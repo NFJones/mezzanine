@@ -96,10 +96,24 @@ impl RuntimeSessionService {
                 )
             },
         );
+        let response_metadata = observation.response_diagnostics.as_ref().map_or_else(
+            || "unavailable".to_string(),
+            |diagnostics| {
+                format!(
+                    "response_id_sha256={} server_request_id_sha256={} returned_turn_state_sha256={} effective_service_tier={} native_output_kinds={} reasoning_payload_present={}",
+                    diagnostics.response_id_sha256.as_deref().unwrap_or("absent"),
+                    diagnostics.server_request_id_sha256.as_deref().unwrap_or("absent"),
+                    diagnostics.chatgpt_turn_state_sha256.as_deref().unwrap_or("absent"),
+                    diagnostics.effective_service_tier.as_deref().unwrap_or("unknown"),
+                    diagnostics.native_output_kinds.join(","),
+                    diagnostics.reasoning_payload_present,
+                )
+            },
+        );
         self.record_agent_pane_trace_log_text(
             &observation.pane_id,
             &format!(
-                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} schema_digest={} succeeded={} failure={} input_bytes={} input_items={} mcp_directory_bytes={} mcp_search_result_bytes={} mcp_retrieved_contract_bytes={} mcp_action_result_bytes={} action_result_bytes={} final_wire={} cache={} continuity={} continuity_warning={}",
+                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} schema_digest={} succeeded={} failure={} input_bytes={} input_items={} mcp_directory_bytes={} mcp_search_result_bytes={} mcp_retrieved_contract_bytes={} mcp_action_result_bytes={} action_result_bytes={} final_wire={} response_metadata={} cache={} continuity={} continuity_warning={}",
                 observation.turn_id,
                 status.request_id,
                 observation.attempt_index,
@@ -119,6 +133,7 @@ impl RuntimeSessionService {
                 status.mcp_action_result_bytes,
                 status.action_result_bytes,
                 final_wire,
+                response_metadata,
                 usage,
                 continuity,
                 continuity_warning,

@@ -786,6 +786,7 @@ mod provider_wire_tests {
             mcp_action_result_bytes: 0,
             action_result_bytes: 0,
             final_wire_diagnostics: None,
+            response_diagnostics: None,
             openai_diagnostics: Some(
                 mez_agent::openai_prompt_cache_diagnostics_for_request(request).unwrap(),
             ),

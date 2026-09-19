@@ -81,6 +81,242 @@ fn openai_final_wire_diagnostics(request: &ProviderHttpRequest) -> OpenAiFinalWi
     }
 }
 
+/// Summarizes one successful OpenAI response without retaining response content.
+fn openai_response_diagnostics(
+    response: &mez_agent::ProviderHttpResponse,
+) -> OpenAiResponseDiagnostics {
+    let sha256_hex = |value: &str| {
+        Sha256::digest(value.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let body = serde_json::from_str::<serde_json::Value>(&response.body)
+        .ok()
+        .or_else(|| {
+            mez_agent::parse_sse_events(
+                &response.body,
+                "OpenAI response diagnostics did not contain SSE data events",
+            )
+            .ok()?
+            .into_iter()
+            .rev()
+            .find_map(|event| serde_json::from_str::<serde_json::Value>(&event.data).ok())
+        });
+    let Some(body) = body else {
+        return OpenAiResponseDiagnostics {
+            response_id_sha256: None,
+            server_request_id_sha256: response
+                .headers
+                .iter()
+                .find(|(name, _)| {
+                    name.eq_ignore_ascii_case("x-request-id")
+                        || name.eq_ignore_ascii_case("request-id")
+                })
+                .map(|(_, value)| sha256_hex(value)),
+            chatgpt_turn_state_sha256: response
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(CHATGPT_TURN_STATE_HEADER))
+                .map(|(_, value)| sha256_hex(value)),
+            effective_service_tier: None,
+            native_output_kinds: Vec::new(),
+            reasoning_payload_present: false,
+        };
+    };
+    let response_value = body.get("response").unwrap_or(&body);
+    let output = body
+        .get("output")
+        .or_else(|| response_value.get("output"))
+        .and_then(serde_json::Value::as_array);
+    OpenAiResponseDiagnostics {
+        response_id_sha256: response_value
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(sha256_hex),
+        server_request_id_sha256: response
+            .headers
+            .iter()
+            .find(|(name, _)| {
+                name.eq_ignore_ascii_case("x-request-id") || name.eq_ignore_ascii_case("request-id")
+            })
+            .map(|(_, value)| sha256_hex(value)),
+        chatgpt_turn_state_sha256: response
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(CHATGPT_TURN_STATE_HEADER))
+            .map(|(_, value)| sha256_hex(value)),
+        effective_service_tier: response_value
+            .get("service_tier")
+            .and_then(serde_json::Value::as_str)
+            .map(openai_service_tier_category),
+        native_output_kinds: output
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.get("type").and_then(serde_json::Value::as_str))
+            .map(openai_output_kind_category)
+            .collect(),
+        reasoning_payload_present: output.into_iter().flatten().any(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("reasoning")
+                && item
+                    .get("summary")
+                    .or_else(|| item.get("content"))
+                    .or_else(|| item.get("encrypted_content"))
+                    .is_some()
+        }),
+    }
+}
+
+/// Maps a provider-reported tier onto a bounded diagnostic category.
+fn openai_service_tier_category(value: &str) -> String {
+    match value {
+        "default" | "flex" | "priority" | "auto" | "standard" => value.to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Maps a provider-reported output kind onto a bounded diagnostic category.
+fn openai_output_kind_category(value: &str) -> String {
+    match value {
+        "reasoning"
+        | "message"
+        | "function_call"
+        | "function_call_output"
+        | "web_search_call"
+        | "computer_call"
+        | "code_interpreter_call"
+        | "image_generation_call"
+        | "local_shell_call"
+        | "custom_tool_call" => value.to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod openai_response_diagnostics_tests {
+    use super::{
+        CHATGPT_TURN_STATE_HEADER, OpenAiResponseDiagnostics, openai_response_diagnostics,
+    };
+    use mez_agent::ProviderHttpResponse;
+    use std::collections::BTreeMap;
+
+    /// Verifies successful Responses diagnostics retain routing and output shape
+    /// without retaining identifiers, reasoning content, or visible output.
+    #[test]
+    fn response_diagnostics_redact_response_content_and_identifiers() {
+        let response = ProviderHttpResponse {
+            status_code: 200,
+            headers: BTreeMap::from([
+                ("x-request-id".to_string(), "PRIVATE_REQUEST_ID".to_string()),
+                (
+                    CHATGPT_TURN_STATE_HEADER.to_string(),
+                    "PRIVATE_RETURNED_TURN_STATE".to_string(),
+                ),
+            ]),
+            body: serde_json::json!({
+                "id": "PRIVATE_RESPONSE_ID",
+                "service_tier": "priority",
+                "output": [
+                    {"type": "reasoning", "summary": [{"text": "PRIVATE_REASONING"}]},
+                    {"type": "message", "content": [{"text": "PRIVATE_OUTPUT"}]}
+                ]
+            })
+            .to_string(),
+        };
+
+        let diagnostics: OpenAiResponseDiagnostics = openai_response_diagnostics(&response);
+
+        assert_eq!(
+            diagnostics.effective_service_tier.as_deref(),
+            Some("priority")
+        );
+        assert_eq!(diagnostics.native_output_kinds, ["reasoning", "message"]);
+        assert!(diagnostics.reasoning_payload_present);
+        assert_eq!(
+            diagnostics.response_id_sha256.as_deref().map(str::len),
+            Some(64)
+        );
+        assert_eq!(
+            diagnostics
+                .server_request_id_sha256
+                .as_deref()
+                .map(str::len),
+            Some(64)
+        );
+        assert_eq!(
+            diagnostics
+                .chatgpt_turn_state_sha256
+                .as_deref()
+                .map(str::len),
+            Some(64)
+        );
+        let rendered = format!("{diagnostics:?}");
+        assert!(!rendered.contains("PRIVATE_RESPONSE_ID"));
+        assert!(!rendered.contains("PRIVATE_REQUEST_ID"));
+        assert!(!rendered.contains("PRIVATE_RETURNED_TURN_STATE"));
+        assert!(!rendered.contains("PRIVATE_REASONING"));
+        assert!(!rendered.contains("PRIVATE_OUTPUT"));
+    }
+
+    /// Verifies unrecognized provider metadata is collapsed into bounded
+    /// categories while encrypted reasoning still records payload presence.
+    #[test]
+    fn response_diagnostics_bounds_unknown_metadata_and_detects_encrypted_reasoning() {
+        let response = ProviderHttpResponse {
+            status_code: 200,
+            headers: BTreeMap::new(),
+            body: serde_json::json!({
+                "service_tier": "PRIVATE_TIER\ninjected",
+                "output": [
+                    {"type": "PRIVATE_KIND\ninjected"},
+                    {"type": "reasoning", "encrypted_content": "PRIVATE_ENCRYPTED_REASONING"}
+                ]
+            })
+            .to_string(),
+        };
+
+        let diagnostics = openai_response_diagnostics(&response);
+
+        assert_eq!(
+            diagnostics.effective_service_tier.as_deref(),
+            Some("unknown")
+        );
+        assert_eq!(diagnostics.native_output_kinds, ["unknown", "reasoning"]);
+        assert!(diagnostics.reasoning_payload_present);
+        let rendered = format!("{diagnostics:?}");
+        assert!(!rendered.contains("PRIVATE_TIER"));
+        assert!(!rendered.contains("PRIVATE_KIND"));
+        assert!(!rendered.contains("PRIVATE_ENCRYPTED_REASONING"));
+    }
+
+    /// Verifies the terminal Responses SSE event yields the same bounded
+    /// metadata as a unary response without retaining event payload content.
+    #[test]
+    fn response_diagnostics_reads_completed_sse_response_metadata() {
+        let response = ProviderHttpResponse {
+            status_code: 200,
+            headers: BTreeMap::new(),
+            body: concat!(
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"PRIVATE_SSE_RESPONSE_ID\",\"service_tier\":\"flex\",\"output\":[{\"type\":\"reasoning\",\"summary\":[{\"text\":\"PRIVATE_SSE_REASONING\"}]}]}}\n\n"
+            )
+            .to_string(),
+        };
+
+        let diagnostics = openai_response_diagnostics(&response);
+
+        assert_eq!(diagnostics.effective_service_tier.as_deref(), Some("flex"));
+        assert_eq!(diagnostics.native_output_kinds, ["reasoning"]);
+        assert!(diagnostics.reasoning_payload_present);
+        assert_eq!(
+            diagnostics.response_id_sha256.as_deref().map(str::len),
+            Some(64)
+        );
+        assert!(!format!("{diagnostics:?}").contains("PRIVATE_SSE_RESPONSE_ID"));
+        assert!(!format!("{diagnostics:?}").contains("PRIVATE_SSE_REASONING"));
+    }
+}
+
 // Model provider traits and OpenAI Responses adapter.
 
 mod anthropic;
@@ -217,6 +453,8 @@ pub struct ProviderWireRequestObservation {
     /// Content-free shape of the final serialized provider request, when the
     /// adapter transforms the canonical request before transport.
     pub final_wire_diagnostics: Option<OpenAiFinalWireDiagnostics>,
+    /// Content-free metadata retained from the completed provider reply.
+    pub response_diagnostics: Option<OpenAiResponseDiagnostics>,
     /// OpenAI Responses cache diagnostics, when applicable.
     pub openai_diagnostics: Option<mez_agent::OpenAiPromptCacheDiagnostics>,
     /// Whether OpenAI diagnostic construction failed independently of send.
@@ -257,6 +495,27 @@ pub struct OpenAiFinalWireDiagnostics {
     /// Digest of the replayed ChatGPT same-turn token, when present.
     pub chatgpt_turn_state_sha256: Option<String>,
 }
+
+/// Content-free metadata retained from one successful OpenAI Responses reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiResponseDiagnostics {
+    /// Digest of the provider response identifier, when present.
+    pub response_id_sha256: Option<String>,
+    /// Digest of the server request identifier, when present.
+    pub server_request_id_sha256: Option<String>,
+    /// Digest of the returned ChatGPT same-turn token, when present.
+    pub chatgpt_turn_state_sha256: Option<String>,
+    /// Effective server-selected service tier, when reported.
+    pub effective_service_tier: Option<String>,
+    /// Ordered native output-item kinds without their contents.
+    pub native_output_kinds: Vec<String>,
+    /// Whether any native output item carries a reasoning payload.
+    pub reasoning_payload_present: bool,
+}
+
+/// Completed OpenAI Responses result or downstream parse failure paired with
+/// content-free reply metadata from the received transport response.
+type OpenAiResponsesCompleted = (Result<ModelResponse>, OpenAiResponseDiagnostics);
 
 /// Actor-bound observation sink shared by every provider call in one worker.
 pub struct ProviderWireRequestObserver {
@@ -330,7 +589,7 @@ impl<'a> ProviderWireObservationContext<'a> {
         retry_reason: Option<&str>,
         result: &Result<ModelResponse>,
     ) {
-        self.observe_with_final_wire(request, attempt_index, retry_reason, None, result)
+        self.observe_with_final_wire(request, attempt_index, retry_reason, None, None, result)
             .await;
     }
 
@@ -341,6 +600,7 @@ impl<'a> ProviderWireObservationContext<'a> {
         attempt_index: usize,
         retry_reason: Option<&str>,
         final_wire_diagnostics: Option<OpenAiFinalWireDiagnostics>,
+        response_diagnostics: Option<OpenAiResponseDiagnostics>,
         result: &Result<ModelResponse>,
     ) {
         let usage = result.as_ref().ok().and_then(|response| {
@@ -408,6 +668,7 @@ impl<'a> ProviderWireObservationContext<'a> {
                     total.saturating_add(message.content.len())
                 }),
             final_wire_diagnostics,
+            response_diagnostics,
             openai_diagnostics: self.openai_diagnostics.clone(),
             diagnostics_failed: self.diagnostics_failed,
             usage,
@@ -1751,7 +2012,7 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
         request: &'a ModelRequest,
         http_request: ProviderHttpRequest,
         progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
-    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<OpenAiResponsesCompleted>> + Send + 'a>> {
         Box::pin(async move {
             let mut stream_decoder = OpenAiResponsesStreamDecoder::default();
             let mut streaming_say_extractor = mez_agent::StreamingSayExtractor::default();
@@ -1789,6 +2050,7 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
             } else {
                 self.transport.send_async(&http_request).await?
             };
+            let response_diagnostics = openai_response_diagnostics(&response);
             if !(200..300).contains(&response.status_code) {
                 return Err(MezError::invalid_state(format!(
                     "OpenAI Responses API returned status {}: {}",
@@ -1804,39 +2066,42 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                 ));
             }
             self.capture_chatgpt_turn_state(request, &response.headers);
-            if let Some(error) = stream_error {
-                return Err(error.into());
-            }
-            let (model, raw_text, usage, provider_transcript_events) =
-                if self.stream && !openai_response_is_json(&response.headers) {
-                    stream_decoder.finish(&request.model)?
-                } else {
-                    parse_openai_responses_provider_body(&response.body, &request.model, false)?
-                };
-            let quota_usage = provider_quota_usage_from_headers(&response.headers);
-            let action_batch = if !request.interaction_kind.expects_maap_batch() {
-                None
-            } else {
-                match parse_provider_native_maap_action_batch(&raw_text, request)? {
-                    Some(batch) => Some(batch),
-                    None => parse_fenced_maap_action_batch_for_turn(
-                        &raw_text,
-                        &request.turn_id,
-                        &request.agent_id,
-                    )
-                    .map_err(|error| provider_maap_parse_error(error, &raw_text))?,
+            let result = (|| -> Result<ModelResponse> {
+                if let Some(error) = stream_error {
+                    return Err(error.into());
                 }
-            };
-            Ok(ModelResponse {
-                provider: AsyncModelProvider::provider_id(self).to_string(),
-                model,
-                raw_text,
-                usage,
-                latest_request_usage: None,
-                quota_usage,
-                action_batch,
-                provider_transcript_events,
-            })
+                let (model, raw_text, usage, provider_transcript_events) =
+                    if self.stream && !openai_response_is_json(&response.headers) {
+                        stream_decoder.finish(&request.model)?
+                    } else {
+                        parse_openai_responses_provider_body(&response.body, &request.model, false)?
+                    };
+                let quota_usage = provider_quota_usage_from_headers(&response.headers);
+                let action_batch = if !request.interaction_kind.expects_maap_batch() {
+                    None
+                } else {
+                    match parse_provider_native_maap_action_batch(&raw_text, request)? {
+                        Some(batch) => Some(batch),
+                        None => parse_fenced_maap_action_batch_for_turn(
+                            &raw_text,
+                            &request.turn_id,
+                            &request.agent_id,
+                        )
+                        .map_err(|error| provider_maap_parse_error(error, &raw_text))?,
+                    }
+                };
+                Ok(ModelResponse {
+                    provider: AsyncModelProvider::provider_id(self).to_string(),
+                    model,
+                    raw_text,
+                    usage,
+                    latest_request_usage: None,
+                    quota_usage,
+                    action_batch,
+                    provider_transcript_events,
+                })
+            })();
+            Ok((result, response_diagnostics))
         })
     }
 }
@@ -1963,6 +2228,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
             )?;
             self.send_openai_responses_http_request_async(request, http_request, progress)
                 .await
+                .and_then(|(response, _)| response)
         })
     }
 
@@ -1988,9 +2254,13 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 self.timeout_ms,
             )?;
             let final_wire_diagnostics = openai_final_wire_diagnostics(&http_request);
-            let result = self
+            let completed = self
                 .send_openai_responses_http_request_async(request, http_request, progress)
                 .await;
+            let (result, response_diagnostics) = match completed {
+                Ok((result, diagnostics)) => (result, Some(diagnostics)),
+                Err(error) => (Err(error), None),
+            };
             if let Some(observation) = observation.as_ref() {
                 observation
                     .observe_with_final_wire(
@@ -1998,6 +2268,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                         1,
                         None,
                         Some(final_wire_diagnostics),
+                        response_diagnostics,
                         &result,
                     )
                     .await;

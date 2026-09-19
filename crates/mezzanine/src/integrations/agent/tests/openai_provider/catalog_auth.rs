@@ -540,6 +540,96 @@ async fn observed_chatgpt_provider_reports_redacted_final_wire_shape() {
     assert!(!rendered.contains("PRIVATE_TURN_STATE"));
 }
 
+#[tokio::test]
+/// Verifies a completed 2xx Responses reply keeps redacted routing metadata
+/// when downstream response parsing rejects its malformed body.
+async fn observed_openai_provider_retains_response_metadata_after_parse_failure() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "parse failure diagnostics".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "chatgpt-access-token",
+        CHATGPT_RESPONSES_ENDPOINT,
+        10,
+        std::collections::BTreeMap::from([(
+            CHATGPT_ACCOUNT_ID_HEADER.to_string(),
+            "account-1".to_string(),
+        )]),
+        false,
+        AsyncSequencedFakeProviderHttpTransport::new(vec![ProviderHttpResponse {
+            status_code: 200,
+            headers: std::collections::BTreeMap::from([
+                ("x-request-id".to_string(), "PRIVATE_REQUEST_ID".to_string()),
+                (
+                    CHATGPT_TURN_STATE_HEADER.to_string(),
+                    "PRIVATE_TURN_STATE".to_string(),
+                ),
+            ]),
+            body: r#"{"id":"PRIVATE_RESPONSE_ID","service_tier":"priority"}"#.to_string(),
+        }]),
+    )
+    .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let observer = crate::integrations::agent::provider::ProviderWireRequestObserver::new(
+        "conversation-parse-failure",
+        "%parse-failure",
+        sender,
+    );
+    let observed = crate::integrations::agent::provider::ObservedAsyncModelProvider::new(
+        &provider,
+        &observer,
+        crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
+    );
+
+    assert!(observed.send_request_async(&request).await.is_err());
+    let observation = receiver.recv().await.unwrap();
+    let diagnostics = observation.response_diagnostics.unwrap();
+    assert_eq!(
+        diagnostics.effective_service_tier.as_deref(),
+        Some("priority")
+    );
+    assert_eq!(
+        diagnostics.response_id_sha256.as_deref().map(str::len),
+        Some(64)
+    );
+    assert_eq!(
+        diagnostics
+            .server_request_id_sha256
+            .as_deref()
+            .map(str::len),
+        Some(64)
+    );
+    assert_eq!(
+        diagnostics
+            .chatgpt_turn_state_sha256
+            .as_deref()
+            .map(str::len),
+        Some(64)
+    );
+    let rendered = format!("{diagnostics:?}");
+    assert!(!rendered.contains("PRIVATE_RESPONSE_ID"));
+    assert!(!rendered.contains("PRIVATE_REQUEST_ID"));
+    assert!(!rendered.contains("PRIVATE_TURN_STATE"));
+}
+
 #[test]
 /// Verifies ChatGPT turn routing state is captured once, replayed for retries,
 /// and cleared when the logical turn changes.

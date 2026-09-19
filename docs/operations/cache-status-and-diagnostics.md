@@ -71,6 +71,14 @@ prompts, reasoning payloads, or opaque routing tokens. A missing header digest
 means the header was absent; it does not establish a cache miss or server-side
 routing failure.
 
+Successful Responses replies additionally contribute only response metadata:
+digests of response and server request identifiers, reported effective service
+tier, native output-item kinds, whether a reasoning payload was present, and
+a returned `x-codex-turn-state` digest when the ChatGPT backend supplies one.
+The trace never retains those identifiers, routing tokens, or any output or
+reasoning content. Missing metadata is reported as absent or unknown and is
+not evidence of a cache or routing failure.
+
 `action_result_bytes` reports exact durable action-result content in the
 observed request. Those bytes are cold when first appended, then remain in the
 same chronological position for later requests and turns until compaction.
