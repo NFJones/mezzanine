@@ -39,6 +39,8 @@ pub(crate) struct RuntimeProviderWireRequestStatus {
     pub(crate) mcp_retrieved_contract_bytes: usize,
     pub(crate) mcp_action_result_bytes: usize,
     pub(crate) action_result_bytes: usize,
+    pub(crate) final_wire_diagnostics:
+        Option<crate::integrations::agent::provider::OpenAiFinalWireDiagnostics>,
     pub(crate) continuity: Option<mez_agent::OpenAiRequestContinuity>,
 }
 
@@ -464,6 +466,7 @@ impl RuntimeMetricsSnapshot {
             mcp_retrieved_contract_bytes: observation.mcp_retrieved_contract_bytes,
             mcp_action_result_bytes: observation.mcp_action_result_bytes,
             action_result_bytes: observation.action_result_bytes,
+            final_wire_diagnostics: observation.final_wire_diagnostics.clone(),
             continuity,
         };
         if observation.purpose
@@ -782,6 +785,7 @@ mod provider_wire_tests {
             mcp_retrieved_contract_bytes: 0,
             mcp_action_result_bytes: 0,
             action_result_bytes: 0,
+            final_wire_diagnostics: None,
             openai_diagnostics: Some(
                 mez_agent::openai_prompt_cache_diagnostics_for_request(request).unwrap(),
             ),

@@ -1694,6 +1694,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
             mcp_retrieved_contract_bytes: 0,
             mcp_action_result_bytes: 0,
             action_result_bytes: 0,
+            final_wire_diagnostics: None,
             openai_diagnostics: Some(diagnostics.clone()),
             diagnostics_failed: false,
             usage,

@@ -407,6 +407,139 @@ fn openai_provider_from_auth_store_routes_chatgpt_credentials_to_codex_backend()
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[tokio::test]
+/// Verifies observed ChatGPT requests retain only the final wire shape and
+/// digests of routing headers, never the credentials, prompt, or turn token.
+async fn observed_chatgpt_provider_reports_redacted_final_wire_shape() {
+    use sha2::{Digest, Sha256};
+
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "PRIVATE_CHATGPT_PROMPT_MARKER".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let response = |turn_state: Option<&str>| ProviderHttpResponse {
+        status_code: 200,
+        headers: turn_state
+            .map(|value| {
+                std::collections::BTreeMap::from([(
+                    CHATGPT_TURN_STATE_HEADER.to_string(),
+                    value.to_string(),
+                )])
+            })
+            .unwrap_or_default(),
+        body: r#"{"model":"gpt-test","output_text":"ok"}"#.to_string(),
+    };
+    let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "chatgpt-access-token",
+        CHATGPT_RESPONSES_ENDPOINT,
+        10,
+        std::collections::BTreeMap::from([(
+            CHATGPT_ACCOUNT_ID_HEADER.to_string(),
+            "account-1".to_string(),
+        )]),
+        false,
+        AsyncSequencedFakeProviderHttpTransport::new(vec![
+            response(Some("PRIVATE_TURN_STATE")),
+            response(None),
+        ]),
+    )
+    .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+    let observer = crate::integrations::agent::provider::ProviderWireRequestObserver::new(
+        "conversation-chatgpt-wire",
+        "%chatgpt-wire",
+        sender,
+    );
+    let observed = crate::integrations::agent::provider::ObservedAsyncModelProvider::new(
+        &provider,
+        &observer,
+        crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
+    );
+
+    observed.send_request_async(&request).await.unwrap();
+    let first = receiver.recv().await.unwrap();
+    observed.send_request_async(&request).await.unwrap();
+    let second = receiver.recv().await.unwrap();
+
+    let first_wire = first.final_wire_diagnostics.unwrap();
+    let second_wire = second.final_wire_diagnostics.unwrap();
+    assert!(!first_wire.prompt_cache_options_present);
+    assert_eq!(first_wire.input_items, Some(1));
+    assert_eq!(first_wire.body_sha256.len(), 64);
+    assert_eq!(
+        first_wire
+            .chatgpt_session_id_sha256
+            .as_deref()
+            .map(str::len),
+        Some(64)
+    );
+    assert_eq!(first_wire.chatgpt_turn_state_sha256, None);
+    assert_eq!(
+        second_wire
+            .chatgpt_turn_state_sha256
+            .as_deref()
+            .map(str::len),
+        Some(64)
+    );
+    let sent = provider.transport.requests.lock().unwrap();
+    let sha256_hex = |value: &str| {
+        Sha256::digest(value.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    for (wire, request) in [&first_wire, &second_wire].into_iter().zip(sent.iter()) {
+        let body: serde_json::Value = serde_json::from_str(&request.body).unwrap();
+        let input = serde_json::to_string(&body["input"]).unwrap();
+        assert_eq!(wire.body_bytes, request.body.len());
+        assert_eq!(wire.body_sha256, sha256_hex(&request.body));
+        assert_eq!(wire.input_bytes, Some(input.len()));
+        assert_eq!(wire.input_items, body["input"].as_array().map(Vec::len));
+        assert_eq!(
+            wire.input_sha256.as_deref(),
+            Some(sha256_hex(&input).as_str())
+        );
+        assert_eq!(
+            wire.chatgpt_session_id_sha256.as_deref(),
+            request
+                .headers
+                .get(CHATGPT_SESSION_ID_HEADER)
+                .map(|value| sha256_hex(value))
+                .as_deref()
+        );
+        assert_eq!(
+            wire.chatgpt_turn_state_sha256.as_deref(),
+            request
+                .headers
+                .get(CHATGPT_TURN_STATE_HEADER)
+                .map(|value| sha256_hex(value))
+                .as_deref()
+        );
+    }
+    let rendered = format!("{first_wire:?} {second_wire:?}");
+    assert!(!rendered.contains("chatgpt-access-token"));
+    assert!(!rendered.contains("account-1"));
+    assert!(!rendered.contains("PRIVATE_CHATGPT_PROMPT_MARKER"));
+    assert!(!rendered.contains("PRIVATE_TURN_STATE"));
+}
+
 #[test]
 /// Verifies ChatGPT turn routing state is captured once, replayed for retries,
 /// and cleared when the logical turn changes.

@@ -61,6 +61,16 @@ durable chronology. Provider-wire diagnostics are the evidence for continuity:
 they report canonical input size and items, the common leading items and bytes,
 and whether the cache-affecting envelope remained unchanged.
 
+For ChatGPT browser/device Responses requests, the bounded trace also records
+the post-transform wire shape: final body and input byte counts and digests,
+whether `prompt_cache_options` survived, and presence-only digests for the
+sent `session-id` and replayed `x-codex-turn-state` headers. These values
+describe the actual serialized request after the ChatGPT adapter removes
+unsupported cache options. They never include credentials, account ids,
+prompts, reasoning payloads, or opaque routing tokens. A missing header digest
+means the header was absent; it does not establish a cache miss or server-side
+routing failure.
+
 `action_result_bytes` reports exact durable action-result content in the
 observed request. Those bytes are cold when first appended, then remain in the
 same chronological position for later requests and turns until compaction.

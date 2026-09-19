@@ -80,10 +80,26 @@ impl RuntimeSessionService {
             },
         );
         let continuity_warning = observation.continuity_warning.as_deref().unwrap_or("none");
+        let final_wire = observation.final_wire_diagnostics.as_ref().map_or_else(
+            || "unavailable".to_string(),
+            |diagnostics| {
+                format!(
+                    "body_bytes={} body_sha256={} input_bytes={} input_items={} input_sha256={} prompt_cache_options_present={} session_id_sha256={} turn_state_sha256={}",
+                    diagnostics.body_bytes,
+                    diagnostics.body_sha256,
+                    diagnostics.input_bytes.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                    diagnostics.input_items.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                    diagnostics.input_sha256.as_deref().unwrap_or("unknown"),
+                    diagnostics.prompt_cache_options_present,
+                    diagnostics.chatgpt_session_id_sha256.as_deref().unwrap_or("absent"),
+                    diagnostics.chatgpt_turn_state_sha256.as_deref().unwrap_or("absent"),
+                )
+            },
+        );
         self.record_agent_pane_trace_log_text(
             &observation.pane_id,
             &format!(
-                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} schema_digest={} succeeded={} failure={} input_bytes={} input_items={} mcp_directory_bytes={} mcp_search_result_bytes={} mcp_retrieved_contract_bytes={} mcp_action_result_bytes={} action_result_bytes={} cache={} continuity={} continuity_warning={}",
+                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} schema_digest={} succeeded={} failure={} input_bytes={} input_items={} mcp_directory_bytes={} mcp_search_result_bytes={} mcp_retrieved_contract_bytes={} mcp_action_result_bytes={} action_result_bytes={} final_wire={} cache={} continuity={} continuity_warning={}",
                 observation.turn_id,
                 status.request_id,
                 observation.attempt_index,
@@ -102,6 +118,7 @@ impl RuntimeSessionService {
                 status.mcp_retrieved_contract_bytes,
                 status.mcp_action_result_bytes,
                 status.action_result_bytes,
+                final_wire,
                 usage,
                 continuity,
                 continuity_warning,

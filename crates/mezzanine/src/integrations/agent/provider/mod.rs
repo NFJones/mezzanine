@@ -37,6 +37,50 @@ fn remove_openai_prompt_cache_options(body: &mut serde_json::Value) {
     }
 }
 
+/// Summarizes the exact serialized OpenAI request without retaining contents.
+fn openai_final_wire_diagnostics(request: &ProviderHttpRequest) -> OpenAiFinalWireDiagnostics {
+    let sha256_hex = |bytes: &[u8]| {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let body = serde_json::from_str::<serde_json::Value>(&request.body).ok();
+    let input = body.as_ref().and_then(|body| body.get("input"));
+    let input_text = input.and_then(|input| serde_json::to_string(input).ok());
+    let header_digest = |name: &str| {
+        request
+            .headers
+            .iter()
+            .find(|(header, _)| header.eq_ignore_ascii_case(name))
+            .map(|(_, value)| sha256_hex(value.as_bytes()))
+    };
+    OpenAiFinalWireDiagnostics {
+        body_bytes: request.body.len(),
+        body_sha256: sha256_hex(request.body.as_bytes()),
+        input_bytes: input_text.as_ref().map(String::len),
+        input_items: input.and_then(serde_json::Value::as_array).map(Vec::len),
+        input_sha256: input_text
+            .as_ref()
+            .map(|input| sha256_hex(input.as_bytes())),
+        instructions_sha256: body
+            .as_ref()
+            .and_then(|body| body.get("instructions"))
+            .and_then(|instructions| serde_json::to_string(instructions).ok())
+            .map(|instructions| sha256_hex(instructions.as_bytes())),
+        tools_sha256: body
+            .as_ref()
+            .and_then(|body| body.get("tools"))
+            .and_then(|tools| serde_json::to_string(tools).ok())
+            .map(|tools| sha256_hex(tools.as_bytes())),
+        prompt_cache_options_present: body
+            .as_ref()
+            .is_some_and(|body| body.get("prompt_cache_options").is_some()),
+        chatgpt_session_id_sha256: header_digest(CHATGPT_SESSION_ID_HEADER),
+        chatgpt_turn_state_sha256: header_digest(CHATGPT_TURN_STATE_HEADER),
+    }
+}
+
 // Model provider traits and OpenAI Responses adapter.
 
 mod anthropic;
@@ -170,6 +214,9 @@ pub struct ProviderWireRequestObservation {
     pub mcp_action_result_bytes: usize,
     /// Exact durable action-result bytes included in this request.
     pub action_result_bytes: usize,
+    /// Content-free shape of the final serialized provider request, when the
+    /// adapter transforms the canonical request before transport.
+    pub final_wire_diagnostics: Option<OpenAiFinalWireDiagnostics>,
     /// OpenAI Responses cache diagnostics, when applicable.
     pub openai_diagnostics: Option<mez_agent::OpenAiPromptCacheDiagnostics>,
     /// Whether OpenAI diagnostic construction failed independently of send.
@@ -180,6 +227,35 @@ pub struct ProviderWireRequestObservation {
     pub succeeded: bool,
     /// Content-free failure classification when the request failed.
     pub failure_kind: Option<String>,
+}
+
+/// Content-free digest of the final OpenAI Responses request sent on the wire.
+///
+/// This record deliberately excludes all request and routing-token contents.
+/// It lets diagnostics distinguish a local pre-transform shape from the body
+/// and selected routing headers actually sent by a provider adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiFinalWireDiagnostics {
+    /// Canonical serialized request body byte count.
+    pub body_bytes: usize,
+    /// SHA-256 of the complete serialized request body.
+    pub body_sha256: String,
+    /// Canonical serialized `input` array byte count, when present.
+    pub input_bytes: Option<usize>,
+    /// Number of `input` items, when the final body contains an array.
+    pub input_items: Option<usize>,
+    /// SHA-256 of the final `input` array, when present.
+    pub input_sha256: Option<String>,
+    /// SHA-256 of final front-loaded instructions, when present.
+    pub instructions_sha256: Option<String>,
+    /// SHA-256 of final tool definitions, when present.
+    pub tools_sha256: Option<String>,
+    /// Whether the final body contains direct OpenAI cache options.
+    pub prompt_cache_options_present: bool,
+    /// Digest of the sent ChatGPT session-affinity header, when present.
+    pub chatgpt_session_id_sha256: Option<String>,
+    /// Digest of the replayed ChatGPT same-turn token, when present.
+    pub chatgpt_turn_state_sha256: Option<String>,
 }
 
 /// Actor-bound observation sink shared by every provider call in one worker.
@@ -254,6 +330,19 @@ impl<'a> ProviderWireObservationContext<'a> {
         retry_reason: Option<&str>,
         result: &Result<ModelResponse>,
     ) {
+        self.observe_with_final_wire(request, attempt_index, retry_reason, None, result)
+            .await;
+    }
+
+    /// Emits one observation with diagnostics derived from its transported request.
+    pub async fn observe_with_final_wire(
+        &self,
+        request: &ModelRequest,
+        attempt_index: usize,
+        retry_reason: Option<&str>,
+        final_wire_diagnostics: Option<OpenAiFinalWireDiagnostics>,
+        result: &Result<ModelResponse>,
+    ) {
         let usage = result.as_ref().ok().and_then(|response| {
             response.latest_request_usage.or_else(|| {
                 let usage = response.usage;
@@ -318,6 +407,7 @@ impl<'a> ProviderWireObservationContext<'a> {
                 .fold(0usize, |total, message| {
                     total.saturating_add(message.content.len())
                 }),
+            final_wire_diagnostics,
             openai_diagnostics: self.openai_diagnostics.clone(),
             diagnostics_failed: self.diagnostics_failed,
             usage,
@@ -1654,6 +1744,103 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
     }
 }
 
+impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
+    /// Sends one already-constructed Responses request and normalizes its result.
+    fn send_openai_responses_http_request_async<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        http_request: ProviderHttpRequest,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut stream_decoder = OpenAiResponsesStreamDecoder::default();
+            let mut streaming_say_extractor = mez_agent::StreamingSayExtractor::default();
+            let mut stream_error = None;
+            let response = if self.stream {
+                let mut on_event = |event| {
+                    let mut progress_events = Vec::new();
+                    if stream_error.is_none() {
+                        match stream_decoder.push_event(&event) {
+                            Ok(Some(_)) => {}
+                            Ok(None) => {}
+                            Err(error) => stream_error = Some(error),
+                        }
+                        if let Some(fragment) = provider_maap_stream_fragment(&event) {
+                            progress_events = bounded_streaming_say_events(
+                                streaming_say_extractor.push_delta(&fragment),
+                            );
+                        }
+                    }
+                    let progress = progress.clone();
+                    Box::pin(async move {
+                        let Some(progress) = progress else {
+                            return;
+                        };
+                        for event in progress_events {
+                            if progress.send(event).await.is_err() {
+                                break;
+                            }
+                        }
+                    }) as Pin<Box<dyn Future<Output = ()> + Send>>
+                };
+                self.transport
+                    .send_async_with_sse_events(&http_request, &mut on_event)
+                    .await?
+            } else {
+                self.transport.send_async(&http_request).await?
+            };
+            if !(200..300).contains(&response.status_code) {
+                return Err(MezError::invalid_state(format!(
+                    "OpenAI Responses API returned status {}: {}",
+                    response.status_code,
+                    openai_provider_error_detail(&response.body)
+                ))
+                .with_provider_failure_json(
+                    openai_provider_failure_json_with_retry_headers(
+                        Some(response.status_code),
+                        &response.body,
+                        &response.headers,
+                    ),
+                ));
+            }
+            self.capture_chatgpt_turn_state(request, &response.headers);
+            if let Some(error) = stream_error {
+                return Err(error.into());
+            }
+            let (model, raw_text, usage, provider_transcript_events) =
+                if self.stream && !openai_response_is_json(&response.headers) {
+                    stream_decoder.finish(&request.model)?
+                } else {
+                    parse_openai_responses_provider_body(&response.body, &request.model, false)?
+                };
+            let quota_usage = provider_quota_usage_from_headers(&response.headers);
+            let action_batch = if !request.interaction_kind.expects_maap_batch() {
+                None
+            } else {
+                match parse_provider_native_maap_action_batch(&raw_text, request)? {
+                    Some(batch) => Some(batch),
+                    None => parse_fenced_maap_action_batch_for_turn(
+                        &raw_text,
+                        &request.turn_id,
+                        &request.agent_id,
+                    )
+                    .map_err(|error| provider_maap_parse_error(error, &raw_text))?,
+                }
+            };
+            Ok(ModelResponse {
+                provider: AsyncModelProvider::provider_id(self).to_string(),
+                model,
+                raw_text,
+                usage,
+                latest_request_usage: None,
+                quota_usage,
+                action_batch,
+                provider_transcript_events,
+            })
+        })
+    }
+}
+
 impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvider<T> {
     /// Runs the provider id operation for this subsystem.
     ///
@@ -1774,90 +1961,48 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 self.stream,
                 self.timeout_ms,
             )?;
-            let mut stream_decoder = OpenAiResponsesStreamDecoder::default();
-            let mut streaming_say_extractor = mez_agent::StreamingSayExtractor::default();
-            let mut stream_error = None;
-            let response = if self.stream {
-                let mut on_event = |event| {
-                    let mut progress_events = Vec::new();
-                    if stream_error.is_none() {
-                        match stream_decoder.push_event(&event) {
-                            Ok(Some(_)) => {}
-                            Ok(None) => {}
-                            Err(error) => stream_error = Some(error),
-                        }
-                        if let Some(fragment) = provider_maap_stream_fragment(&event) {
-                            progress_events = bounded_streaming_say_events(
-                                streaming_say_extractor.push_delta(&fragment),
-                            );
-                        }
-                    }
-                    let progress = progress.clone();
-                    Box::pin(async move {
-                        let Some(progress) = progress else {
-                            return;
-                        };
-                        for event in progress_events {
-                            if progress.send(event).await.is_err() {
-                                break;
-                            }
-                        }
-                    }) as Pin<Box<dyn Future<Output = ()> + Send>>
-                };
-                self.transport
-                    .send_async_with_sse_events(&http_request, &mut on_event)
-                    .await?
-            } else {
-                self.transport.send_async(&http_request).await?
-            };
-            if !(200..300).contains(&response.status_code) {
-                return Err(MezError::invalid_state(format!(
-                    "OpenAI Responses API returned status {}: {}",
-                    response.status_code,
-                    openai_provider_error_detail(&response.body)
-                ))
-                .with_provider_failure_json(
-                    openai_provider_failure_json_with_retry_headers(
-                        Some(response.status_code),
-                        &response.body,
-                        &response.headers,
-                    ),
+            self.send_openai_responses_http_request_async(request, http_request, progress)
+                .await
+        })
+    }
+
+    fn send_request_async_with_progress_and_observation<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+        observation: Option<ProviderWireObservationContext<'a>>,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            if request.provider != AsyncModelProvider::provider_id(self) {
+                return Err(MezError::invalid_args(
+                    "OpenAI provider received a request for a different provider",
                 ));
             }
-            self.capture_chatgpt_turn_state(request, &response.headers);
-            if let Some(error) = stream_error {
-                return Err(error.into());
-            }
-            let (model, raw_text, usage, provider_transcript_events) =
-                if self.stream && !openai_response_is_json(&response.headers) {
-                    stream_decoder.finish(&request.model)?
-                } else {
-                    parse_openai_responses_provider_body(&response.body, &request.model, false)?
-                };
-            let quota_usage = provider_quota_usage_from_headers(&response.headers);
-            let action_batch = if !request.interaction_kind.expects_maap_batch() {
-                None
-            } else {
-                match parse_provider_native_maap_action_batch(&raw_text, request)? {
-                    Some(batch) => Some(batch),
-                    None => parse_fenced_maap_action_batch_for_turn(
-                        &raw_text,
-                        &request.turn_id,
-                        &request.agent_id,
+            let request_headers = self.headers_for_request(request);
+            let http_request = build_openai_responses_http_request_with_headers(
+                request,
+                self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
+                &self.endpoint,
+                &request_headers,
+                self.stream,
+                self.timeout_ms,
+            )?;
+            let final_wire_diagnostics = openai_final_wire_diagnostics(&http_request);
+            let result = self
+                .send_openai_responses_http_request_async(request, http_request, progress)
+                .await;
+            if let Some(observation) = observation.as_ref() {
+                observation
+                    .observe_with_final_wire(
+                        request,
+                        1,
+                        None,
+                        Some(final_wire_diagnostics),
+                        &result,
                     )
-                    .map_err(|error| provider_maap_parse_error(error, &raw_text))?,
-                }
-            };
-            Ok(ModelResponse {
-                provider: AsyncModelProvider::provider_id(self).to_string(),
-                model,
-                raw_text,
-                usage,
-                latest_request_usage: None,
-                quota_usage,
-                action_batch,
-                provider_transcript_events,
-            })
+                    .await;
+            }
+            result
         })
     }
 }
