@@ -893,6 +893,27 @@ fn overlay_refresh_applies_a_filter_key_pressed_inside_a_detail_view() {
         !saved_session_detail_open(&service),
         "the settled page replaces the detail the key was pressed in"
     );
+
+    // Paging behaves like the filter keys: a page-edge step taken from inside a
+    // detail owns the page it fetches instead of being discarded.
+    move_saved_session_cursor_to_last_row(&mut service, &primary);
+    service
+        .apply_primary_display_overlay_input(&primary, b"i")
+        .unwrap();
+    assert!(saved_session_detail_open(&service));
+    service
+        .apply_primary_display_overlay_input(&primary, b"\x1b[B")
+        .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the page-edge step taken inside the detail claims its page"
+    );
+    assert!(
+        !saved_session_detail_open(&service),
+        "the fetched page replaces the detail the paging key was pressed in"
+    );
 }
 
 /// Verifies a memory-browser claim rebuilds its store-backed page.

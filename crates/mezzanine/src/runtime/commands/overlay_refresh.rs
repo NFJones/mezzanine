@@ -102,6 +102,7 @@ impl RuntimeSessionService {
                 delta,
                 first_id,
                 last_id,
+                replaces_detail: self.active_record_browser_is_detail(),
             },
         )))
     }
@@ -332,6 +333,7 @@ impl RuntimeSessionService {
             delta,
             first_id,
             last_id,
+            ..
         } = &work.intent
         {
             let current_anchor = match &source {
@@ -793,6 +795,9 @@ impl RuntimeSessionService {
                 if !self.active_record_browser_matches(&work.active_source) {
                     return Ok(false);
                 }
+                // A failure that settles while a detail is open is dropped with the
+                // install it belongs to: the operator re-presses the key after the
+                // detail, exactly as for a dropped filter.
                 if self.active_record_browser_is_detail() {
                     return Ok(false);
                 }
@@ -831,6 +836,9 @@ impl RuntimeSessionService {
                 let replaces_detail = matches!(
                     work.intent,
                     RuntimeRecordBrowserRefreshIntent::ApplyFilter {
+                        replaces_detail: true,
+                        ..
+                    } | RuntimeRecordBrowserRefreshIntent::FetchAdjacent {
                         replaces_detail: true,
                         ..
                     } | RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { .. }

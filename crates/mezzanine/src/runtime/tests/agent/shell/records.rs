@@ -1775,6 +1775,37 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
             .any(|line| line.contains("other pane context"))
     );
 
+    // The detail form runs in the same lane: the sequence argument opens the named
+    // entry instead of the list page, and Esc returns the browser to its list.
+    let detail_ack = service
+        .execute_agent_shell_command(&primary, "/show-context 1")
+        .unwrap();
+    assert!(
+        detail_ack.contains(r#""body":null"#),
+        "the deferred lane acknowledges the detail form: {detail_ack}"
+    );
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /show-context detail applies");
+    let detail = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("the detail keeps the context browser")
+        .browser
+        .render_page();
+    assert!(
+        detail.markdown.contains("first context entry"),
+        "the sequence form shows the named entry: {}",
+        detail.markdown
+    );
+    assert!(
+        !detail.markdown.contains("| Sequence |"),
+        "the sequence form opens the detail rather than the list: {}",
+        detail.markdown
+    );
+    apply_record_browser_input(&mut service, &primary, b"\x1b");
+
     apply_record_browser_input(&mut service, &primary, b"\x1b[B");
 
     let overlay = service.primary_display_overlay().unwrap();

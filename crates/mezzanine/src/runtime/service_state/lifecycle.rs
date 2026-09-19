@@ -466,6 +466,8 @@ pub(crate) enum RuntimeRecordBrowserRefreshIntent {
         first_id: String,
         /// Last record id on the page the cursor moved off.
         last_id: String,
+        /// Whether the operator paged from inside a record detail view.
+        replaces_detail: bool,
     },
     /// Rebuild the page around the focused row after an in-memory filter change:
     /// a toggled scope, subagent visibility, lifecycle, or search text.
