@@ -85,6 +85,11 @@ pub enum TranscriptContextEvent {
     PromptBoundary {
         /// Original provider-neutral context provenance.
         source: ContextSourceKind,
+        /// Original non-zero chronological event sequence when available.
+        ///
+        /// Legacy prompt-boundary records predate occurrence identity and keep
+        /// this absent so they remain replayable.
+        event_sequence: Option<u64>,
         /// SHA-256 digest of source, label, and exact model-visible content.
         projection_sha256: String,
         /// Exact model-visible block label.
@@ -195,7 +200,34 @@ impl TranscriptContextEvent {
         }
         Some(Self::PromptBoundary {
             source,
-            projection_sha256: prompt_boundary_sha256(source, &label, &content),
+            event_sequence: None,
+            projection_sha256: prompt_boundary_sha256(source, None, &label, &content),
+            label,
+            content,
+        })
+    }
+
+    /// Builds one validated prompt-boundary event with exact chronology identity.
+    pub fn prompt_boundary_with_event_sequence(
+        source: ContextSourceKind,
+        event_sequence: u64,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Option<Self> {
+        let label = label.into();
+        let content = content.into();
+        if event_sequence == 0 || !valid_prompt_boundary(source, &label, &content) {
+            return None;
+        }
+        Some(Self::PromptBoundary {
+            source,
+            event_sequence: Some(event_sequence),
+            projection_sha256: prompt_boundary_sha256(
+                source,
+                Some(event_sequence),
+                &label,
+                &content,
+            ),
             label,
             content,
         })
@@ -317,6 +349,7 @@ impl TranscriptContextEvent {
             }),
             Self::PromptBoundary {
                 source,
+                event_sequence,
                 projection_sha256,
                 label,
                 content,
@@ -324,6 +357,7 @@ impl TranscriptContextEvent {
                 "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
                 "kind": PROMPT_BOUNDARY_KIND,
                 "source": prompt_boundary_source_name(*source),
+                "event_sequence": event_sequence,
                 "projection_sha256": projection_sha256,
                 "label": label,
                 "content": content,
@@ -420,16 +454,19 @@ impl TranscriptContextEvent {
             MCP_COMPACTION_EPOCH_KIND => Some(Self::McpCompactionEpoch),
             PROMPT_BOUNDARY_KIND => {
                 let source = prompt_boundary_source(value.get("source")?.as_str()?)?;
+                let event_sequence = value.get("event_sequence").and_then(Value::as_u64);
                 let projection_sha256 = value.get("projection_sha256")?.as_str()?;
                 let label = value.get("label")?.as_str()?;
                 let content = value.get("content")?.as_str()?;
                 if !valid_prompt_boundary(source, label, content)
-                    || prompt_boundary_sha256(source, label, content) != projection_sha256
+                    || prompt_boundary_sha256(source, event_sequence, label, content)
+                        != projection_sha256
                 {
                     return None;
                 }
                 Some(Self::PromptBoundary {
                     source,
+                    event_sequence,
                     projection_sha256: projection_sha256.to_string(),
                     label: label.to_string(),
                     content: content.to_string(),
@@ -595,13 +632,22 @@ fn valid_prompt_boundary(source: ContextSourceKind, label: &str, content: &str) 
 }
 
 /// Digests the exact prompt-boundary identity without ambiguous concatenation.
-fn prompt_boundary_sha256(source: ContextSourceKind, label: &str, content: &str) -> String {
-    let material = format!(
-        "{}\0{}\0{}",
-        prompt_boundary_source_name(source),
-        label,
-        content
-    );
+fn prompt_boundary_sha256(
+    source: ContextSourceKind,
+    event_sequence: Option<u64>,
+    label: &str,
+    content: &str,
+) -> String {
+    let material = match event_sequence {
+        Some(event_sequence) => format!(
+            "{}\0{event_sequence}\0{label}\0{content}",
+            prompt_boundary_source_name(source),
+        ),
+        None => format!(
+            "{}\0{label}\0{content}",
+            prompt_boundary_source_name(source),
+        ),
+    };
     Sha256::digest(material.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -835,6 +881,38 @@ mod tests {
             let tampered = encoded.replace("exact pre-user content", "rewritten content");
             assert!(TranscriptContextEvent::from_transcript_content(&tampered).is_none());
         }
+        let event = TranscriptContextEvent::prompt_boundary_with_event_sequence(
+            ContextSourceKind::PeerMessage,
+            42,
+            "late peer reference",
+            "exact post-user content",
+        )
+        .unwrap();
+        let encoded = event.to_transcript_content();
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(&encoded),
+            Some(event)
+        );
+        let tampered = encoded.replace("\"event_sequence\":42", "\"event_sequence\":43");
+        assert!(TranscriptContextEvent::from_transcript_content(&tampered).is_none());
+        let legacy = concat!(
+            "[mez-transcript-context-event/v1]\n",
+            "{\"version\":\"mez-transcript-context-event/v1\",",
+            "\"kind\":\"prompt_boundary\",\"source\":\"local_message\",",
+            "\"projection_sha256\":\"e869dcd8f881e7cbd6ef0f60d1e32968a467c4144d31156ca0f952d76e835921\",",
+            "\"label\":\"legacy label\",\"content\":\"legacy content\"}"
+        );
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(legacy),
+            Some(TranscriptContextEvent::PromptBoundary {
+                source: ContextSourceKind::LocalMessage,
+                event_sequence: None,
+                projection_sha256:
+                    "e869dcd8f881e7cbd6ef0f60d1e32968a467c4144d31156ca0f952d76e835921".to_string(),
+                label: "legacy label".to_string(),
+                content: "legacy content".to_string(),
+            })
+        );
         assert!(
             TranscriptContextEvent::prompt_boundary(
                 ContextSourceKind::UserInstruction,

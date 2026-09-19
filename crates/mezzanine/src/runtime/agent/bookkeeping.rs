@@ -720,8 +720,9 @@ impl RuntimeSessionService {
                     | ContextSourceKind::Policy
                     | ContextSourceKind::Configuration
             ) {
-                TranscriptContextEvent::prompt_boundary(
+                TranscriptContextEvent::prompt_boundary_with_event_sequence(
                     block.source,
+                    event.sequence().get(),
                     block.label.clone(),
                     block.content.clone(),
                 )
@@ -805,6 +806,21 @@ impl RuntimeSessionService {
                 TranscriptContextEvent::mcp_catalog_snapshot(
                     block.content.clone(),
                     event.sequence().get(),
+                )
+            } else if active_user_seen
+                && matches!(
+                    block.source,
+                    ContextSourceKind::LocalMessage
+                        | ContextSourceKind::PeerMessage
+                        | ContextSourceKind::Policy
+                        | ContextSourceKind::Configuration
+                )
+            {
+                TranscriptContextEvent::prompt_boundary_with_event_sequence(
+                    block.source,
+                    event.sequence().get(),
+                    block.label.clone(),
+                    block.content.clone(),
                 )
             } else if !matches!(
                 block.source,

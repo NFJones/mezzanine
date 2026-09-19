@@ -1522,6 +1522,48 @@ fn runtime_transcript_persistence_preserves_interleaved_user_steering_order() {
         .unwrap()
         .append_user_event("user steering", "repeat this instruction exactly")
         .unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_peer_message_event(
+            "late peer reference",
+            "peer evidence received after the active prompt",
+        )
+        .unwrap();
+    for (source, label, content) in [
+        (
+            ContextSourceKind::LocalMessage,
+            "late local reference",
+            "local evidence received after the active prompt",
+        ),
+        (
+            ContextSourceKind::Policy,
+            "late policy reference",
+            "policy evidence received after the active prompt",
+        ),
+        (
+            ContextSourceKind::Configuration,
+            "late configuration reference",
+            "configuration evidence received after the active prompt",
+        ),
+    ] {
+        service
+            .agent_turn_contexts_mut()
+            .get_mut(&turn.turn_id)
+            .unwrap()
+            .append_reference_event(source, label, content)
+            .unwrap();
+    }
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_peer_message_event(
+            "late peer reference",
+            "peer evidence received after the active prompt",
+        )
+        .unwrap();
     let action = mez_agent::AgentAction {
         id: "settled-after-steering".to_string(),
         payload: mez_agent::AgentActionPayload::Say {
@@ -1606,11 +1648,47 @@ fn runtime_transcript_persistence_preserves_interleaved_user_steering_order() {
             )
         })
         .unwrap();
+    let peer_indices = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::PromptBoundary {
+                    source: ContextSourceKind::PeerMessage,
+                    label,
+                    content,
+                    ..
+                }) if label == "late peer reference"
+                    && content == "peer evidence received after the active prompt"
+            )
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let late_reference_indices = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::PromptBoundary { label, .. })
+                    if matches!(label.as_str(), "late local reference" | "late policy reference" | "late configuration reference")
+            )
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(user_event_indices.len(), 3, "{entries:#?}");
+    assert_eq!(peer_indices.len(), 2, "{entries:#?}");
+    assert_eq!(late_reference_indices.len(), 3, "{entries:#?}");
     assert!(
         user_event_indices[0] < assistant_index
             && assistant_index < user_event_indices[1]
-            && user_event_indices[1] < result_index
+            && user_event_indices[1] < peer_indices[0]
+            && peer_indices[0] < late_reference_indices[0]
+            && late_reference_indices[0] < late_reference_indices[1]
+            && late_reference_indices[1] < late_reference_indices[2]
+            && late_reference_indices[2] < peer_indices[1]
+            && peer_indices[1] < result_index
             && result_index < user_event_indices[2]
     );
 
@@ -1635,11 +1713,46 @@ fn runtime_transcript_persistence_preserves_interleaved_user_steering_order() {
         .iter()
         .position(|block| block.label == "action result settled-after-steering")
         .unwrap();
+    let replayed_peer_indices = replayed
+        .blocks()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            (block.source == ContextSourceKind::PeerMessage
+                && block.label == "late peer reference"
+                && block.content == "peer evidence received after the active prompt")
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let replayed_late_references = replayed
+        .blocks()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            matches!(
+                block.label.as_str(),
+                "late local reference" | "late policy reference" | "late configuration reference"
+            )
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(replayed_steering.len(), 3, "{:#?}", replayed.blocks());
+    assert_eq!(replayed_peer_indices.len(), 2, "{:#?}", replayed.blocks());
+    assert_eq!(
+        replayed_late_references.len(),
+        3,
+        "{:#?}",
+        replayed.blocks()
+    );
     assert!(
         replayed_steering[0] < replayed_assistant
             && replayed_assistant < replayed_steering[1]
-            && replayed_steering[1] < replayed_result
+            && replayed_steering[1] < replayed_peer_indices[0]
+            && replayed_peer_indices[0] < replayed_late_references[0]
+            && replayed_late_references[0] < replayed_late_references[1]
+            && replayed_late_references[1] < replayed_late_references[2]
+            && replayed_late_references[2] < replayed_peer_indices[1]
+            && replayed_peer_indices[1] < replayed_result
             && replayed_result < replayed_steering[2]
     );
     let _ = std::fs::remove_dir_all(transcript_root);

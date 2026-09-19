@@ -5298,7 +5298,10 @@ and cache lineage travel as typed non-model-visible request metadata.
 Prompt-boundary plan policy, explicit skill instructions, invocation-time
 configuration snapshots, and unread local messages that precede a user event
 MUST be persisted as bounded typed chronology before that user event and replayed
-with byte-identical source, label, content, and order. Persistent plan mode MUST
+with byte-identical source, label, content, and order. Allowlisted exact
+references introduced after a user event (local, peer, policy, and
+configuration context) MUST likewise persist at their original chronological
+position and replay without relocation or duplication. Persistent plan mode MUST
 append only when its enabled/disabled state changes; unchanged prompts MUST reuse
 the prior transition. A skill activation governs only its owning prompt boundary:
 historical activations MUST remain visible as causal history but MUST NOT suppress
