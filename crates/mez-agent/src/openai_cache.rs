@@ -142,26 +142,17 @@ fn provider_request_epoch(
     }
 }
 
-/// Operational controls excluded from prompt-cache identity material.
+/// Compatible-provider controls excluded from cache identity material.
 ///
-/// `reasoning`, `service_tier`, `text.verbosity`, and their provider-native
-/// dialect spellings change provider behaviour at request time but not one byte
-/// of the model-visible prefix or the provider-side cache key, so a change to
-/// only these controls must neither rotate Mezzanine's local epoch nor report a
-/// continuity divergence. They stay wire-level parameters - the emitted body
-/// keeps them - and provider-side truth stays observable through usage counters.
-/// New operational controls belong in this list instead of silently becoming
-/// identity material.
-const CACHE_IDENTITY_EXCLUDED_CONTROL_PATHS: &[&[&str]] = &[
-    // The OpenAI Responses reasoning object: every member today is operational.
-    &["reasoning"],
+/// This projection applies only to provider-native compatibility dialects.
+/// OpenAI Responses uses a separate projection because its reasoning, tier,
+/// and verbosity controls can affect provider cache compatibility.
+const PROVIDER_NATIVE_CACHE_IDENTITY_EXCLUDED_CONTROL_PATHS: &[&[&str]] = &[
     // Provider-native reasoning spellings, including DeepSeek's thinking object.
     &["thinking"],
     &["output_config", "effort"],
     &["output_config", "verbosity"],
     &["reasoning_effort"],
-    &["service_tier"],
-    &["text", "verbosity"],
     &["verbosity"],
     // Sampling and output caps: they change generation, not one byte of cached
     // prefix material, and the OpenAI Responses body never emits them.
@@ -172,13 +163,27 @@ const CACHE_IDENTITY_EXCLUDED_CONTROL_PATHS: &[&[&str]] = &[
     &["max_tokens"],
 ];
 
-/// Returns one request-control shape reduced to the fields that define
-/// prompt-cache identity.
+/// Returns a compatible-provider request-control cache-identity projection.
 pub(crate) fn openai_cache_identity_control_projection(
     controls: &serde_json::Value,
 ) -> serde_json::Value {
     let mut projection = controls.clone();
-    for path in CACHE_IDENTITY_EXCLUDED_CONTROL_PATHS {
+    for path in PROVIDER_NATIVE_CACHE_IDENTITY_EXCLUDED_CONTROL_PATHS {
+        remove_cache_identity_control_path(&mut projection, path);
+    }
+    projection
+}
+
+/// Returns the OpenAI Responses request-control cache-identity projection.
+///
+/// Responses reasoning, service tier, and text verbosity remain present because
+/// they can affect provider cache compatibility despite leaving visible input
+/// unchanged. Output-generation controls remain excluded.
+pub(crate) fn openai_responses_cache_identity_control_projection(
+    controls: &serde_json::Value,
+) -> serde_json::Value {
+    let mut projection = controls.clone();
+    for path in [&["temperature"][..], &["stop"][..], &["max_tokens"][..]] {
         remove_cache_identity_control_path(&mut projection, path);
     }
     projection
@@ -241,9 +246,9 @@ fn openai_context_epoch_identity(
         response_format_sha256: canonical_json_sha256(&response_format)?,
         tool_schema_sha256: canonical_json_sha256(&tools)?,
         tool_choice_sha256: canonical_json_sha256(&tool_choice)?,
-        request_controls_sha256: canonical_json_sha256(&openai_cache_identity_control_projection(
-            &request_controls,
-        ))?,
+        request_controls_sha256: canonical_json_sha256(
+            &openai_responses_cache_identity_control_projection(&request_controls),
+        )?,
         api_shape: format!("openai-responses;stream={stream}"),
         cache_lineage: request.prompt_cache_lineage_id.clone(),
         compaction_generation_sha256: sha256_hex(
@@ -679,8 +684,8 @@ mod tests {
         );
     }
 
-    /// Verifies the cache-identity projection drops exactly the operational
-    /// controls and nothing else.
+    /// Verifies the compatible-provider cache-identity projection drops exactly
+    /// its operational controls and nothing else.
     ///
     /// A new operational control must be added to the projection list instead of
     /// silently becoming identity material, so the exclusion set is asserted
@@ -692,10 +697,8 @@ mod tests {
         let controls = serde_json::json!({
             "model": "gpt-test",
             "stream": true,
-            "reasoning": { "effort": "high" },
             "thinking": { "type": "enabled" },
-            "service_tier": "priority",
-            "text": { "format": { "type": "json_object" }, "verbosity": "low" },
+            "text": { "format": { "type": "json_object" } },
             "output_config": { "effort": "high" },
             "reasoning_effort": "high",
             "verbosity": "low",
@@ -715,22 +718,41 @@ mod tests {
         );
 
         // An excluded leaf must not leave an empty parent behind.
-        let only_verbosity = serde_json::json!({ "text": { "verbosity": "low" } });
+        let only_thinking = serde_json::json!({ "thinking": { "type": "enabled" } });
         assert_eq!(
-            openai_cache_identity_control_projection(&only_verbosity),
+            openai_cache_identity_control_projection(&only_thinking),
             serde_json::json!({})
         );
     }
 
-    /// Verifies an operational control change keeps the cache epoch, the
-    /// rendered prefix, and the derived cache key.
+    /// Verifies Responses controls that can affect provider cache compatibility
+    /// remain in the diagnostic identity projection.
+    #[test]
+    fn openai_responses_cache_identity_retains_compatibility_controls() {
+        let controls = serde_json::json!({
+            "reasoning": { "effort": "high" },
+            "service_tier": "priority",
+            "text": { "verbosity": "low" },
+            "temperature": 0.9,
+        });
+        assert_eq!(
+            openai_responses_cache_identity_control_projection(&controls),
+            serde_json::json!({
+                "reasoning": { "effort": "high" },
+                "service_tier": "priority",
+                "text": { "verbosity": "low" },
+            })
+        );
+    }
+
+    /// Verifies Responses reasoning and tier controls change cache-compatibility
+    /// diagnostics while retaining the literal rendered prompt prefix.
     ///
     /// Auto-sizing can select a different reasoning effort or latency preference
-    /// between turns. Those are wire parameters: the emitted body still carries
-    /// them, but they must not rotate Mezzanine's local epoch nor appear as a
-    /// request-control continuity divergence.
+    /// between turns. The emitted body retains those controls, and the
+    /// compatibility projection must reflect their potential cache effect.
     #[test]
-    fn openai_operational_controls_keep_the_cache_epoch_and_envelope() {
+    fn openai_responses_reasoning_and_tier_change_cache_identity() {
         let messages = vec![
             ModelMessage {
                 role: ModelMessageRole::System,
@@ -763,10 +785,10 @@ mod tests {
         assert_eq!(medium_body["input"], high_body["input"]);
         assert_eq!(
             medium_body["prompt_cache_key"], high_body["prompt_cache_key"],
-            "operational controls must not change the derived cache key"
+            "cache partition ownership remains independent of control compatibility"
         );
         assert_eq!(high.messages.provider_continuity_warning(), None);
-        assert_eq!(
+        assert_ne!(
             medium
                 .messages
                 .provider_request_epoch()
@@ -776,7 +798,7 @@ mod tests {
                 .provider_request_epoch()
                 .unwrap()
                 .context_epoch,
-            "operational controls must not rotate the local cache epoch"
+            "Responses reasoning and tier controls must rotate cache identity"
         );
 
         let medium_diagnostics = openai_prompt_cache_diagnostics_for_request(&medium).unwrap();
@@ -785,20 +807,20 @@ mod tests {
             &medium_diagnostics.continuity_snapshot,
             &high_diagnostics.continuity_snapshot,
         );
-        assert!(continuity.cache_envelope_unchanged, "{continuity:#?}");
-        assert!(continuity.request_prefix_append_only, "{continuity:#?}");
-        assert_eq!(continuity.category, "identical", "{continuity:#?}");
+        assert!(!continuity.cache_envelope_unchanged, "{continuity:#?}");
+        assert!(!continuity.request_prefix_append_only, "{continuity:#?}");
+        assert_eq!(continuity.category, "request_control", "{continuity:#?}");
         assert_ne!(
             medium_diagnostics.continuity_snapshot.request_sha256,
             high_diagnostics.continuity_snapshot.request_sha256,
             "the raw complete-request digest must still describe the literal body"
         );
-        assert_eq!(
+        assert_ne!(
             medium_diagnostics
                 .continuity_snapshot
                 .request_control_sha256,
             high_diagnostics.continuity_snapshot.request_control_sha256,
-            "only the cache-identity control digest is reduced"
+            "Responses cache-compatibility controls must remain in the diagnostic projection"
         );
     }
 

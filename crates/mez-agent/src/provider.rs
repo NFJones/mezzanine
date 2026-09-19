@@ -347,7 +347,9 @@ pub fn openai_prompt_cache_diagnostics(
     )?;
     let stable_projection = openai_stable_projection_material(rendered)?;
     let provider_request_shape = openai_diagnostic_json(
-        &crate::openai_cache::openai_cache_identity_control_projection(provider_request_shape),
+        &crate::openai_cache::openai_responses_cache_identity_control_projection(
+            provider_request_shape,
+        ),
         "OpenAI request-shape diagnostics failed",
     )?;
     let continuity_snapshot = openai_request_continuity_snapshot(
