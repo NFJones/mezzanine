@@ -63,13 +63,15 @@ and whether the cache-affecting envelope remained unchanged.
 
 For ChatGPT browser/device Responses requests, the bounded trace also records
 the post-transform wire shape: final body and input byte counts and digests,
-whether `prompt_cache_options` survived, and presence-only digests for the
-sent `session-id` and replayed `x-codex-turn-state` headers. These values
+whether `prompt_cache_options` survived, requested reasoning-effort and
+service-tier categories, and presence-only digests for the sent `session-id`
+and replayed `x-codex-turn-state` headers. It also records the elapsed
+transport and response-normalization duration for that request. These values
 describe the actual serialized request after the ChatGPT adapter removes
 unsupported cache options. They never include credentials, account ids,
 prompts, reasoning payloads, or opaque routing tokens. A missing header digest
-means the header was absent; it does not establish a cache miss or server-side
-routing failure.
+means the header was absent; an absent requested control or unknown elapsed
+duration does not establish a cache miss or server-side routing failure.
 
 Successful Responses replies additionally contribute only response metadata:
 digests of response and server request identifiers, reported effective service

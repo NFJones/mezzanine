@@ -418,8 +418,8 @@ async fn observed_chatgpt_provider_reports_redacted_final_wire_shape() {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
             model_capabilities: Default::default(),
-            reasoning_profile: None,
-            latency_preference: None,
+            reasoning_profile: Some("high".to_string()),
+            latency_preference: Some("fast".to_string()),
             multimodal_required: false,
             provider_options: std::collections::BTreeMap::new(),
             safety_tier: None,
@@ -478,11 +478,21 @@ async fn observed_chatgpt_provider_reports_redacted_final_wire_shape() {
     observed.send_request_async(&request).await.unwrap();
     let second = receiver.recv().await.unwrap();
 
+    assert!(first.elapsed_ms.is_some());
+    assert!(second.elapsed_ms.is_some());
     let first_wire = first.final_wire_diagnostics.unwrap();
     let second_wire = second.final_wire_diagnostics.unwrap();
     assert!(!first_wire.prompt_cache_options_present);
     assert_eq!(first_wire.input_items, Some(1));
     assert_eq!(first_wire.body_sha256.len(), 64);
+    assert_eq!(
+        first_wire.requested_reasoning_effort.as_deref(),
+        Some("high")
+    );
+    assert_eq!(
+        first_wire.requested_service_tier.as_deref(),
+        Some("priority")
+    );
     assert_eq!(
         first_wire
             .chatgpt_session_id_sha256

@@ -84,13 +84,15 @@ impl RuntimeSessionService {
             || "unavailable".to_string(),
             |diagnostics| {
                 format!(
-                    "body_bytes={} body_sha256={} input_bytes={} input_items={} input_sha256={} prompt_cache_options_present={} session_id_sha256={} turn_state_sha256={}",
+                    "body_bytes={} body_sha256={} input_bytes={} input_items={} input_sha256={} prompt_cache_options_present={} requested_reasoning_effort={} requested_service_tier={} session_id_sha256={} turn_state_sha256={}",
                     diagnostics.body_bytes,
                     diagnostics.body_sha256,
                     diagnostics.input_bytes.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
                     diagnostics.input_items.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
                     diagnostics.input_sha256.as_deref().unwrap_or("unknown"),
                     diagnostics.prompt_cache_options_present,
+                    diagnostics.requested_reasoning_effort.as_deref().unwrap_or("absent"),
+                    diagnostics.requested_service_tier.as_deref().unwrap_or("absent"),
                     diagnostics.chatgpt_session_id_sha256.as_deref().unwrap_or("absent"),
                     diagnostics.chatgpt_turn_state_sha256.as_deref().unwrap_or("absent"),
                 )
@@ -113,7 +115,7 @@ impl RuntimeSessionService {
         self.record_agent_pane_trace_log_text(
             &observation.pane_id,
             &format!(
-                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} schema_digest={} succeeded={} failure={} input_bytes={} input_items={} mcp_directory_bytes={} mcp_search_result_bytes={} mcp_retrieved_contract_bytes={} mcp_action_result_bytes={} action_result_bytes={} final_wire={} response_metadata={} cache={} continuity={} continuity_warning={}",
+                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} schema_digest={} succeeded={} failure={} elapsed_ms={} input_bytes={} input_items={} mcp_directory_bytes={} mcp_search_result_bytes={} mcp_retrieved_contract_bytes={} mcp_action_result_bytes={} action_result_bytes={} final_wire={} response_metadata={} cache={} continuity={} continuity_warning={}",
                 observation.turn_id,
                 status.request_id,
                 observation.attempt_index,
@@ -125,6 +127,7 @@ impl RuntimeSessionService {
                 observation.schema_digest,
                 observation.succeeded,
                 observation.failure_kind.as_deref().unwrap_or("none"),
+                observation.elapsed_ms.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
                 status.effective_input_bytes.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
                 status.effective_input_items.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
                 status.mcp_directory_bytes,

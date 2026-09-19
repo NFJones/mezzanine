@@ -1701,6 +1701,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
             usage,
             succeeded: true,
             failure_kind: None,
+            elapsed_ms: None,
         }
     };
 

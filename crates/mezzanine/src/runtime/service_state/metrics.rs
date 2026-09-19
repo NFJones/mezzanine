@@ -794,6 +794,7 @@ mod provider_wire_tests {
             usage,
             succeeded: true,
             failure_kind: None,
+            elapsed_ms: None,
         }
     }
 

@@ -129,6 +129,7 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
                 usage: None,
                 succeeded: true,
                 failure_kind: None,
+                elapsed_ms: None,
             },
         );
 

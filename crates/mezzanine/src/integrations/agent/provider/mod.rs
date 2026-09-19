@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Validates one required concrete provider-adapter field.
 fn validate_non_empty(field: &str, value: &str) -> Result<()> {
@@ -76,8 +77,26 @@ fn openai_final_wire_diagnostics(request: &ProviderHttpRequest) -> OpenAiFinalWi
         prompt_cache_options_present: body
             .as_ref()
             .is_some_and(|body| body.get("prompt_cache_options").is_some()),
+        requested_reasoning_effort: body
+            .as_ref()
+            .and_then(|body| body.pointer("/reasoning/effort"))
+            .and_then(serde_json::Value::as_str)
+            .map(openai_reasoning_effort_category),
+        requested_service_tier: body
+            .as_ref()
+            .and_then(|body| body.get("service_tier"))
+            .and_then(serde_json::Value::as_str)
+            .map(openai_service_tier_category),
         chatgpt_session_id_sha256: header_digest(CHATGPT_SESSION_ID_HEADER),
         chatgpt_turn_state_sha256: header_digest(CHATGPT_TURN_STATE_HEADER),
+    }
+}
+
+/// Maps a requested reasoning effort onto a bounded diagnostic category.
+fn openai_reasoning_effort_category(value: &str) -> String {
+    match value {
+        "low" | "medium" | "high" | "xhigh" | "minimal" => value.to_string(),
+        _ => "unknown".to_string(),
     }
 }
 
@@ -465,6 +484,8 @@ pub struct ProviderWireRequestObservation {
     pub succeeded: bool,
     /// Content-free failure classification when the request failed.
     pub failure_kind: Option<String>,
+    /// Elapsed monotonic transport and response-normalization time in milliseconds.
+    pub elapsed_ms: Option<u64>,
 }
 
 /// Content-free digest of the final OpenAI Responses request sent on the wire.
@@ -490,6 +511,10 @@ pub struct OpenAiFinalWireDiagnostics {
     pub tools_sha256: Option<String>,
     /// Whether the final body contains direct OpenAI cache options.
     pub prompt_cache_options_present: bool,
+    /// Requested reasoning effort category in the final serialized request.
+    pub requested_reasoning_effort: Option<String>,
+    /// Requested service-tier category in the final serialized request.
+    pub requested_service_tier: Option<String>,
     /// Digest of the sent ChatGPT session-affinity header, when present.
     pub chatgpt_session_id_sha256: Option<String>,
     /// Digest of the replayed ChatGPT same-turn token, when present.
@@ -560,6 +585,13 @@ pub struct ProviderWireObservationContext<'a> {
     diagnostics_failed: bool,
 }
 
+/// Content-free details captured from one final OpenAI Responses wire attempt.
+struct FinalWireObservation {
+    final_wire_diagnostics: Option<OpenAiFinalWireDiagnostics>,
+    response_diagnostics: Option<OpenAiResponseDiagnostics>,
+    elapsed_ms: Option<u64>,
+}
+
 impl<'a> ProviderWireObservationContext<'a> {
     /// Creates context for every concrete send made by one provider call.
     fn new(
@@ -589,18 +621,27 @@ impl<'a> ProviderWireObservationContext<'a> {
         retry_reason: Option<&str>,
         result: &Result<ModelResponse>,
     ) {
-        self.observe_with_final_wire(request, attempt_index, retry_reason, None, None, result)
-            .await;
+        self.observe_with_final_wire(
+            request,
+            attempt_index,
+            retry_reason,
+            FinalWireObservation {
+                final_wire_diagnostics: None,
+                response_diagnostics: None,
+                elapsed_ms: None,
+            },
+            result,
+        )
+        .await;
     }
 
     /// Emits one observation with diagnostics derived from its transported request.
-    pub async fn observe_with_final_wire(
+    async fn observe_with_final_wire(
         &self,
         request: &ModelRequest,
         attempt_index: usize,
         retry_reason: Option<&str>,
-        final_wire_diagnostics: Option<OpenAiFinalWireDiagnostics>,
-        response_diagnostics: Option<OpenAiResponseDiagnostics>,
+        final_wire: FinalWireObservation,
         result: &Result<ModelResponse>,
     ) {
         let usage = result.as_ref().ok().and_then(|response| {
@@ -667,13 +708,14 @@ impl<'a> ProviderWireObservationContext<'a> {
                 .fold(0usize, |total, message| {
                     total.saturating_add(message.content.len())
                 }),
-            final_wire_diagnostics,
-            response_diagnostics,
+            final_wire_diagnostics: final_wire.final_wire_diagnostics,
+            response_diagnostics: final_wire.response_diagnostics,
             openai_diagnostics: self.openai_diagnostics.clone(),
             diagnostics_failed: self.diagnostics_failed,
             usage,
             succeeded: result.is_ok(),
             failure_kind,
+            elapsed_ms: final_wire.elapsed_ms,
         };
         let _ = self.observer.sender.send(observation).await;
     }
@@ -2254,9 +2296,11 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 self.timeout_ms,
             )?;
             let final_wire_diagnostics = openai_final_wire_diagnostics(&http_request);
+            let started_at = Instant::now();
             let completed = self
                 .send_openai_responses_http_request_async(request, http_request, progress)
                 .await;
+            let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
             let (result, response_diagnostics) = match completed {
                 Ok((result, diagnostics)) => (result, Some(diagnostics)),
                 Err(error) => (Err(error), None),
@@ -2267,8 +2311,11 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                         request,
                         1,
                         None,
-                        Some(final_wire_diagnostics),
-                        response_diagnostics,
+                        FinalWireObservation {
+                            final_wire_diagnostics: Some(final_wire_diagnostics),
+                            response_diagnostics,
+                            elapsed_ms: Some(elapsed_ms),
+                        },
                         &result,
                     )
                     .await;
