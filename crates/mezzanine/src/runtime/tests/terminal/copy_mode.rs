@@ -334,6 +334,117 @@ fn runtime_mouse_wheel_scrolls_without_dropping_a_selection_drag() {
     );
 }
 
+/// Verifies the wheel scrolls the dragged pane, not the pane under the pointer.
+///
+/// A drag owns the mouse until it finishes, and every selection update resolves
+/// against the pane the drag started in. A pointer that has moved over another
+/// pane must not redirect the scroll: doing so scrolled the wrong view, created a
+/// copy buffer for that pane, and could end the drag from there by reaching its
+/// bottom.
+#[test]
+fn runtime_mouse_wheel_scrolls_the_dragged_pane_not_the_pointer_pane() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 8).unwrap());
+    service.set_frame_visibility_for_tests(false, false);
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 8).unwrap(), 120)
+        .unwrap();
+    let dragged_pane = service.active_pane_id().unwrap().to_string();
+    let mut screen = TerminalScreen::new(Size::new(20, 8).unwrap(), 20).unwrap();
+    screen.feed(
+        b"one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen",
+    );
+    service.set_pane_screen(dragged_pane.clone(), screen);
+
+    service
+        .apply_attached_mux_action(&primary, MuxAction::SplitPaneVertical)
+        .unwrap();
+    let pointer_pane = service.active_pane_id().unwrap().to_string();
+    assert_ne!(
+        dragged_pane, pointer_pane,
+        "the split focuses a pane the drag does not own"
+    );
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::CopySelectionStart(CopyPosition { line: 1, column: 1 }),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    let started_top = {
+        let copy_mode = service
+            .active_copy_mode_for_presented_surface(&dragged_pane)
+            .expect("the press seeds a copy buffer for the dragged pane");
+        copy_mode.scroll_top()
+    };
+    assert_eq!(
+        service.active_pane_id().unwrap(),
+        dragged_pane,
+        "the press focuses the pane the drag belongs to"
+    );
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(
+        config.mouse_selection_active,
+        "the drag is active in the pane it started in"
+    );
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::ScrollHistory {
+                        lines: -3,
+                        position: CopyPosition {
+                            line: 1,
+                            column: 15,
+                        },
+                    },
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let scrolled_top = {
+        let copy_mode = service
+            .active_copy_mode_for_presented_surface(&dragged_pane)
+            .expect("the wheel keeps the dragged pane's copy buffer");
+        copy_mode.scroll_top()
+    };
+    assert!(
+        scrolled_top < started_top,
+        "the wheel scrolls the pane the selection lives in"
+    );
+    assert!(
+        service
+            .active_copy_mode_for_presented_surface(&pointer_pane)
+            .is_none(),
+        "the pane under the pointer gains no copy buffer"
+    );
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(
+        config.mouse_selection_active,
+        "the drag survives a wheel fired over another pane"
+    );
+}
+
 /// Verifies a double-click copied-word highlight remains visible across the
 /// first render and only clears after its configured 500 ms lifetime expires.
 /// This protects the copied-word flash from disappearing immediately on the

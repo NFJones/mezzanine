@@ -538,12 +538,35 @@ impl RuntimeSessionService {
                 // extending past the rows that were visible when it started. The
                 // selection actions own this state: finish clears it, and a scroll
                 // must not reset an anchor the operator is still dragging from.
-                let target = self
-                    .mouse_pane_target_at(position)
-                    .unwrap_or(MousePaneTarget {
-                        pane_id: self.active_pane_id()?.to_string(),
+                //
+                // A drag whose surface was replaced is stale, exactly as in the
+                // selection update path, so it is dropped before the target is
+                // chosen; a live drag owns the mouse until it finishes, so the
+                // wheel scrolls the pane the selection lives in - the target the
+                // drag updates resolve against - rather than whichever pane is
+                // under the pointer.
+                if self
+                    .presentation
+                    .mouse_selection_drag_state
+                    .as_ref()
+                    .is_some_and(|state| {
+                        self.presented_pane_surface(state.pane_id.as_str()) != state.surface
+                    })
+                {
+                    self.presentation.mouse_selection_drag_state = None;
+                }
+                let target = match self.presentation.mouse_selection_drag_state.as_ref() {
+                    Some(state) => MousePaneTarget {
+                        pane_id: state.pane_id.clone(),
                         position,
-                    });
+                    },
+                    None => self
+                        .mouse_pane_target_at(position)
+                        .unwrap_or(MousePaneTarget {
+                            pane_id: self.active_pane_id()?.to_string(),
+                            position,
+                        }),
+                };
                 let should_exit = {
                     let copy_mode = self.ensure_active_copy_mode(target.pane_id.as_str())?;
                     copy_mode.scroll_by(lines);
