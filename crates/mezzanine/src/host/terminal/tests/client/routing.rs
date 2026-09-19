@@ -1188,3 +1188,86 @@ fn client_loop_forwards_ordinary_bytes_in_batched_copy_mode_input() {
         ]
     );
 }
+
+/// Verifies batched control bytes keep their own copy-mode contract.
+///
+/// Control bytes are a different class from the escape chords the split was
+/// written for: each one parses as its own chord, so a held control key has to
+/// reach the classifier once per byte - never forwarded into the pane under the
+/// copy view, and never collapsed into one action for the whole read.
+#[test]
+fn client_loop_repeats_batched_control_bytes_in_copy_mode() {
+    let mut config = TerminalClientLoopConfig::default();
+    config.mouse_policy.copy_mode_active = true;
+    config.scrollback_copy_mode_active = true;
+
+    assert_eq!(
+        route_client_input_actions(b"\x03\x03", &config).unwrap(),
+        vec![
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::Ignore),
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::Ignore),
+        ]
+    );
+}
+
+/// Verifies batched escapes reach copy mode as repeated cancels.
+///
+/// The chord parser needs a following graphic byte to build a chord, so a held
+/// escape never parsed and the run took the old path - forwarded into the pane
+/// under the copy view. A lone escape is `Cancel` to the classifier, so the
+/// batched form has to be one cancel per byte, matching a single escape press.
+#[test]
+fn client_loop_repeats_batched_escapes_in_copy_mode() {
+    let mut config = TerminalClientLoopConfig::default();
+    config.mouse_policy.copy_mode_active = true;
+    config.scrollback_copy_mode_active = true;
+
+    assert_eq!(
+        route_client_input_actions(b"\x1b\x1b", &config).unwrap(),
+        vec![
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::Cancel),
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::Cancel),
+        ]
+    );
+}
+
+/// Verifies an unknown leading chord stays independent of the moves behind it.
+///
+/// The splitter does not classify copy-mode keys itself: it hands every complete
+/// chord to the router a single press uses, so a leading sequence copy mode does
+/// not own keeps its own routing while the repeats after it still reach copy
+/// mode instead of being dragged onto the older unsplit path.
+#[test]
+fn client_loop_routes_an_unknown_leading_chord_in_batched_copy_mode_input() {
+    let mut config = TerminalClientLoopConfig::default();
+    config.mouse_policy.copy_mode_active = true;
+    config.scrollback_copy_mode_active = true;
+
+    assert_eq!(
+        route_client_input_actions(b"\x1b[\x1b[B", &config).unwrap(),
+        vec![
+            TerminalClientLoopAction::ForwardToPane(b"\x1b[".to_vec()),
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::MoveDown),
+        ]
+    );
+}
+
+/// Verifies a trailing escape after copy-mode moves still cancels.
+///
+/// A held escape arriving behind complete chords is a press in its own right,
+/// and the classifier reads one escape as `Cancel`, so the trailing byte must
+/// cancel instead of dragging the moves back onto the older unsplit path.
+#[test]
+fn client_loop_cancels_a_trailing_escape_after_copy_mode_moves() {
+    let mut config = TerminalClientLoopConfig::default();
+    config.mouse_policy.copy_mode_active = true;
+    config.scrollback_copy_mode_active = true;
+
+    assert_eq!(
+        route_client_input_actions(b"\x1b[B\x1b", &config).unwrap(),
+        vec![
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::MoveDown),
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::Cancel),
+        ]
+    );
+}

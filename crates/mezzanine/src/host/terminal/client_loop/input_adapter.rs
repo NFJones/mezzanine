@@ -23,20 +23,44 @@ use mez_mux::input::{
 /// and the copy-mode classifier accepts exactly one chord, so an unsplit run is
 /// either discarded or forwarded into the pane. Returns `None` unless the read
 /// is a multi-chord run of complete chords, which keeps single chords,
-/// incomplete escapes, and every non-copy-mode read on the existing path.
+/// incomplete escapes, and every non-copy-mode read on the existing path: a
+/// trailing partial chord is left to the old path rather than guessed at, since
+/// a read boundary can be the only thing separating `\x1b` from its sequence.
+/// The one exception is a run of consecutive escape bytes, which is the batched
+/// form of the classifier's own lone-escape rule.
 fn split_complete_copy_mode_chords(input: &[u8]) -> Option<Vec<&[u8]>> {
     let mut chords = Vec::new();
     let mut remaining = input;
     while !remaining.is_empty() {
-        let (_, consumed) = parse_key_chord_bytes(remaining)?;
-        if consumed == 0 || consumed > remaining.len() {
-            return None;
-        }
+        let consumed = copy_mode_chord_len(remaining, !chords.is_empty())?;
         let (chord, rest) = remaining.split_at(consumed);
         chords.push(chord);
         remaining = rest;
     }
     (chords.len() > 1).then_some(chords)
+}
+
+/// Returns the byte length of the next complete copy-mode chord.
+///
+/// A lone escape is the one case where the chord parser and the copy-mode
+/// classifier disagree: the parser needs a following graphic byte to build a
+/// chord, while the classifier reads a lone escape as `Cancel`, so a held escape
+/// would never be split. A run of consecutive escapes splits byte by byte, and a
+/// trailing escape left after complete chords is the same batched press. Anything
+/// the parser cannot complete declines, which leaves the whole read on the
+/// previous path rather than guessing at a chord boundary.
+fn copy_mode_chord_len(input: &[u8], split_started: bool) -> Option<usize> {
+    if input.first() == Some(&b'\x1b') {
+        if input.len() > 1 && input[1] == b'\x1b' {
+            return Some(1);
+        }
+        if input.len() == 1 && split_started {
+            return Some(1);
+        }
+    }
+    parse_key_chord_bytes(input)
+        .map(|(_, consumed)| consumed)
+        .filter(|consumed| *consumed > 0 && *consumed <= input.len())
 }
 
 /// Routes one ordinary input segment, chord by chord while copy mode owns it.
