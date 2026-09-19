@@ -168,7 +168,6 @@ impl OpenAiResponsesStreamDecoder {
     ) -> ProviderResponseResult<Option<String>> {
         let data = event.data.trim();
         if data == "[DONE]" {
-            self.completed = true;
             return Ok(None);
         }
         let value: serde_json::Value = serde_json::from_str(data).map_err(|error| {
@@ -342,6 +341,11 @@ impl OpenAiResponsesStreamDecoder {
         ModelTokenUsage,
         Vec<ProviderTranscriptEvent>,
     )> {
+        if !self.completed {
+            return Err(ProviderResponseError::invalid_state(
+                "OpenAI stream closed before response.completed",
+            ));
+        }
         let output_item_text_empty = self.output_item_text.is_empty();
         let raw_text = if let Some(arguments) =
             collect_openai_maap_function_call_arguments_from_accumulators(&self.function_calls)?
@@ -355,11 +359,6 @@ impl OpenAiResponsesStreamDecoder {
         if raw_text.is_empty() {
             return Err(ProviderResponseError::invalid_state(
                 "OpenAI stream did not contain text or MAAP function-call output",
-            ));
-        }
-        if !self.completed && output_item_text_empty && self.function_calls.is_empty() {
-            return Err(ProviderResponseError::invalid_state(
-                "OpenAI stream closed before response.completed",
             ));
         }
         let native_output = self
@@ -420,7 +419,6 @@ pub fn parse_openai_responses_stream_body(
         |event_name, data| {
             let data = data.trim();
             if data == "[DONE]" {
-                completed = true;
                 return Ok(());
             }
             let value: serde_json::Value = serde_json::from_str(data).map_err(|error| {
@@ -578,6 +576,11 @@ pub fn parse_openai_responses_stream_body(
     )?;
 
     let output_item_text_empty = output_item_text.is_empty();
+    if !completed {
+        return Err(ProviderResponseError::invalid_state(
+            "OpenAI stream closed before response.completed",
+        ));
+    }
     let raw_text = if let Some(arguments) =
         collect_openai_maap_function_call_arguments_from_accumulators(&function_calls)?
     {
@@ -590,11 +593,6 @@ pub fn parse_openai_responses_stream_body(
     if raw_text.is_empty() {
         return Err(ProviderResponseError::invalid_state(
             "OpenAI stream did not contain text or MAAP function-call output",
-        ));
-    }
-    if !completed && output_item_text_empty && function_calls.is_empty() {
-        return Err(ProviderResponseError::invalid_state(
-            "OpenAI stream closed before response.completed",
         ));
     }
     let native_output =
@@ -1115,6 +1113,121 @@ mod tests {
         assert_eq!(
             events,
             vec![ProviderTranscriptEvent::OpenAiResponseOutput { items }]
+        );
+    }
+
+    /// Verifies incremental decoding rejects function-call output when the SSE
+    /// stream ends before the provider declares a completed response.
+    #[test]
+    fn openai_stream_decoder_rejects_native_output_without_completion() {
+        let event = crate::SseEvent {
+            name: Some("response.output_item.done".to_string()),
+            data: serde_json::json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_cutoff",
+                    "call_id": "call_cutoff",
+                    "name": "submit_maap_action_batch",
+                    "arguments": "{\"actions\":[]}"
+                }
+            })
+            .to_string(),
+        };
+        let mut decoder = OpenAiResponsesStreamDecoder::default();
+
+        decoder.push_event(&event).unwrap();
+        let error = decoder.finish("gpt-test").unwrap_err();
+
+        assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
+        assert_eq!(
+            error.message(),
+            "OpenAI stream closed before response.completed"
+        );
+    }
+
+    /// Verifies buffered SSE parsing rejects visible output when EOF arrives
+    /// without a terminal `response.completed` event.
+    #[test]
+    fn openai_stream_body_rejects_text_without_completion() {
+        let body = format!(
+            "event: response.output_item.done\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "partial output"}]
+                }
+            })
+        );
+
+        let error = parse_openai_responses_stream_body(&body, "gpt-test").unwrap_err();
+
+        assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
+        assert_eq!(
+            error.message(),
+            "OpenAI stream closed before response.completed"
+        );
+    }
+
+    /// Verifies a terminal transport sentinel cannot promote native output
+    /// without the authoritative `response.completed` provider event.
+    #[test]
+    fn openai_stream_decoder_rejects_done_without_response_completed() {
+        let output = crate::SseEvent {
+            name: Some("response.output_item.done".to_string()),
+            data: serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_done",
+                    "call_id": "call_done",
+                    "name": "submit_maap_action_batch",
+                    "arguments": "{\"actions\":[]}"
+                }
+            })
+            .to_string(),
+        };
+        let done = crate::SseEvent {
+            name: None,
+            data: "[DONE]".to_string(),
+        };
+        let mut decoder = OpenAiResponsesStreamDecoder::default();
+
+        decoder.push_event(&output).unwrap();
+        decoder.push_event(&done).unwrap();
+        let error = decoder.finish("gpt-test").unwrap_err();
+
+        assert_eq!(
+            error.message(),
+            "OpenAI stream closed before response.completed"
+        );
+    }
+
+    /// Verifies buffered parsing treats `[DONE]` as transport termination, not
+    /// as a completed Responses result that can promote visible text.
+    #[test]
+    fn openai_stream_body_rejects_done_without_response_completed() {
+        let body = format!(
+            "event: response.output_item.done\ndata: {}\n\ndata: [DONE]\n\n",
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "partial output"}]
+                }
+            })
+        );
+
+        let error = parse_openai_responses_stream_body(&body, "gpt-test").unwrap_err();
+
+        assert_eq!(
+            error.message(),
+            "OpenAI stream closed before response.completed"
         );
     }
 
