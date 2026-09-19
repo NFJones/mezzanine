@@ -356,9 +356,16 @@ fn openai_provider_from_auth_store_routes_chatgpt_credentials_to_codex_backend()
 
     let provider = openai_provider_from_auth_store_with_transport(&auth_store, transport).unwrap();
     let response = provider.send_request(&request).unwrap();
+    let retry_response = provider.send_request(&request).unwrap();
+    let mut separate_session_request = request.clone();
+    separate_session_request.prompt_cache_session_id = Some("session-other".to_string());
+    let separate_session_response = provider.send_request(&separate_session_request).unwrap();
 
     assert_eq!(response.raw_text, "ok");
+    assert_eq!(retry_response.raw_text, "ok");
+    assert_eq!(separate_session_response.raw_text, "ok");
     let sent = provider.transport.requests.borrow();
+    assert_eq!(sent.len(), 3);
     assert_eq!(sent[0].url, CHATGPT_RESPONSES_ENDPOINT);
     assert_eq!(
         sent[0].headers.get("Authorization").map(String::as_str),
@@ -374,6 +381,21 @@ fn openai_provider_from_auth_store_routes_chatgpt_credentials_to_codex_backend()
             .get(CHATGPT_ACCOUNT_ID_HEADER)
             .map(String::as_str),
         Some("acct_123")
+    );
+    assert!(sent[0].headers.contains_key(CHATGPT_SESSION_ID_HEADER));
+    assert!(
+        sent[0]
+            .headers
+            .get(CHATGPT_SESSION_ID_HEADER)
+            .is_some_and(|value| value.starts_with("mez-"))
+    );
+    assert_eq!(
+        sent[0].headers.get(CHATGPT_SESSION_ID_HEADER),
+        sent[1].headers.get(CHATGPT_SESSION_ID_HEADER)
+    );
+    assert_ne!(
+        sent[0].headers.get(CHATGPT_SESSION_ID_HEADER),
+        sent[2].headers.get(CHATGPT_SESSION_ID_HEADER)
     );
     let request_body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
     assert_eq!(request_body["stream"], true);

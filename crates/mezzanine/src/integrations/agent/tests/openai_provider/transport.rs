@@ -56,6 +56,7 @@ async fn openai_provider_async_posts_responses_request_and_parses_output_text() 
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].method, "POST");
     assert_eq!(sent[0].url, "https://example.test/responses");
+    assert!(!sent[0].headers.contains_key(CHATGPT_SESSION_ID_HEADER));
     assert_eq!(
         sent[0].headers.get("Authorization").map(String::as_str),
         Some("Bearer test-key")

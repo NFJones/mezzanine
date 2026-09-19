@@ -20,8 +20,9 @@ use super::network::execute_network_action_with_transport_async;
 use super::prompt;
 use super::prompt::build_agent_system_prompt;
 use super::provider::{
-    AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER, ModelProvider,
-    OpenAiResponsesProvider, ProviderHttpTransport, build_deepseek_chat_completions_http_request,
+    AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER,
+    CHATGPT_SESSION_ID_HEADER, ModelProvider, OpenAiResponsesProvider, ProviderHttpTransport,
+    build_deepseek_chat_completions_http_request,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_provider_from_auth_store_with_options,

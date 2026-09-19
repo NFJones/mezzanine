@@ -446,6 +446,31 @@ mod provider_wire_namespace_tests {
             assert_ne!(second, first, "{header} value changes must isolate scope");
         }
     }
+
+    /// Verifies ChatGPT session affinity remains stable for one account and
+    /// changes when authenticated account ownership changes.
+    #[test]
+    fn chatgpt_session_affinity_isolated_by_account() {
+        let body = serde_json::json!({"prompt_cache_key": "mez-session-key"});
+        let first_headers = BTreeMap::from([(
+            CHATGPT_ACCOUNT_ID_HEADER.to_string(),
+            "account-a".to_string(),
+        )]);
+        let second_headers = BTreeMap::from([(
+            CHATGPT_ACCOUNT_ID_HEADER.to_string(),
+            "account-b".to_string(),
+        )]);
+
+        let first = chatgpt_responses_session_id(&body, &first_headers).unwrap();
+        assert_eq!(
+            first,
+            chatgpt_responses_session_id(&body, &first_headers).unwrap()
+        );
+        assert_ne!(
+            first,
+            chatgpt_responses_session_id(&body, &second_headers).unwrap()
+        );
+    }
 }
 
 /// Returns one MAAP-bearing text or native-argument fragment from an SSE event.
@@ -603,6 +628,37 @@ pub const OPENAI_ORGANIZATION_HEADER: &str = "OpenAI-Organization";
 pub const OPENAI_PROJECT_HEADER: &str = "OpenAI-Project";
 /// ChatGPT account selection header required by ChatGPT-backed requests.
 pub const CHATGPT_ACCOUNT_ID_HEADER: &str = "ChatGPT-Account-ID";
+/// ChatGPT Responses cache-affinity header.
+pub const CHATGPT_SESSION_ID_HEADER: &str = "session-id";
+
+/// Derives one opaque, account-isolated ChatGPT Responses session affinity id.
+fn chatgpt_responses_session_id(
+    body: &serde_json::Value,
+    extra_headers: &BTreeMap<String, String>,
+) -> Result<String> {
+    let prompt_cache_key = body
+        .get("prompt_cache_key")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            MezError::invalid_state("ChatGPT Responses request is missing prompt cache identity")
+        })?;
+    let account_id = extra_headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(CHATGPT_ACCOUNT_ID_HEADER))
+        .map(|(_, value)| value.as_str())
+        .ok_or_else(|| {
+            MezError::invalid_state("ChatGPT Responses request is missing account identity")
+        })?;
+    let digest = Sha256::digest(
+        format!("chatgpt-responses-session\0{account_id}\0{prompt_cache_key}").as_bytes(),
+    );
+    let digest_hex = digest
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(format!("mez-{digest_hex}"))
+}
 
 /// Defines the Model Provider behavior contract for this subsystem.
 ///
@@ -1754,6 +1810,7 @@ pub fn build_openai_responses_http_request_with_headers(
             "OpenAI provider timeout must be greater than zero",
         ));
     }
+    let mut extra_headers = extra_headers.clone();
     let mut body: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body_with_stream(request, stream)?)
             .map_err(|error| {
@@ -1766,6 +1823,11 @@ pub fn build_openai_responses_http_request_with_headers(
         .any(|name| name.eq_ignore_ascii_case(CHATGPT_ACCOUNT_ID_HEADER))
     {
         remove_openai_prompt_cache_options(&mut body);
+        extra_headers.retain(|name, _| !name.eq_ignore_ascii_case(CHATGPT_SESSION_ID_HEADER));
+        extra_headers.insert(
+            CHATGPT_SESSION_ID_HEADER.to_string(),
+            chatgpt_responses_session_id(&body, &extra_headers)?,
+        );
     }
     let body = serde_json::to_string(&body).map_err(|error| {
         MezError::invalid_state(format!("OpenAI Responses request encoding failed: {error}"))
