@@ -1755,6 +1755,17 @@ fn runtime_transcript_persistence_preserves_interleaved_user_steering_order() {
             && replayed_peer_indices[1] < replayed_result
             && replayed_result < replayed_steering[2]
     );
+    let repeated = service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
+        .unwrap();
+    assert_eq!(repeated, 0);
+    assert_eq!(
+        transcript_store
+            .inspect(&turn.conversation_id)
+            .unwrap()
+            .len(),
+        entries.len()
+    );
     let _ = std::fs::remove_dir_all(transcript_root);
 }
 
