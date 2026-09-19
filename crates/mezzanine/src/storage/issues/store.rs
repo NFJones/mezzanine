@@ -209,6 +209,9 @@ impl IssueStore {
             sql.push_str(&format!(" AND state = ?{parameter_index}"));
             parameter_index = parameter_index.saturating_add(1);
         }
+        if query.exclude_resolved {
+            sql.push_str(" AND state <> 'resolved'");
+        }
         if text.is_some() {
             sql.push_str(&format!(
                 " AND (title LIKE ?{parameter_index} ESCAPE '\\' OR body LIKE ?{parameter_index} ESCAPE '\\')"

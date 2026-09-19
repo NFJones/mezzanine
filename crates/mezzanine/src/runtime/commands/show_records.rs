@@ -199,6 +199,7 @@ impl RuntimeSessionService {
                 project_glob,
                 kind,
                 state,
+                active_only,
                 text,
                 limit,
                 ..
@@ -219,7 +220,8 @@ impl RuntimeSessionService {
                     *state,
                     text.clone(),
                     Some(*limit),
-                )?;
+                )?
+                .excluding_resolved_if(*active_only);
                 let record = store
                     .query_issue_browser(&query)?
                     .into_iter()
@@ -574,16 +576,13 @@ impl RuntimeSessionService {
             *state,
             text.clone(),
             Some(*limit),
-        )?;
+        )?
+        .excluding_resolved_if(*active_only);
         let mut browser = RecordBrowser::new(
             "Issues",
             store
                 .query_issue_browser(&query)?
                 .into_iter()
-                .filter(|record| {
-                    !matches!(record.state, mez_agent::issues::IssueState::Resolved)
-                        || !*active_only
-                })
                 .map(issue_browser_record)
                 .collect(),
             issue_kind_filter_choices(),
@@ -1040,23 +1039,17 @@ pub(crate) fn read_issue_browser(
             issue_state,
             args.text.clone(),
             Some(args.limit),
-        )?;
-        store
-            .query_issue_browser(&query)?
-            .into_iter()
-            .filter(|record| {
-                !matches!(record.state, mez_agent::issues::IssueState::Resolved)
-                    || !source.as_ref().is_some_and(|source| {
-                        matches!(
-                            source,
-                            RuntimeRecordBrowserOverlaySource::Issues {
-                                active_only: true,
-                                ..
-                            }
-                        )
-                    })
-            })
-            .collect()
+        )?
+        .excluding_resolved_if(source.as_ref().is_some_and(|source| {
+            matches!(
+                source,
+                RuntimeRecordBrowserOverlaySource::Issues {
+                    active_only: true,
+                    ..
+                }
+            )
+        }));
+        store.query_issue_browser(&query)?.into_iter().collect()
     };
     let mut browser = RecordBrowser::new(
         if args.detail_id.is_some() {

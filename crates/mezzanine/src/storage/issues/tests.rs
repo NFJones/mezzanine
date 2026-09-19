@@ -484,6 +484,66 @@ fn issue_store_browser_query_matches_text_and_respects_limit() {
     assert_eq!(expanded, vec![newer_title_match, body_match]);
 }
 
+/// Verifies active-only browser queries exclude resolved rows before applying
+/// their limit, so recent resolutions cannot hide older active work.
+#[test]
+fn issue_store_browser_query_excludes_resolved_before_limit() {
+    let store = temp_store("browser-active-before-limit");
+    let first_open = store
+        .add_issue(
+            "/repo/current".to_string(),
+            IssueKind::Task,
+            "First active issue".to_string(),
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+    let second_open = store
+        .add_issue(
+            "/repo/current".to_string(),
+            IssueKind::Defect,
+            "Second active issue".to_string(),
+            None,
+            None,
+            11,
+        )
+        .unwrap();
+    for index in 0..101_u64 {
+        let resolved = store
+            .add_issue(
+                "/repo/current".to_string(),
+                IssueKind::Task,
+                format!("Recent resolution {index}"),
+                None,
+                None,
+                100 + index,
+            )
+            .unwrap();
+        store
+            .update_issue(
+                "/repo/current".to_string(),
+                resolved.id,
+                IssueUpdate {
+                    state: Some(IssueState::Resolved),
+                    ..IssueUpdate::default()
+                },
+                1_000 + index,
+            )
+            .unwrap();
+    }
+
+    let results = store
+        .query_issue_browser(
+            &IssueBrowserQuery::new(None, None, None, None, Some(2))
+                .unwrap()
+                .excluding_resolved(),
+        )
+        .unwrap();
+
+    assert_eq!(results, vec![second_open, first_open]);
+}
+
 /// Verifies deletion is scoped by project so equal ids cannot remove records
 /// from another project key.
 #[test]

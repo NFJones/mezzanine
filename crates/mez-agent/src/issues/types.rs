@@ -356,6 +356,8 @@ pub struct IssueBrowserQuery {
     pub kind: Option<IssueKind>,
     /// Optional open/in-progress/resolved filter.
     pub state: Option<IssueState>,
+    /// Whether resolved records are excluded before ordering and limiting.
+    pub exclude_resolved: bool,
     /// Optional case-insensitive title/body substring query.
     pub text: Option<String>,
     /// Maximum records returned.
@@ -402,9 +404,22 @@ impl IssueBrowserQuery {
             project_glob,
             kind,
             state,
+            exclude_resolved: false,
             text,
             limit: limit.min(MAX_ISSUE_QUERY_LIMIT),
         })
+    }
+
+    /// Excludes resolved records before ordering and applying the result limit.
+    pub fn excluding_resolved(mut self) -> Self {
+        self.exclude_resolved = true;
+        self
+    }
+
+    /// Applies active-only behavior when the calling browser surface requires it.
+    pub fn excluding_resolved_if(mut self, condition: bool) -> Self {
+        self.exclude_resolved = condition;
+        self
     }
 }
 
