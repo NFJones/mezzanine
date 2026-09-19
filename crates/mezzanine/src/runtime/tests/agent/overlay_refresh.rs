@@ -595,6 +595,7 @@ fn overlay_refresh_installs_a_post_mutation_page_with_its_settlement_status() {
             .begin_record_browser_preserving_claim(
                 source,
                 None,
+                false,
                 Some("archive completed for fixture".to_string()),
             )
             .unwrap()
@@ -843,6 +844,7 @@ fn overlay_refresh_reports_a_missing_issue_database_path() {
             target: Box::new(source),
             active_record_id: None,
             active_index: None,
+            replaces_detail: false,
             error: None,
         },
         transcript_store: None,
@@ -859,4 +861,96 @@ fn overlay_refresh_reports_a_missing_issue_database_path() {
         message.contains("config root"),
         "the failure keeps the inline diagnostic: {message}"
     );
+}
+
+/// Verifies a filter key pressed inside a detail view replaces that detail.
+///
+/// The lane never closes a detail a rebuild did not open; the key itself is the
+/// operator's intent, so a claim it makes from inside a detail installs its page
+/// and leaves the detail behind, while a rebuild that settles after a detail was
+/// opened still drops.
+#[test]
+fn overlay_refresh_applies_a_filter_key_pressed_inside_a_detail_view() {
+    let mut service = test_runtime_service();
+    let primary = open_saved_session_picker(&mut service, "overlay-refresh-detail-key", 45);
+    service
+        .apply_primary_display_overlay_input(&primary, b"i")
+        .unwrap();
+    assert!(
+        saved_session_detail_open(&service),
+        "the focused row opens its detail view"
+    );
+    service
+        .apply_primary_display_overlay_input(&primary, b"u")
+        .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the key pressed inside the detail claims its page"
+    );
+    assert!(
+        !saved_session_detail_open(&service),
+        "the settled page replaces the detail the key was pressed in"
+    );
+}
+
+/// Verifies a memory-browser claim rebuilds its store-backed page.
+///
+/// The memories family reads the persistent store through the same static reader
+/// the inline path used, so a settled claim carries the records the store holds.
+#[test]
+fn overlay_refresh_rebuilds_a_memory_page() {
+    let service = test_runtime_service();
+    let config_root = temp_root("overlay-refresh-memories");
+    crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root)
+        .upsert(mez_agent::memory::MemoryRecord::new_with_defaults(
+            "memory-claim",
+            mez_agent::memory::MemoryScope::Global,
+            10,
+            10,
+            mez_agent::memory::MemorySource::Agent,
+            50,
+            "claimable memory body",
+        ))
+        .unwrap();
+    let source = RuntimeRecordBrowserOverlaySource::Memories {
+        scope: None,
+        default_scope: None,
+        kind: None,
+        state: None,
+        text: None,
+        limit: 20,
+    };
+    let work = crate::runtime::RuntimeRecordBrowserRefreshWork {
+        refresh_key: "%1".to_string(),
+        generation: 0,
+        active_source: source.clone(),
+        source: source.clone(),
+        intent: crate::runtime::RuntimeRecordBrowserRefreshIntent::ApplyFilter {
+            target: Box::new(source),
+            active_record_id: None,
+            active_index: None,
+            replaces_detail: false,
+            error: None,
+        },
+        transcript_store: None,
+        config_root: Some(config_root.clone()),
+        issue_database_path: None,
+        prompt_width: 40,
+        title_policy: service.agent_session_title_policy(),
+    };
+    let outcome = RuntimeSessionService::execute_record_browser_refresh(&work);
+    let RuntimeRecordBrowserRefreshOutcome::Rebuilt { browser, .. } = outcome else {
+        panic!("the claim rebuilds the memory page");
+    };
+    assert_eq!(browser.records().len(), 1);
+    assert!(
+        browser
+            .render_page()
+            .raw_markdown
+            .contains("claimable memory body"),
+        "the rebuilt page carries the stored memory"
+    );
+    let _ = std::fs::remove_dir_all(&config_root);
 }

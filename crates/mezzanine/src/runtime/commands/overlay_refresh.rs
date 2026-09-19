@@ -137,6 +137,7 @@ impl RuntimeSessionService {
         &mut self,
         target: RuntimeRecordBrowserOverlaySource,
         active_record_id: Option<String>,
+        replaces_detail: bool,
         error: Option<String>,
     ) -> Result<Option<u64>> {
         if self.active_saved_session_browser_source().is_none() {
@@ -153,6 +154,7 @@ impl RuntimeSessionService {
                 target: Box::new(target),
                 active_record_id,
                 active_index: None,
+                replaces_detail,
                 error,
             },
         )))
@@ -226,6 +228,9 @@ impl RuntimeSessionService {
                 target: Box::new(target),
                 active_record_id,
                 active_index,
+                // Every pane-scoped claim comes from a keypress, so a key pressed
+                // inside a detail view is allowed to leave it behind.
+                replaces_detail: self.active_record_browser_is_detail(),
                 error: None,
             },
         )))
@@ -819,16 +824,18 @@ impl RuntimeSessionService {
                     return Ok(false);
                 }
                 let mut browser = *browser;
-                // A delete owns the page it emptied: the row whose detail was open
-                // is gone, so the rebuilt page replaces it. Every other intent
-                // leaves an open detail alone, which keeps a rebuild that settles
-                // late from closing a record the operator just opened.
-                if self.active_record_browser_is_detail()
-                    && !matches!(
-                        work.intent,
-                        RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { .. }
-                    )
-                {
+                // A key pressed from inside a detail view (and a delete, whose row
+                // is gone) owns the page it replaces. Every other intent leaves an
+                // open detail alone, which keeps a rebuild that settles late from
+                // closing a record the operator just opened.
+                let replaces_detail = matches!(
+                    work.intent,
+                    RuntimeRecordBrowserRefreshIntent::ApplyFilter {
+                        replaces_detail: true,
+                        ..
+                    } | RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { .. }
+                );
+                if self.active_record_browser_is_detail() && !replaces_detail {
                     return Ok(false);
                 }
                 if let Some(active_index) = active_index {

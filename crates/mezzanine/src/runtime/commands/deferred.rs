@@ -37,6 +37,7 @@ pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] = &[
     "issue",
     "show-issues",
     "show-memories",
+    "show-context",
     "context-doc",
     "sync-builtin-skills",
     "resume",
@@ -58,6 +59,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     IssueBrowser,
     /// Persistent-memory browser reads.
     MemoryBrowser,
+    /// Pane transcript reads backing the context browser.
+    ContextBrowser,
     /// Context-document reads.
     ContextDocument,
     /// Managed built-in skill syncs.
@@ -85,6 +88,7 @@ pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentComm
         "issue" => Some(RuntimeAgentCommandFamily::IssueStore),
         "show-issues" => Some(RuntimeAgentCommandFamily::IssueBrowser),
         "show-memories" => Some(RuntimeAgentCommandFamily::MemoryBrowser),
+        "show-context" => Some(RuntimeAgentCommandFamily::ContextBrowser),
         "context-doc" => Some(RuntimeAgentCommandFamily::ContextDocument),
         "sync-builtin-skills" => Some(RuntimeAgentCommandFamily::BuiltinSkillSync),
         "resume" => Some(RuntimeAgentCommandFamily::SavedSessionsBrowser),
@@ -150,6 +154,10 @@ impl RuntimeSessionService {
                 self.runtime_persistent_memory_enabled()
                     && self.integration.config_root().is_some()
                     && super::show_records::show_memories_args_are_browser_form(input)
+            }
+            "show-context" => {
+                self.persistence.transcript_store().is_some()
+                    && super::show_records::show_context_args_are_browser_form(input)
             }
             "context-doc" => {
                 self.integration.config_root().is_some()
@@ -298,6 +306,23 @@ impl RuntimeSessionService {
                 RuntimeAgentCommandPrepared::MemoryBrowser {
                     config_root,
                     pane_scope: self.runtime_remember_scope_for_pane(pane_id),
+                }
+            }
+            RuntimeAgentCommandFamily::ContextBrowser => {
+                let Some(store) = self.persistence.cloned_transcript_store() else {
+                    return Ok(None);
+                };
+                let Some(conversation_id) = self
+                    .agent_shell_store()
+                    .get(pane_id)
+                    .map(|session| session.session_id.clone())
+                else {
+                    return Ok(None);
+                };
+                RuntimeAgentCommandPrepared::ContextBrowser {
+                    store,
+                    conversation_id,
+                    pane_id: pane_id.to_string(),
                 }
             }
             RuntimeAgentCommandFamily::ContextDocument => {
@@ -481,6 +506,39 @@ impl RuntimeSessionService {
                                 Some(&outcome),
                             ),
                             command: "show-issues".to_string(),
+                            browser: Box::new(read.browser),
+                            source: read.source,
+                        }
+                    }
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    },
+                };
+            }
+            RuntimeAgentCommandPrepared::ContextBrowser {
+                store,
+                conversation_id,
+                pane_id,
+            } => {
+                return match super::show_records::read_context_browser_for_command(
+                    store,
+                    conversation_id,
+                    pane_id,
+                    &work.input,
+                ) {
+                    Ok(read) => {
+                        let outcome = AgentShellCommandOutcome::Display {
+                            command: "show-context".to_string(),
+                            body: read.markdown,
+                        };
+                        RuntimeAgentCommandAsyncOutcome::RecordBrowser {
+                            body: runtime_agent_shell_command_response_json(
+                                &work.pane_id,
+                                &work.input,
+                                Some(&outcome),
+                            ),
+                            command: "show-context".to_string(),
                             browser: Box::new(read.browser),
                             source: read.source,
                         }

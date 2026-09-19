@@ -1716,9 +1716,14 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
     let response = service
         .execute_agent_shell_command(&primary, "/show-context")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /show-context: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /show-context pager applies its page");
     let overlay = service.primary_display_overlay().unwrap();
     let page = overlay
         .record_browser
@@ -2145,6 +2150,48 @@ fn runtime_agent_shell_record_browser_filter_claims_its_page() {
             .map(|record_browser| record_browser.browser.records().len()),
         Some(1),
         "the dropped claim leaves the displayed page alone"
+    );
+
+    // A pane key is invalidated when its overlay closes and re-opens, so an
+    // in-flight page cannot land in the browser that replaces it even when the
+    // filters are identical.
+    apply_record_browser_input(&mut service, &primary, b"p");
+    for input in [b"x".as_slice(), b"y"] {
+        apply_record_browser_input(&mut service, &primary, input);
+    }
+    apply_record_browser_input(&mut service, &primary, b"\r");
+    let reopened_source = service
+        .active_record_browser_source()
+        .expect("the filtered browser keeps its source");
+    assert!(service.dismiss_primary_display_overlay());
+    let browser = crate::runtime::RuntimeSessionService::read_issue_browser_for_refresh(
+        crate::storage::issues::issue_database_location(&config_root, None),
+        &reopened_source,
+    )
+    .unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(
+        &pane_id,
+        "show-issues",
+        browser,
+        Some(reopened_source),
+    );
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    assert!(
+        !service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "a re-opened pane overlay must not inherit the claim its predecessor queued"
     );
 
     // Submit a project filter that matches nothing, so the settled page is empty

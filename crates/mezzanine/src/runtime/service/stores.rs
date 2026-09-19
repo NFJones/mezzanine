@@ -377,6 +377,7 @@ impl RuntimeSessionService {
         self.begin_record_browser_preserving_claim(
             source,
             error.is_some().then(|| conversation_id.to_string()),
+            false,
             error.map(str::to_string),
         )?;
         Ok(())
@@ -392,7 +393,7 @@ impl RuntimeSessionService {
         let Some(source) = self.active_saved_session_browser_source() else {
             return Ok(());
         };
-        self.begin_record_browser_preserving_claim(source, None, None)?;
+        self.begin_record_browser_preserving_claim(source, None, false, None)?;
         Ok(())
     }
 

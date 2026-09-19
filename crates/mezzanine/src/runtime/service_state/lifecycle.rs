@@ -257,6 +257,20 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Pane's effective remember scope when the invocation does not name one.
         pane_scope: mez_agent::memory::MemoryScope,
     },
+    /// Reads one pane's transcript into its context browser.
+    ///
+    /// `/show-context` builds its pager from the pane-filtered transcript, which
+    /// is the same read the overlay refresh lane performs after every context
+    /// keystroke; the actor keeps only the pane-session lookup that names the
+    /// conversation the browser reads.
+    ContextBrowser {
+        /// Transcript store the pane's conversation lives in.
+        store: crate::storage::transcript::AgentTranscriptStore,
+        /// Conversation displayed by the browser.
+        conversation_id: String,
+        /// Pane whose entries are displayed.
+        pane_id: String,
+    },
     /// Reads context documents from the captured store.
     ///
     /// `/context-doc list` and `/context-doc show` read the context-document
@@ -463,6 +477,11 @@ pub(crate) enum RuntimeRecordBrowserRefreshIntent {
         /// Row index the rebuilt page keeps for the families that have no anchors
         /// to restore by, used when the focused record left the page.
         active_index: Option<usize>,
+        /// Whether the operator pressed the key from inside a record detail view.
+        ///
+        /// The settle still drops when a detail was opened after the claim; this
+        /// records that the key itself meant to leave the detail behind.
+        replaces_detail: bool,
         /// Settlement error the rebuilt page displays, when one applies.
         error: Option<String>,
     },

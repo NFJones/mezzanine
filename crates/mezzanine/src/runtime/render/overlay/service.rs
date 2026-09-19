@@ -572,7 +572,13 @@ impl RuntimeSessionService {
                 source,
                 RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
             ) {
-                self.begin_record_browser_preserving_claim(source, active_record_id, None)?;
+                let replacing_detail = self.active_record_browser_is_detail();
+                self.begin_record_browser_preserving_claim(
+                    source,
+                    active_record_id,
+                    replacing_detail,
+                    None,
+                )?;
                 return Ok(Some(false));
             }
             let active_index =
@@ -619,7 +625,13 @@ impl RuntimeSessionService {
                 .active_record_id()
                 .map(str::to_string);
             let source = self.record_browser_source_toggled_subagents(&source);
-            self.begin_record_browser_preserving_claim(source, active_record_id, None)?;
+            let replacing_detail = self.active_record_browser_is_detail();
+            self.begin_record_browser_preserving_claim(
+                source,
+                active_record_id,
+                replacing_detail,
+                None,
+            )?;
             return Ok(Some(false));
         }
         if input == b"r"
@@ -632,7 +644,8 @@ impl RuntimeSessionService {
                 return Ok(Some(false));
             };
             let source = self.record_browser_source_toggled_session_lifecycle(&source);
-            self.begin_record_browser_preserving_claim(source, None, None)?;
+            let replacing_detail = self.active_record_browser_is_detail();
+            self.begin_record_browser_preserving_claim(source, None, replacing_detail, None)?;
             return Ok(Some(false));
         }
         if input == b"A"
@@ -902,7 +915,13 @@ impl RuntimeSessionService {
                 MezError::invalid_state("saved-session browser is missing its backend source")
             })?;
             self.clear_saved_session_name(&record_id)?;
-            self.begin_record_browser_preserving_claim(source, Some(record_id), None)?;
+            let replacing_detail = self.active_record_browser_is_detail();
+            self.begin_record_browser_preserving_claim(
+                source,
+                Some(record_id),
+                replacing_detail,
+                None,
+            )?;
             return Ok(Some(false));
         }
         if input == b"d" && record_browser.browser.deletion_enabled() {
@@ -1548,7 +1567,12 @@ impl RuntimeSessionService {
                         source,
                         RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
                     ) {
-                        self.begin_record_browser_preserving_claim(source.clone(), None, None)?
+                        self.begin_record_browser_preserving_claim(
+                            source.clone(),
+                            None,
+                            self.active_record_browser_is_detail(),
+                            None,
+                        )?
                     } else {
                         self.begin_record_browser_pane_claim(
                             source.clone(),
@@ -1715,7 +1739,13 @@ impl RuntimeSessionService {
                     mez_mux::record_browser::RecordBrowserFilterField::Text,
                     query.as_deref().unwrap_or_default(),
                 )?;
-                self.begin_record_browser_preserving_claim(source, active_record_id, None)?;
+                let replacing_detail = self.active_record_browser_is_detail();
+                self.begin_record_browser_preserving_claim(
+                    source,
+                    active_record_id,
+                    replacing_detail,
+                    None,
+                )?;
                 return Ok(false);
             }
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {

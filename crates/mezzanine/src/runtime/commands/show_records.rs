@@ -1100,6 +1100,79 @@ pub(crate) fn show_issues_args_are_browser_form(input: &str) -> bool {
     )
 }
 
+/// Reads one pane's context browser for a deferred `/show-context` command.
+///
+/// The read is the same static one the overlay refresh lane uses, so the deferred
+/// command and its refreshes cannot disagree about what the pane owns.
+pub(crate) fn read_context_browser_for_command(
+    store: &crate::storage::transcript::AgentTranscriptStore,
+    conversation_id: &str,
+    pane_id: &str,
+    input: &str,
+) -> Result<RuntimeContextBrowserRead> {
+    let slash = parse_slash_command(input)?
+        .ok_or_else(|| MezError::invalid_args("show-context command must be a slash command"))?;
+    let args = slash.args.split_whitespace().collect::<Vec<_>>();
+    let detail_sequence = match args.as_slice() {
+        [] => None,
+        [sequence] => Some(sequence.parse::<u64>().map_err(|_| {
+            MezError::invalid_args("show-context transcript sequence must be an integer")
+        })?),
+        _ => {
+            return Err(MezError::invalid_args(
+                "show-context accepts at most one transcript sequence",
+            ));
+        }
+    };
+    let mut browser =
+        RuntimeSessionService::read_context_browser_for_refresh(store, conversation_id, pane_id)?;
+    if let Some(sequence) = detail_sequence {
+        if !browser.set_active_record_id(&sequence.to_string()) {
+            return Err(MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "context entry was not found in the active pane",
+            ));
+        }
+        browser.apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)?;
+    }
+    let page = browser.render_page();
+    Ok(RuntimeContextBrowserRead {
+        browser,
+        source: Some(RuntimeRecordBrowserOverlaySource::Context {
+            conversation_id: conversation_id.to_string(),
+            pane_id: pane_id.to_string(),
+        }),
+        markdown: page.raw_markdown,
+    })
+}
+
+/// Reports whether one `/show-context` invocation opens the browser form.
+///
+/// The deferred lane owns the pager, so only the forms it executes - no argument
+/// or one transcript sequence - may move off the actor; other forms keep the
+/// inline arm and its own diagnostic.
+pub(crate) fn show_context_args_are_browser_form(input: &str) -> bool {
+    let Ok(Some(invocation)) = parse_slash_command(input) else {
+        return false;
+    };
+    let mut args = invocation.args.split_whitespace();
+    match (args.next(), args.next()) {
+        (None, None) => true,
+        (Some(sequence), None) => sequence.parse::<u64>().is_ok(),
+        _ => false,
+    }
+}
+
+/// One `/show-context` read rendered for whichever lane asked for it.
+pub(crate) struct RuntimeContextBrowserRead {
+    /// Browser the actor installs as the pane overlay.
+    pub browser: RecordBrowser,
+    /// Overlay source retained for refreshes and scope indicators.
+    pub source: Option<RuntimeRecordBrowserOverlaySource>,
+    /// Page markdown the response body carries.
+    pub markdown: String,
+}
+
 /// One `/show-memories` read rendered for whichever lane asked for it.
 pub(crate) struct RuntimeMemoryBrowserRead {
     /// Browser the actor installs as the pane overlay.
