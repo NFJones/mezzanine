@@ -12220,9 +12220,10 @@ gated `issues` capability whose concrete action subset contains `issue_add`,
 `issue_update`, `issue_query`, and `issue_delete`. These on-demand actions MUST
 execute through the runtime-owned local issue store, MUST scope records to the
 active pane project, and MUST return bounded action results for provider
-continuation. `issue_query` MUST default to open issues when no state filter is
-provided, MAY filter by open, in-progress, or resolved state, and its optional
-text filter MUST perform a case-insensitive substring match over issue ID,
+continuation. `issue_query` MUST default to open issues when its state filter is
+omitted or null, MAY filter by open, in-progress, or resolved state, and MUST
+remove the state filter when its state is explicitly `all`. Its optional text
+filter MUST perform a case-insensitive substring match over issue ID,
 title, and body. `issue_add`
 MAY set an initial state and MUST default it to open when omitted. Issues MUST
 have an integer priority from 0 through 100 inclusive and MUST default to 10

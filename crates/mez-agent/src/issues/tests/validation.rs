@@ -31,6 +31,13 @@ fn issue_action_validation_accepts_valid_fields() {
         limit: Some(200),
     })
     .unwrap();
+    validate_issue_query(IssueQueryValidation {
+        kind: None,
+        state: Some("all"),
+        text: None,
+        limit: None,
+    })
+    .unwrap();
 }
 
 /// Verifies model-authored issue validation rejects malformed fields.
@@ -71,6 +78,24 @@ fn issue_action_validation_rejects_invalid_fields() {
     assert!(
         priority_error.to_string().contains("between 0 and 100"),
         "{priority_error}"
+    );
+
+    let state_error = validate_issue_update(IssueUpdateValidation {
+        kind: None,
+        state: Some("all"),
+        priority: None,
+        title: None,
+        body: None,
+        clear_body: false,
+        notes: None,
+        clear_notes: false,
+        depends_on: None,
+        clear_depends_on: false,
+    })
+    .unwrap_err();
+    assert!(
+        state_error.to_string().contains("issue state"),
+        "{state_error}"
     );
 
     for query in [

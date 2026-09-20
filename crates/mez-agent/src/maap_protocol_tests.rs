@@ -495,6 +495,74 @@ fn maap_batch_validates_issue_query_limit_bounds() {
 }
 
 #[test]
+/// Verifies `issue_query` alone accepts the `all` selector while persisted
+/// issue mutations continue to reject it as an invalid state.
+///
+/// The selector is a query-only instruction that removes the store state
+/// predicate; it must not become a record state accepted by add or update.
+fn maap_batch_accepts_all_issue_query_state_without_broadening_mutations() {
+    let query_text = serde_json::json!({
+        "rationale": "query every issue state",
+        "actions": [{
+            "type": "issue_query",
+            "kind": null,
+            "state": "all",
+            "text": null,
+            "limit": null,
+            "refresh": false
+        }]
+    })
+    .to_string();
+    let query = parse_maap_action_batch_json_for_turn(&query_text, "turn-1", "agent-1").unwrap();
+    query.validate(&turn(), &[], &[]).unwrap();
+    let schema = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]).to_string();
+    assert!(schema.contains("\"all\""), "{schema}");
+    assert!(
+        schema.contains(
+            "Omit or use null for open issues by default; use all to disable state filtering."
+        ),
+        "{schema}"
+    );
+
+    for action_type in ["issue_add", "issue_update"] {
+        let action = if action_type == "issue_add" {
+            serde_json::json!({
+                "type": action_type,
+                "kind": "task",
+                "state": "all",
+                "priority": null,
+                "title": "invalid persisted selector",
+                "body": null,
+                "notes": null,
+                "depends_on": []
+            })
+        } else {
+            serde_json::json!({
+                "type": action_type,
+                "id": "issue-1",
+                "kind": null,
+                "state": "all",
+                "priority": null,
+                "title": null,
+                "body": null,
+                "clear_body": false,
+                "notes": null,
+                "clear_notes": false,
+                "depends_on": null,
+                "clear_depends_on": false
+            })
+        };
+        let text = serde_json::json!({
+            "rationale": "reject query-only state on mutation",
+            "actions": [action]
+        })
+        .to_string();
+        let batch = parse_maap_action_batch_json_for_turn(&text, "turn-1", "agent-1").unwrap();
+        assert!(batch.validate(&turn(), &[], &[]).is_err(), "{action_type}");
+    }
+}
+
+#[test]
 /// Verifies compact provider-native MAAP output rejects the removed batch
 /// thought field instead of retaining non-action model notes.
 fn maap_parser_rejects_removed_batch_thought() {

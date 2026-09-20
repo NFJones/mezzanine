@@ -261,15 +261,16 @@ pub(crate) fn execute_issue_action_with_context(
                 .as_deref()
                 .map(mez_agent::issues::IssueKind::parse)
                 .transpose()?;
-            let state = state
-                .as_deref()
-                .map(mez_agent::issues::IssueState::parse)
-                .transpose()?;
+            let state = match state.as_deref() {
+                Some("all") => None,
+                Some(state) => Some(mez_agent::issues::IssueState::parse(state)?),
+                None => Some(mez_agent::issues::IssueState::Open),
+            };
             let limit = limit.and_then(|value| usize::try_from(value).ok());
             let query = mez_agent::issues::IssueQuery::new_with_state(
                 project.to_string(),
                 kind,
-                state.or(Some(mez_agent::issues::IssueState::Open)),
+                state,
                 text.clone(),
                 limit,
             )?;

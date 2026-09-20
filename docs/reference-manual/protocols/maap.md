@@ -64,7 +64,7 @@ family; otherwise the current surface is final for that response.
 | `memory_store` | `kind`, `keywords`, `content` | Stores safe, durable, non-secret memory; optional priority, scope, and retention apply. |
 | `issue_add` | `kind`, `title`, `depends_on` | Creates a local project issue; state, body, and notes are optional. |
 | `issue_update` | `id` | Updates an issue with explicit replacement or clear fields. |
-| `issue_query` | none | Queries local issues with optional kind, state, text, limit, and refresh filters. |
+| `issue_query` | none | Queries local issues with optional kind, state, text, limit, and refresh filters; omitted or null state means open, while `all` removes state filtering. |
 | `issue_delete` | `id` | Deletes a local project issue. |
 | `complete` | none | Marks the turn complete when exposed by a compatibility surface. |
 

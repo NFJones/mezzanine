@@ -567,8 +567,8 @@ fn maap_issue_query_action_schema() -> serde_json::Value {
                 "state",
                 serde_json::json!({
                     "type": ["string", "null"],
-                    "enum": ["open", "in-progress", "resolved", null],
-                    "description": "Optional issue state filter. Use null for open issues by default."
+                    "enum": ["open", "in-progress", "resolved", "all", null],
+                    "description": "Optional issue state filter. Omit or use null for open issues by default; use all to disable state filtering."
                 }),
             ),
             (

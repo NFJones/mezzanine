@@ -21,6 +21,51 @@ fn runtime_issue_query_batch(action_id: &str, refresh: bool) -> mez_agent::MaapB
     }
 }
 
+/// Builds one batch that seeds all persisted states before issuing all-state
+/// and default-open MAAP queries through the runtime action executor.
+fn runtime_issue_query_all_states_batch() -> mez_agent::MaapBatch {
+    let issue = |id: &str, state: &str| mez_agent::AgentAction {
+        id: id.to_string(),
+        payload: mez_agent::AgentActionPayload::IssueAdd {
+            kind: "task".to_string(),
+            state: Some(state.to_string()),
+            priority: None,
+            title: format!("{state} issue"),
+            body: None,
+            notes: None,
+            depends_on: Vec::new(),
+        },
+    };
+    mez_agent::MaapBatch {
+        rationale: "seed issue states and inspect the complete backlog".to_string(),
+        actions: vec![
+            issue("seed-open", "open"),
+            issue("seed-progress", "in-progress"),
+            issue("seed-resolved", "resolved"),
+            mez_agent::AgentAction {
+                id: "query-all".to_string(),
+                payload: mez_agent::AgentActionPayload::IssueQuery {
+                    kind: None,
+                    state: Some("all".to_string()),
+                    text: None,
+                    limit: Some(100),
+                    refresh: false,
+                },
+            },
+            mez_agent::AgentAction {
+                id: "query-default".to_string(),
+                payload: mez_agent::AgentActionPayload::IssueQuery {
+                    kind: None,
+                    state: None,
+                    text: None,
+                    limit: Some(100),
+                    refresh: false,
+                },
+            },
+        ],
+    }
+}
+
 /// Builds one non-final issue-add batch that invalidates query freshness.
 fn runtime_issue_add_batch(action_id: &str) -> mez_agent::MaapBatch {
     runtime_issue_add_batch_with_dependencies(
@@ -67,6 +112,72 @@ fn runtime_issue_response(batch: mez_agent::MaapBatch) -> mez_agent::ModelRespon
         action_batch: Some(batch),
         provider_transcript_events: Vec::new(),
     }
+}
+
+/// Verifies the MAAP-only `all` state selector returns every persisted state
+/// while omitted query state retains the compatible open-only default.
+///
+/// Both queries execute in one provider batch after records are created, so
+/// this also proves their distinct normalized descriptors prevent the
+/// same-turn freshness guard from treating all-state discovery as open-only.
+#[test]
+fn runtime_issue_query_all_state_selector_preserves_default_open_behavior() {
+    let mut service = test_runtime_service();
+    service.set_config_root(temp_root("runtime-issue-query-all-states"));
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-issue-all-states","input":"inspect every issue"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &RuntimeBatchProvider {
+                response: runtime_issue_response(runtime_issue_query_all_states_batch()),
+            },
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let all: serde_json::Value = serde_json::from_str(
+        execution.action_results[3]
+            .structured_content_json
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    let default_open: serde_json::Value = serde_json::from_str(
+        execution.action_results[4]
+            .structured_content_json
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(all["count"], 3);
+    assert_eq!(all["query"]["state"], serde_json::Value::Null);
+    assert_eq!(
+        all["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|issue| issue["state"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["open", "in-progress", "resolved"])
+    );
+    assert_eq!(default_open["count"], 1);
+    assert_eq!(default_open["query"]["state"], "open");
+    assert_eq!(default_open["issues"][0]["state"], "open");
 }
 
 /// Verifies an issue capability grant and its causal evidence survive the

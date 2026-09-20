@@ -165,7 +165,9 @@ pub fn validate_issue_query(query: IssueQueryValidation<'_>) -> IssueResult<()> 
     if let Some(kind) = query.kind {
         validate_issue_kind(kind)?;
     }
-    if let Some(state) = query.state {
+    if let Some(state) = query.state
+        && state != "all"
+    {
         validate_issue_state(state)?;
     }
     validate_optional_text("issue query text", query.text)?;
