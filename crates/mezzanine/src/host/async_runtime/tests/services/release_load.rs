@@ -10,6 +10,10 @@ use super::super::*;
 
 /// PTY output bytes required before the load sample is considered complete.
 const MINIMUM_OUTPUT_BYTES: usize = 1024 * 1024;
+/// Concurrent runtime-owned panes that flood the actor during one load sample.
+const RELEASE_LOAD_PANES: usize = 8;
+/// Runtime-owned windows carrying the concurrent pane flood.
+const RELEASE_LOAD_WINDOWS: usize = 2;
 /// Input records mixed into the PTY output flood.
 const INPUT_RECORDS: usize = 64;
 /// Maximum workload iterations before the outer timeout reports a failure.
@@ -102,6 +106,58 @@ fn latency_summary(mut samples: Vec<u64>) -> serde_json::Value {
     })
 }
 
+/// Serializes one bounded runtime histogram without exposing workload content.
+fn runtime_histogram_summary(
+    histogram: &crate::host::async_runtime::config::RuntimeHistogram,
+) -> serde_json::Value {
+    serde_json::json!({
+        "observations": histogram.observations,
+        "sum": histogram.sum,
+        "min": histogram.min,
+        "max": histogram.max,
+        "buckets": histogram
+            .buckets
+            .iter()
+            .map(|bucket| serde_json::json!({
+                "upper_bound": bucket.upper_bound,
+                "count": bucket.count,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Serializes the fixed actor metric families used to compare release runs.
+fn actor_latency_summary(
+    metrics: &crate::host::async_runtime::config::AsyncRuntimeActorMetrics,
+) -> serde_json::Value {
+    let request_families = AsyncRuntimeRequestFamily::ALL
+        .into_iter()
+        .map(|family| {
+            let latency = metrics.request_latency(family);
+            (
+                family.name().to_string(),
+                serde_json::json!({
+                    "queue_wait_ms": runtime_histogram_summary(&latency.queue_wait_ms),
+                    "handler_duration_ms": runtime_histogram_summary(&latency.handler_duration_ms),
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let phases = AsyncRuntimeLatencyPhase::ALL
+        .into_iter()
+        .map(|phase| {
+            (
+                phase.name().to_string(),
+                runtime_histogram_summary(metrics.phase_latency(phase)),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    serde_json::json!({
+        "request_families": request_families,
+        "phases": phases,
+    })
+}
+
 /// Retains only the recent output suffix needed for completion markers.
 fn retain_output_tail(tail: &mut Vec<u8>, bytes: &[u8]) {
     const TAIL_BYTES: usize = 1024;
@@ -162,6 +218,30 @@ fn incomplete_release_load_report_records_failure_context() {
     );
 }
 
+/// Verifies release artifacts retain every fixed actor family and phase as
+/// bounded, content-free diagnostics even when a workload has no samples for
+/// some categories.
+#[test]
+fn actor_latency_summary_preserves_fixed_diagnostic_categories() {
+    let metrics = crate::host::async_runtime::config::AsyncRuntimeActorMetrics::default();
+    let summary = actor_latency_summary(&metrics);
+
+    for family in AsyncRuntimeRequestFamily::ALL {
+        let latency = &summary["request_families"][family.name()];
+        assert_eq!(latency["queue_wait_ms"]["observations"], 0, "{family:?}");
+        assert_eq!(
+            latency["handler_duration_ms"]["observations"], 0,
+            "{family:?}"
+        );
+        assert!(latency["queue_wait_ms"]["buckets"].is_array(), "{family:?}");
+    }
+    for phase in AsyncRuntimeLatencyPhase::ALL {
+        let histogram = &summary["phases"][phase.name()];
+        assert_eq!(histogram["observations"], 0, "{phase:?}");
+        assert!(histogram["buckets"].is_array(), "{phase:?}");
+    }
+}
+
 /// Returns the explicit Tokio worker count selected for this load run.
 fn release_load_worker_threads() -> usize {
     let worker_threads = std::env::var("MEZ_RELEASE_LOAD_WORKERS")
@@ -204,52 +284,81 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
         let primary = service
             .attach_primary("release-load", true, Size::new(120, 40).unwrap(), 20_000)
             .unwrap();
+        let command = "/bin/sh -c 'i=0; while [ \"$i\" -lt 4096 ]; do printf \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\"; i=$((i + 1)); done; printf \"release-load-output-done\\n\"; while IFS= read -r line; do printf \"ack:%s\\n\" \"$line\"; [ \"$line\" = done ] && break; done; sleep 1'";
+        service.start_initial_pane_process(Some(command)).unwrap();
+        for _ in 1..(RELEASE_LOAD_PANES / RELEASE_LOAD_WINDOWS) {
+            service
+                .split_pane_with_process(&primary, SplitDirection::Vertical, Some(command))
+                .unwrap();
+        }
+        service
+            .create_window_with_pane_process(
+                &primary,
+                "release-load-secondary",
+                true,
+                Some(command),
+            )
+            .unwrap();
+        for _ in 1..(RELEASE_LOAD_PANES / RELEASE_LOAD_WINDOWS) {
+            service
+                .split_pane_with_process(&primary, SplitDirection::Vertical, Some(command))
+                .unwrap();
+        }
         let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
             .build()
             .unwrap();
-        let launch = PaneProcessLaunch::new("/bin/sh".into());
-        let process = spawn_pane_process(
-            &launch,
-            Some(
-                "/bin/sh -c 'i=0; while [ \"$i\" -lt 16384 ]; do printf \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\"; i=$((i + 1)); done; printf \"release-load-output-done\\n\"; while IFS= read -r line; do printf \"ack:%s\\n\" \"$line\"; [ \"$line\" = done ] && break; done; sleep 1'",
-            ),
-            &test_pane_environment(),
-            Size::new(120, 40).unwrap(),
-        )
-        .unwrap();
-        let backend = AsyncPtyPaneProcessIo::new("%1", process).unwrap();
-        let mut driver =
-            AsyncPaneProcessDriver::new("%1", backend, AsyncPaneProcessDriverConfig::default())
-                .unwrap();
         let resources_before = release_load_resource_usage();
         let workload_started = Instant::now();
 
         let client = async move {
+            let processes = handle
+                .take_running_pane_process_instances_for_adapter(RELEASE_LOAD_PANES)
+                .await
+                .unwrap();
+            assert_eq!(processes.len(), RELEASE_LOAD_PANES);
+            let mut drivers = processes
+                .into_iter()
+                .map(|(instance, process)| {
+                    let backend = AsyncPtyPaneProcessIo::new(instance.pane_id.clone(), process)
+                        .unwrap();
+                    AsyncPaneProcessDriver::new_for_instance(
+                        instance,
+                        backend,
+                        AsyncPaneProcessDriverConfig::default(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
             let mut output_bytes = 0usize;
             let mut output_events = 0usize;
-            let mut output_tail = Vec::new();
+            let mut output_tails = vec![Vec::new(); drivers.len()];
             let mut input_records = 0usize;
             let mut render_samples = Vec::new();
             let mut input_samples = Vec::new();
             let mut output_samples = Vec::new();
             let mut metadata_samples = Vec::new();
             let mut metadata_observations = 0usize;
-            let mut output_complete_seen = false;
+            let mut output_complete_seen = vec![false; drivers.len()];
             let mut done_sent = false;
             let mut workload_complete = false;
 
             for iteration in 0..MAX_WORKLOAD_ITERATIONS {
+                let driver_index = iteration % drivers.len();
+                let driver = &mut drivers[driver_index];
                 let output_started = Instant::now();
                 let output_event = driver.poll_output_event().await.unwrap();
                 let output_ready = output_event.is_some();
                 if let Some(event) = output_event {
                     let bytes = match &event {
-                        RuntimeEvent::Pane(PaneEvent::Output { bytes, .. }) => bytes,
+                        RuntimeEvent::PaneProcess {
+                            event: PaneProcessEvent::Pane(PaneEvent::Output { bytes, .. }),
+                            ..
+                        } => bytes,
                         other => panic!("expected pane output event, got {other:?}"),
                     };
                     output_bytes = output_bytes.saturating_add(bytes.len());
                     output_events = output_events.saturating_add(1);
-                    retain_output_tail(&mut output_tail, bytes);
+                    retain_output_tail(&mut output_tails[driver_index], bytes);
                     let mut batch = RuntimeEventBatch::new();
                     batch.push(event);
                     handle.submit_runtime_events(batch).await.unwrap();
@@ -278,8 +387,10 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
                     assert!(
                         matches!(
                             &event,
-                            RuntimeEvent::Pane(PaneEvent::InputWritten { bytes, .. })
-                                if *bytes == input.len()
+                            RuntimeEvent::PaneProcess {
+                                event: PaneProcessEvent::Pane(PaneEvent::InputWritten { bytes, .. }),
+                                ..
+                            } if *bytes == input.len()
                         ),
                         "unexpected input result: {event:?}"
                     );
@@ -301,38 +412,49 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
                     metadata_samples.push(elapsed_micros(metadata_started));
                 }
 
-                output_complete_seen |= output_tail
+                if !output_ready && let Some(activity) = driver.output_activity() {
+                    let _ = tokio::time::timeout(Duration::from_millis(5), activity).await;
+                }
+
+                output_complete_seen[driver_index] |= output_tails[driver_index]
                     .windows(OUTPUT_COMPLETE_MARKER.len())
                     .any(|window| window == OUTPUT_COMPLETE_MARKER);
-                if output_complete_seen && input_records == INPUT_RECORDS && !done_sent {
-                    let event = driver.write_input_event(b"done\n").await;
-                    assert!(matches!(
-                        event,
-                        RuntimeEvent::Pane(PaneEvent::InputWritten { bytes: 5, .. })
-                    ));
-                    let mut batch = RuntimeEventBatch::new();
-                    batch.push(event);
-                    handle.submit_runtime_events(batch).await.unwrap();
+                if output_complete_seen.iter().all(|seen| *seen)
+                    && input_records == INPUT_RECORDS
+                    && !done_sent
+                {
+                    for driver in &mut drivers {
+                        let event = driver.write_input_event(b"done\n").await;
+                        assert!(matches!(
+                            event,
+                            RuntimeEvent::PaneProcess {
+                                event: PaneProcessEvent::Pane(PaneEvent::InputWritten { bytes: 5, .. }),
+                                ..
+                            }
+                        ));
+                        let mut batch = RuntimeEventBatch::new();
+                        batch.push(event);
+                        handle.submit_runtime_events(batch).await.unwrap();
+                    }
                     done_sent = true;
                 }
                 if done_sent
-                    && output_tail
-                        .windows(INPUT_COMPLETE_MARKER.len())
-                        .any(|window| window == INPUT_COMPLETE_MARKER)
+                    && output_tails.iter().all(|tail| {
+                        tail.windows(INPUT_COMPLETE_MARKER.len())
+                            .any(|window| window == INPUT_COMPLETE_MARKER)
+                    })
                 {
                     workload_complete = true;
                     break;
                 }
-
-                if !output_ready && let Some(activity) = driver.output_activity() {
-                    let _ = tokio::time::timeout(Duration::from_millis(5), activity).await;
-                }
             }
 
-            let termination = driver.terminate_event(true).await;
-            let mut batch = RuntimeEventBatch::new();
-            batch.push(termination);
-            handle.submit_runtime_events(batch).await.unwrap();
+            for driver in &mut drivers {
+                let termination = driver.terminate_event(true).await;
+                let mut batch = RuntimeEventBatch::new();
+                batch.push(termination);
+                handle.submit_runtime_events(batch).await.unwrap();
+            }
             let metrics = handle.metrics().await.unwrap();
             handle.shutdown().await.unwrap();
 
@@ -340,8 +462,9 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
                 workload_complete,
                 "release load workload did not complete: output_bytes={output_bytes} \
                  output_events={output_events} input_records={input_records} \
-                 done_sent={done_sent} tail={:?}",
-                String::from_utf8_lossy(&output_tail)
+                 done_sent={done_sent} completed_panes={}/{}",
+                output_complete_seen.iter().filter(|seen| **seen).count(),
+                RELEASE_LOAD_PANES,
             );
             assert!(output_bytes >= MINIMUM_OUTPUT_BYTES, "{output_bytes}");
             assert_eq!(input_records, INPUT_RECORDS);
@@ -386,6 +509,8 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
             "diagnostic": null,
             "workload": {
                 "minimum_output_bytes": MINIMUM_OUTPUT_BYTES,
+                "pane_count": RELEASE_LOAD_PANES,
+                "window_count": RELEASE_LOAD_WINDOWS,
                 "input_records": INPUT_RECORDS,
                 "terminal_columns": 120,
                 "terminal_rows": 40,
@@ -406,6 +531,9 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
                 "actor_events_accepted": metrics.runtime_events_accepted,
                 "actor_events_applied": metrics.runtime_events_applied,
                 "actor_side_effect_queue_high_water": metrics.side_effect_queue_high_water,
+                "actor_side_effect_queue_depth": metrics.side_effect_queue_depth,
+                "render_invalidations_coalesced": metrics.render_invalidations_coalesced,
+                "runtime_side_effects_evicted": metrics.runtime_side_effects_evicted,
             },
             "latency": {
                 "pty_output_apply": latency_summary(output_samples),
@@ -413,6 +541,7 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
                 "render_frame": latency_summary(render_samples),
                 "process_metadata": latency_summary(metadata_samples),
             },
+            "actor_diagnostics": actor_latency_summary(&metrics),
         });
         write_release_load_report(&report);
     };
