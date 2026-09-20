@@ -137,6 +137,11 @@ async fn async_attached_terminal_loop_skips_stale_record_detail_frame_after_esca
             "{frame:?}"
         );
         assert_eq!(
+            handle.metrics().await.unwrap().render_client_frame_requests,
+            1,
+            "keyboard navigation must render only the authoritative post-input frame",
+        );
+        assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
         );
@@ -734,6 +739,89 @@ async fn async_attached_terminal_loop_renders_and_applies_primary_actions() {
 
     let ((), exit) = tokio::join!(client, actor.run());
 
+    assert!(exit.commands_processed > 0);
+}
+
+/// Verifies one read containing ordinary keyboard bytes plus an SGR mouse
+/// packet remains on the rendered-frame path. Coordinate input must never be
+/// applied through the keyboard-only pre-render route because its meaning is
+/// fenced by the frame that supplied the hit regions.
+#[tokio::test(flavor = "current_thread")]
+async fn async_attached_terminal_loop_keeps_mixed_sgr_input_frame_fenced() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let mut io = FakeAttachedTerminalLoopIo {
+        readiness_batches: vec![vec![
+            AttachedTerminalFdReadiness {
+                role: AttachedTerminalFdRole::Input,
+                fd: 0,
+                interest: TerminalFdInterest::read(),
+                readable: true,
+                writable: false,
+                hangup: false,
+                error: false,
+            },
+            AttachedTerminalFdReadiness {
+                role: AttachedTerminalFdRole::Output,
+                fd: 1,
+                interest: TerminalFdInterest::write(),
+                readable: false,
+                writable: true,
+                hangup: false,
+                error: false,
+            },
+        ]],
+        input_batches: vec![b"q\x1b[<0;1;1M".to_vec()],
+        written_batches: Vec::new(),
+        write_error_kinds: Vec::new(),
+    };
+
+    let client = async {
+        let report = run_async_attached_terminal_client_loop(
+            &handle,
+            &mut io,
+            AsyncAttachedTerminalLoopRequest {
+                role: ClientViewRole::Primary,
+                client_id: primary.clone(),
+                primary_client_id: Some(primary.clone()),
+                client_size: Size::new(80, 24).unwrap(),
+                terminal_config: TerminalClientLoopConfig::default(),
+                loop_config: AttachedTerminalClientLoopConfig {
+                    max_iterations: 1,
+                    max_input_bytes: 64,
+                },
+            },
+            |_| Ok(None),
+        )
+        .await
+        .unwrap();
+
+        assert!(report.actions.iter().any(|action| matches!(
+            action,
+            TerminalClientLoopAction::ForwardToPane(bytes) if bytes == b"q"
+        )));
+        assert!(report.actions.iter().any(|action| matches!(
+            action,
+            TerminalClientLoopAction::HandleMouse(_) | TerminalClientLoopAction::ForwardMouseToPane { .. }
+        )));
+        assert!(
+            handle
+                .metrics()
+                .await
+                .unwrap()
+                .render_client_frame_requests
+                >= 1,
+            "mixed SGR input must render before coordinate actions are applied"
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
     assert!(exit.commands_processed > 0);
 }
 

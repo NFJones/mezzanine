@@ -424,6 +424,78 @@ where
         let output_writable = readiness
             .iter()
             .any(|ready| ready.role == AttachedTerminalFdRole::Output && ready.writable);
+        // Keyboard input can be routed from the actor-resolved terminal
+        // configuration without composing a frame. SGR mouse input remains on
+        // the rendered-frame path because its coordinates are meaningful only
+        // against that exact presentation.
+        let keyboard_input = input.as_deref().filter(|input| {
+            !input
+                .windows(b"\x1b[<".len())
+                .any(|sequence| sequence == b"\x1b[<")
+        });
+        let (primary_step_application, pre_render_actions, keyboard_input_consumed) = if request.role == ClientViewRole::Primary
+            && request.primary_client_id.as_ref() == Some(&request.client_id)
+            && let Some(keyboard_input) = keyboard_input
+        {
+            let keyboard_step = plan_attached_terminal_client_step_with_host_paste_buffer(
+                &readiness,
+                Some(keyboard_input),
+                None,
+                None,
+                terminal_config.config(),
+                &mut crate::host::terminal::HostBracketedPasteBufferState {
+                    active: &mut host_bracketed_paste_active,
+                    buffer: &mut host_bracketed_paste_buffer,
+                    started_at: &mut host_bracketed_paste_started_at,
+                },
+            )?;
+            report.host_bracketed_paste_active = host_bracketed_paste_active;
+            report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
+            if keyboard_step.actions.is_empty() {
+                (None, Vec::new(), true)
+            } else {
+                let pre_render_actions = keyboard_step.actions.clone();
+                let application_result = handle
+                    .apply_attached_terminal_step_plan_for_frame(
+                        request.client_id.clone(),
+                        None,
+                        keyboard_step,
+                    )
+                    .await;
+                (
+                    Some(match application_result {
+                    Ok(application) => application,
+                    Err(error) => {
+                        recover_attached_terminal_error(
+                            handle,
+                            io,
+                            AsyncAttachedTerminalErrorRecovery {
+                                client_id: request.client_id.clone(),
+                                error,
+                                client_size: request.client_size,
+                                terminal_config: terminal_config.config().clone(),
+                                cursor_blink_epoch,
+                                output_writable,
+                            },
+                            &mut report,
+                        )
+                        .await?;
+                        report.host_bracketed_paste_active = host_bracketed_paste_active;
+                        report.host_bracketed_paste_buffer = host_bracketed_paste_buffer;
+                        report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
+                        return Ok(report);
+                    }
+                    }),
+                    pre_render_actions,
+                    true,
+                )
+            }
+        } else {
+            (None, Vec::new(), false)
+        };
+        if primary_step_application.is_some() {
+            terminal_config = handle.refresh_terminal_client_loop_config(terminal_config).await?;
+        }
         let frame = if output_writable {
             await_attached_terminal_step(
                 "client frame render",
@@ -452,7 +524,11 @@ where
         };
         let step = plan_attached_terminal_client_step_with_host_paste_buffer(
             &readiness,
-            input.as_deref(),
+            if keyboard_input_consumed {
+                None
+            } else {
+                input.as_deref()
+            },
             frame.view.as_ref(),
             status.as_ref(),
             &frame.config,
@@ -478,7 +554,9 @@ where
             && request.role == ClientViewRole::Primary
             && !step.actions.is_empty()
             && request.primary_client_id.as_ref() == Some(&request.client_id);
-        let primary_step_application = if apply_primary_step_before_output {
+        let primary_step_application = if primary_step_application.is_some() {
+            primary_step_application
+        } else if apply_primary_step_before_output {
             let primary_client_id = request.client_id.clone();
             let application_result = handle
                 .apply_attached_terminal_step_plan_for_frame(
@@ -513,8 +591,8 @@ where
         } else {
             None
         };
-        let pre_action_frame_is_stale =
-            primary_step_application
+        let pre_action_frame_is_stale = pre_render_actions.is_empty()
+            && primary_step_application
                 .as_ref()
                 .is_some_and(|application| {
                     application.view_refresh_required || application.full_redraw_required
@@ -620,7 +698,10 @@ where
                 )
                 .await?;
             }
-            if application.view_refresh_required && output_writable {
+            if application.view_refresh_required
+                && output_writable
+                && pre_render_actions.is_empty()
+            {
                 let refreshed = await_attached_terminal_step(
                     "refreshed client frame render",
                     handle.render_client_frame_with_snapshot(
@@ -679,6 +760,7 @@ where
                 }
             }
         }
+        report.actions.extend(pre_render_actions);
         report.actions.extend(step.actions);
         if step.input_hangup {
             report.input_hangups = report.input_hangups.saturating_add(1);
