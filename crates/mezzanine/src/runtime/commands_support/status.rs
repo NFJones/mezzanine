@@ -796,6 +796,38 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
         "[async runtime counts]".to_string(),
         format!("commands_processed = {}", metrics.commands_processed),
         format!(
+            "actor_ingress_queue_depth = {}",
+            metrics.actor_ingress_queue_depth
+        ),
+        format!(
+            "actor_oldest_local_queue_wait_ms = {}",
+            metrics.actor_oldest_local_queue_wait_ms
+        ),
+        format!(
+            "actor_urgent_queue_depth = {}",
+            metrics.actor_urgent_queue_depth
+        ),
+        format!(
+            "actor_interactive_queue_depth = {}",
+            metrics.actor_interactive_queue_depth
+        ),
+        format!(
+            "actor_normal_queue_depth = {}",
+            metrics.actor_normal_queue_depth
+        ),
+        format!(
+            "actor_maintenance_queue_depth = {}",
+            metrics.actor_maintenance_queue_depth
+        ),
+        format!(
+            "actor_normal_fairness_services = {}",
+            metrics.actor_normal_fairness_services
+        ),
+        format!(
+            "actor_maintenance_fairness_services = {}",
+            metrics.actor_maintenance_fairness_services
+        ),
+        format!(
             "render_client_view_requests = {}",
             metrics.render_client_view_requests
         ),

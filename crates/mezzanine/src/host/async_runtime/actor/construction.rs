@@ -1,11 +1,105 @@
 //! Actor construction, run-loop ownership, and actor metrics.
 
 use super::{
-    Arc, AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeSessionActor,
-    AsyncRuntimeSessionHandle, MezError, Notify, Result, RuntimeSessionService,
-    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    Arc, AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeRequestEnvelope,
+    AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle, MezError, Notify, Result,
+    RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, decode_control_frame, mpsc, watch,
 };
+/// Maximum interactive requests served before pending normal work must advance.
+pub(super) const MAX_INTERACTIVE_REQUEST_BURST: u8 = 4;
+/// Maximum elapsed actor time spent on one interactive or normal burst before
+/// pending downstream work must advance.
+pub(super) const MAX_ACTOR_REQUEST_BURST_DURATION: std::time::Duration =
+    std::time::Duration::from_millis(16);
+/// Maximum request services between cancellation-safe clipboard route cleanups.
+const MAX_REQUESTS_BEFORE_CLIPBOARD_CLEANUP: u8 = 4;
+
+/// Returns whether a burst has consumed its bounded actor-time allowance.
+pub(super) fn actor_request_burst_duration_exhausted(elapsed: std::time::Duration) -> bool {
+    elapsed >= MAX_ACTOR_REQUEST_BURST_DURATION
+}
+
+/// Reserves admission capacity for every fair-scheduling lane.
+///
+/// The reservations sum to the configured mailbox bound. Reserving urgent and
+/// interactive slots prevents a saturated normal producer from occupying every
+/// admission slot before the actor can observe a later terminal action.
+pub(super) const fn actor_request_lane_capacities(
+    command_buffer: usize,
+) -> Option<(usize, usize, usize, usize)> {
+    if command_buffer < 4 {
+        return None;
+    }
+    let urgent = 1;
+    let interactive = if command_buffer.div_ceil(4) == 0 {
+        1
+    } else {
+        command_buffer.div_ceil(4)
+    };
+    let maintenance = if command_buffer.div_ceil(8) == 0 {
+        1
+    } else {
+        command_buffer.div_ceil(8)
+    };
+    let normal = command_buffer - urgent - interactive - maintenance;
+    Some((urgent, interactive, normal, maintenance))
+}
+
+/// Returns the oldest queued request age without inspecting request contents.
+pub(super) fn oldest_queued_request_wait_ms(
+    urgent: Option<&AsyncRuntimeRequestEnvelope>,
+    interactive: Option<&AsyncRuntimeRequestEnvelope>,
+    normal: Option<&AsyncRuntimeRequestEnvelope>,
+    maintenance: Option<&AsyncRuntimeRequestEnvelope>,
+) -> u64 {
+    [urgent, interactive, normal, maintenance]
+        .into_iter()
+        .flatten()
+        .map(|request| u64::try_from(request.enqueued_at.elapsed().as_millis()).unwrap_or(u64::MAX))
+        .max()
+        .unwrap_or(0)
+}
+
+pub(super) use crate::host::async_runtime::AsyncRuntimeRequestLane as ActorRequestLane;
+
+/// Chooses one lane from bounded queue state without inspecting request payloads.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the selector keeps lane availability and both deterministic fairness bounds explicit"
+)]
+pub(super) const fn next_actor_request_lane(
+    urgent: bool,
+    interactive: bool,
+    normal: bool,
+    maintenance: bool,
+    interactive_burst: u8,
+    normal_burst: u8,
+    interactive_time_exhausted: bool,
+    normal_time_exhausted: bool,
+) -> Option<ActorRequestLane> {
+    if urgent {
+        Some(ActorRequestLane::Urgent)
+    } else if interactive
+        && (!(normal || maintenance)
+            || (interactive_burst < MAX_INTERACTIVE_REQUEST_BURST && !interactive_time_exhausted))
+    {
+        Some(ActorRequestLane::Interactive)
+    } else if normal
+        && (!maintenance
+            || (normal_burst < MAX_INTERACTIVE_REQUEST_BURST && !normal_time_exhausted))
+    {
+        Some(ActorRequestLane::Normal)
+    } else if maintenance {
+        Some(ActorRequestLane::Maintenance)
+    } else if normal {
+        Some(ActorRequestLane::Normal)
+    } else if interactive {
+        Some(ActorRequestLane::Interactive)
+    } else {
+        None
+    }
+}
 
 /// Runs the execute snapshot control async work operation for this subsystem.
 ///
@@ -110,18 +204,33 @@ impl AsyncRuntimeSessionActor {
         mut service: RuntimeSessionService,
         config: AsyncRuntimeActorConfig,
     ) -> Result<(AsyncRuntimeSessionHandle, Self)> {
-        if config.command_buffer == 0 {
+        let Some((urgent_capacity, interactive_capacity, normal_capacity, maintenance_capacity)) =
+            actor_request_lane_capacities(config.command_buffer)
+        else {
             return Err(MezError::invalid_args(
-                "async runtime command buffer must be greater than zero",
+                "async runtime command buffer must reserve at least one slot per scheduling lane",
             ));
-        }
+        };
         if config.side_effect_buffer == 0 {
             return Err(MezError::invalid_args(
                 "async runtime side-effect buffer must be greater than zero",
             ));
         }
 
-        let (sender, receiver) = mpsc::channel(config.command_buffer);
+        // Lane-local queues make every accepted request visible to the fair
+        // scheduler immediately. Their fixed reservations sum exactly to the
+        // configured bound while preserving urgent and interactive admission.
+        let request_ingress = Arc::new(std::sync::Mutex::new(Default::default()));
+        let request_ingress_notify = Arc::new(Notify::new());
+        let sender = crate::host::async_runtime::config::AsyncRuntimeRequestSender {
+            ingress: request_ingress.clone(),
+            ingress_notify: request_ingress_notify.clone(),
+            closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            urgent_admission: Arc::new(tokio::sync::Semaphore::new(urgent_capacity)),
+            interactive_admission: Arc::new(tokio::sync::Semaphore::new(interactive_capacity)),
+            normal_admission: Arc::new(tokio::sync::Semaphore::new(normal_capacity)),
+            maintenance_admission: Arc::new(tokio::sync::Semaphore::new(maintenance_capacity)),
+        };
         let (client_clipboard_route_cleanup_tx, client_clipboard_route_cleanup_rx) =
             mpsc::unbounded_channel();
         let message_delivery_notify = Arc::new(Notify::new());
@@ -161,8 +270,22 @@ impl AsyncRuntimeSessionActor {
         };
         let mut actor = Self {
             service,
-            sender: sender.clone(),
-            receiver,
+            sender: Box::new(sender.clone()),
+            request_admission_guard:
+                crate::host::async_runtime::config::AsyncRuntimeRequestAdmissionGuard::new(
+                    sender.clone(),
+                ),
+            request_ingress,
+            request_ingress_notify,
+            request_scheduler: Box::new(
+                crate::host::async_runtime::config::AsyncRuntimeRequestScheduler {
+                    interactive_request_burst: 0,
+                    interactive_request_burst_started_at: None,
+                    normal_request_burst: 0,
+                    normal_request_burst_started_at: None,
+                    requests_since_clipboard_cleanup: 0,
+                },
+            ),
             message_delivery_notify,
             event_delivery_notify,
             event_delivery_revision_tx,
@@ -189,6 +312,120 @@ impl AsyncRuntimeSessionActor {
         Ok((handle, actor))
     }
 
+    /// Returns the total number of requests retained by bounded lane queues.
+    fn queued_request_count(&self) -> usize {
+        let ingress = self
+            .request_ingress
+            .lock()
+            .expect("actor request ingress lock must not be poisoned");
+        ingress
+            .urgent_requests
+            .len()
+            .saturating_add(ingress.interactive_requests.len())
+            .saturating_add(ingress.normal_requests.len())
+            .saturating_add(ingress.maintenance_requests.len())
+    }
+
+    /// Removes one request using bounded priority while retaining FIFO order per lane.
+    fn dequeue_request(&mut self) -> Option<AsyncRuntimeRequestEnvelope> {
+        let interactive_time_exhausted = self
+            .request_scheduler
+            .interactive_request_burst_started_at
+            .is_some_and(|started_at| actor_request_burst_duration_exhausted(started_at.elapsed()));
+        let normal_time_exhausted = self
+            .request_scheduler
+            .normal_request_burst_started_at
+            .is_some_and(|started_at| actor_request_burst_duration_exhausted(started_at.elapsed()));
+        let mut ingress = self
+            .request_ingress
+            .lock()
+            .expect("actor request ingress lock must not be poisoned");
+        let interactive_was_forced = self.request_scheduler.interactive_request_burst
+            >= MAX_INTERACTIVE_REQUEST_BURST
+            || interactive_time_exhausted
+                && !ingress.interactive_requests.is_empty()
+                && (!ingress.normal_requests.is_empty()
+                    || !ingress.maintenance_requests.is_empty());
+        let interactive_was_forced = interactive_was_forced
+            && !ingress.interactive_requests.is_empty()
+            && (!ingress.normal_requests.is_empty() || !ingress.maintenance_requests.is_empty());
+        let maintenance_was_forced = self.request_scheduler.normal_request_burst
+            >= MAX_INTERACTIVE_REQUEST_BURST
+            || normal_time_exhausted
+                && !ingress.normal_requests.is_empty()
+                && !ingress.maintenance_requests.is_empty();
+        let maintenance_was_forced = maintenance_was_forced
+            && !ingress.normal_requests.is_empty()
+            && !ingress.maintenance_requests.is_empty();
+        match next_actor_request_lane(
+            !ingress.urgent_requests.is_empty(),
+            !ingress.interactive_requests.is_empty(),
+            !ingress.normal_requests.is_empty(),
+            !ingress.maintenance_requests.is_empty(),
+            self.request_scheduler.interactive_request_burst,
+            self.request_scheduler.normal_request_burst,
+            interactive_time_exhausted,
+            normal_time_exhausted,
+        )? {
+            ActorRequestLane::Urgent => ingress
+                .urgent_requests
+                .pop_front()
+                .map(|request| request.envelope),
+            ActorRequestLane::Interactive => {
+                if self.request_scheduler.interactive_request_burst == 0 {
+                    self.request_scheduler.interactive_request_burst_started_at =
+                        Some(std::time::Instant::now());
+                }
+                self.request_scheduler.interactive_request_burst = self
+                    .request_scheduler
+                    .interactive_request_burst
+                    .saturating_add(1);
+                ingress
+                    .interactive_requests
+                    .pop_front()
+                    .map(|request| request.envelope)
+            }
+            ActorRequestLane::Normal => {
+                self.request_scheduler.interactive_request_burst = 0;
+                self.request_scheduler.interactive_request_burst_started_at = None;
+                if self.request_scheduler.normal_request_burst == 0 {
+                    self.request_scheduler.normal_request_burst_started_at =
+                        Some(std::time::Instant::now());
+                }
+                self.request_scheduler.normal_request_burst = self
+                    .request_scheduler
+                    .normal_request_burst
+                    .saturating_add(1);
+                if interactive_was_forced {
+                    self.metrics.actor_normal_fairness_services = self
+                        .metrics
+                        .actor_normal_fairness_services
+                        .saturating_add(1);
+                }
+                ingress
+                    .normal_requests
+                    .pop_front()
+                    .map(|request| request.envelope)
+            }
+            ActorRequestLane::Maintenance => {
+                self.request_scheduler.interactive_request_burst = 0;
+                self.request_scheduler.interactive_request_burst_started_at = None;
+                self.request_scheduler.normal_request_burst = 0;
+                self.request_scheduler.normal_request_burst_started_at = None;
+                if maintenance_was_forced {
+                    self.metrics.actor_maintenance_fairness_services = self
+                        .metrics
+                        .actor_maintenance_fairness_services
+                        .saturating_add(1);
+                }
+                ingress
+                    .maintenance_requests
+                    .pop_front()
+                    .map(|request| request.envelope)
+            }
+        }
+    }
+
     /// Runs the run operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -196,20 +433,37 @@ impl AsyncRuntimeSessionActor {
     /// on duplicated control-flow logic.
     pub async fn run(mut self) -> AsyncRuntimeActorExit {
         loop {
-            let envelope = tokio::select! {
-                biased;
-                Some(cleanup) = self.client_clipboard_route_cleanup_rx.recv() => {
-                    self.cleanup_client_clipboard_route(cleanup.client_id, cleanup.generation);
-                    continue;
-                }
-                envelope = self.receiver.recv() => {
-                    let Some(envelope) = envelope else { break; };
-                    envelope
+            if self.request_scheduler.requests_since_clipboard_cleanup
+                >= MAX_REQUESTS_BEFORE_CLIPBOARD_CLEANUP
+                && self.queued_request_count() > 0
+                && let Ok(cleanup) = self.client_clipboard_route_cleanup_rx.try_recv()
+            {
+                self.cleanup_client_clipboard_route(cleanup.client_id, cleanup.generation);
+                self.request_scheduler.requests_since_clipboard_cleanup = 0;
+                continue;
+            }
+            let envelope = if let Some(envelope) = self.dequeue_request() {
+                envelope
+            } else {
+                tokio::select! {
+                    biased;
+                    () = self.request_ingress_notify.notified() => continue,
+                    Some(cleanup) = self.client_clipboard_route_cleanup_rx.recv() => {
+                        self.cleanup_client_clipboard_route(cleanup.client_id, cleanup.generation);
+                        self.request_scheduler.requests_since_clipboard_cleanup = 0;
+                        // A cleanup is cancellation bookkeeping rather than an actor request.
+                        // Re-enter the loop so ingress is checked before another cleanup.
+                        continue;
+                    }
                 }
             };
             let queue_wait_ms =
                 u64::try_from(envelope.enqueued_at.elapsed().as_millis()).unwrap_or(u64::MAX);
             let handler_started = std::time::Instant::now();
+            self.request_scheduler.requests_since_clipboard_cleanup = self
+                .request_scheduler
+                .requests_since_clipboard_cleanup
+                .saturating_add(1);
             self.commands_processed += 1;
             self.metrics.commands_processed = self.commands_processed;
             // The cached snapshot is read only by display commands, which arrive
@@ -238,6 +492,8 @@ impl AsyncRuntimeSessionActor {
                 break;
             }
         }
+
+        self.sender.close();
 
         AsyncRuntimeActorExit {
             service: self.service,
@@ -291,6 +547,38 @@ impl AsyncRuntimeSessionActor {
         &self,
     ) -> crate::host::async_runtime::AsyncRuntimeActorMetrics {
         let mut metrics = self.metrics.clone();
+        let ingress = self
+            .request_ingress
+            .lock()
+            .expect("actor request ingress lock must not be poisoned");
+        metrics.actor_ingress_queue_depth = ingress
+            .urgent_requests
+            .len()
+            .saturating_add(ingress.interactive_requests.len())
+            .saturating_add(ingress.normal_requests.len())
+            .saturating_add(ingress.maintenance_requests.len());
+        metrics.actor_urgent_queue_depth = ingress.urgent_requests.len();
+        metrics.actor_interactive_queue_depth = ingress.interactive_requests.len();
+        metrics.actor_normal_queue_depth = ingress.normal_requests.len();
+        metrics.actor_maintenance_queue_depth = ingress.maintenance_requests.len();
+        metrics.actor_oldest_local_queue_wait_ms = oldest_queued_request_wait_ms(
+            ingress
+                .urgent_requests
+                .front()
+                .map(|request| &request.envelope),
+            ingress
+                .interactive_requests
+                .front()
+                .map(|request| &request.envelope),
+            ingress
+                .normal_requests
+                .front()
+                .map(|request| &request.envelope),
+            ingress
+                .maintenance_requests
+                .front()
+                .map(|request| &request.envelope),
+        );
         metrics.side_effect_queue_depth = self.side_effects.len();
         metrics
     }

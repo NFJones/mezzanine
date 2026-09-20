@@ -8,11 +8,12 @@ use super::{
     AgentId, Arc, AsyncRuntimeRequestEnvelope, ClientId, ControlConnectionState,
     DEFAULT_ASYNC_CONTROL_MAX_CONTENT_LENGTH, DEFAULT_ASYNC_EVENT_LIMIT_PER_CONNECTION,
     DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER, Duration, FanoutBatch, HashMap, HashSet,
-    MessageConnection, MezError, Notify, PaneProcessInstance, Result, RuntimeLifecycleState,
-    RuntimeSessionService, RuntimeSideEffect, RuntimeTimerKey, UnixListener, VecDeque,
-    current_effective_uid, mpsc, watch,
+    MessageConnection, MezError, Mutex, Notify, OwnedSemaphorePermit, PaneProcessInstance, Result,
+    RuntimeLifecycleState, RuntimeSessionService, RuntimeSideEffect, RuntimeTimerKey, Semaphore,
+    UnixListener, VecDeque, current_effective_uid, mpsc, watch,
 };
 use crate::storage::snapshot::SnapshotRepository;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // Async runtime, daemon, connection, and client configuration.
 
@@ -49,6 +50,19 @@ pub struct AsyncRuntimeActorConfig {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub side_effect_buffer: usize,
+}
+
+/// Fixed bounded-fair lanes used independently of request-family metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AsyncRuntimeRequestLane {
+    /// Terminal lifecycle work that must preempt ordinary requests.
+    Urgent,
+    /// Direct terminal and control interaction.
+    Interactive,
+    /// Events, messaging, and provider state transitions.
+    Normal,
+    /// Rendering and best-effort diagnostic work.
+    Maintenance,
 }
 
 impl Default for AsyncRuntimeActorConfig {
@@ -272,6 +286,22 @@ impl AsyncRuntimeLatencyPhase {
 pub struct AsyncRuntimeActorMetrics {
     /// Number of actor requests processed in serialized order.
     pub commands_processed: u64,
+    /// Current envelopes buffered before fixed-lane admission.
+    pub actor_ingress_queue_depth: usize,
+    /// Age of the oldest locally admitted scheduler request in milliseconds.
+    pub actor_oldest_local_queue_wait_ms: u64,
+    /// Current urgent lifecycle request depth in the bounded actor scheduler.
+    pub actor_urgent_queue_depth: usize,
+    /// Current interactive terminal and control request depth in the bounded actor scheduler.
+    pub actor_interactive_queue_depth: usize,
+    /// Current normal state and event request depth in the bounded actor scheduler.
+    pub actor_normal_queue_depth: usize,
+    /// Current render and worker-maintenance request depth in the bounded actor scheduler.
+    pub actor_maintenance_queue_depth: usize,
+    /// Number of normal requests forced through after an interactive burst.
+    pub actor_normal_fairness_services: u64,
+    /// Number of maintenance requests forced through after normal work progressed.
+    pub actor_maintenance_fairness_services: u64,
     /// Number of direct actor requests for a rendered client view.
     pub render_client_view_requests: u64,
     /// Number of direct actor frame requests that included a rendered view.
@@ -413,6 +443,175 @@ pub(super) struct RuntimeTimerTracker {
     pub(super) saved_session_retention: Option<RuntimeTimerKey>,
 }
 
+/// Heap-owned bounded queues and counters for fair actor request scheduling.
+///
+/// Keeping these queues behind one pointer prevents the serialized actor's
+/// construction and polling futures from inheriting every lane allocation in
+/// their stack frames.
+#[derive(Debug, Default)]
+pub(super) struct AsyncRuntimeRequestScheduler {
+    /// Consecutive interactive requests handled since normal work last progressed.
+    pub(super) interactive_request_burst: u8,
+    /// Monotonic start of the current interactive burst.
+    pub(super) interactive_request_burst_started_at: Option<std::time::Instant>,
+    /// Consecutive normal requests handled since maintenance work last progressed.
+    pub(super) normal_request_burst: u8,
+    /// Monotonic start of the current normal burst.
+    pub(super) normal_request_burst_started_at: Option<std::time::Instant>,
+    /// Requests handled since the last cancellation-safe clipboard route cleanup.
+    pub(super) requests_since_clipboard_cleanup: u8,
+}
+
+/// Lane-specific admission port governed by fixed configured reservations.
+#[derive(Debug, Clone)]
+pub(super) struct AsyncRuntimeRequestSender {
+    pub(super) ingress: Arc<Mutex<AsyncRuntimeRequestIngress>>,
+    pub(super) ingress_notify: Arc<Notify>,
+    pub(super) closed: Arc<AtomicBool>,
+    pub(super) urgent_admission: Arc<Semaphore>,
+    pub(super) interactive_admission: Arc<Semaphore>,
+    pub(super) normal_admission: Arc<Semaphore>,
+    pub(super) maintenance_admission: Arc<Semaphore>,
+}
+
+impl AsyncRuntimeRequestSender {
+    /// Closes every admission lane and wakes callers waiting for capacity.
+    pub(super) fn close(&self) {
+        {
+            let mut ingress = self
+                .ingress
+                .lock()
+                .expect("actor request ingress lock must not be poisoned");
+            if self.closed.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            ingress.urgent_requests.clear();
+            ingress.interactive_requests.clear();
+            ingress.normal_requests.clear();
+            ingress.maintenance_requests.clear();
+        }
+        self.urgent_admission.close();
+        self.interactive_admission.close();
+        self.normal_admission.close();
+        self.maintenance_admission.close();
+        self.ingress_notify.notify_waiters();
+    }
+
+    /// Admits one request to its FIFO lane within its configured reservation.
+    pub(super) async fn send(&self, envelope: AsyncRuntimeRequestEnvelope) -> Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(MezError::invalid_state(
+                "async runtime session actor is closed",
+            ));
+        }
+        let admission = match envelope.lane {
+            AsyncRuntimeRequestLane::Urgent => self.urgent_admission.clone(),
+            AsyncRuntimeRequestLane::Interactive => self.interactive_admission.clone(),
+            AsyncRuntimeRequestLane::Normal => self.normal_admission.clone(),
+            AsyncRuntimeRequestLane::Maintenance => self.maintenance_admission.clone(),
+        };
+        let admission_permit = admission
+            .acquire_owned()
+            .await
+            .map_err(|_| MezError::invalid_state("async runtime session actor is closed"))?;
+        let mut ingress = self
+            .ingress
+            .lock()
+            .expect("actor request ingress lock must not be poisoned");
+        if self.closed.load(Ordering::Acquire) {
+            return Err(MezError::invalid_state(
+                "async runtime session actor is closed",
+            ));
+        }
+        ingress.enqueue(AsyncRuntimeQueuedRequest {
+            envelope,
+            _admission_permit: admission_permit,
+        });
+        self.ingress_notify.notify_one();
+        Ok(())
+    }
+
+    /// Best-effort admission for low-priority diagnostics.
+    pub(super) fn try_send(&self, envelope: AsyncRuntimeRequestEnvelope) -> Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(MezError::invalid_state(
+                "async runtime session actor is closed",
+            ));
+        }
+        let admission = match envelope.lane {
+            AsyncRuntimeRequestLane::Urgent => self.urgent_admission.clone(),
+            AsyncRuntimeRequestLane::Interactive => self.interactive_admission.clone(),
+            AsyncRuntimeRequestLane::Normal => self.normal_admission.clone(),
+            AsyncRuntimeRequestLane::Maintenance => self.maintenance_admission.clone(),
+        };
+        let admission_permit = admission
+            .try_acquire_owned()
+            .map_err(|_| MezError::invalid_state("async runtime actor request buffer is full"))?;
+        let mut ingress = self
+            .ingress
+            .lock()
+            .expect("actor request ingress lock must not be poisoned");
+        if self.closed.load(Ordering::Acquire) {
+            return Err(MezError::invalid_state(
+                "async runtime session actor is closed",
+            ));
+        }
+        ingress.enqueue(AsyncRuntimeQueuedRequest {
+            envelope,
+            _admission_permit: admission_permit,
+        });
+        self.ingress_notify.notify_one();
+        Ok(())
+    }
+}
+
+/// Actor-owned lifetime guard that closes admission if its task is cancelled.
+#[derive(Debug)]
+pub(super) struct AsyncRuntimeRequestAdmissionGuard {
+    sender: AsyncRuntimeRequestSender,
+}
+
+impl AsyncRuntimeRequestAdmissionGuard {
+    /// Retains the admission sender for the actor task lifetime.
+    pub(super) fn new(sender: AsyncRuntimeRequestSender) -> Self {
+        Self { sender }
+    }
+}
+
+impl Drop for AsyncRuntimeRequestAdmissionGuard {
+    fn drop(&mut self) {
+        self.sender.close();
+    }
+}
+
+/// Heap-owned lane queues kept out of the actor polling future's stack frame.
+#[derive(Debug, Default)]
+pub(super) struct AsyncRuntimeRequestIngress {
+    pub(super) urgent_requests: VecDeque<AsyncRuntimeQueuedRequest>,
+    pub(super) interactive_requests: VecDeque<AsyncRuntimeQueuedRequest>,
+    pub(super) normal_requests: VecDeque<AsyncRuntimeQueuedRequest>,
+    pub(super) maintenance_requests: VecDeque<AsyncRuntimeQueuedRequest>,
+}
+
+impl AsyncRuntimeRequestIngress {
+    /// Appends one capacity-reserved request to its fixed FIFO lane.
+    pub(super) fn enqueue(&mut self, request: AsyncRuntimeQueuedRequest) {
+        match request.envelope.lane {
+            AsyncRuntimeRequestLane::Urgent => self.urgent_requests.push_back(request),
+            AsyncRuntimeRequestLane::Interactive => self.interactive_requests.push_back(request),
+            AsyncRuntimeRequestLane::Normal => self.normal_requests.push_back(request),
+            AsyncRuntimeRequestLane::Maintenance => self.maintenance_requests.push_back(request),
+        }
+    }
+}
+
+/// Queued request plus its lane reservation, released when the actor dequeues it.
+#[derive(Debug)]
+pub(super) struct AsyncRuntimeQueuedRequest {
+    pub(super) envelope: AsyncRuntimeRequestEnvelope,
+    pub(super) _admission_permit: OwnedSemaphorePermit,
+}
+
 /// Carries Async Runtime Session Actor state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -428,12 +627,19 @@ pub struct AsyncRuntimeSessionActor {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) sender: mpsc::Sender<AsyncRuntimeRequestEnvelope>,
-    /// Stores the receiver value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) receiver: mpsc::Receiver<AsyncRuntimeRequestEnvelope>,
+    pub(super) sender: Box<AsyncRuntimeRequestSender>,
+    /// Closes admission if the actor task exits through cancellation or drop.
+    #[allow(
+        dead_code,
+        reason = "the guard is intentionally retained for its Drop implementation"
+    )]
+    pub(super) request_admission_guard: AsyncRuntimeRequestAdmissionGuard,
+    /// Heap-owned lane-local FIFO queues independently visible to the fair scheduler.
+    pub(super) request_ingress: Arc<Mutex<AsyncRuntimeRequestIngress>>,
+    /// Wakes the actor after one request enters a previously idle ingress.
+    pub(super) request_ingress_notify: Arc<Notify>,
+    /// Heap-owned bounded queues and fairness counters for actor requests.
+    pub(super) request_scheduler: Box<AsyncRuntimeRequestScheduler>,
     /// Pending transient clipboard write keyed by the exact live Iroh primary.
     pub(super) client_clipboard_routes:
         HashMap<ClientId, Option<crate::runtime::ClientClipboardWrite>>,
@@ -515,7 +721,7 @@ pub struct AsyncRuntimeSessionHandle {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) sender: mpsc::Sender<AsyncRuntimeRequestEnvelope>,
+    pub(super) sender: AsyncRuntimeRequestSender,
     /// Nonblocking generation-fenced clipboard cleanup for aborted event tasks.
     pub(super) client_clipboard_route_cleanup_tx:
         mpsc::UnboundedSender<ClientClipboardRouteCleanup>,

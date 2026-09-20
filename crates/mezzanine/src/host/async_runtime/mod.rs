@@ -14,13 +14,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::os::fd::AsRawFd;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{Notify, mpsc, oneshot, watch};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 use tokio::task::{Id as TokioTaskId, JoinError, JoinSet};
 use tokio::time::sleep;
 use tokio_util::codec::Framed;
@@ -182,6 +182,7 @@ pub use client::{
     AsyncAttachedTerminalClientServiceConfig, run_async_agent_provider_service,
     run_async_attached_terminal_client_service,
 };
+pub(crate) use config::AsyncRuntimeRequestLane;
 pub(crate) use config::ClientClipboardRouteLease;
 pub use config::{
     AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig, AsyncControlInputResult,

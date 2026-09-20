@@ -1287,8 +1287,7 @@ impl AsyncRuntimeSessionHandle {
         let (reply, response) = oneshot::channel();
         self.sender
             .send(AsyncRuntimeRequestEnvelope::new(build_request(reply)))
-            .await
-            .map_err(|_| MezError::invalid_state("async runtime session actor is closed"))?;
+            .await?;
         response
             .await
             .map_err(|_| MezError::invalid_state("async runtime session actor reply was dropped"))

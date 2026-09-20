@@ -1,6 +1,7 @@
 //! Async-runtime tests owned by lifecycle behavior.
 
 use super::super::*;
+use crate::host::async_runtime::{AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope};
 use crate::runtime::{PersistenceEvent, current_unix_millis};
 use mez_agent::messaging::{Envelope, MessageScope};
 use mez_core::ids::PaneId;
@@ -2433,4 +2434,45 @@ async fn async_actor_synchronized_output_normal_release_cancels_timer() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     exit.service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies actor-task cancellation closes lane admission so retained handles
+/// reject later requests instead of waiting for a reply without a consumer.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_abort_closes_request_admission() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let task = tokio::spawn(actor.run());
+
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(handle.lifecycle_state().await.is_err());
+}
+
+/// Verifies the public metrics handle reports live scheduler backlog rather
+/// than only counters copied before queued lane work is observed.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_metrics_reports_live_scheduler_backlog() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    for _ in 0..5 {
+        let (reply, _) = tokio::sync::oneshot::channel();
+        handle
+            .sender
+            .try_send(AsyncRuntimeRequestEnvelope::new(
+                AsyncRuntimeRequest::LifecycleState { reply },
+            ))
+            .unwrap();
+    }
+
+    let client = async {
+        let metrics = handle.metrics().await.unwrap();
+        assert!(metrics.actor_normal_queue_depth > 0);
+        assert!(metrics.actor_ingress_queue_depth >= metrics.actor_normal_queue_depth);
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _exit) = tokio::join!(client, actor.run());
 }

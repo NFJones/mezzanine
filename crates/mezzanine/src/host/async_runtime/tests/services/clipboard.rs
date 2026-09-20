@@ -286,7 +286,9 @@ async fn iroh_client_clipboard_routes_are_bounded_private_and_exact() {
 }
 
 /// Aborting an event task drops its route lease and synchronously queues
-/// generation-fenced actor cleanup, so later clipboard effects are rejected.
+/// generation-fenced actor cleanup. The cleanup must still progress while
+/// ordinary actor traffic remains continuously queued, so later clipboard
+/// effects are rejected instead of retaining a stale route indefinitely.
 #[tokio::test(flavor = "current_thread")]
 async fn aborted_iroh_event_owner_removes_clipboard_route() {
     let mut service = test_service();
@@ -314,6 +316,20 @@ async fn aborted_iroh_event_owner_removes_clipboard_route() {
 
         owner.abort();
         assert!(owner.await.unwrap_err().is_cancelled());
+        let traffic_handle = handle.clone();
+        let traffic_client = primary.clone();
+        let (stop_traffic, traffic_stopped) = tokio::sync::watch::channel(false);
+        let traffic = tokio::spawn(async move {
+            while !*traffic_stopped.borrow() {
+                let _ = traffic_handle
+                    .enqueue_client_clipboard_write(
+                        traffic_client.clone(),
+                        "queued traffic".to_string(),
+                    )
+                    .await;
+                tokio::task::yield_now().await;
+            }
+        });
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 if !handle
@@ -327,7 +343,9 @@ async fn aborted_iroh_event_owner_removes_clipboard_route() {
             }
         })
         .await
-        .expect("aborted event owner should remove its clipboard route");
+        .expect("bounded cleanup must remove the route while normal requests remain queued");
+        stop_traffic.send(true).unwrap();
+        traffic.await.unwrap();
         handle.shutdown().await.unwrap();
     };
 

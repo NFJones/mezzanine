@@ -27,6 +27,8 @@ pub(in crate::host::async_runtime) struct AsyncRuntimeRequestEnvelope {
     /// Fixed request family captured without allocating a dynamic label.
     pub(in crate::host::async_runtime) family:
         crate::host::async_runtime::AsyncRuntimeRequestFamily,
+    /// Fixed bounded-fair scheduling lane independent of metric attribution.
+    pub(in crate::host::async_runtime) lane: crate::host::async_runtime::AsyncRuntimeRequestLane,
     /// Whether this command contributes actor queue and handler observations.
     pub(in crate::host::async_runtime) record_actor_latency: bool,
     /// Monotonic enqueue timestamp used to measure dequeue latency.
@@ -35,11 +37,24 @@ pub(in crate::host::async_runtime) struct AsyncRuntimeRequestEnvelope {
     pub(in crate::host::async_runtime) request: AsyncRuntimeRequest,
 }
 
+impl std::fmt::Debug for AsyncRuntimeRequestEnvelope {
+    /// Formats scheduling metadata without requiring request payloads to expose their contents.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AsyncRuntimeRequestEnvelope")
+            .field("family", &self.family)
+            .field("lane", &self.lane)
+            .field("record_actor_latency", &self.record_actor_latency)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AsyncRuntimeRequestEnvelope {
     /// Captures one request's fixed family and monotonic enqueue timestamp.
     pub(in crate::host::async_runtime) fn new(request: AsyncRuntimeRequest) -> Self {
         Self {
             family: request.family(),
+            lane: request.scheduling_lane(),
             record_actor_latency: request.records_actor_latency(),
             enqueued_at: Instant::now(),
             request,
@@ -1202,6 +1217,30 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
 }
 
 impl AsyncRuntimeRequest {
+    /// Maps request semantics to one bounded-fair actor scheduling lane.
+    const fn scheduling_lane(&self) -> crate::host::async_runtime::AsyncRuntimeRequestLane {
+        use crate::host::async_runtime::AsyncRuntimeRequestLane as Lane;
+
+        match self {
+            Self::Shutdown { .. } => Lane::Urgent,
+            Self::Metrics { .. } | Self::RecordLatencyPhase { .. } => Lane::Maintenance,
+            _ => match self.family() {
+                crate::host::async_runtime::AsyncRuntimeRequestFamily::Terminal
+                | crate::host::async_runtime::AsyncRuntimeRequestFamily::Control => {
+                    Lane::Interactive
+                }
+                crate::host::async_runtime::AsyncRuntimeRequestFamily::Render
+                | crate::host::async_runtime::AsyncRuntimeRequestFamily::SideEffect => {
+                    Lane::Maintenance
+                }
+                crate::host::async_runtime::AsyncRuntimeRequestFamily::Lifecycle
+                | crate::host::async_runtime::AsyncRuntimeRequestFamily::Message
+                | crate::host::async_runtime::AsyncRuntimeRequestFamily::Provider
+                | crate::host::async_runtime::AsyncRuntimeRequestFamily::Event => Lane::Normal,
+            },
+        }
+    }
+
     /// Returns whether this command should observe its own actor latency.
     const fn records_actor_latency(&self) -> bool {
         !matches!(self, Self::Metrics { .. } | Self::RecordLatencyPhase { .. })
@@ -1216,27 +1255,9 @@ impl AsyncRuntimeRequest {
             | Self::PowerInhibitionStatus { .. }
             | Self::Metrics { .. }
             | Self::Shutdown { .. } => Family::Lifecycle,
-            Self::RecordLatencyPhase { phase, .. } => match phase {
-                crate::host::async_runtime::AsyncRuntimeLatencyPhase::EventBatchApply
-                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::EventReconciliation => {
-                    Family::Event
-                }
-                crate::host::async_runtime::AsyncRuntimeLatencyPhase::RenderComposition
-                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::RenderEncoding
-                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::OutputFlush => {
-                    Family::Render
-                }
-                crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTtfb
-                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderChunkInterval
-                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal => {
-                    Family::Provider
-                }
-                crate::host::async_runtime::AsyncRuntimeLatencyPhase::PersistenceOperation
-                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::PersistenceBatch
-                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::SideEffectQueueAge => {
-                    Family::SideEffect
-                }
-            },
+            // Phase observations retain their metric-family attribution while
+            // scheduling independently as bounded maintenance work.
+            Self::RecordLatencyPhase { .. } => Family::Lifecycle,
             Self::RenderClientView { .. }
             | Self::RenderClientFrame { .. }
             | Self::RenderIrohClientSnapshot { .. }

@@ -184,9 +184,7 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             AsyncRuntimeRequest::Metrics { reply } => {
-                let mut metrics = self.metrics.clone();
-                metrics.side_effect_queue_depth = self.side_effects.len();
-                let _ = reply.send(metrics);
+                let _ = reply.send(self.current_metrics_snapshot());
                 false
             }
             AsyncRuntimeRequest::RecordLatencyPhase { phase, elapsed_ms } => {
