@@ -799,6 +799,59 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
     fs::remove_dir_all(target.parent().unwrap()).unwrap();
 }
 
+/// Verifies loop-owned work turns retain the first iteration's operation start
+/// for elapsed-time presentation while preserving their own physical start
+/// timestamps for execution policy.
+///
+/// A later iteration is a distinct `AgentTurnRecord`, so resolving display
+/// time from that record alone would reset the user-visible loop duration.
+/// Removing the controller also verifies terminal cleanup falls back safely to
+/// physical turn timing instead of retaining stale ownership.
+#[test]
+fn runtime_agent_loop_display_duration_uses_operation_start_and_falls_back_safely() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .execute_agent_shell_loop_command("%1", "/loop review this document")
+        .unwrap();
+    let first_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .last()
+        .cloned()
+        .expect("loop invocation should create its first work turn");
+    let loop_id = service
+        .agent_loop_turn(&first_turn.turn_id)
+        .expect("first work turn should be loop-owned")
+        .loop_id
+        .clone();
+    let operation_started_at = first_turn.started_at_unix_seconds.saturating_sub(60);
+    service
+        .agent_loop_state_mut_by_id(&loop_id)
+        .expect("loop controller should remain active")
+        .operation_started_at_unix_seconds = operation_started_at;
+
+    assert_eq!(
+        service.agent_display_duration_started_at(&first_turn),
+        operation_started_at
+    );
+
+    service.remove_agent_loop_state_by_id(&loop_id);
+
+    assert_eq!(
+        service.agent_display_duration_started_at(&first_turn),
+        first_turn.started_at_unix_seconds
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a delayed `apply_patch` read completion is inert after a provider
 /// continuation supersedes the action that owned the shell transaction.
 ///

@@ -1161,7 +1161,8 @@ impl RuntimeSessionService {
             .running_turn_id
             .as_deref()?;
         let turn = self.agent_turn_ledger().turn(running_turn_id)?;
-        let elapsed = current_unix_seconds().saturating_sub(turn.started_at_unix_seconds);
+        let elapsed =
+            current_unix_seconds().saturating_sub(self.agent_display_duration_started_at(turn));
         Some(format!(
             "{} ({} • esc to interrupt)",
             self.runtime_agent_working_footer_state_label(turn),

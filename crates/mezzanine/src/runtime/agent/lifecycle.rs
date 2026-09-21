@@ -143,7 +143,10 @@ impl RuntimeSessionService {
             self.emit_subagent_task_result_for_state(&turn, state)?;
         }
         if !suppress_exit_output
-            && let Some(footer) = runtime_agent_finished_footer_line(&turn, state)
+            && let Some(footer) = runtime_agent_finished_footer_line(
+                state,
+                self.agent_display_duration_started_at(&turn),
+            )
         {
             self.append_agent_status_text_to_terminal_buffer(pane_id, &footer)?;
         }
@@ -328,7 +331,10 @@ impl RuntimeSessionService {
         }
         if pane_present
             && conversation_still_owned
-            && let Some(footer) = runtime_agent_finished_footer_line(turn, state)
+            && let Some(footer) = runtime_agent_finished_footer_line(
+                state,
+                self.agent_display_duration_started_at(turn),
+            )
         {
             self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &footer)?;
         }

@@ -251,7 +251,8 @@ impl RuntimeSessionService {
         let running_turn_elapsed = running_turn_record
             .map(|turn| {
                 runtime_agent_turn_duration_display(
-                    current_unix_seconds().saturating_sub(turn.started_at_unix_seconds),
+                    current_unix_seconds()
+                        .saturating_sub(self.agent_display_duration_started_at(turn)),
                 )
             })
             .unwrap_or_else(|| "none".to_string());

@@ -487,6 +487,11 @@ pub struct RuntimeAgentLoopCompletion {
 pub struct RuntimeAgentLoopState {
     /// Stable identity shared by every work turn in this logical loop.
     pub loop_id: String,
+    /// Unix timestamp when the logical loop operation started.
+    ///
+    /// Each work iteration retains its own turn timestamp and deadline for
+    /// execution policy, while user-facing elapsed time spans the full loop.
+    pub operation_started_at_unix_seconds: u64,
     /// Pane whose visible agent shell invoked and presents the loop.
     pub invoking_pane_id: String,
     /// Pane that currently executes loop work turns.

@@ -583,11 +583,11 @@ pub(super) fn runtime_agent_shell_status(action: &AgentAction, fallback: &str) -
 
 /// Builds the terminal footer that replaces the live working timer.
 pub(super) fn runtime_agent_finished_footer_line(
-    turn: &AgentTurnRecord,
     state: AgentTurnState,
+    display_duration_started_at_unix_seconds: u64,
 ) -> Option<String> {
     let elapsed = runtime_agent_turn_duration_display(
-        current_unix_seconds().saturating_sub(turn.started_at_unix_seconds),
+        current_unix_seconds().saturating_sub(display_duration_started_at_unix_seconds),
     );
     match state {
         AgentTurnState::Completed => Some(format!("Worked for {elapsed}")),

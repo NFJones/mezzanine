@@ -3203,6 +3203,18 @@ impl RuntimeSessionService {
         self.agent.agent_loop_turns.get(turn_id)
     }
 
+    /// Returns the timestamp from which a turn's user-visible elapsed time runs.
+    ///
+    /// Loop work turns retain independent execution deadlines, but their status
+    /// and completion presentation must cover the entire logical loop. Missing
+    /// controller metadata safely falls back to the physical turn timestamp.
+    pub(crate) fn agent_display_duration_started_at(&self, turn: &AgentTurnRecord) -> u64 {
+        self.agent_loop_turn(&turn.turn_id)
+            .and_then(|loop_turn| self.agent_loop_state_by_id(&loop_turn.loop_id))
+            .map(|state| state.operation_started_at_unix_seconds)
+            .unwrap_or(turn.started_at_unix_seconds)
+    }
+
     /// Records one loop-owned turn.
     pub(crate) fn insert_agent_loop_turn(
         &mut self,

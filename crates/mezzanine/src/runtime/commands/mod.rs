@@ -961,6 +961,7 @@ impl RuntimeSessionService {
         }
         self.insert_agent_loop_state(RuntimeAgentLoopState {
             loop_id,
+            operation_started_at_unix_seconds: current_unix_seconds(),
             invoking_pane_id: pane_id.to_string(),
             execution_pane_id: pane_id.to_string(),
             original_prompt: parsed.original_prompt.to_string(),
@@ -1968,6 +1969,7 @@ mod tests {
     fn runtime_agent_loop_work_prompt_stays_fresh_across_iterations() {
         let first = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
             loop_id: "loop-1".to_string(),
+            operation_started_at_unix_seconds: 1,
             invoking_pane_id: "%1".to_string(),
             execution_pane_id: "%1".to_string(),
             original_prompt: "review this document".to_string(),
@@ -1986,6 +1988,7 @@ mod tests {
         });
         let later = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
             loop_id: "loop-1".to_string(),
+            operation_started_at_unix_seconds: 1,
             invoking_pane_id: "%1".to_string(),
             execution_pane_id: "%1".to_string(),
             original_prompt: "review this document".to_string(),
@@ -2057,6 +2060,7 @@ mod tests {
     fn runtime_agent_loop_goal_prompt_requests_completion_assessment() {
         let prompt = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
             loop_id: "loop-goal".to_string(),
+            operation_started_at_unix_seconds: 1,
             invoking_pane_id: "%1".to_string(),
             execution_pane_id: "%1".to_string(),
             original_prompt: "run release checks".to_string(),
