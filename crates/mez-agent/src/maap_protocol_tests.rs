@@ -1137,18 +1137,25 @@ fn wait_round_trips_with_strict_mmp_only_batch_contract() {
         actions: vec![wait.clone()],
     };
     valid.validate(&turn(), &[], &[]).expect("valid wait batch");
+    assert!(crate::maap::batch_requests_terminal_completion(
+        &valid.actions
+    ));
 
     let mut progress = parse_maap_action_json(
         r#"{"type":"say","status":"progress","text":"Waiting for the peer reply"}"#,
     )
     .expect("progress say");
     progress.id = "say-1".to_string();
-    MaapBatch {
+    let progress_and_wait = MaapBatch {
         rationale: "make the MMP wait visible".to_string(),
         actions: vec![progress.clone(), wait.clone()],
-    }
-    .validate(&turn(), &[], &[])
-    .expect("progress plus wait");
+    };
+    progress_and_wait
+        .validate(&turn(), &[], &[])
+        .expect("progress plus wait");
+    assert!(crate::maap::batch_requests_terminal_completion(
+        &progress_and_wait.actions
+    ));
 
     let mut shell =
         parse_maap_action_json(r#"{"type":"shell_command","summary":"inspect","command":"pwd"}"#)
@@ -1175,6 +1182,7 @@ fn wait_round_trips_with_strict_mmp_only_batch_contract() {
     assert!(schema.contains("\"wait\""));
     assert!(schema.contains("Wait only for a response from another agent"));
     assert!(schema.contains("Never use this action for delays"));
+    assert!(schema.contains("settles the current turn into idle"));
 }
 
 #[test]

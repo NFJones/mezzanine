@@ -283,11 +283,11 @@ pub fn plan_action_result(
             vec!["agent discovery accepted for runtime execution".to_string()],
             Some(r#"{"state":"pending_runtime_agent_discovery"}"#.to_string()),
         )),
-        AgentActionPayload::Wait => Ok(ActionResult::running(
+        AgentActionPayload::Wait => Ok(ActionResult::succeeded(
             turn,
             action,
-            vec!["waiting for model-originated MMP peer mail".to_string()],
-            Some(r#"{"state":"pending_peer_message"}"#.to_string()),
+            vec!["entered idle state; MMP peer mail will start a follow-up turn".to_string()],
+            Some(r#"{"state":"idle"}"#.to_string()),
         )),
         AgentActionPayload::ConfigChange {
             setting_path,

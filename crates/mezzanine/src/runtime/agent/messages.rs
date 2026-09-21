@@ -172,9 +172,6 @@ impl RuntimeSessionService {
                 self.start_ready_agent_turns()?;
             }
 
-            if model_message_count > 0 && self.resume_agent_peer_wait(&turn, model_message_count)? {
-                continue;
-            }
             if turn.state == AgentTurnState::Running
                 && !self.agent_provider_task_is_owned(&turn.turn_id)
                 && self

@@ -1648,6 +1648,12 @@ fn parse_maap_action_value(
 /// Infers whether a compact action batch should complete after its visible
 /// actions without requiring the model to emit a redundant final flag.
 pub fn batch_requests_terminal_completion(actions: &[AgentAction]) -> bool {
+    if actions
+        .iter()
+        .any(|action| matches!(action.payload, AgentActionPayload::Wait))
+    {
+        return true;
+    }
     actions.iter().all(|action| {
         matches!(
             action.payload,

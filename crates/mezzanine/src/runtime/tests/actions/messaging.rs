@@ -2107,14 +2107,14 @@ fn runtime_group_fanout_receipts_are_scoped_to_each_committing_recipient() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies `wait` releases provider capacity and model-originated MMP mail
-/// resumes the same turn instead of creating a new message-triggered turn.
+/// Verifies `wait` settles its turn into idle and later model-originated MMP
+/// mail starts one ordinary follow-up turn.
 ///
-/// The parked action must remain nonterminal, preserve pane and agent claims,
-/// settle exactly once after peer mail is committed, and queue one ordinary
-/// provider continuation with the original turn identity.
+/// A completed wait must release every scheduler claim without retaining a
+/// deadline-bound peer-wait state. Subsequent peer mail must be committed into
+/// a new message-triggered turn even when pane presentation initially fails.
 #[test]
-fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
+fn runtime_wait_enters_idle_and_peer_mail_starts_follow_up_turn() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -2153,97 +2153,45 @@ fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
             runtime_model_profile("runtime-batch", "test"),
         )
         .unwrap();
-    assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
-    assert!(service.agent_turn_is_waiting_for_peer_message(&started.turn_id));
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     assert_eq!(
         service
             .agent_turn_ledger()
             .turn(&started.turn_id)
             .unwrap()
             .state,
-        AgentTurnState::Blocked
+        AgentTurnState::Completed
     );
-    let parked = service.agent_scheduler().snapshot();
-    assert_eq!(parked.running, 0);
-    assert_eq!(parked.waiting, 1);
-    assert_eq!(parked.active_capacity_used, 0);
-    let parked_frame = service
+    let idle = service.agent_scheduler().snapshot();
+    assert_eq!(idle.running, 0);
+    assert_eq!(idle.waiting, 0);
+    assert_eq!(idle.active_capacity_used, 0);
+    let idle_frame = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();
     assert_eq!(
-        parked_frame
+        idle_frame
             .frame_context
             .panes
             .get("%1")
             .unwrap()
             .agent_status
             .as_deref(),
-        Some("idle")
+        Some("completed")
     );
-    assert_eq!(parked_frame.frame_context.animation_tick_ms, 0);
-    let parked_agents = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"parked-agents","method":"agent/list","params":{}}"#,
+    assert_eq!(idle_frame.frame_context.animation_tick_ms, 0);
+    let idle_agents = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"idle-agents","method":"agent/list","params":{}}"#,
         &primary,
     );
-    assert!(
-        parked_agents.contains(r#""status":"idle""#),
-        "{parked_agents}"
-    );
-    let parked_tasks = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"parked-tasks","method":"agent/task/list","params":{}}"#,
-        &primary,
-    );
-    assert!(
-        parked_tasks.contains(r#""state":"waiting""#),
-        "{parked_tasks}"
-    );
+    assert!(idle_agents.contains(r#""status":"idle""#), "{idle_agents}");
 
     let now_ms = current_unix_millis();
     let sender = service
         .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
         .unwrap();
     let recipient = AgentId::opaque(started.agent_id.clone()).unwrap();
-    service
-        .control
-        .message_service_mut()
-        .accept_at_with_scope(
-            &sender.agent_id,
-            Envelope {
-                protocol: "mmp/1",
-                id: "wait-bridge-status-1".to_string(),
-                message_type: "task_status".to_string(),
-                time: format!("runtime:{now_ms}"),
-                sender: sender.clone(),
-                recipient: mez_agent::messaging::Recipient::Agent(recipient.clone()),
-                correlation_id: Some(started.turn_id.clone()),
-                ttl_ms: None,
-                content_type: "application/json".to_string(),
-                payload: mez_agent::messaging::TaskStatusPayload {
-                    task_id: "peer-task".to_string(),
-                    state: mez_agent::messaging::TaskState::Running,
-                    progress_percent: Some(50),
-                    summary: "peer task still running".to_string(),
-                }
-                .to_json(),
-                extension_fields: Vec::new(),
-            },
-            MessageScope::Session,
-            now_ms,
-        )
-        .unwrap();
-    assert_eq!(
-        service
-            .deliver_pending_runtime_agent_messages(now_ms)
-            .unwrap(),
-        1
-    );
-    assert!(
-        service.agent_turn_is_waiting_for_peer_message(&started.turn_id),
-        "runtime-owned bridge traffic must not wake a peer wait"
-    );
-    assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
-
     service
         .control
         .message_service_mut()
@@ -2274,25 +2222,29 @@ fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
             .unwrap(),
         1
     );
-    assert!(!service.agent_turn_is_waiting_for_peer_message(&started.turn_id));
-    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count + 1);
     assert_eq!(
         service
             .agent_turn_ledger()
             .turn(&started.turn_id)
             .unwrap()
             .state,
-        AgentTurnState::Running
+        AgentTurnState::Completed
     );
-    let resumed = service.agent_scheduler().snapshot();
-    assert_eq!(resumed.waiting, 0);
-    assert_eq!(resumed.running, 1);
-    assert_eq!(resumed.active_capacity_used, 1);
-    let resumed_frame = service
+    let follow_up = service.agent_turn_ledger().turns().last().unwrap();
+    assert_ne!(follow_up.turn_id, started.turn_id);
+    assert_eq!(follow_up.trigger, mez_agent::AgentTurnTrigger::LocalMessage);
+    assert_eq!(follow_up.state, AgentTurnState::Running);
+    let follow_up_id = follow_up.turn_id.clone();
+    let running = service.agent_scheduler().snapshot();
+    assert_eq!(running.waiting, 0);
+    assert_eq!(running.running, 1);
+    assert_eq!(running.active_capacity_used, 1);
+    let running_frame = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();
     assert_eq!(
-        resumed_frame
+        running_frame
             .frame_context
             .panes
             .get("%1")
@@ -2301,50 +2253,21 @@ fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
             .as_deref(),
         Some("thinking")
     );
-    assert!(resumed_frame.frame_context.animation_tick_ms > 0);
-    let resumed_agents = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"resumed-agents","method":"agent/list","params":{}}"#,
+    assert!(running_frame.frame_context.animation_tick_ms > 0);
+    let running_agents = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"running-agents","method":"agent/list","params":{}}"#,
         &primary,
     );
     assert!(
-        resumed_agents.contains(r#""status":"running""#),
-        "{resumed_agents}"
+        running_agents.contains(r#""status":"running""#),
+        "{running_agents}"
     );
-    assert_eq!(service.agent_peer_message_turn_count(&started.agent_id), 0);
+    assert_eq!(service.agent_peer_message_turn_count(&started.agent_id), 1);
     assert!(
         service
             .pending_agent_provider_tasks()
             .iter()
-            .any(|task| task.turn_id == started.turn_id)
-    );
-    let settled = service
-        .agent_turn_executions()
-        .get(&started.turn_id)
-        .unwrap();
-    assert_eq!(settled.action_results[0].status, ActionStatus::Succeeded);
-    assert!(
-        settled.action_results[0]
-            .structured_content_json
-            .as_deref()
-            .is_some_and(|value| value.contains("peer_message"))
-    );
-
-    service
-        .agent_turn_ledger_mut()
-        .finish_turn(&started.turn_id, AgentTurnState::Blocked)
-        .unwrap();
-    let ordinary_blocked_frame = service
-        .terminal_client_loop_config(TerminalClientLoopConfig::default())
-        .unwrap();
-    assert_eq!(
-        ordinary_blocked_frame
-            .frame_context
-            .panes
-            .get("%1")
-            .unwrap()
-            .agent_status
-            .as_deref(),
-        Some("waiting")
+            .any(|task| task.turn_id == follow_up_id)
     );
 }
 

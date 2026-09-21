@@ -210,7 +210,6 @@ mod mcp_registry;
 mod memory;
 mod messages;
 mod outcome;
-mod peer_wait;
 mod presentation;
 mod provider_context;
 mod provider_events;
@@ -681,8 +680,6 @@ pub(crate) struct RuntimeAgentComponent {
     agent_persisted_execution_transcripts: BTreeSet<(String, String)>,
     /// Action execution state keyed by turn id.
     agent_turn_executions: BTreeMap<String, AgentTurnExecution>,
-    /// Remaining execution budget retained while a turn waits for MMP peer mail.
-    agent_peer_wait_remaining_timeout_ms: BTreeMap<String, u64>,
 }
 
 /// Immutable, bounded host status for one runtime's power-inhibition policy.
