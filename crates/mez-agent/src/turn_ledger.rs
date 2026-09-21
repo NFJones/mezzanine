@@ -185,18 +185,7 @@ impl AgentTurnLedger {
         if self.turns[index].state != AgentTurnState::Queued {
             return Err(AgentTurnLedgerError::conflict("agent turn is not queued"));
         }
-        let agent_id = self.turns[index].agent_id.clone();
-        if !self.allow_concurrent_turns
-            && self.turns.iter().any(|existing| {
-                existing.agent_id == agent_id
-                    && existing.state == AgentTurnState::Running
-                    && existing.turn_id != turn_id
-            })
-        {
-            return Err(AgentTurnLedgerError::conflict(
-                "agent already has a running turn and concurrent turns are disabled",
-            ));
-        }
+        self.ensure_agent_can_run(index, turn_id)?;
         let turn = self
             .turns
             .get_mut(index)
@@ -273,6 +262,11 @@ impl AgentTurnLedger {
                 "agent turn is already terminal",
             ));
         }
+        if state == AgentTurnState::Blocked && turn.state != AgentTurnState::Running {
+            return Err(AgentTurnLedgerError::conflict(
+                "only a running agent turn can become blocked",
+            ));
+        }
         let pane_id = turn.pane_id.clone();
         let previous = turn.state;
         turn.state = state;
@@ -292,13 +286,14 @@ impl AgentTurnLedger {
             .get(turn_id)
             .copied()
             .ok_or_else(|| AgentTurnLedgerError::not_found("turn not found"))?;
+        if self.turns[index].state != AgentTurnState::Blocked {
+            return Err(AgentTurnLedgerError::conflict("agent turn is not blocked"));
+        }
+        self.ensure_agent_can_run(index, turn_id)?;
         let turn = self
             .turns
             .get_mut(index)
             .ok_or_else(|| AgentTurnLedgerError::not_found("turn not found"))?;
-        if turn.state != AgentTurnState::Blocked {
-            return Err(AgentTurnLedgerError::conflict("agent turn is not blocked"));
-        }
         let pane_id = turn.pane_id.clone();
         let previous = turn.state;
         turn.state = AgentTurnState::Running;
@@ -409,6 +404,23 @@ impl AgentTurnLedger {
     /// Returns the generation of indexed semantic ledger state.
     pub fn semantic_generation(&self) -> u64 {
         self.semantic_generation
+    }
+
+    /// Rejects a transition to running when serialized agents already own one.
+    fn ensure_agent_can_run(&self, index: usize, turn_id: &str) -> AgentTurnLedgerResult<()> {
+        let agent_id = self.turns[index].agent_id.as_str();
+        if !self.allow_concurrent_turns
+            && self.turns.iter().any(|existing| {
+                existing.agent_id == agent_id
+                    && existing.state == AgentTurnState::Running
+                    && existing.turn_id != turn_id
+            })
+        {
+            return Err(AgentTurnLedgerError::conflict(
+                "agent already has a running turn and concurrent turns are disabled",
+            ));
+        }
+        Ok(())
     }
 
     /// Registers one newly appended turn in every derived index.

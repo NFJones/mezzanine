@@ -174,3 +174,45 @@ fn turn_ledger_serializes_turns_for_one_agent() {
     assert_eq!(ledger.turns().len(), 2);
     assert_eq!(ledger.turns()[1].state, AgentTurnState::Running);
 }
+
+/// Verifies a blocked turn cannot bypass the single-running-turn invariant when
+/// it resumes, and that a queued turn cannot manufacture a blocked state.
+#[test]
+fn turn_ledger_enforces_blocked_resume_and_queued_transition_invariants() {
+    let mut ledger = AgentTurnLedger::new(false);
+    ledger.start_turn(turn()).unwrap();
+    ledger
+        .finish_turn("turn-1", AgentTurnState::Blocked)
+        .unwrap();
+    ledger
+        .start_turn(AgentTurnRecord {
+            turn_id: "turn-2".to_string(),
+            conversation_id: "conversation-2".to_string(),
+            ..turn()
+        })
+        .unwrap();
+
+    let resume_error = ledger.resume_blocked_turn("turn-1").unwrap_err();
+    assert_eq!(
+        resume_error.kind(),
+        crate::AgentTurnLedgerErrorKind::Conflict
+    );
+    assert_eq!(
+        ledger.turn("turn-1").unwrap().state,
+        AgentTurnState::Blocked
+    );
+    assert_eq!(ledger.running_turn_count_for_panes(["%1"]), 1);
+
+    let mut queued = turn();
+    queued.turn_id = "turn-3".to_string();
+    queued.conversation_id = "conversation-3".to_string();
+    ledger.queue_turn(queued).unwrap();
+    let block_error = ledger
+        .finish_turn("turn-3", AgentTurnState::Blocked)
+        .unwrap_err();
+    assert_eq!(
+        block_error.kind(),
+        crate::AgentTurnLedgerErrorKind::Conflict
+    );
+    assert_eq!(ledger.turn("turn-3").unwrap().state, AgentTurnState::Queued);
+}
