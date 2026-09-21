@@ -580,6 +580,31 @@ max_input_tokens = 20000
     let task = service.pending_agent_provider_tasks().remove(0);
     let agent_id = AgentId::opaque(task.agent_id.clone()).unwrap();
 
+    let same_turn_group =
+        mez_agent::ContextExecutionGroupId::new("configured-input-cap-same-turn").unwrap();
+    let same_turn_marker = "same-turn-raw-marker ".repeat(20_000);
+    let turn_context = service
+        .agent_turn_contexts_mut()
+        .get_mut(&task.turn_id)
+        .expect("the configured-input turn owns an active context");
+    turn_context
+        .append_assistant_event(
+            "same-turn compaction action",
+            "inspect same-turn evidence before configured-input compaction",
+            same_turn_group.clone(),
+        )
+        .unwrap();
+    turn_context
+        .append_evidence_event(
+            mez_agent::ContextSourceKind::ActionResult,
+            "same-turn large evidence",
+            same_turn_marker.clone(),
+            same_turn_group,
+            None,
+            true,
+        )
+        .unwrap();
+
     assert!(
         service
             .claim_configured_agent_provider_task(&agent_id, &task.turn_id)
@@ -686,6 +711,16 @@ max_input_tokens = 20000
     }
     assert!(observed_split, "oversized compactor source was not split");
     assert!(compactor_requests > 1);
+    assert!(
+        !service
+            .agent_turn_contexts()
+            .get(&task.turn_id)
+            .expect("compacted turn context remains active")
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("same-turn-raw-marker")),
+        "configured-input compaction must not resurrect selected same-turn evidence"
+    );
     assert!(service.agent_provider_task_is_pending(&task.turn_id));
     assert_eq!(
         service

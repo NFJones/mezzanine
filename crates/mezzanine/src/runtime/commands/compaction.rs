@@ -760,6 +760,8 @@ impl RuntimeSessionService {
                     trigger,
                     RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. }
                 ) {
+                    self.agent_turn_contexts_mut()
+                        .insert(turn_id.clone(), compacted.clone());
                     self.persist_agent_compaction_epoch(pane_id, &task, &final_summary)?;
                     if self.refresh_running_turn_context_after_conversation_compaction(&turn_id)? {
                         self.clear_agent_turn_provider_request_chain(&turn_id);
