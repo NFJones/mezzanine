@@ -1,6 +1,7 @@
 //! Async-runtime tests owned by persistence behavior.
 
 use super::super::*;
+use crate::runtime::RuntimeRegistryUpdatePlan;
 use crate::security::project::{ProjectTrustStore, TrustDecision};
 
 /// Verifies that registry persistence side effects are coalesced before queue
@@ -60,6 +61,75 @@ async fn async_actor_coalesces_registry_persistence_before_capacity_check() {
     assert_eq!(exit.metrics.runtime_side_effects_queued, 1);
     assert_eq!(exit.metrics.runtime_side_effects_drained, 1);
     assert_eq!(exit.metrics.render_invalidations_coalesced, 2);
+    assert_eq!(exit.metrics.side_effect_queue_high_water, 1);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies that a registry update arriving after the prior update has entered
+/// the routed persistence lane replaces that pending work. This keeps a busy
+/// provider stream from filling the shared effect queue with stale snapshots.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_coalesces_routed_registry_persistence_across_enqueue_calls() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-routed-registry-coalesce-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let registry = SessionRegistry::new(root.clone(), current_effective_uid());
+    let mut service = test_service();
+    service.set_session_registry(registry.clone());
+    let initial_update = service.registry_update_plan();
+    let RuntimeRegistryUpdatePlan::Upsert(record) = &initial_update else {
+        panic!("live test service must create a registry upsert");
+    };
+    let expected_session_id = record.session_id.clone();
+    let replacement_update = RuntimeRegistryUpdatePlan::Remove {
+        session_id: expected_session_id.clone(),
+    };
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 1,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistRegistry {
+                registry: registry.clone(),
+                update: initial_update,
+            }])
+            .await
+            .unwrap();
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistRegistry {
+                registry,
+                update: replacement_update.clone(),
+            }])
+            .await
+            .unwrap();
+
+        let effects = handle.drain_persistence_side_effects(8).await.unwrap();
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects.as_slice(),
+            [RuntimeSideEffect::PersistRegistry {
+                update: RuntimeRegistryUpdatePlan::Remove { session_id },
+                ..
+            }] if session_id == &expected_session_id
+        ));
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.runtime_side_effects_queued, 1);
+    assert_eq!(exit.metrics.runtime_side_effects_drained, 1);
+    assert_eq!(exit.metrics.render_invalidations_coalesced, 1);
     assert_eq!(exit.metrics.side_effect_queue_high_water, 1);
     let _ = std::fs::remove_dir_all(root);
 }

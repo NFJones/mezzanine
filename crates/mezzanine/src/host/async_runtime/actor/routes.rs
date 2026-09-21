@@ -188,6 +188,35 @@ impl RuntimeSideEffectRouter {
         true
     }
 
+    /// Replaces a pending registry update for the same registry session while
+    /// preserving its original persistence-worker admission position.
+    pub(super) fn coalesce_pending_registry(
+        &mut self,
+        registry: &crate::storage::registry::SessionRegistry,
+        session_id: &str,
+        effect: &mut Option<RuntimeSideEffect>,
+    ) -> bool {
+        self.persistence.iter_mut().any(|queued_effect| {
+            let RuntimeSideEffect::PersistRegistry {
+                registry: queued_registry,
+                update,
+            } = queued_effect
+            else {
+                return false;
+            };
+            if queued_registry != registry
+                || super::coalesce::registry_update_session_id(update) != session_id
+            {
+                return false;
+            }
+            let Some(replacement) = effect.take() else {
+                return false;
+            };
+            *queued_effect = replacement;
+            true
+        })
+    }
+
     /// Removes one pending repaint request so bounded overflow can retain the
     /// existing compensation contract after client work moved out of the
     /// compatibility queue.

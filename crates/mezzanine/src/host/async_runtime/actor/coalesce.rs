@@ -61,17 +61,20 @@ pub(super) fn coalesce_output_side_effects_for_enqueue(
                     registry: registry.clone(),
                     update,
                 });
-                if coalesce_registry_side_effect_into_queue(
-                    queued,
-                    &registry,
-                    &session_id,
-                    &mut effect,
-                ) || coalesce_registry_side_effect_into_vec(
-                    &mut retained,
-                    &registry,
-                    &session_id,
-                    &mut effect,
-                ) {
+                if routes.coalesce_pending_registry(&registry, &session_id, &mut effect)
+                    || coalesce_registry_side_effect_into_queue(
+                        queued,
+                        &registry,
+                        &session_id,
+                        &mut effect,
+                    )
+                    || coalesce_registry_side_effect_into_vec(
+                        &mut retained,
+                        &registry,
+                        &session_id,
+                        &mut effect,
+                    )
+                {
                     coalesced = coalesced.saturating_add(1);
                 } else if let Some(effect) = effect {
                     retained.push(effect);
