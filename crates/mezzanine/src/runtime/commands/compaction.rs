@@ -293,7 +293,7 @@ impl RuntimeSessionService {
                 MezError::invalid_state("active-turn compaction pane session is unavailable")
             })?;
         let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?;
-        let mut current_blocks = plan.replacement_blocks().to_vec();
+        let mut current_blocks = runtime_redact_compaction_blocks(plan.replacement_blocks());
         let mut pending_blocks = Vec::new();
         let recovery_attempt = match trigger {
             RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { attempt } => attempt,
@@ -1212,6 +1212,7 @@ fn runtime_rebuild_active_turn_compaction_request(
             "active-turn compaction request rebuild requires an active-turn target",
         ));
     };
+    let blocks = runtime_redact_compaction_blocks(&blocks);
     task.summarized_entries = blocks.len();
     task.request = runtime_model_compaction_request_for_blocks(
         &task.model_profile,
@@ -1378,26 +1379,35 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
     }
 }
 
-/// Bounds and redacts one transcript entry before sending it for compaction.
+/// Redacts one transcript entry before sending it for compaction while
+/// preserving its structural whitespace for model interpretation.
 pub(super) fn runtime_model_compaction_entry_content(content: &str) -> String {
-    const MAX_MODEL_COMPACTION_ENTRY_BYTES: usize = 4096;
-    let redacted = content
-        .split_whitespace()
-        .map(runtime_compact_redact_sensitive_token)
-        .collect::<Vec<_>>()
-        .join(" ");
-    if redacted.len() <= MAX_MODEL_COMPACTION_ENTRY_BYTES {
-        return redacted;
-    }
-    let mut end = MAX_MODEL_COMPACTION_ENTRY_BYTES;
-    while !redacted.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    format!(
-        "{}...[entry content elided before compaction; original_bytes={}]",
-        &redacted[..end],
-        redacted.len()
-    )
+    content
+        .split_inclusive(char::is_whitespace)
+        .map(|segment| {
+            let token = segment.trim_end_matches(char::is_whitespace);
+            let whitespace = &segment[token.len()..];
+            format!(
+                "{}{}",
+                runtime_compact_redact_sensitive_token(token),
+                whitespace
+            )
+        })
+        .collect()
+}
+
+/// Creates temporary compactor source blocks whose content is redacted before
+/// request sizing or UTF-8-boundary splitting. The frozen replacement plan
+/// continues to own the original context and is applied only after synthesis.
+fn runtime_redact_compaction_blocks(blocks: &[ContextBlock]) -> Vec<ContextBlock> {
+    blocks
+        .iter()
+        .cloned()
+        .map(|mut block| {
+            block.content = runtime_model_compaction_entry_content(&block.content);
+            block
+        })
+        .collect()
 }
 
 /// Extracts the model-authored markdown summary from a compaction response.

@@ -557,7 +557,10 @@ max_input_tokens = 20000
             turn_id: "turn-history".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
-            content: format!("configured-cap-marker {}", "compactable ".repeat(20_000)),
+            content: format!(
+                "configured-cap-marker {} secRET-CROSS-BOUNDARY source-tail-sentinel",
+                "compactable ".repeat(20_000)
+            ),
         })
         .unwrap();
     service.set_agent_transcript_store(transcript_store.clone());
@@ -671,6 +674,8 @@ max_input_tokens = 20000
 
     let mut compactor_requests = 0usize;
     let mut observed_split = false;
+    let mut observed_tail_sentinel = false;
+    let mut observed_redaction = false;
     while service
         .pending_agent_compaction_task_for_tests("%1")
         .is_some()
@@ -688,6 +693,27 @@ max_input_tokens = 20000
         else {
             panic!("expected active-turn compactor dispatch");
         };
+        observed_tail_sentinel |= dispatch
+            .task
+            .request
+            .messages
+            .iter()
+            .any(|message| message.content.contains("source-tail-sentinel"));
+        observed_redaction |= dispatch
+            .task
+            .request
+            .messages
+            .iter()
+            .any(|message| message.content.contains("[redacted]"));
+        assert!(
+            !dispatch
+                .task
+                .request
+                .messages
+                .iter()
+                .any(|message| message.content.contains("secRET-CROSS-BOUNDARY")),
+            "temporary compactor chunks must be redacted before splitting"
+        );
         observed_split |= !pending_blocks.is_empty();
         assert_eq!(
             dispatch.task.request.max_output_tokens,
@@ -711,6 +737,14 @@ max_input_tokens = 20000
     }
     assert!(observed_split, "oversized compactor source was not split");
     assert!(compactor_requests > 1);
+    assert!(
+        observed_tail_sentinel,
+        "the tail of a selected source block must reach a compactor request"
+    );
+    assert!(
+        observed_redaction,
+        "selected sensitive source must be redacted"
+    );
     assert!(
         !service
             .agent_turn_contexts()

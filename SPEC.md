@@ -8124,6 +8124,13 @@ to selection, group and barrier safety, exact-tail handling, accounting,
 validation, and bounded orchestration. A range whose required content is not
 safely recoverable MUST remain raw or cause typed unrecoverable overflow.
 
+Every selected model-visible source range MUST reach at least one compactor
+request in full after sensitive-token redaction. Mezzanine MUST NOT silently
+replace a source prefix with an elision marker before temporary compactor input
+chunking. Temporary input MAY split at UTF-8 boundaries to meet provider
+limits, but redaction MUST happen before splitting and all chunks MUST remain
+attributable to their selected source range.
+
 Within each barrier-delimited segment, compaction MUST retain a bounded recent
 raw suffix of complete execution groups so exact recent references remain
 available after context reduction.
