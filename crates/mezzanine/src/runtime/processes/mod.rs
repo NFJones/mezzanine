@@ -5793,7 +5793,6 @@ impl RuntimeSessionService {
         }
 
         let agent_id = format!("agent-{pane_id}");
-        let retire_message_identity = self.subagent_lineage(&agent_id).is_some();
         self.remove_subagent_task_routes_for_parent(&agent_id);
         self.remove_joined_subagent_dependencies_for_agent(&agent_id);
         self.integration
@@ -5807,22 +5806,9 @@ impl RuntimeSessionService {
         self.remove_subagent_authority_state(&agent_id);
         self.deregister_macro_managed_subagent(&agent_id);
         if let Some(agent_id) = AgentId::opaque(agent_id) {
-            if retire_message_identity {
-                self.control
-                    .message_service_mut()
-                    .retire_agent_identity(&agent_id);
-            } else if self
-                .control
-                .message_service()
-                .registered_identity(&agent_id)
-                .is_some()
-            {
-                let _ = self.control.message_service_mut().update_presence(
-                    &agent_id,
-                    mez_agent::messaging::AgentPresenceStatus::Offline,
-                    current_unix_seconds().saturating_mul(1000),
-                );
-            }
+            self.control
+                .message_service_mut()
+                .retire_agent_identity(&agent_id);
         }
 
         let live_windows = self

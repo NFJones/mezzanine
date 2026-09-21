@@ -17,9 +17,10 @@ use super::types::{
     MessageAcceptedSnapshot, MessageAudienceSnapshot, MessageDeliveryCursorSnapshot,
     MessageDeliverySnapshot, MessageEnvelopeSnapshot, MessageExtensionFieldSnapshot,
     MessageFanoutDiagnostics, MessageIdentitySnapshot, MessagePresenceSnapshot,
-    MessageQueuedEnvelopeSnapshot, MessageRecipientSnapshot, MessageScope, MessageSequence,
-    MessageService, MessageServiceSnapshot, PresenceRecord, ProjectScopeId, QueuedEnvelope,
-    Recipient, ResolvedMessageAudience, SenderIdentity, SequencedEnvelope,
+    MessageQueuedEnvelopeSnapshot, MessageRecipientSnapshot, MessageRetiredDeliveryFloorSnapshot,
+    MessageScope, MessageSequence, MessageService, MessageServiceSnapshot, PresenceRecord,
+    ProjectScopeId, QueuedEnvelope, Recipient, ResolvedMessageAudience, SenderIdentity,
+    SequencedEnvelope,
 };
 use super::validation::{
     normalize_objective, normalize_optional_objective, validate_message_type, validate_protocol,
@@ -88,6 +89,7 @@ impl MessageService {
             registered: HashMap::new(),
             presence: HashMap::new(),
             subscriptions: HashMap::new(),
+            retired_delivery_floors: HashMap::new(),
             accepted_messages: HashMap::new(),
             queue: VecDeque::new(),
             queued_by_sequence: Default::default(),
@@ -515,16 +517,32 @@ impl MessageService {
 
     /// Retires one agent identity and its delivery subscription.
     ///
-    /// Retained envelopes remain in the bounded queue for other matching
-    /// recipients, but the retired identity is no longer discoverable,
-    /// messageable, or eligible for fanout.
+    /// Retained envelopes matching the retired identity are discarded. A
+    /// future pane owner can reuse the same opaque id, while unrelated
+    /// outbound task results retain their sender provenance for durable
+    /// snapshot recovery.
     pub fn retire_agent_identity(&mut self, agent_id: &AgentId) -> bool {
+        let identity = self.registered.get(agent_id).cloned();
         let removed = self.registered.remove(agent_id).is_some();
         self.presence.remove(agent_id);
         self.subscriptions.remove(agent_id);
         self.subscription_order.remove(agent_id.as_str());
         if self.fanout_after_recipient.as_deref() == Some(agent_id.as_str()) {
             self.fanout_after_recipient = None;
+        }
+        if let Some(identity) = identity.filter(|_| removed) {
+            self.retired_delivery_floors
+                .insert(agent_id.clone(), (identity.clone(), self.last_sequence()));
+            self.queue
+                .retain(|queued| !recipient_matches(&identity, &queued.envelope.recipient));
+            self.queued_bytes = self
+                .queue
+                .iter()
+                .map(|queued| queued.envelope.payload.len())
+                .sum();
+            self.rebuild_queue_indexes();
+            self.prune_accepted_messages_to_retained_queue();
+            self.prune_retired_delivery_floors();
         }
         removed
     }
@@ -604,6 +622,18 @@ impl MessageService {
             .map(cursor_snapshot)
             .collect::<Vec<_>>();
         subscriptions.sort_by(|left, right| left.recipient.cmp(&right.recipient));
+        let mut retired_delivery_floors = self
+            .retired_delivery_floors
+            .iter()
+            .map(
+                |(_, (identity, last_sequence))| MessageRetiredDeliveryFloorSnapshot {
+                    identity: identity_snapshot(identity),
+                    last_sequence: *last_sequence,
+                },
+            )
+            .collect::<Vec<_>>();
+        retired_delivery_floors
+            .sort_by(|left, right| left.identity.agent_id.cmp(&right.identity.agent_id));
         let retained_messages = self
             .queue
             .iter()
@@ -618,13 +648,14 @@ impl MessageService {
 
         MessageServiceSnapshot {
             protocol: MMP_PROTOCOL.to_string(),
-            schema_version: 2,
+            schema_version: 3,
             next_sequence: self.next_sequence,
             retention_messages: self.retention_messages,
             retention_bytes: self.retention_bytes,
             registered_agents,
             presence,
             subscriptions,
+            retired_delivery_floors,
             retained_messages,
             accepted_messages,
         }
@@ -667,6 +698,12 @@ impl MessageService {
                 cursor.recipient.clone(),
             );
             subscriptions.insert(cursor.recipient.clone(), cursor);
+        }
+        let mut retired_delivery_floors = HashMap::new();
+        for floor in &snapshot.retired_delivery_floors {
+            let identity = sender_identity_from_snapshot(&floor.identity, snapshot.schema_version)?;
+            retired_delivery_floors
+                .insert(identity.agent_id.clone(), (identity, floor.last_sequence));
         }
         let mut queue = VecDeque::new();
         let mut retained_envelopes = HashMap::new();
@@ -721,6 +758,7 @@ impl MessageService {
             registered,
             presence,
             subscriptions,
+            retired_delivery_floors,
             accepted_messages,
             queue,
             queued_by_sequence: Default::default(),
@@ -735,6 +773,7 @@ impl MessageService {
         };
         service.rebuild_queue_indexes();
         service.prune_accepted_messages_to_retained_queue();
+        service.prune_retired_delivery_floors();
         Ok(service)
     }
 
@@ -770,7 +809,11 @@ impl MessageService {
         })?;
         let cursor = DeliveryCursor {
             recipient: recipient.clone(),
-            last_sequence: 0,
+            last_sequence: self
+                .retired_delivery_floors
+                .remove(recipient)
+                .map(|(_, last_sequence)| last_sequence)
+                .unwrap_or(0),
         };
         self.subscription_order
             .insert(recipient.as_str().to_string(), recipient.clone());
@@ -1225,6 +1268,7 @@ impl MessageService {
                     .saturating_sub(removed.envelope.payload.len());
             }
         }
+        self.prune_retired_delivery_floors();
         Ok(sequence)
     }
 
@@ -1269,6 +1313,16 @@ impl MessageService {
             .collect::<HashSet<_>>();
         self.accepted_messages
             .retain(|message_id, _| retained_ids.contains(message_id));
+    }
+
+    fn prune_retired_delivery_floors(&mut self) {
+        let Some(oldest_retained_sequence) = self.queue.front().map(|queued| queued.sequence)
+        else {
+            self.retired_delivery_floors.clear();
+            return;
+        };
+        self.retired_delivery_floors
+            .retain(|_, (_, floor)| *floor >= oldest_retained_sequence);
     }
 
     /// Runs the matching recipients operation for this subsystem.
@@ -1440,7 +1494,7 @@ fn expires_before_delivery(envelope: &Envelope) -> bool {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Result<()> {
-    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1 | 2) {
+    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1 | 2 | 3) {
         return Err(MessageError::invalid_args(
             "snapshot MMP state has unsupported protocol or schema version",
         ));
@@ -1480,7 +1534,7 @@ fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Resul
             ));
         }
     }
-    if snapshot.schema_version == 2 && presence_ids.len() != registered_by_id.len() {
+    if snapshot.schema_version >= 2 && presence_ids.len() != registered_by_id.len() {
         return Err(MessageError::invalid_args(
             "snapshot MMP registered agents must each have a presence record",
         ));
@@ -1504,10 +1558,40 @@ fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Resul
             ));
         }
     }
+    let mut retired_identities = HashMap::new();
+    if snapshot.schema_version == 3 {
+        for floor in &snapshot.retired_delivery_floors {
+            let identity = sender_identity_from_snapshot(&floor.identity, snapshot.schema_version)?;
+            if floor.last_sequence >= snapshot.next_sequence {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP retired delivery floor exceeds the retained sequence range",
+                ));
+            }
+            if registered_by_id.contains_key(identity.agent_id.as_str())
+                || subscription_ids.contains(identity.agent_id.as_str())
+            {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP retired delivery floor identity must not be active",
+                ));
+            }
+            if retired_identities
+                .insert(identity.agent_id.clone(), identity)
+                .is_some()
+            {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP retired delivery floor identities must be unique",
+                ));
+            }
+        }
+    } else if !snapshot.retired_delivery_floors.is_empty() {
+        return Err(MessageError::invalid_args(
+            "snapshot MMP retired delivery floors require schema version 3",
+        ));
+    }
     let mut max_sequence = 0;
     let mut queued_bytes = 0usize;
     let mut retained_by_id = HashMap::new();
-    if snapshot.schema_version == 2 {
+    if snapshot.schema_version >= 2 {
         let mut retained_sequences = HashSet::new();
         for retained in &snapshot.retained_messages {
             if retained.sequence == 0 {
@@ -1525,6 +1609,7 @@ fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Resul
             let envelope = envelope_from_snapshot(&retained.envelope, snapshot.schema_version)?;
             if registered_by_id.get(envelope.sender.agent_id.as_str())
                 != Some(&&retained.envelope.sender)
+                && retired_identities.get(&envelope.sender.agent_id) != Some(&envelope.sender)
             {
                 return Err(MessageError::invalid_args(
                     "snapshot MMP envelope sender must match a registered agent",
@@ -1554,6 +1639,7 @@ fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Resul
             let envelope = envelope_from_snapshot(&accepted.envelope, snapshot.schema_version)?;
             if registered_by_id.get(envelope.sender.agent_id.as_str())
                 != Some(&&accepted.envelope.sender)
+                && retired_identities.get(&envelope.sender.agent_id) != Some(&envelope.sender)
             {
                 return Err(MessageError::invalid_args(
                     "snapshot MMP envelope sender must match a registered agent",
@@ -2085,6 +2171,154 @@ mod tests {
         assert!(!service.retire_agent_identity(&identity.agent_id));
     }
 
+    /// A retired runtime identity must not replay retained session-scoped mail
+    /// to a later owner of the same pane-derived opaque id, even after the
+    /// message service is restored from a durable snapshot.
+    #[test]
+    fn retired_identity_delivery_floor_survives_snapshot_restore() {
+        let mut service = MessageService::default();
+        let sender = service.register_agent(None, None, "agent", Vec::new());
+        let sender_agent_id = sender.agent_id.clone();
+        let retired = SenderIdentity {
+            agent_id: AgentId::opaque("agent-%1").unwrap(),
+            project_scope: None,
+            pane_id: Some(PaneId::parse('%', "%1").unwrap()),
+            window_id: Some(WindowId::parse('@', "@1").unwrap()),
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        service.ensure_agent_identity(retired.clone(), 0).unwrap();
+        service
+            .accept_at_with_scope(
+                &sender.agent_id,
+                Envelope {
+                    protocol: MMP_PROTOCOL,
+                    id: "retired-session-message".to_string(),
+                    message_type: "send".to_string(),
+                    time: "runtime:0".to_string(),
+                    sender: sender.clone(),
+                    recipient: Recipient::Session,
+                    correlation_id: None,
+                    ttl_ms: None,
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                    payload: "must not replay".to_string(),
+                    extension_fields: Vec::new(),
+                },
+                MessageScope::Session,
+                0,
+            )
+            .unwrap();
+        service
+            .accept_at_with_scope(
+                &retired.agent_id,
+                Envelope {
+                    protocol: MMP_PROTOCOL,
+                    id: "retired-outbound-message".to_string(),
+                    message_type: "send".to_string(),
+                    time: "runtime:0".to_string(),
+                    sender: retired.clone(),
+                    recipient: Recipient::Agent(sender.agent_id.clone()),
+                    correlation_id: None,
+                    ttl_ms: None,
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                    payload: "must retire with the sender".to_string(),
+                    extension_fields: Vec::new(),
+                },
+                MessageScope::Session,
+                0,
+            )
+            .unwrap();
+        assert!(service.retire_agent_identity(&retired.agent_id));
+
+        let snapshot = service.snapshot_state();
+        assert!(snapshot.accepted_messages.iter().any(|message| {
+            message.envelope.id == "retired-outbound-message"
+                && message.envelope.sender.agent_id == retired.agent_id.as_str()
+        }));
+        let mut forged = snapshot.clone();
+        forged.retired_delivery_floors[0].identity.agent_id = "agent-forged".to_string();
+        assert!(MessageService::from_snapshot_state(&forged).is_err());
+
+        let mut duplicate_floor = snapshot.clone();
+        duplicate_floor
+            .retired_delivery_floors
+            .push(duplicate_floor.retired_delivery_floors[0].clone());
+        assert!(MessageService::from_snapshot_state(&duplicate_floor).is_err());
+
+        let mut active_floor = snapshot.clone();
+        active_floor
+            .registered_agents
+            .push(active_floor.retired_delivery_floors[0].identity.clone());
+        assert!(MessageService::from_snapshot_state(&active_floor).is_err());
+
+        let mut out_of_range_floor = snapshot.clone();
+        out_of_range_floor.retired_delivery_floors[0].last_sequence =
+            out_of_range_floor.next_sequence;
+        assert!(MessageService::from_snapshot_state(&out_of_range_floor).is_err());
+
+        let mut lowered_floor = snapshot.clone();
+        lowered_floor.retired_delivery_floors[0].last_sequence = 0;
+        let mut lowered_restored = MessageService::from_snapshot_state(&lowered_floor).unwrap();
+        lowered_restored
+            .ensure_agent_identity(retired.clone(), 1)
+            .unwrap();
+        lowered_restored
+            .subscribe_from_retained_start(&retired.agent_id)
+            .unwrap();
+        assert!(
+            lowered_restored
+                .receive_subscribed(&retired.agent_id, 1, usize::MAX)
+                .unwrap()
+                .messages
+                .is_empty()
+        );
+
+        let mut legacy_floor = snapshot.clone();
+        legacy_floor.schema_version = 2;
+        assert!(MessageService::from_snapshot_state(&legacy_floor).is_err());
+
+        let mut restored = MessageService::from_snapshot_state(&snapshot).unwrap();
+        restored.ensure_agent_identity(retired.clone(), 1).unwrap();
+        restored
+            .subscribe_from_retained_start(&retired.agent_id)
+            .unwrap();
+        assert!(
+            restored
+                .receive_subscribed(&retired.agent_id, 1, usize::MAX)
+                .unwrap()
+                .messages
+                .is_empty()
+        );
+
+        restored
+            .accept_at_with_scope(
+                &sender_agent_id,
+                Envelope {
+                    protocol: MMP_PROTOCOL,
+                    id: "replacement-session-message".to_string(),
+                    message_type: "send".to_string(),
+                    time: "runtime:1".to_string(),
+                    sender,
+                    recipient: Recipient::Session,
+                    correlation_id: None,
+                    ttl_ms: None,
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                    payload: "belongs to the replacement".to_string(),
+                    extension_fields: Vec::new(),
+                },
+                MessageScope::Session,
+                1,
+            )
+            .unwrap();
+        let messages = restored
+            .receive_subscribed(&retired.agent_id, 1, usize::MAX)
+            .unwrap()
+            .messages;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].envelope.payload, "belongs to the replacement");
+    }
+
     /// An unchanged objective publishes nothing and does not churn presence, so
     /// discovery rows and resume views stay identical.
     #[test]
@@ -2587,7 +2821,7 @@ mod tests {
             .unwrap();
 
         let snapshot = service.snapshot_state();
-        assert_eq!(snapshot.schema_version, 2);
+        assert_eq!(snapshot.schema_version, 3);
         assert!(
             snapshot
                 .registered_agents

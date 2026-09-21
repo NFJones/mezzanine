@@ -495,6 +495,176 @@ fn runtime_pane_close_immediately_checkpoints_remaining_agent_sessions() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies closing an ordinary root pane retires its pane-derived MMP identity
+/// so a future owner of the same pane id can establish a different project
+/// membership without weakening the message service's conflict boundary.
+#[test]
+fn runtime_pane_close_retires_root_message_identity_before_scope_reuse() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let project_a = temp_root("pane-mmp-project-a");
+    let project_b = temp_root("pane-mmp-project-b");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_pane_current_working_directory("%1", project_a);
+    let initial = service
+        .ensure_runtime_message_identity("agent-%1", None, "agent", &[], 0)
+        .unwrap();
+    let agent_id = initial.agent_id.clone();
+    assert!(initial.project_scope.is_some());
+    let sender = service
+        .ensure_runtime_message_identity("agent-pane-retirement-sender", None, "agent", &[], 0)
+        .unwrap();
+    let sender_agent_id = sender.agent_id.clone();
+    service
+        .control
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender_agent_id,
+            mez_agent::messaging::Envelope {
+                protocol: "mmp/1",
+                id: "retired-pane-direct-message".to_string(),
+                message_type: "send".to_string(),
+                time: "runtime:0".to_string(),
+                sender,
+                recipient: mez_agent::messaging::Recipient::Agent(agent_id.clone()),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "must not reach the replacement pane".to_string(),
+                extension_fields: Vec::new(),
+            },
+            mez_agent::messaging::MessageScope::Session,
+            0,
+        )
+        .unwrap();
+    let sender = service
+        .ensure_runtime_message_identity("agent-pane-retirement-sender", None, "agent", &[], 0)
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender_agent_id,
+            mez_agent::messaging::Envelope {
+                protocol: "mmp/1",
+                id: "retired-pane-addressed-message".to_string(),
+                message_type: "send".to_string(),
+                time: "runtime:0".to_string(),
+                sender,
+                recipient: mez_agent::messaging::Recipient::Pane(
+                    mez_core::ids::PaneId::opaque("%1").unwrap(),
+                ),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "must not reach the replacement pane".to_string(),
+                extension_fields: Vec::new(),
+            },
+            mez_agent::messaging::MessageScope::Session,
+            0,
+        )
+        .unwrap();
+
+    let sender = service
+        .ensure_runtime_message_identity("agent-pane-retirement-sender", None, "agent", &[], 0)
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender_agent_id,
+            mez_agent::messaging::Envelope {
+                protocol: "mmp/1",
+                id: "retired-pane-session-message".to_string(),
+                message_type: "send".to_string(),
+                time: "runtime:0".to_string(),
+                sender,
+                recipient: mez_agent::messaging::Recipient::Session,
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "must not reach the replacement pane".to_string(),
+                extension_fields: Vec::new(),
+            },
+            mez_agent::messaging::MessageScope::Session,
+            0,
+        )
+        .unwrap();
+
+    service
+        .execute_terminal_command(&primary, "kill-pane --force -t %1")
+        .unwrap();
+    assert!(
+        service
+            .message_service()
+            .registered_identity(&agent_id)
+            .is_none()
+    );
+
+    service.set_pane_current_working_directory("%1", project_b);
+    let replacement = service
+        .ensure_runtime_message_identity("agent-%1", None, "agent", &[], 1)
+        .unwrap();
+    assert!(replacement.project_scope.is_some());
+    assert_ne!(replacement.project_scope, initial.project_scope);
+    service
+        .message_service_mut()
+        .subscribe_from_retained_start(&agent_id)
+        .unwrap();
+    assert!(
+        service
+            .message_service()
+            .receive_subscribed(&agent_id, 1, usize::MAX)
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+
+    let sender = service
+        .ensure_runtime_message_identity("agent-pane-retirement-sender", None, "agent", &[], 1)
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender_agent_id,
+            mez_agent::messaging::Envelope {
+                protocol: "mmp/1",
+                id: "replacement-pane-session-message".to_string(),
+                message_type: "send".to_string(),
+                time: "runtime:1".to_string(),
+                sender,
+                recipient: mez_agent::messaging::Recipient::Session,
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "belongs to the replacement pane".to_string(),
+                extension_fields: Vec::new(),
+            },
+            mez_agent::messaging::MessageScope::Session,
+            1,
+        )
+        .unwrap();
+    let replacement_messages = service
+        .message_service()
+        .receive_subscribed(&agent_id, 1, usize::MAX)
+        .unwrap()
+        .messages;
+    assert_eq!(replacement_messages.len(), 1);
+    assert_eq!(
+        replacement_messages[0].envelope.payload,
+        "belongs to the replacement pane"
+    );
+}
+
 /// Verifies terminal-generated response bytes are forwarded back to the pane.
 ///
 /// CSI 6n is a pane application query, not visible output. When the terminal

@@ -684,6 +684,9 @@ pub struct MessageService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) subscriptions: HashMap<AgentId, DeliveryCursor>,
+    /// Authenticated identity and high-water marks that prevent a retired
+    /// runtime identity from replaying retained mail to a later owner.
+    pub(super) retired_delivery_floors: HashMap<AgentId, (SenderIdentity, MessageSequence)>,
     /// Stores the accepted messages value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -787,6 +790,10 @@ pub struct MessageServiceSnapshot {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub subscriptions: Vec<MessageDeliveryCursorSnapshot>,
+    /// Authenticated delivery floors for identities whose runtime ownership
+    /// ended.
+    #[serde(default)]
+    pub retired_delivery_floors: Vec<MessageRetiredDeliveryFloorSnapshot>,
     /// Stores the retained messages value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -870,6 +877,15 @@ pub struct MessageDeliveryCursorSnapshot {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
+    pub last_sequence: MessageSequence,
+}
+
+/// Serializable authenticated delivery floor for one retired runtime identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageRetiredDeliveryFloorSnapshot {
+    /// Exact trusted identity captured while the runtime owner was live.
+    pub identity: MessageIdentitySnapshot,
+    /// Highest sequence accepted before the owner retired.
     pub last_sequence: MessageSequence,
 }
 
