@@ -4,13 +4,16 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use super::actor::routes::RuntimeSideEffectRouter;
+use super::actor_types::AsyncClientRenderToken;
 use super::{
-    AgentId, Arc, AsyncRuntimeRequestEnvelope, ClientId, ControlConnectionState,
+    AgentId, Arc, AsyncRuntimeRequestEnvelope, ClientId, ClientStatusLine, ControlConnectionState,
     DEFAULT_ASYNC_CONTROL_MAX_CONTENT_LENGTH, DEFAULT_ASYNC_EVENT_LIMIT_PER_CONNECTION,
     DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER, Duration, FanoutBatch, HashMap, HashSet,
     MessageConnection, MezError, Mutex, Notify, OwnedSemaphorePermit, PaneProcessInstance, Result,
-    RuntimeLifecycleState, RuntimeSessionService, RuntimeSideEffect, RuntimeTimerKey, Semaphore,
-    UnixListener, VecDeque, current_effective_uid, mpsc, watch,
+    RuntimeEvent, RuntimeLifecycleState, RuntimeSessionService, RuntimeSideEffect, RuntimeTimerKey,
+    Semaphore, TerminalClientLoopConfig, UnixListener, VecDeque, current_effective_uid, mpsc,
+    watch,
 };
 use crate::storage::snapshot::SnapshotRepository;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -296,6 +299,10 @@ pub struct AsyncRuntimeActorMetrics {
     pub actor_interactive_queue_depth: usize,
     /// Current normal state and event request depth in the bounded actor scheduler.
     pub actor_normal_queue_depth: usize,
+    /// Current ready exact-process pane-output producer count in the normal lane.
+    pub pane_output_ready_processes: usize,
+    /// Maximum ready exact-process pane-output producer count observed since startup.
+    pub pane_output_ready_processes_high_water: usize,
     /// Current render and worker-maintenance request depth in the bounded actor scheduler.
     pub actor_maintenance_queue_depth: usize,
     /// Number of normal requests forced through after an interactive burst.
@@ -306,6 +313,8 @@ pub struct AsyncRuntimeActorMetrics {
     pub render_client_view_requests: u64,
     /// Number of direct actor frame requests that included a rendered view.
     pub render_client_frame_requests: u64,
+    /// Number of unchanged pane-output side effects suppressed before composition.
+    pub render_compositions_skipped: u64,
     /// Number of `terminal/step` control requests observed by the actor.
     pub terminal_step_control_requests: u64,
     /// Number of `terminal/view` control requests observed by the actor.
@@ -318,6 +327,8 @@ pub struct AsyncRuntimeActorMetrics {
     pub runtime_events_applied: u64,
     /// Number of once-per-batch global reconciliation passes performed.
     pub runtime_event_reconciliation_passes: u64,
+    /// Number of applied event batches that required only exact-client presentation work.
+    pub runtime_event_global_reconciliation_skipped: u64,
     /// Histogram of accepted event counts per runtime event batch.
     pub runtime_event_batch_sizes: RuntimeHistogram,
     /// Number of runtime side effects queued by event application.
@@ -338,6 +349,8 @@ pub struct AsyncRuntimeActorMetrics {
     pub pane_output_chunks: u64,
     /// Number of pane output bytes applied through typed runtime events.
     pub pane_output_bytes: u64,
+    /// Number of exact-process pane-output submissions selected by round-robin ingress.
+    pub pane_output_round_robin_services: u64,
     /// Histogram of pane output chunk sizes in bytes.
     pub pane_output_chunk_bytes: RuntimeHistogram,
     /// Number of redundant render invalidations merged by render side-effect drains.
@@ -488,6 +501,8 @@ impl AsyncRuntimeRequestSender {
             ingress.urgent_requests.clear();
             ingress.interactive_requests.clear();
             ingress.normal_requests.clear();
+            ingress.normal_pane_output_requests.clear();
+            ingress.normal_pane_output_ready.clear();
             ingress.maintenance_requests.clear();
         }
         self.urgent_admission.close();
@@ -590,12 +605,35 @@ pub(super) struct AsyncRuntimeRequestIngress {
     pub(super) urgent_requests: VecDeque<AsyncRuntimeQueuedRequest>,
     pub(super) interactive_requests: VecDeque<AsyncRuntimeQueuedRequest>,
     pub(super) normal_requests: VecDeque<AsyncRuntimeQueuedRequest>,
+    /// Exact-process pane-output requests, retained FIFO per producer.
+    pub(super) normal_pane_output_requests:
+        HashMap<PaneProcessInstance, VecDeque<AsyncRuntimeQueuedRequest>>,
+    /// Ready exact-process producers in round-robin dequeue order.
+    pub(super) normal_pane_output_ready: VecDeque<PaneProcessInstance>,
+    /// Largest ready exact-process producer set observed by this actor ingress.
+    normal_pane_output_ready_high_water: usize,
+    /// Whether the next mixed normal dequeue must service ordinary normal work.
+    normal_pane_output_turn: bool,
     pub(super) maintenance_requests: VecDeque<AsyncRuntimeQueuedRequest>,
 }
 
 impl AsyncRuntimeRequestIngress {
     /// Appends one capacity-reserved request to its fixed FIFO lane.
     pub(super) fn enqueue(&mut self, request: AsyncRuntimeQueuedRequest) {
+        if let Some(instance) = exact_pane_output_instance(&request.envelope) {
+            let requests = self
+                .normal_pane_output_requests
+                .entry(instance.clone())
+                .or_default();
+            if requests.is_empty() {
+                self.normal_pane_output_ready.push_back(instance);
+                self.normal_pane_output_ready_high_water = self
+                    .normal_pane_output_ready_high_water
+                    .max(self.normal_pane_output_ready.len());
+            }
+            requests.push_back(request);
+            return;
+        }
         match request.envelope.lane {
             AsyncRuntimeRequestLane::Urgent => self.urgent_requests.push_back(request),
             AsyncRuntimeRequestLane::Interactive => self.interactive_requests.push_back(request),
@@ -603,6 +641,97 @@ impl AsyncRuntimeRequestIngress {
             AsyncRuntimeRequestLane::Maintenance => self.maintenance_requests.push_back(request),
         }
     }
+
+    /// Returns whether any ordinary or exact-process pane-output normal work waits.
+    pub(super) fn has_normal_requests(&self) -> bool {
+        !self.normal_requests.is_empty() || !self.normal_pane_output_ready.is_empty()
+    }
+
+    /// Returns the total normal-lane request count across ordinary and keyed work.
+    pub(super) fn normal_request_count(&self) -> usize {
+        self.normal_requests.len().saturating_add(
+            self.normal_pane_output_requests
+                .values()
+                .map(VecDeque::len)
+                .sum::<usize>(),
+        )
+    }
+
+    /// Returns the oldest ordinary or exact-process pane-output normal request.
+    pub(super) fn oldest_normal_request(&self) -> Option<&AsyncRuntimeRequestEnvelope> {
+        self.normal_requests
+            .front()
+            .into_iter()
+            .chain(
+                self.normal_pane_output_requests
+                    .values()
+                    .filter_map(VecDeque::front),
+            )
+            .map(|request| &request.envelope)
+            .min_by_key(|request| request.enqueued_at)
+    }
+
+    /// Reports whether the next normal dequeue will service a pane-output producer.
+    pub(super) fn next_normal_request_is_pane_output(&self) -> bool {
+        !self.normal_pane_output_ready.is_empty()
+            && !(self.normal_pane_output_turn && !self.normal_requests.is_empty())
+    }
+
+    /// Removes one normal request, rotating exact pane-output producers fairly.
+    pub(super) fn dequeue_normal_request(&mut self) -> Option<AsyncRuntimeQueuedRequest> {
+        if self.normal_pane_output_turn && !self.normal_requests.is_empty() {
+            self.normal_pane_output_turn = false;
+            return self.normal_requests.pop_front();
+        }
+        let Some(instance) = self.normal_pane_output_ready.pop_front() else {
+            return self.normal_requests.pop_front();
+        };
+        let requests = self
+            .normal_pane_output_requests
+            .get_mut(&instance)
+            .expect("ready pane-output producer must retain its FIFO");
+        let request = requests
+            .pop_front()
+            .expect("ready pane-output producer FIFO must not be empty");
+        if requests.is_empty() {
+            self.normal_pane_output_requests.remove(&instance);
+        } else {
+            self.normal_pane_output_ready.push_back(instance);
+        }
+        self.normal_pane_output_turn = !self.normal_requests.is_empty();
+        Some(request)
+    }
+
+    /// Returns the number of exact-process producers currently awaiting service.
+    pub(super) fn ready_pane_output_process_count(&self) -> usize {
+        self.normal_pane_output_ready.len()
+    }
+
+    /// Returns the largest ready exact-process producer set observed by this ingress.
+    pub(super) fn ready_pane_output_process_high_water(&self) -> usize {
+        self.normal_pane_output_ready_high_water
+    }
+}
+
+/// Returns the exact producer only for a single coalesced pane-output submission.
+fn exact_pane_output_instance(
+    envelope: &AsyncRuntimeRequestEnvelope,
+) -> Option<PaneProcessInstance> {
+    let crate::host::async_runtime::AsyncRuntimeRequest::SubmitRuntimeEvents { batch, .. } =
+        &envelope.request
+    else {
+        return None;
+    };
+    let [
+        RuntimeEvent::PaneProcess {
+            instance,
+            event: crate::runtime::PaneProcessEvent::Pane(crate::runtime::PaneEvent::Output { .. }),
+        },
+    ] = batch.events.as_slice()
+    else {
+        return None;
+    };
+    Some(instance.clone())
 }
 
 /// Queued request plus its lane reservation, released when the actor dequeues it.
@@ -674,6 +803,9 @@ pub struct AsyncRuntimeSessionActor {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) side_effect_delivery_tx: watch::Sender<u64>,
+    /// Publishes delivery revisions for exact pane-process worker routes.
+    pub(super) pane_process_side_effect_delivery_txs:
+        Arc<Mutex<HashMap<PaneProcessInstance, watch::Sender<u64>>>>,
     /// Stores the lifecycle state tx value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -683,11 +815,19 @@ pub struct AsyncRuntimeSessionActor {
     pub(super) terminal_config_generation: u64,
     /// Publishes terminal configuration generation changes to attached clients.
     pub(super) terminal_config_generation_tx: watch::Sender<u64>,
-    /// Stores the side effects value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Last fully composed primary frame identity, keyed by its attached client.
+    pub(super) rendered_client_side_effects: HashMap<
+        ClientId,
+        (
+            AsyncClientRenderToken,
+            TerminalClientLoopConfig,
+            Option<ClientStatusLine>,
+        ),
+    >,
+    /// Compatibility queue retained while typed side-effect lanes are migrated.
     pub(super) side_effects: VecDeque<RuntimeSideEffect>,
+    /// Typed, keyed side-effect work owned by exact worker lanes.
+    pub(super) side_effect_routes: RuntimeSideEffectRouter,
     /// Start of the current continuously non-empty side-effect queue generation.
     pub(super) side_effect_queue_nonempty_since: Option<std::time::Instant>,
     /// Active transaction input leases keyed by exact pane process generation.
@@ -751,6 +891,9 @@ pub struct AsyncRuntimeSessionHandle {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) side_effect_delivery_rx: watch::Receiver<u64>,
+    /// Shares exact pane-process delivery revisions with owning workers.
+    pub(super) pane_process_side_effect_delivery_txs:
+        Arc<Mutex<HashMap<PaneProcessInstance, watch::Sender<u64>>>>,
     /// Stores the lifecycle state rx value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -1380,5 +1523,115 @@ impl AsyncRuntimeDaemonConfig {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::async_runtime::AsyncRuntimeRequest;
+    use crate::runtime::{PaneEvent, PaneProcessEvent, RuntimeEvent, RuntimeEventBatch};
+
+    fn pane_output_request(
+        instance: PaneProcessInstance,
+        bytes: &[u8],
+    ) -> AsyncRuntimeQueuedRequest {
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::PaneProcess {
+            instance,
+            event: PaneProcessEvent::Pane(PaneEvent::Output {
+                pane_id: "%test".to_string(),
+                bytes: bytes.to_vec(),
+            }),
+        });
+        let (reply, _receiver) = tokio::sync::oneshot::channel();
+        AsyncRuntimeQueuedRequest {
+            envelope: AsyncRuntimeRequestEnvelope::new(AsyncRuntimeRequest::SubmitRuntimeEvents {
+                batch,
+                reply,
+            }),
+            _admission_permit: std::sync::Arc::new(tokio::sync::Semaphore::new(1))
+                .try_acquire_owned()
+                .unwrap(),
+        }
+    }
+
+    fn pane_output_bytes(request: AsyncRuntimeQueuedRequest) -> Vec<u8> {
+        let AsyncRuntimeRequest::SubmitRuntimeEvents { batch, .. } = request.envelope.request
+        else {
+            panic!("expected pane-output submission");
+        };
+        let [
+            RuntimeEvent::PaneProcess {
+                event: PaneProcessEvent::Pane(PaneEvent::Output { bytes, .. }),
+                ..
+            },
+        ] = batch.events.as_slice()
+        else {
+            panic!("expected exact-process pane output");
+        };
+        bytes.clone()
+    }
+
+    /// Verifies exact-process output queues rotate by producer while preserving
+    /// FIFO bytes per process and allowing ordinary normal work to progress.
+    #[test]
+    fn exact_process_pane_output_ingress_rotates_fairly() {
+        let first = PaneProcessInstance {
+            pane_id: "%1".to_string(),
+            generation: 1,
+        };
+        let second = PaneProcessInstance {
+            pane_id: "%2".to_string(),
+            generation: 1,
+        };
+        let mut ingress = AsyncRuntimeRequestIngress::default();
+        ingress.enqueue(pane_output_request(first.clone(), b"first-1"));
+        ingress.enqueue(pane_output_request(first, b"first-2"));
+        ingress.enqueue(pane_output_request(second, b"second-1"));
+
+        let (reply, _receiver) = tokio::sync::oneshot::channel();
+        ingress.enqueue(AsyncRuntimeQueuedRequest {
+            envelope: AsyncRuntimeRequestEnvelope::new(AsyncRuntimeRequest::LifecycleState {
+                reply,
+            }),
+            _admission_permit: std::sync::Arc::new(tokio::sync::Semaphore::new(1))
+                .try_acquire_owned()
+                .unwrap(),
+        });
+
+        assert_eq!(
+            pane_output_bytes(ingress.dequeue_normal_request().unwrap()),
+            b"first-1"
+        );
+        assert!(matches!(
+            ingress.dequeue_normal_request().unwrap().envelope.request,
+            AsyncRuntimeRequest::LifecycleState { .. }
+        ));
+        assert_eq!(
+            pane_output_bytes(ingress.dequeue_normal_request().unwrap()),
+            b"second-1"
+        );
+        assert_eq!(
+            pane_output_bytes(ingress.dequeue_normal_request().unwrap()),
+            b"first-2"
+        );
+        assert!(ingress.dequeue_normal_request().is_none());
+    }
+
+    /// Verifies queued exact-process output contributes to aggregate queue-age diagnostics.
+    #[test]
+    fn exact_process_pane_output_ingress_reports_oldest_normal_request() {
+        let instance = PaneProcessInstance {
+            pane_id: "%1".to_string(),
+            generation: 1,
+        };
+        let mut ingress = AsyncRuntimeRequestIngress::default();
+        ingress.enqueue(pane_output_request(instance, b"queued"));
+
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert!(ingress.oldest_normal_request().is_some_and(
+            |request| request.enqueued_at.elapsed() >= std::time::Duration::from_millis(1)
+        ));
     }
 }

@@ -762,42 +762,14 @@ impl RuntimeSessionService {
                 }
             })
             .collect::<Vec<_>>();
-        let previous_catalogs = records
-            .iter()
-            .filter_map(|record| {
-                record.allowed_actions.as_ref().map(|_| {
-                    store
-                        .conversation_allowed_actions(&record.conversation_id)
-                        .map(|catalog| (record.conversation_id.clone(), catalog))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        for record in &records {
-            if let Some(allowed_actions) = record.allowed_actions.clone()
-                && let Err(error) = store.save_conversation_allowed_actions(
-                    &record.conversation_id,
-                    Some(allowed_actions),
-                )
-            {
-                for (conversation_id, previous_catalog) in previous_catalogs.iter().rev() {
-                    let _ = store.restore_conversation_allowed_actions(
-                        conversation_id,
-                        previous_catalog.clone(),
-                    );
-                }
-                return Err(error);
-            }
+        if self.persistence.transcript_uses_adapter() {
+            return Ok(self.persistence.queue_agent_session_metadata(
+                store,
+                mezzanine_session_id,
+                records,
+            ));
         }
-        if let Err(error) = store.save_agent_session_metadata(&mezzanine_session_id, &records) {
-            for (conversation_id, previous_catalog) in previous_catalogs.iter().rev() {
-                let _ = store.restore_conversation_allowed_actions(
-                    conversation_id,
-                    previous_catalog.clone(),
-                );
-            }
-            return Err(error);
-        }
-        Ok(records.len())
+        store.save_agent_session_metadata_checkpoint(&mezzanine_session_id, &records)
     }
 
     /// Restores the durable agent-scoped model identity for one pane.

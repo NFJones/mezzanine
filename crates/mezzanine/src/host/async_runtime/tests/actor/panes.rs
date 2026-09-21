@@ -95,6 +95,9 @@ async fn async_actor_fences_stale_pane_process_generations() {
         let report = handle.submit_runtime_events(batch).await.unwrap();
         assert_eq!(report.accepted, 2);
         assert_eq!(report.applied, 1);
+        let metrics = handle.metrics().await.unwrap();
+        assert_eq!(metrics.runtime_event_reconciliation_passes, 0);
+        assert_eq!(metrics.runtime_event_global_reconciliation_skipped, 1);
 
         handle
             .queue_runtime_side_effects(vec![
@@ -681,6 +684,63 @@ async fn async_actor_drains_service_deferred_input_after_pane_handoff() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.service.terminate_all_pane_processes().is_ok());
+}
+
+/// Verifies an exact-process worker claims only its own keyed FIFO, leaving
+/// unrelated provider dispatches available to the provider service.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_process_drain_preserves_unrelated_provider_dispatch() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let instance = PaneProcessInstance {
+        pane_id: "%1".to_string(),
+        generation: 1,
+    };
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: AgentId::opaque("agent-%1").unwrap(),
+                    turn_id: "turn-pane-route".to_string(),
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteInput {
+                        bytes: b"pane-route".to_vec(),
+                    },
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .drain_pane_process_io_side_effects(instance.clone(), 1)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect: PaneProcessIoEffect::WriteInput {
+                    bytes: b"pane-route".to_vec(),
+                },
+            }]
+        );
+        assert_eq!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(1)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque("agent-%1").unwrap(),
+                turn_id: "turn-pane-route".to_string(),
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
 }
 
 /// Verifies typed shell deliveries retain pacing, priority, identity, and
@@ -1442,8 +1502,14 @@ async fn async_actor_serves_steps_while_deferred_command_work_is_outstanding() {
             "{refused_text}"
         );
 
-        // Settling the outstanding work still applies its display.
+        // The command worker resolves the display projection before the actor
+        // validates the claim and installs it.
         let outcome = crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&work);
+        let outcome =
+            crate::runtime::RuntimeSessionService::project_deferred_agent_command_outcome(
+                &work, outcome,
+            )
+            .unwrap();
         assert!(
             handle
                 .complete_agent_command_work(work, outcome)

@@ -34,7 +34,18 @@ where
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
-    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
+    let process_instance = driver.process_instance().cloned();
+    let _side_effect_watcher_registration =
+        process_instance
+            .clone()
+            .map(|instance| PaneProcessSideEffectWatcherRegistration {
+                handle: handle.clone(),
+                instance,
+            });
+    let mut side_effect_watcher = process_instance.as_ref().map_or_else(
+        || handle.side_effect_delivery_watcher(),
+        |instance| handle.pane_process_side_effect_delivery_watcher(instance.clone()),
+    );
     let mut report = AsyncPaneProcessServiceReport::new(*lifecycle_watcher.borrow());
     let mut last_foreground_metadata_poll: Option<Instant> = None;
     let mut pending_pane_io_side_effects = VecDeque::new();
@@ -463,6 +474,19 @@ where
     }
     report.terminal_state = *lifecycle_watcher.borrow();
     Ok(report)
+}
+
+/// Retires the exact-process wakeup route on every worker return path.
+struct PaneProcessSideEffectWatcherRegistration {
+    handle: AsyncRuntimeSessionHandle,
+    instance: crate::runtime::PaneProcessInstance,
+}
+
+impl Drop for PaneProcessSideEffectWatcherRegistration {
+    fn drop(&mut self) {
+        self.handle
+            .unregister_pane_process_side_effect_delivery_watcher(&self.instance);
+    }
 }
 
 /// Publishes one cumulative receiver-input checkpoint with process fencing.

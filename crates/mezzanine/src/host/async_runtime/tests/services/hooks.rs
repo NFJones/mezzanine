@@ -76,6 +76,59 @@ async fn async_hook_side_effect_service_executes_program_hooks() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies the hook worker claims its dedicated FIFO route without scanning
+/// or consuming unrelated provider dispatch work from the compatibility queue.
+#[tokio::test(flavor = "current_thread")]
+async fn async_hook_drain_preserves_unrelated_provider_dispatch() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: AgentId::opaque("agent-%1").unwrap(),
+                    turn_id: "turn-hook-route".to_string(),
+                },
+                RuntimeSideEffect::RunProgramHook {
+                    plan: Box::new(HookExecutionPlan {
+                        hook_id: "hook-route".to_string(),
+                        event: HookEvent::ClientDetach,
+                        run_in_focused_shell: false,
+                        target_pane_id: None,
+                        blocks_on_shell_availability: false,
+                        program: Some("true".to_string()),
+                        args: Vec::new(),
+                        shell_command: None,
+                        event_payload_json: "{}".to_string(),
+                        timeout_ms: 1_000,
+                        on_failure: HookOnFailure::Warn,
+                    }),
+                    triggering_event_completed: true,
+                    continuation: None,
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(handle.drain_hook_side_effects(1).await.unwrap().len(), 1);
+        assert_eq!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(1)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque("agent-%1").unwrap(),
+                turn_id: "turn-hook-route".to_string(),
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
 /// Verifies a slow program hook executes outside serialized actor ownership.
 ///
 /// A lifecycle-state heartbeat must complete while the hook worker is still

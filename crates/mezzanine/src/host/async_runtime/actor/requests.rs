@@ -27,23 +27,30 @@ impl AsyncRuntimeSessionActor {
         self.client_clipboard_routes.remove(&client_id).is_some()
     }
 
-    /// Captures the exact primary view identity used to derive coordinate actions.
-    fn client_render_token(
+    /// Captures the exact client view identity used to fence worker rendering.
+    pub(super) fn client_render_token(
         &mut self,
         client_id: &mez_core::ids::ClientId,
         role: mez_mux::presentation::ClientViewRole,
     ) -> crate::Result<Option<AsyncClientRenderToken>> {
-        if role != mez_mux::presentation::ClientViewRole::Primary {
-            return Ok(None);
-        }
-        let (window_id, navigation_revision, layout_revision, presentation_revision) =
-            self.service.client_render_identity(client_id)?;
-        Ok(Some(AsyncClientRenderToken {
-            client_id: client_id.clone(),
+        let crate::runtime::RuntimeClientRenderIdentity {
+            view_source_client_id,
             window_id,
             navigation_revision,
             layout_revision,
             presentation_revision,
+            external_editor_session,
+            pane_render_generations,
+        } = self.service.client_render_identity(client_id, role)?;
+        Ok(Some(AsyncClientRenderToken {
+            client_id: client_id.clone(),
+            view_source_client_id,
+            window_id,
+            navigation_revision,
+            layout_revision,
+            presentation_revision,
+            external_editor_session,
+            pane_render_generations,
         }))
     }
 
@@ -344,11 +351,96 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
-            AsyncRuntimeRequest::RenderIrohClientSnapshot {
+            AsyncRuntimeRequest::CaptureClientRenderWork {
                 client_id,
-                invalidate_output,
+                role,
+                client_size,
+                config,
                 reply,
             } => {
+                self.metrics.render_client_frame_requests =
+                    self.metrics.render_client_frame_requests.saturating_add(1);
+                let result = self
+                    .service
+                    .prepare_client_render(&client_id, role)
+                    .and_then(|()| {
+                        self.resolve_terminal_client_config_snapshot_for_client(&client_id, config)
+                    })
+                    .and_then(|config| {
+                        let render_token = self.client_render_token(&client_id, role)?;
+                        let snapshot = self.service.capture_client_render_snapshot(
+                            &client_id,
+                            role,
+                            client_size,
+                            config.config(),
+                        )?;
+                        let apply_overlays = snapshot.requires_actor_overlays();
+                        Ok(
+                            crate::host::async_runtime::actor_types::AsyncClientRenderWork {
+                                client_id,
+                                role,
+                                render_token,
+                                config,
+                                snapshot,
+                                apply_overlays,
+                                #[cfg(test)]
+                                composition_started: self
+                                    .service
+                                    .client_render_composition_probe_for_tests()
+                                    .0,
+                                #[cfg(test)]
+                                composition_release: self
+                                    .service
+                                    .client_render_composition_probe_for_tests()
+                                    .1,
+                            },
+                        )
+                    });
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::CompleteClientRenderWork { work, view, reply } => {
+                let result = self
+                    .service
+                    .prepare_client_render(&work.client_id, work.role)
+                    .and_then(|()| {
+                        if work.config.generation() != self.terminal_config_generation
+                            || self.client_render_token(&work.client_id, work.role)?
+                                != work.render_token
+                        {
+                            return Err(crate::MezError::conflict(
+                                "client render work became stale",
+                            ));
+                        }
+                        if work.apply_overlays {
+                            self.service.complete_client_render_snapshot(
+                                work.role,
+                                work.config.config(),
+                                view,
+                            )
+                        } else {
+                            Ok((view, Vec::new()))
+                        }
+                    })
+                    .and_then(|(view, presentation_ids)| {
+                        let effects = self
+                            .service
+                            .drain_status_pill_refresh_transition()
+                            .side_effects;
+                        if !effects.is_empty() {
+                            self.queue_runtime_side_effects(effects)?;
+                        }
+                        Ok(AsyncRenderedClientFrame {
+                            config: work.config,
+                            render_token: work.render_token,
+                            presentation_ids,
+                            view,
+                        })
+                    });
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::CaptureIrohClientRenderWork { client_id, reply } => {
                 self.metrics.render_client_frame_requests =
                     self.metrics.render_client_frame_requests.saturating_add(1);
                 let result = (|| {
@@ -372,42 +464,98 @@ impl AsyncRuntimeSessionActor {
                         _ => return Ok(None),
                     };
                     self.service.prepare_client_render(&client_id, role)?;
-                    let config = self
-                        .service
-                        .terminal_client_loop_config(Default::default())?;
-                    let (Some(view), presentation_ids) = self
-                        .service
-                        .render_client_view_for_client_with_resolved_config_and_receipts(
-                            &client_id,
+                    let config = self.resolve_terminal_client_config_snapshot_for_client(
+                        &client_id,
+                        AsyncTerminalClientConfigInput::Raw(Box::default()),
+                    )?;
+                    let render_token = self.client_render_token(&client_id, role)?;
+                    let snapshot = self.service.capture_client_render_snapshot(
+                        &client_id,
+                        role,
+                        client_size,
+                        config.config(),
+                    )?;
+                    let apply_overlays = snapshot.requires_actor_overlays();
+                    Ok(Some(
+                        crate::host::async_runtime::actor_types::AsyncClientRenderWork {
+                            client_id,
                             role,
-                            client_size,
-                            &config,
-                        )?
-                    else {
-                        return Ok(None);
-                    };
-                    let iroh_status_slot = self.service.terminal_iroh_status_slot(&view, &config);
-                    let event_cutoff = self
-                        .service
-                        .event_log()
-                        .map(|event_log| event_log.latest_event_id())
-                        .unwrap_or(0);
-                    let effects = self
-                        .service
-                        .drain_status_pill_refresh_transition()
-                        .side_effects;
-                    if !effects.is_empty() {
-                        self.queue_runtime_side_effects(effects)?;
-                    }
-                    self.ensure_client_render_timers(&client_id)?;
-                    Ok(Some(AsyncIrohRenderSnapshot {
-                        view,
-                        presentation_ids,
-                        iroh_status_slot,
-                        event_cutoff,
-                        invalidate_output,
-                    }))
+                            render_token,
+                            config,
+                            snapshot,
+                            apply_overlays,
+                            #[cfg(test)]
+                            composition_started: self
+                                .service
+                                .client_render_composition_probe_for_tests()
+                                .0,
+                            #[cfg(test)]
+                            composition_release: self
+                                .service
+                                .client_render_composition_probe_for_tests()
+                                .1,
+                        },
+                    ))
                 })();
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::CompleteIrohClientRenderWork {
+                work,
+                view,
+                invalidate_output,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .prepare_client_render(&work.client_id, work.role)
+                    .and_then(|()| {
+                        if work.config.generation() != self.terminal_config_generation
+                            || self.client_render_token(&work.client_id, work.role)?
+                                != work.render_token
+                        {
+                            return Err(crate::MezError::conflict(
+                                "Iroh client render work became stale",
+                            ));
+                        }
+                        if work.apply_overlays {
+                            self.service.complete_client_render_snapshot(
+                                work.role,
+                                work.config.config(),
+                                view,
+                            )
+                        } else {
+                            Ok((view, Vec::new()))
+                        }
+                    })
+                    .and_then(|(view, presentation_ids)| {
+                        let Some(view) = view else {
+                            return Ok(None);
+                        };
+                        let iroh_status_slot = self
+                            .service
+                            .terminal_iroh_status_slot(&view, work.config.config());
+                        let event_cutoff = self
+                            .service
+                            .event_log()
+                            .map(|event_log| event_log.latest_event_id())
+                            .unwrap_or(0);
+                        let effects = self
+                            .service
+                            .drain_status_pill_refresh_transition()
+                            .side_effects;
+                        if !effects.is_empty() {
+                            self.queue_runtime_side_effects(effects)?;
+                        }
+                        self.ensure_client_render_timers(&work.client_id)?;
+                        Ok(Some(AsyncIrohRenderSnapshot {
+                            view,
+                            presentation_ids,
+                            iroh_status_slot,
+                            event_cutoff,
+                            invalidate_output,
+                        }))
+                    });
                 let _ = reply.send(result);
                 false
             }
@@ -432,6 +580,7 @@ impl AsyncRuntimeSessionActor {
             }
             AsyncRuntimeRequest::RenderClientSideEffect {
                 client_id,
+                reason,
                 config,
                 status,
                 cursor_blink_elapsed_ms,
@@ -439,6 +588,7 @@ impl AsyncRuntimeSessionActor {
             } => {
                 let result = self.render_client_side_effect(
                     client_id,
+                    reason,
                     config,
                     status,
                     cursor_blink_elapsed_ms,
@@ -900,20 +1050,31 @@ impl AsyncRuntimeSessionActor {
                     .as_ref()
                     .filter(|_| Self::step_uses_render_coordinates(&step))
                     .map(|token| {
-                        self.service.client_render_identity(&primary_client_id).map(
-                            |(
-                                window_id,
-                                navigation_revision,
-                                layout_revision,
-                                presentation_revision,
-                            )| {
-                                token.client_id != primary_client_id
-                                    || token.window_id != window_id
-                                    || token.navigation_revision != navigation_revision
-                                    || token.layout_revision != layout_revision
-                                    || token.presentation_revision != presentation_revision
-                            },
-                        )
+                        self.service
+                            .client_render_identity(
+                                &primary_client_id,
+                                mez_mux::presentation::ClientViewRole::Primary,
+                            )
+                            .map(
+                                |crate::runtime::RuntimeClientRenderIdentity {
+                                     view_source_client_id,
+                                     window_id,
+                                     navigation_revision,
+                                     layout_revision,
+                                     presentation_revision,
+                                     external_editor_session,
+                                     pane_render_generations,
+                                 }| {
+                                    token.client_id != primary_client_id
+                                        || token.view_source_client_id != view_source_client_id
+                                        || token.window_id != window_id
+                                        || token.navigation_revision != navigation_revision
+                                        || token.layout_revision != layout_revision
+                                        || token.presentation_revision != presentation_revision
+                                        || token.external_editor_session != external_editor_session
+                                        || token.pane_render_generations != pane_render_generations
+                                },
+                            )
                     })
                     .transpose();
                 let result = stale_coordinate_input.and_then(|stale| {
@@ -1559,6 +1720,10 @@ impl AsyncRuntimeSessionActor {
             }
             AsyncRuntimeRequest::DrainAgentProviderDispatchSideEffects { limit, reply } => {
                 let _ = reply.send(self.drain_agent_provider_dispatch_side_effects(limit));
+                false
+            }
+            AsyncRuntimeRequest::DrainAgentCommandDispatchSideEffects { limit, reply } => {
+                let _ = reply.send(self.drain_agent_command_dispatch_side_effects(limit));
                 false
             }
             AsyncRuntimeRequest::DrainRenderSideEffects { limit, reply } => {

@@ -3775,6 +3775,10 @@ that mutation MUST NOT change primary geometry, another observer's geometry,
 or canonical pane layout. The server MUST send the first available
 snapshot immediately and MUST NOT add a debounce, compression batching window,
 or delayed flush. At most one encoded render update MAY occupy the write path.
+Ordinary `terminal/step` acknowledgement latency MUST NOT cause an attached
+client to replace terminal content or status chrome with a transport, daemon,
+or elapsed-time waiting message. Connection failure and ambiguous-response
+diagnostics remain subject to the bounded transport and no-input-replay rules.
 While a primary mutation acknowledgement is outstanding, the client MUST
 continue consuming and presenting authoritative v3 render updates instead of
 holding them behind the control round trip. Receiving a pushed update MUST NOT
@@ -3998,7 +4002,22 @@ per client, while still delivering one trailing frame after a burst. A value of
 unsuperseded pending partial-output flushes, and user-input handling MUST NOT
 be delayed by this limit. When a newer render is waiting behind the rate gate,
 stale pending bytes from an older incomplete frame SHOULD be superseded by the
-newer frame rather than flushed eagerly.
+newer frame rather than flushed eagerly. Output-writability signals alone MUST
+retain differential frame state and MAY coalesce as ordinary output work;
+terminal resize, layout, mode recovery, and provisional divider feedback retain
+their immediate invalidation behavior.
+
+Client-frame base composition MAY run outside the serialized runtime actor only
+from an immutable snapshot captured by that actor. The capture MUST include the
+exact client attachment, navigation, layout, presentation, terminal-config,
+and visible-pane generation lineage required by the frame. Before any
+worker-composed frame is accepted, the actor MUST revalidate that lineage and
+apply client-local overlays and presentation receipts atomically. A stale
+worker result MUST NOT publish stale focus labels, mouse hit regions, overlays,
+or terminal modes; it MUST be discarded and the newest generation retried with
+a bounded convergent attempt. Composition workers MUST NOT delay unrelated
+actor requests, and partial physical-output write handling remains owned by the
+attached-client output path.
 
 The version 1 to version 2 primary-config migration MUST treat
 `terminal.nested_muxxer` as a migration alias for
@@ -4550,11 +4569,14 @@ MUST receive no model-specific cache controls and MUST reject an explicit
 retention setting until supported capability metadata is available.
 GPT-5.6-and-later model metadata MAY declare
 `openai_prompt_cache_explicit` with its cache-generation capability to select
-`prompt_cache_options.mode = "explicit"`. Explicit mode MUST mark exactly one
-semantic `input_text` content block with
-`prompt_cache_breakpoint: { mode: "explicit" }`; it MUST NOT mark top-level
-`instructions`, alter chronological ordering, or be enabled for earlier or
-unknown model generations.
+`prompt_cache_options.mode = "explicit"`. Explicit mode MUST mark one to four
+semantic `input_text` content blocks with
+`prompt_cache_breakpoint: { mode: "explicit" }`. It MUST retain the last
+eligible stable-prefix breakpoint and MAY add up to three newest eligible
+settled durable-history checkpoints as chronology grows; it MUST NOT mark
+top-level `instructions`, volatile request suffix content, or alter
+chronological ordering, and it MUST NOT be enabled for earlier or unknown model
+generations.
 For OpenAI-compatible Chat Completions profiles,
 `provider_options.developer_role` MAY be set to `developer` or `system` to
 control how Mezzanine developer messages are serialized. It MUST default to
@@ -5324,6 +5346,23 @@ append one compact neutral request-state block that identifies the current
 interaction kind and allowed subset. Providers with dynamic tool schemas MUST
 not duplicate complete action or MCP descriptions in text. All provider families, including auto-sizing, MUST preserve canonical order
 and MUST NOT manufacture a late user restatement.
+
+For direct OpenAI Responses requests on verified GPT-5.6-or-newer models, a
+provider MAY retain a bounded set of private successful response ids keyed by
+exact model, prompt-cache lineage, and non-secret endpoint/account-routing
+namespace, then send the matching id on a subsequent request as
+`prompt_cache_options.comparison_response_id`. A direct request without an
+explicit non-secret account-routing identity MUST omit comparison rather than
+risk crossing accounts. This value is diagnostic-only:
+it MUST NOT enter model input, continuation state, cache-key identity,
+transcript content, or observations. The first request, unsupported models,
+lineage/model changes, failed responses, and ChatGPT-backed Responses requests
+MUST omit it. A stale completion MUST NOT replace a newer retained baseline.
+When OpenAI returns `prompt_cache_diagnostics`, observations MAY retain only
+bounded outcome and miss-reason categories plus numeric comparison token
+counts and effective service tier; raw response ids, prompts, output, reasoning,
+and provider errors MUST remain excluded. Streamed diagnostics MUST be read from
+the terminal `response.completed` event's `response` object.
 
 Every concrete provider wire send, including capability continuations,
 repairs, output-limit retries, adapter-internal retries, routing, auxiliary

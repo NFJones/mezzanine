@@ -929,23 +929,42 @@ fn assert_replay_settlement_is_terminal(outcome: &SpoofCaseOutcome) {
 
 /// Proves the adversarial fixture owns the pane foreground group and intercepts
 /// runtime input before any contract assertion depends on it.
-#[tokio::test(flavor = "current_thread")]
-async fn async_adversarial_foreground_fixture_owns_pty_and_intercepts_input() {
-    let Some(bash) = available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]) else {
-        eprintln!("skipping adversarial foreground fixture probe because Bash is unavailable");
-        return;
-    };
-    let outcome = run_foreground_spoof_case(bash, SpoofMode::Silent, "bash-probe").await;
-    assert!(
-        outcome.log_text.contains("OBSERVED:"),
-        "fixture should have received pane input: {}",
-        outcome.log_text
-    );
-    assert!(
-        outcome.fixture_process_group.is_some(),
-        "fixture should have owned the pane foreground group: {}",
-        outcome.log_text
-    );
+#[test]
+fn async_adversarial_foreground_fixture_owns_pty_and_intercepts_input() {
+    std::thread::Builder::new()
+        .name("adversarial-foreground-fixture-probe".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let Some(bash) =
+                        available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
+                    else {
+                        eprintln!(
+                            "skipping adversarial foreground fixture probe because Bash is unavailable"
+                        );
+                        return;
+                    };
+                    let outcome =
+                        run_foreground_spoof_case(bash, SpoofMode::Silent, "bash-probe").await;
+                    assert!(
+                        outcome.log_text.contains("OBSERVED:"),
+                        "fixture should have received pane input: {}",
+                        outcome.log_text
+                    );
+                    assert!(
+                        outcome.fixture_process_group.is_some(),
+                        "fixture should have owned the pane foreground group: {}",
+                        outcome.log_text
+                    );
+                });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// Verifies a malicious foreground program that keeps the pane PTY foreground
@@ -994,30 +1013,49 @@ fn async_spoofed_foreground_program_cannot_publish_shell_authority() {
 ///
 /// The runtime may keep probing inside its bounded observation budget, but it
 /// must not force settlement by signalling the program that owns the PTY.
-#[tokio::test(flavor = "current_thread")]
-async fn async_silent_foreground_program_keeps_pane_and_receives_no_command() {
-    let Some(bash) = available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]) else {
-        eprintln!("skipping adversarial silent certification test because Bash is unavailable");
-        return;
-    };
-    let outcome = run_foreground_spoof_case(bash, SpoofMode::Silent, "bash-silent").await;
-    assert_no_spoofed_authority(&outcome, SpoofMode::Silent);
-    assert!(
-        !outcome.interrupted,
-        "an unresponsive foreground program must not be interrupted by certification: {}",
-        outcome.log_text
-    );
-    assert!(
-        !outcome.log_text.contains(FIXTURE_CONTROL_C_MARK),
-        "no implicit Ctrl-C may reach an unresponsive foreground program: {}",
-        outcome.log_text
-    );
-    assert_eq!(
-        outcome.snapshot.foreground_certified_shell,
-        Some(false),
-        "the pane must remain owned by the unresponsive program: {}",
-        outcome.log_text
-    );
+#[test]
+fn async_silent_foreground_program_keeps_pane_and_receives_no_command() {
+    std::thread::Builder::new()
+        .name("adversarial-silent-foreground".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let Some(bash) =
+                        available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
+                    else {
+                        eprintln!(
+                            "skipping adversarial silent certification test because Bash is unavailable"
+                        );
+                        return;
+                    };
+                    let outcome =
+                        run_foreground_spoof_case(bash, SpoofMode::Silent, "bash-silent").await;
+                    assert_no_spoofed_authority(&outcome, SpoofMode::Silent);
+                    assert!(
+                        !outcome.interrupted,
+                        "an unresponsive foreground program must not be interrupted by certification: {}",
+                        outcome.log_text
+                    );
+                    assert!(
+                        !outcome.log_text.contains(FIXTURE_CONTROL_C_MARK),
+                        "no implicit Ctrl-C may reach an unresponsive foreground program: {}",
+                        outcome.log_text
+                    );
+                    assert_eq!(
+                        outcome.snapshot.foreground_certified_shell,
+                        Some(false),
+                        "the pane must remain owned by the unresponsive program: {}",
+                        outcome.log_text
+                    );
+                });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// Verifies the same spoofing contract when the pane's primary shell is Fish.

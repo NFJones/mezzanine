@@ -1930,8 +1930,7 @@ impl HostSessionRouter {
                 &lease.lease_id,
                 lease.boot_generation,
                 lease.lease_generation,
-                current_unix_seconds()
-                    .map_err(|error| (error, RecoveryFailureDisposition::Retryable))?,
+                follow_up_instant_unix_seconds(lease.updated_at_unix_seconds),
             ) {
                 Ok(lease) => Ok(RemoteSessionBinding { lease, runtime }),
                 Err(error) => {
@@ -2412,6 +2411,14 @@ mod tests {
     use crate::storage::lease::LeaseCheckpointReference;
 
     use super::*;
+
+    /// Verifies follow-up lease writes retain a persisted timestamp when the
+    /// wall-clock sample cannot advance it, preserving repository fencing.
+    #[test]
+    fn follow_up_instant_never_precedes_persisted_timestamp() {
+        let persisted = u64::MAX;
+        assert_eq!(follow_up_instant_unix_seconds(persisted), persisted);
+    }
 
     /// Prepared remote authority remains non-routable until explicit commit.
     #[tokio::test(flavor = "current_thread")]

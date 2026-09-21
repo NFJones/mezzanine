@@ -108,6 +108,107 @@ done"#,
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies submitting `/list-mcp` starts configured MCP transports outside
+/// serialized actor ownership, leaving unrelated terminal work responsive
+/// until the fixture releases discovery.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_list_mcp_startup_does_not_block_terminal_commands() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-list-mcp-responsiveness-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let started_path = root.join("started");
+    let release_path = root.join("release");
+    let script = format!(
+        concat!(
+            "printf started > '{}'\n",
+            "while [ ! -e '{}' ]; do sleep 0.01; done\n",
+            "while IFS= read -r line; do\n",
+            "case \"$line\" in\n",
+            "  *'\"method\":\"initialize\"'*)\n",
+            "printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{{\"tools\":{{}}}},\"serverInfo\":{{\"name\":\"fixture\",\"version\":\"1.0.0\"}}}}}}'\n",
+            ";;\n",
+            "  *'\"method\":\"notifications/initialized\"'*) ;;\n",
+            "  *'\"method\":\"tools/list\"'*)\n",
+            "printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"tools\":[]}}}}'\n",
+            ";;\n",
+            "esac\n",
+            "done"
+        ),
+        started_path.display(),
+        release_path.display()
+    );
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "slow-list-mcp".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "[mcp_servers.fixture]\ncommand = \"/bin/sh\"\nargs = [\"-c\", {}]\nstartup_timeout_ms = 5000\napproval = \"allow\"\n",
+                serde_json::to_string(&script).unwrap()
+            ),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let list_mcp_handle = handle.clone();
+        let list_mcp_primary = primary.clone();
+        let list_mcp = tokio::spawn(async move {
+            list_mcp_handle
+                .execute_agent_shell_command(list_mcp_primary, "/list-mcp".to_string())
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !started_path.exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("list-mcp startup should reach the gated fixture");
+
+        let output = tokio::time::timeout(
+            Duration::from_millis(250),
+            handle.execute_terminal_command(primary.clone(), "show-metrics".to_string()),
+        )
+        .await
+        .expect("terminal command must not queue behind list-mcp startup")
+        .unwrap();
+        assert!(output.contains("metrics source=async-runtime"), "{output}");
+
+        std::fs::write(&release_path, b"release").unwrap();
+        let response = list_mcp.await.unwrap().unwrap();
+        assert!(response.contains("\"command\":\"list-mcp\""), "{response}");
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.service.session().windows().len(), 1);
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that async provider worker failures can finish the active agent
 /// turn through typed runtime event ingress. The failed event has enough
 /// identity and error information to reuse the configured provider failure
@@ -775,8 +876,8 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         )
         .await
         .unwrap();
-        assert_eq!(persistence.drained, 6);
-        assert_eq!(persistence.completed, 5);
+        assert_eq!(persistence.drained, 7);
+        assert_eq!(persistence.completed, 6);
         assert_eq!(persistence.failed, 0);
         assert!(persistence.bytes_written > 0);
 
@@ -834,13 +935,14 @@ async fn async_actor_defers_agent_prompt_history_to_persistence_worker() {
     let prompt_history_path = transcript_store
         .prompt_history_file(&conversation_id)
         .unwrap();
+    let mezzanine_session_id = service.session().id.as_str().to_string();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
 
     let client = async {
         let response = handle
-            .execute_agent_shell_command(primary, "remember this prompt".to_string())
+            .execute_agent_shell_command(primary.clone(), "remember this prompt".to_string())
             .await
             .unwrap();
         assert!(response.contains(r#""state":"running""#), "{response}");
@@ -851,6 +953,44 @@ async fn async_actor_defers_agent_prompt_history_to_persistence_worker() {
                 .unwrap()
                 .is_empty()
         );
+
+        let steering = handle
+            .execute_agent_shell_command(primary.clone(), "keep the latest checkpoint".to_string())
+            .await
+            .unwrap();
+        assert!(steering.contains("injected_user_input"), "{steering}");
+
+        let pending = handle.drain_persistence_side_effects(16).await.unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .filter(|effect| matches!(
+                    effect,
+                    RuntimeSideEffect::PersistAgentSessionMetadata { .. }
+                ))
+                .count(),
+            1,
+            "successive prompt mutations must retain only the newest pending metadata checkpoint: {pending:?}"
+        );
+        let metadata_position = pending
+            .iter()
+            .position(|effect| {
+                matches!(
+                    effect,
+                    RuntimeSideEffect::PersistAgentSessionMetadata { .. }
+                )
+            })
+            .expect("queued metadata checkpoint");
+        let last_prompt_history_position = pending
+            .iter()
+            .rposition(|effect| matches!(effect, RuntimeSideEffect::PersistPromptHistory { .. }))
+            .expect("queued prompt history");
+        assert!(
+            metadata_position > last_prompt_history_position,
+            "the coalesced metadata checkpoint must follow every accepted prompt-history write: {pending:?}"
+        );
+        handle.queue_runtime_side_effects(pending).await.unwrap();
+        transcript_store.fail_next_agent_session_metadata_write();
 
         let persistence = run_async_persistence_side_effect_service(
             &handle,
@@ -863,14 +1003,25 @@ async fn async_actor_defers_agent_prompt_history_to_persistence_worker() {
         )
         .await
         .unwrap();
-        assert_eq!(persistence.drained, 4);
-        assert_eq!(persistence.completed, 3);
-        assert_eq!(persistence.failed, 0);
+        assert_eq!(persistence.drained, 9);
+        assert_eq!(persistence.completed, 6);
+        assert_eq!(persistence.failed, 1);
         assert!(persistence.bytes_written > 0);
 
         assert_eq!(
             transcript_store.prompt_history(&conversation_id).unwrap(),
-            vec![String::from("remember this prompt")]
+            vec![
+                String::from("remember this prompt"),
+                String::from("keep the latest checkpoint"),
+            ]
+        );
+        assert!(
+            transcript_store
+                .load_agent_session_metadata(&mezzanine_session_id)
+                .unwrap()
+                .iter()
+                .any(|metadata| metadata.conversation_id == conversation_id),
+            "the persistence worker must checkpoint the accepted prompt session"
         );
         assert_eq!(
             handle.shutdown().await.unwrap(),

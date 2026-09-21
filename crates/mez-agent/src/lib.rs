@@ -423,6 +423,7 @@ pub use openai_continuity::{
 };
 pub use openai_request::{
     openai_responses_request_body, openai_responses_request_body_with_stream,
+    openai_responses_request_body_with_stream_and_cache_comparison,
 };
 pub use openai_response::{
     OpenAiResponsesStreamDecoder, parse_openai_responses_http_body,

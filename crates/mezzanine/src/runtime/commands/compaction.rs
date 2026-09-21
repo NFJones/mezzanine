@@ -313,6 +313,7 @@ impl RuntimeSessionService {
             &current_blocks,
             allowed_actions.clone(),
         )?;
+        runtime_limit_compaction_summary_output(&mut request, plan.summary_budget_words());
         if let (Some(rejected_bytes), Some(stream)) =
             (rejected_request_bytes, rejected_request_stream)
         {
@@ -333,6 +334,7 @@ impl RuntimeSessionService {
                     &current_blocks,
                     allowed_actions.clone(),
                 )?;
+                runtime_limit_compaction_summary_output(&mut request, plan.summary_budget_words());
             }
         }
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
@@ -1198,6 +1200,16 @@ fn runtime_rebuild_active_turn_compaction_request(
     task: &mut RuntimeAgentCompactionTask,
     blocks: Vec<ContextBlock>,
 ) -> Result<()> {
+    let RuntimeAgentCompactionTarget::ActiveTurn {
+        plan,
+        current_blocks,
+        ..
+    } = &mut task.target
+    else {
+        return Err(MezError::invalid_state(
+            "active-turn compaction request rebuild requires an active-turn target",
+        ));
+    };
     task.summarized_entries = blocks.len();
     task.request = runtime_model_compaction_request_for_blocks(
         &task.model_profile,
@@ -1206,13 +1218,28 @@ fn runtime_rebuild_active_turn_compaction_request(
         &blocks,
         task.request.allowed_actions.clone(),
     )?;
-    let RuntimeAgentCompactionTarget::ActiveTurn { current_blocks, .. } = &mut task.target else {
-        return Err(MezError::invalid_state(
-            "active-turn compaction request rebuild requires an active-turn target",
-        ));
-    };
+    runtime_limit_compaction_summary_output(&mut task.request, plan.summary_budget_words());
     *current_blocks = blocks;
     Ok(())
+}
+
+/// Bounds active-turn compactor output to the summary budget reserved by its
+/// frozen replacement plan.
+///
+/// Configured input-cap retries tighten that plan after a non-reducing pass.
+/// The model request must carry the same ceiling; otherwise a provider may keep
+/// returning a profile-sized summary that is too large for the rebuilt request.
+fn runtime_limit_compaction_summary_output(
+    request: &mut ModelRequest,
+    summary_budget_words: usize,
+) {
+    let bounded_budget = summary_budget_words.max(1);
+    request.max_output_tokens = Some(
+        request
+            .max_output_tokens
+            .unwrap_or(bounded_budget)
+            .min(bounded_budget),
+    );
 }
 
 /// Builds one compactor request from temporary active-turn source blocks.

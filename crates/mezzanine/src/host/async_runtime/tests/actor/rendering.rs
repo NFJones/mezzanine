@@ -857,10 +857,10 @@ async fn async_actor_clears_live_status_overlay_when_source_pane_exits() {
 }
 
 /// Verifies that client output-readiness events are applied only for attached
-/// clients and enqueue a render side effect without composing or writing the
-/// frame inside the actor. This keeps slow or backpressured frame delivery on
-/// the side-effect boundary while still waking the eventual render worker as
-/// soon as stdout becomes writable again.
+/// clients and enqueue a coalescible render side effect without composing or
+/// writing the frame inside the actor. Writability changes no geometry or
+/// terminal mode, so it must retain differential frame state while waking the
+/// eventual render worker.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_applies_client_output_ready_events_as_render_side_effects() {
     let mut service = test_service();
@@ -885,7 +885,7 @@ async fn async_actor_applies_client_output_ready_events_as_render_side_effects()
             handle.drain_runtime_side_effects(8).await.unwrap(),
             vec![RuntimeSideEffect::RenderClient {
                 client_id: primary,
-                reason: RenderInvalidationReason::FullRedraw,
+                reason: RenderInvalidationReason::PaneOutput,
             }]
         );
         assert_eq!(
@@ -1545,6 +1545,59 @@ async fn async_actor_rejects_non_droppable_side_effect_overflow() {
             "{}",
             error.message()
         );
+        assert!(
+            error.message().contains("queued=2")
+                && error.message().contains("dispatch-agent-provider:2"),
+            "{}",
+            error.message()
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.runtime_side_effects_evicted, 0);
+}
+
+/// Verifies deferred command work counts toward a bounded side-effect queue
+/// and remains named in an overflow diagnostic rather than hiding its backlog
+/// behind an empty routed-family summary.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_reports_deferred_command_backlog_in_overflow_diagnostics() {
+    let service = test_service();
+    let deferred_command = |claim_generation| RuntimeSideEffect::DispatchAgentCommand {
+        primary_client_id: mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap(),
+        pane_id: "%1".to_string(),
+        conversation_id: "conversation-1".to_string(),
+        command: "resume".to_string(),
+        input: "/resume".to_string(),
+        claim_generation,
+    };
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 2,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+    let client = async {
+        for claim_generation in [1, 2] {
+            handle
+                .queue_runtime_side_effects(vec![deferred_command(claim_generation)])
+                .await
+                .unwrap();
+        }
+        let error = handle
+            .queue_runtime_side_effects(vec![deferred_command(3)])
+            .await
+            .unwrap_err();
+        assert!(
+            error.message().contains("dispatch-agent-command:2"),
+            "{}",
+            error.message()
+        );
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
@@ -1667,6 +1720,60 @@ async fn async_actor_compensates_repaint_evictions_around_non_droppable_overflow
     assert_eq!(exit.metrics.runtime_side_effects_evicted, 2);
     assert_eq!(exit.metrics.render_client_side_effects_evicted, 2);
     assert_eq!(exit.metrics.flush_client_output_side_effects_evicted, 0);
+}
+
+/// Verifies the client-output worker claims its exact client route without
+/// consuming unrelated provider dispatch work.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_flush_drain_preserves_unrelated_provider_dispatch() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: AgentId::opaque("agent-%1").unwrap(),
+                    turn_id: "turn-flush-route".to_string(),
+                },
+                RuntimeSideEffect::FlushClientOutput {
+                    client_id: primary.clone(),
+                    presentation_ids: Vec::new(),
+                    lines: vec!["flush-route".to_string()],
+                    line_style_spans: vec![Vec::new()],
+                    modes: AttachedTerminalOutputModes::default(),
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .drain_client_output_flush_side_effects(Some(primary.clone()), 1)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(1)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque("agent-%1").unwrap(),
+                turn_id: "turn-flush-route".to_string(),
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
 }
 
 /// Verifies that full client-output flushes are coalesced before bounded queue
@@ -2294,6 +2401,96 @@ async fn async_actor_metrics_track_render_and_terminal_control_requests() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies unchanged pane-output invalidations skip composition after one
+/// complete primary frame, while a mandatory full redraw still composes.
+///
+/// The actor keys the suppression on client navigation, layout, presentation,
+/// and visible pane-screen generations, so the second ordinary invalidation
+/// cannot discard a newly visible change. A full redraw remains an explicit
+/// recovery boundary even when those generations are unchanged.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_skips_unchanged_pane_output_composition_but_keeps_full_redraw() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let config = TerminalClientLoopConfig::default();
+        assert!(
+            handle
+                .render_client_side_effect(
+                    primary.clone(),
+                    RenderInvalidationReason::PaneOutput,
+                    config.clone(),
+                    None,
+                    0,
+                )
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            handle
+                .render_client_side_effect(
+                    primary.clone(),
+                    RenderInvalidationReason::PaneOutput,
+                    config.clone(),
+                    None,
+                    0,
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let mut output = RuntimeEventBatch::new();
+        output.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"visible output\n".to_vec(),
+        }));
+        handle.submit_runtime_events(output).await.unwrap();
+        assert!(
+            handle
+                .render_client_side_effect(
+                    primary.clone(),
+                    RenderInvalidationReason::PaneOutput,
+                    config.clone(),
+                    None,
+                    0,
+                )
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            handle
+                .render_client_side_effect(
+                    primary.clone(),
+                    RenderInvalidationReason::FullRedraw,
+                    config,
+                    None,
+                    0,
+                )
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            handle.metrics().await.unwrap().render_compositions_skipped,
+            1
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.render_compositions_skipped, 1);
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies the Iroh v3 snapshot request captures an exact primary view,
 /// semantic status slot, event cutoff, and output invalidation in one actor
 /// turn rather than composing those fields across independently changing state.
@@ -2452,8 +2649,8 @@ async fn async_actor_metrics_track_and_reset_request_family_latencies() {
 
         let metrics = handle.metrics().await.unwrap();
         let render = metrics.request_latency(AsyncRuntimeRequestFamily::Render);
-        assert_eq!(render.queue_wait_ms.observations, 2);
-        assert_eq!(render.handler_duration_ms.observations, 2);
+        assert_eq!(render.queue_wait_ms.observations, 3);
+        assert_eq!(render.handler_duration_ms.observations, 3);
         let control = metrics.request_latency(AsyncRuntimeRequestFamily::Control);
         assert_eq!(control.queue_wait_ms.observations, 1);
         assert_eq!(control.handler_duration_ms.observations, 1);
@@ -2471,7 +2668,7 @@ async fn async_actor_metrics_track_and_reset_request_family_latencies() {
                 .request_latency(AsyncRuntimeRequestFamily::Render)
                 .queue_wait_ms
                 .observations,
-            2
+            3
         );
         assert_eq!(
             handle.shutdown().await.unwrap(),
@@ -2485,7 +2682,7 @@ async fn async_actor_metrics_track_and_reset_request_family_latencies() {
             .request_latency(AsyncRuntimeRequestFamily::Render)
             .handler_duration_ms
             .observations,
-        2
+        3
     );
 }
 
@@ -2672,5 +2869,313 @@ async fn async_actor_cancels_coordinate_input_from_stale_render_token() {
     };
 
     let ((), exit) = tokio::join!(client, actor.run());
-    assert_eq!(exit.commands_processed, 4);
+    assert_eq!(exit.commands_processed, 5);
+}
+
+/// Verifies a frame composition held at the worker handoff leaves the
+/// serialized actor able to serve an unrelated request before rendering
+/// resumes. The explicit gate avoids treating scheduler timing as evidence.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_serves_requests_while_client_frame_composition_is_blocked() {
+    let started = StdArc::new(tokio::sync::Notify::new());
+    let release = StdArc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.set_client_render_composition_probe_for_tests(started.clone(), release.clone());
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let render_handle = handle.clone();
+        let render_client = primary.clone();
+        let render = tokio::spawn(async move {
+            render_handle
+                .render_client_frame(
+                    render_client,
+                    ClientViewRole::Primary,
+                    Size::new(80, 24).unwrap(),
+                    TerminalClientLoopConfig::default(),
+                    true,
+                )
+                .await
+        });
+        started.notified().await;
+        assert_eq!(
+            handle.lifecycle_state().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+        {
+            let (released, wake) = &*release;
+            *released.lock().unwrap() = true;
+            wake.notify_all();
+        }
+        assert!(render.await.unwrap().unwrap().view.is_some());
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 4);
+}
+
+/// Verifies a worker result invalidated by pane output is discarded and retried
+/// against the newest generation. The explicit worker gate makes the stale
+/// boundary deterministic while retaining one convergent client frame.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_retries_stale_client_frame_worker_result() {
+    let started = StdArc::new(tokio::sync::Notify::new());
+    let release = StdArc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.set_client_render_composition_probe_for_tests(started.clone(), release.clone());
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let render_handle = handle.clone();
+        let render_client = primary.clone();
+        let render = tokio::spawn(async move {
+            render_handle
+                .render_client_frame(
+                    render_client,
+                    ClientViewRole::Primary,
+                    Size::new(80, 24).unwrap(),
+                    TerminalClientLoopConfig::default(),
+                    true,
+                )
+                .await
+        });
+        started.notified().await;
+        let mut output = RuntimeEventBatch::new();
+        output.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"fresh worker frame\n".to_vec(),
+        }));
+        handle.submit_runtime_events(output).await.unwrap();
+        {
+            let (released, wake) = &*release;
+            *released.lock().unwrap() = true;
+            wake.notify_all();
+        }
+        let frame = render.await.unwrap().unwrap();
+        assert!(
+            frame
+                .view
+                .as_ref()
+                .unwrap()
+                .lines
+                .iter()
+                .any(|line| line.contains("fresh worker frame"))
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 6);
+}
+
+/// Verifies observer work held at the composition worker is invalidated by
+/// output from its source client's visible pane and retries against the
+/// newest source-screen generation before the observer frame is accepted.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_retries_stale_observer_frame_worker_result() {
+    let started = StdArc::new(tokio::sync::Notify::new());
+    let release = StdArc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let (mut service, observer) = test_service_with_observer();
+    service.set_client_render_composition_probe_for_tests(started.clone(), release.clone());
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let render_handle = handle.clone();
+        let render_observer = observer.clone();
+        let render = tokio::spawn(async move {
+            render_handle
+                .render_client_frame(
+                    render_observer,
+                    ClientViewRole::Observer,
+                    Size::new(80, 24).unwrap(),
+                    TerminalClientLoopConfig::default(),
+                    true,
+                )
+                .await
+        });
+        started.notified().await;
+        let mut output = RuntimeEventBatch::new();
+        output.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"fresh observer worker frame\n".to_vec(),
+        }));
+        handle.submit_runtime_events(output).await.unwrap();
+        {
+            let (released, wake) = &*release;
+            *released.lock().unwrap() = true;
+            wake.notify_all();
+        }
+        let frame = render.await.unwrap().unwrap();
+        assert!(
+            frame
+                .view
+                .as_ref()
+                .unwrap()
+                .lines
+                .iter()
+                .any(|line| line.contains("fresh observer worker frame"))
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 6);
+}
+
+/// Verifies an Iroh snapshot held at the immutable composition worker leaves
+/// the serialized actor available for unrelated requests before the remote
+/// frame is finalized. The explicit gate avoids scheduler-dependent evidence.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_serves_requests_while_iroh_frame_composition_is_blocked() {
+    let started = StdArc::new(tokio::sync::Notify::new());
+    let release = StdArc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.set_client_render_composition_probe_for_tests(started.clone(), release.clone());
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let render_handle = handle.clone();
+        let render_client = primary.clone();
+        let render = tokio::spawn(async move {
+            render_handle
+                .render_iroh_client_snapshot(render_client, true)
+                .await
+        });
+        started.notified().await;
+        assert_eq!(
+            handle.lifecycle_state().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+        {
+            let (released, wake) = &*release;
+            *released.lock().unwrap() = true;
+            wake.notify_all();
+        }
+        assert!(render.await.unwrap().unwrap().is_some());
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 4);
+}
+
+/// Verifies editor output received while a worker holds an immutable takeover
+/// snapshot invalidates that snapshot and retries composition, preventing an
+/// older editor screen from being accepted as the authoritative client frame.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_retries_stale_external_editor_frame_worker_result() {
+    let started = StdArc::new(tokio::sync::Notify::new());
+    let release = StdArc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "external-editor-render-worker".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"pane\"\n[external_editor]\ncommand = [\"/bin/sh\", \"-c\", \"exit 0\", \"{file}\"]\nfallback = []\n".to_string(),
+        }])
+        .unwrap();
+    service
+        .start_external_editor_session(
+            &primary,
+            "%1",
+            crate::runtime::ExternalEditTarget::AgentPrompt,
+            String::new(),
+            String::new(),
+            true,
+        )
+        .unwrap();
+    let editor_instance = service
+        .external_editor_process_instance_for_tests("%1")
+        .unwrap();
+    service.set_client_render_composition_probe_for_tests(started.clone(), release.clone());
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let render_handle = handle.clone();
+        let render_client = primary.clone();
+        let render = tokio::spawn(async move {
+            render_handle
+                .render_client_frame(
+                    render_client,
+                    ClientViewRole::Primary,
+                    Size::new(80, 24).unwrap(),
+                    TerminalClientLoopConfig::default(),
+                    true,
+                )
+                .await
+        });
+        started.notified().await;
+        let mut output = RuntimeEventBatch::new();
+        output.push(RuntimeEvent::PaneProcess {
+            instance: editor_instance.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::Output {
+                pane_id: editor_instance.pane_id.clone(),
+                bytes: b"fresh editor worker frame\n".to_vec(),
+            }),
+        });
+        handle.submit_runtime_events(output).await.unwrap();
+        {
+            let (released, wake) = &*release;
+            *released.lock().unwrap() = true;
+            wake.notify_all();
+        }
+        let frame = render.await.unwrap().unwrap();
+        assert!(
+            frame
+                .view
+                .as_ref()
+                .unwrap()
+                .lines
+                .iter()
+                .any(|line| line.contains("fresh editor worker frame"))
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 6);
 }

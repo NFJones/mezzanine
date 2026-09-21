@@ -1357,9 +1357,14 @@ fn runtime_status_reports_turn_elapsed_provider_claim_and_retry() {
             .unwrap_or_else(|| panic!("{label} row missing from: {status}"))
             .to_string()
     };
+    let elapsed = line("Turn elapsed");
     assert!(
-        !line("Turn elapsed").contains("none"),
-        "a running turn reports elapsed seconds: {status}"
+        !elapsed.contains("none") && elapsed.contains('s'),
+        "a running turn reports a human-readable elapsed duration: {status}"
+    );
+    assert!(
+        !status.contains("Turn elapsed (s)"),
+        "the human-facing status label must not imply a raw seconds value: {status}"
     );
     assert!(
         line("Provider claim").contains("queued") || line("Provider claim").contains("claimed"),

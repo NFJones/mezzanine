@@ -401,6 +401,7 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
     apply_openai_prompt_cache_breakpoint(
         request,
         &rendered.stable_input_positions,
+        &rendered.settled_history_cache_checkpoint_positions,
         &mut rendered.input,
     )?;
     let response_format = openai_response_format(request).unwrap_or(serde_json::Value::Null);

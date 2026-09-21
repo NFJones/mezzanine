@@ -767,3 +767,179 @@ fn openai_provider_stream_replaces_cumulative_function_call_argument_snapshots()
         payload => panic!("unexpected payload: {payload:?}"),
     }
 }
+
+/// Verifies only successful direct GPT-5.6 Responses replies establish a
+/// same-lineage cache comparison baseline, and a failed attempt retains it.
+#[test]
+fn openai_provider_reuses_successful_same_lineage_cache_comparison_baseline() {
+    let mut request = openai_prompt_cache_retention_test_request("gpt-5.6");
+    request.prompt_cache_lineage_id = Some("lineage-1".to_string());
+    request.interaction_kind = mez_agent::ModelInteractionKind::Compaction;
+    let transport = SequencedFakeProviderHttpTransport::new(vec![
+        ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: r#"{"id":"resp-first","model":"gpt-5.6","output_text":"ok"}"#.to_string(),
+        },
+        ProviderHttpResponse {
+            status_code: 500,
+            headers: Default::default(),
+            body: r#"{"error":{"message":"transient"}}"#.to_string(),
+        },
+        ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: r#"{"id":"resp-third","model":"gpt-5.6","output_text":"ok"}"#.to_string(),
+        },
+    ]);
+    let provider = OpenAiResponsesProvider::with_endpoint_and_headers(
+        "test-key",
+        "https://example.test/responses",
+        10,
+        std::collections::BTreeMap::from([(
+            "OpenAI-Organization".to_string(),
+            "org-1".to_string(),
+        )]),
+        transport,
+    )
+    .unwrap();
+
+    provider.send_request(&request).unwrap();
+    assert!(provider.send_request(&request).is_err());
+    provider.send_request(&request).unwrap();
+
+    let sent = provider.transport.requests.borrow();
+    let bodies = sent
+        .iter()
+        .map(|request| serde_json::from_str::<serde_json::Value>(&request.body).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        bodies[0]
+            .pointer("/prompt_cache_options/comparison_response_id")
+            .is_none()
+    );
+    assert_eq!(
+        bodies[1].pointer("/prompt_cache_options/comparison_response_id"),
+        Some(&serde_json::json!("resp-first"))
+    );
+    assert_eq!(
+        bodies[2].pointer("/prompt_cache_options/comparison_response_id"),
+        Some(&serde_json::json!("resp-first"))
+    );
+}
+
+/// Verifies independently keyed lineage baselines survive a successful request
+/// for another lineage and are restored only for their matching tuple.
+#[test]
+fn openai_provider_keeps_comparison_baselines_per_lineage_tuple() {
+    let state = crate::integrations::agent::provider::OpenAiCacheComparisonLineage::default();
+    let headers = std::collections::BTreeMap::from([(
+        "OpenAI-Organization".to_string(),
+        "org-1".to_string(),
+    )]);
+    let mut first_request = openai_prompt_cache_retention_test_request("gpt-5.6");
+    first_request.prompt_cache_lineage_id = Some("lineage-a".to_string());
+    first_request.interaction_kind = mez_agent::ModelInteractionKind::Compaction;
+    let mut second_request = first_request.clone();
+    second_request.prompt_cache_lineage_id = Some("lineage-b".to_string());
+
+    let first = OpenAiResponsesProvider::with_endpoint_and_headers(
+        "test-key",
+        "https://example.test/responses",
+        10,
+        headers.clone(),
+        FakeProviderHttpTransport {
+            requests: RefCell::new(Vec::new()),
+            response: ProviderHttpResponse {
+                status_code: 200,
+                headers: Default::default(),
+                body: r#"{"id":"resp-a","model":"gpt-5.6","output_text":"ok"}"#.to_string(),
+            },
+        },
+    )
+    .unwrap()
+    .with_cache_comparison_lineage(state.clone());
+    first.send_request(&first_request).unwrap();
+
+    let second = OpenAiResponsesProvider::with_endpoint_and_headers(
+        "test-key",
+        "https://example.test/responses",
+        10,
+        headers.clone(),
+        FakeProviderHttpTransport {
+            requests: RefCell::new(Vec::new()),
+            response: ProviderHttpResponse {
+                status_code: 200,
+                headers: Default::default(),
+                body: r#"{"id":"resp-b","model":"gpt-5.6","output_text":"ok"}"#.to_string(),
+            },
+        },
+    )
+    .unwrap()
+    .with_cache_comparison_lineage(state.clone());
+    second.send_request(&second_request).unwrap();
+
+    let restored = OpenAiResponsesProvider::with_endpoint_and_headers(
+        "test-key",
+        "https://example.test/responses",
+        10,
+        headers,
+        FakeProviderHttpTransport {
+            requests: RefCell::new(Vec::new()),
+            response: ProviderHttpResponse {
+                status_code: 200,
+                headers: Default::default(),
+                body: r#"{"id":"resp-a-next","model":"gpt-5.6","output_text":"ok"}"#.to_string(),
+            },
+        },
+    )
+    .unwrap()
+    .with_cache_comparison_lineage(state);
+    restored.send_request(&first_request).unwrap();
+
+    let request: serde_json::Value =
+        serde_json::from_str(&restored.transport.requests.borrow()[0].body).unwrap();
+    assert_eq!(
+        request.pointer("/prompt_cache_options/comparison_response_id"),
+        Some(&serde_json::json!("resp-a"))
+    );
+}
+
+/// Verifies an unscoped direct API-key provider never emits a retained
+/// comparison response ID because it lacks non-secret account routing.
+#[test]
+fn openai_provider_omits_cache_comparison_without_direct_account_scope() {
+    let mut request = openai_prompt_cache_retention_test_request("gpt-5.6");
+    request.prompt_cache_lineage_id = Some("lineage-1".to_string());
+    request.interaction_kind = mez_agent::ModelInteractionKind::Compaction;
+    let transport = SequencedFakeProviderHttpTransport::new(vec![
+        ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: r#"{"id":"resp-first","model":"gpt-5.6","output_text":"ok"}"#.to_string(),
+        },
+        ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: r#"{"id":"resp-second","model":"gpt-5.6","output_text":"ok"}"#.to_string(),
+        },
+    ]);
+    let provider = OpenAiResponsesProvider::with_endpoint(
+        "test-key",
+        "https://example.test/responses",
+        10,
+        transport,
+    )
+    .unwrap();
+
+    provider.send_request(&request).unwrap();
+    provider.send_request(&request).unwrap();
+
+    let sent = provider.transport.requests.borrow();
+    assert!(sent.iter().all(|request| {
+        serde_json::from_str::<serde_json::Value>(&request.body)
+            .unwrap()
+            .pointer("/prompt_cache_options/comparison_response_id")
+            .is_none()
+    }));
+}

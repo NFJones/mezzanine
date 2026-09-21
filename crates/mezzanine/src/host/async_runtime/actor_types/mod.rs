@@ -54,7 +54,7 @@ pub use message::{
     serve_async_runtime_message_listener,
 };
 pub(in crate::host::async_runtime) use render::{
-    AsyncClientRenderToken, AsyncTerminalClientConfigInput,
+    AsyncClientRenderToken, AsyncClientRenderWork, AsyncTerminalClientConfigInput,
 };
 pub use render::{
     AsyncIrohRenderSnapshot, AsyncRenderedClientFlush, AsyncRenderedClientFrame,

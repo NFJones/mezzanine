@@ -3,6 +3,57 @@
 use super::super::*;
 use crate::host::async_runtime::run_async_status_pill_side_effect_service;
 
+/// Verifies the status worker claims its dedicated FIFO route without scanning
+/// or consuming unrelated provider dispatch work in the compatibility queue.
+#[tokio::test(flavor = "current_thread")]
+async fn async_status_pill_drain_preserves_unrelated_provider_dispatch() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let plan = crate::runtime::RuntimeStatusPillRefreshPlan::for_tests(
+        "route",
+        1,
+        "printf route",
+        1_000,
+        32,
+    );
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: AgentId::opaque("agent-%1").unwrap(),
+                    turn_id: "turn-status-route".to_string(),
+                },
+                RuntimeSideEffect::RefreshStatusPill { plan },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .drain_status_pill_side_effects(1)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(1)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque("agent-%1").unwrap(),
+                turn_id: "turn-status-route".to_string(),
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
 /// Verifies slow status-pill helpers run concurrently outside serialized actor
 /// ownership while actor heartbeats remain responsive.
 #[tokio::test(flavor = "current_thread")]

@@ -7,7 +7,7 @@
 use super::{
     AsyncAgentProviderServiceConfig, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeSessionHandle, AttachedTerminalClientLoopReport, Result, RuntimeLifecycleState,
-    run_async_agent_provider_service,
+    run_async_agent_command_service, run_async_agent_provider_service,
 };
 
 // Async agent provider polling service.
@@ -29,6 +29,22 @@ pub fn build_async_agent_provider_service(
         })
         .await?;
         Ok(AsyncRuntimeServiceExit::completed(report.executions))
+    }))
+}
+
+/// Builds the dedicated deferred interactive-command worker service.
+pub fn build_async_agent_command_service(
+    name: impl Into<String>,
+    handle: AsyncRuntimeSessionHandle,
+    config: AsyncAgentProviderServiceConfig,
+) -> Result<AsyncRuntimeService> {
+    config.validate()?;
+    Ok(AsyncRuntimeService::new_auxiliary(name, async move {
+        let executions = run_async_agent_command_service(&handle, config, |_, state| {
+            is_terminal_runtime_lifecycle_state(state)
+        })
+        .await?;
+        Ok(AsyncRuntimeServiceExit::completed(executions))
     }))
 }
 

@@ -230,13 +230,44 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<AsyncRenderedClientFrame>>,
     },
-    /// Captures one exact attached-client view and event boundary for Iroh v3 push.
-    RenderIrohClientSnapshot {
-        /// Exact attached primary or observer whose view is requested.
+    /// Captures immutable inputs for one exact attached-client base frame.
+    CaptureClientRenderWork {
+        /// Exact attached client whose presentation is captured.
         client_id: ClientId,
-        /// Whether the client must invalidate its retained output frame.
+        /// Render role selected by the caller.
+        role: ClientViewRole,
+        /// Client viewport used by the pure renderer.
+        client_size: Size,
+        /// Configuration reused only while its generation remains current.
+        config: AsyncTerminalClientConfigInput,
+        /// Receives immutable worker-owned render inputs.
+        reply: oneshot::Sender<Result<super::AsyncClientRenderWork>>,
+    },
+    /// Completes one worker-composed base frame after generation validation.
+    CompleteClientRenderWork {
+        /// Actor-captured render ownership and immutable source metadata.
+        work: Box<super::AsyncClientRenderWork>,
+        /// Base frame composed without borrowing runtime state.
+        view: Option<RenderedClientView>,
+        /// Receives the accepted frame or a stale-generation error.
+        reply: oneshot::Sender<Result<AsyncRenderedClientFrame>>,
+    },
+    /// Captures immutable inputs for one exact Iroh client render snapshot.
+    CaptureIrohClientRenderWork {
+        /// Exact attached primary or observer whose view is captured.
+        client_id: ClientId,
+        /// Receives immutable worker-owned render inputs, or no work after detach.
+        reply: oneshot::Sender<Result<Option<super::AsyncClientRenderWork>>>,
+    },
+    /// Finalizes one worker-composed Iroh client render snapshot.
+    CompleteIrohClientRenderWork {
+        /// Actor-captured render ownership and immutable source metadata.
+        work: Box<super::AsyncClientRenderWork>,
+        /// Base frame composed without borrowing runtime state.
+        view: Option<RenderedClientView>,
+        /// Whether the transport must discard its retained output base.
         invalidate_output: bool,
-        /// Receives the complete snapshot when the client remains renderable.
+        /// Receives the exact current snapshot or a stale-generation error.
         reply: oneshot::Sender<Result<Option<super::AsyncIrohRenderSnapshot>>>,
     },
     /// Arms focus labels after their frame reaches a transport commit boundary.
@@ -264,6 +295,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         client_id: ClientId,
+        /// Invalidation cause that selected this render side effect.
+        reason: crate::runtime::RenderInvalidationReason,
         /// Stores the config value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -1033,6 +1066,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Vec<RuntimeSideEffect>>>,
     },
+    /// Drains deferred interactive command dispatches from their dedicated lane.
+    DrainAgentCommandDispatchSideEffects {
+        /// Maximum command dispatches to claim.
+        limit: usize,
+        /// Receives the bounded command dispatch batch.
+        reply: oneshot::Sender<Result<Vec<RuntimeSideEffect>>>,
+    },
     /// Represents the Drain Render Side Effects case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1260,7 +1300,10 @@ impl AsyncRuntimeRequest {
             Self::RecordLatencyPhase { .. } => Family::Lifecycle,
             Self::RenderClientView { .. }
             | Self::RenderClientFrame { .. }
-            | Self::RenderIrohClientSnapshot { .. }
+            | Self::CaptureClientRenderWork { .. }
+            | Self::CompleteClientRenderWork { .. }
+            | Self::CaptureIrohClientRenderWork { .. }
+            | Self::CompleteIrohClientRenderWork { .. }
             | Self::AcknowledgeZenFocusLabelPresentations { .. }
             | Self::RenderClientSideEffect { .. }
             | Self::EnsureClientRenderTimers { .. }
@@ -1325,6 +1368,7 @@ impl AsyncRuntimeRequest {
             Self::DrainRuntimeSideEffects { .. }
             | Self::QueueRuntimeSideEffects { .. }
             | Self::DrainAgentProviderDispatchSideEffects { .. }
+            | Self::DrainAgentCommandDispatchSideEffects { .. }
             | Self::DrainRenderSideEffects { .. }
             | Self::DrainRenderSideEffectsForClient { .. }
             | Self::DrainClientOutputFlushSideEffects { .. }

@@ -540,13 +540,10 @@ async fn async_attached_terminal_service_rate_limits_bursty_render_invalidations
         tokio::task::yield_now().await;
         assert_eq!(write_count.load(Ordering::SeqCst), 1);
 
+        let second_write = write_notify.notified();
+        tokio::pin!(second_write);
         tokio::time::advance(Duration::from_millis(1)).await;
-        for _ in 0..8 {
-            if write_count.load(Ordering::SeqCst) == 2 {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+        second_write.await;
         assert_eq!(write_count.load(Ordering::SeqCst), 2);
 
         let report = tokio::time::timeout(Duration::from_millis(1), service_task)
@@ -822,13 +819,10 @@ async fn async_attached_terminal_service_does_not_flush_stale_pending_output_bef
         assert_eq!(write_count.load(Ordering::SeqCst), 1);
         assert_eq!(stale_flushes.load(Ordering::SeqCst), 0);
 
+        let second_write = write_notify.notified();
+        tokio::pin!(second_write);
         tokio::time::advance(Duration::from_millis(1)).await;
-        for _ in 0..8 {
-            if write_count.load(Ordering::SeqCst) == 2 {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+        second_write.await;
         assert_eq!(write_count.load(Ordering::SeqCst), 2);
         assert_eq!(stale_flushes.load(Ordering::SeqCst), 0);
         assert_eq!(pending_output_bytes.load(Ordering::SeqCst), 0);

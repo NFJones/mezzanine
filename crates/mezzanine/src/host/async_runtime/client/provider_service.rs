@@ -294,6 +294,136 @@ where
     }
 }
 
+/// Runs deferred interactive commands on a dedicated, bounded worker lane.
+///
+/// Commands are intentionally claimed separately from provider work. One command
+/// remains in flight at a time, preserving the pane-owned command lifecycle while
+/// ensuring a stalled provider request cannot delay a queued command claim.
+pub async fn run_async_agent_command_service<F>(
+    handle: &AsyncRuntimeSessionHandle,
+    config: AsyncAgentProviderServiceConfig,
+    mut should_stop: F,
+) -> Result<u64>
+where
+    F: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    config.validate()?;
+    let mut lifecycle = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
+    let mut workers = JoinSet::new();
+    let mut polls = 0u64;
+    let mut executions = 0u64;
+
+    loop {
+        let state = *lifecycle.borrow();
+        while let Some(joined) = workers.try_join_next() {
+            joined.map_err(|error| {
+                MezError::invalid_state(format!("async agent command worker task failed: {error}"))
+            })??;
+            executions = executions.saturating_add(1);
+        }
+        if should_stop(polls, state) {
+            workers.abort_all();
+            while workers.join_next().await.is_some() {}
+            return Ok(executions);
+        }
+
+        while workers.len() < config.max_tasks_per_poll {
+            let dispatches = handle.drain_agent_command_dispatch_side_effects(1).await?;
+            if let Some(dispatch) = dispatches.into_iter().next() {
+                workers.spawn(execute_deferred_agent_command(handle.clone(), dispatch));
+                polls = polls.saturating_add(1);
+            } else {
+                break;
+            }
+        }
+
+        polls = polls.saturating_add(1);
+        tokio::select! {
+            joined = workers.join_next(), if !workers.is_empty() => {
+                if let Some(joined) = joined {
+                    joined.map_err(|error| {
+                        MezError::invalid_state(format!("async agent command worker task failed: {error}"))
+                    })??;
+                    executions = executions.saturating_add(1);
+                }
+            }
+            changed = side_effect_watcher.changed() => {
+                let _ = changed;
+            }
+            changed = lifecycle.changed() => {
+                let _ = changed;
+            }
+            _ = sleep(config.idle_interval) => {}
+        }
+    }
+}
+
+/// Claims and executes one deferred interactive command outside actor ownership.
+async fn execute_deferred_agent_command(
+    handle: AsyncRuntimeSessionHandle,
+    dispatch: RuntimeSideEffect,
+) -> Result<()> {
+    let RuntimeSideEffect::DispatchAgentCommand {
+        primary_client_id,
+        pane_id,
+        conversation_id,
+        command,
+        input,
+        claim_generation,
+    } = dispatch
+    else {
+        return Err(MezError::invalid_state(
+            "command worker received a non-command side effect",
+        ));
+    };
+    let Some(work) = handle
+        .claim_agent_command_work(
+            primary_client_id,
+            pane_id,
+            command,
+            input,
+            claim_generation,
+            conversation_id,
+        )
+        .await?
+    else {
+        return Ok(());
+    };
+    #[cfg(test)]
+    if let (Some(started), Some(release)) = (
+        work.deferred_agent_command_started.as_ref(),
+        work.deferred_agent_command_release.as_ref(),
+    ) {
+        started.notify_one();
+        release.notified().await;
+    }
+    let execution_work = work.clone();
+    let command = work.command.clone();
+    let outcome = bounded_deferred_agent_command_outcome(
+        DEFERRED_AGENT_COMMAND_DEADLINE,
+        &command,
+        tokio::task::spawn_blocking(move || {
+            let outcome = crate::runtime::RuntimeSessionService::execute_deferred_agent_command(
+                &execution_work,
+            );
+            crate::runtime::RuntimeSessionService::project_deferred_agent_command_outcome(
+                &execution_work,
+                outcome,
+            )
+            .unwrap_or_else(|error| {
+                crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
+                    message: error.message().to_string(),
+                    kind: error.kind(),
+                }
+            })
+        }),
+    )
+    .await;
+    handle.complete_agent_command_work(work, outcome).await?;
+    Ok(())
+}
+
 type AsyncAgentProviderWorkerResult = Option<(RuntimeEvent, bool)>;
 
 /// Monotonic timing state for one provider worker execution.
@@ -468,47 +598,6 @@ async fn dispatch_agent_provider_side_effects(
                     continue;
                 };
                 workers.spawn(execute_native_shell_action(handle.clone(), dispatch));
-            }
-            RuntimeSideEffect::DispatchAgentCommand {
-                primary_client_id,
-                pane_id,
-                conversation_id,
-                command,
-                input,
-                claim_generation,
-            } => {
-                let work = match handle
-                    .claim_agent_command_work(
-                        primary_client_id,
-                        pane_id,
-                        command,
-                        input,
-                        claim_generation,
-                        conversation_id,
-                    )
-                    .await
-                {
-                    Ok(Some(work)) => work,
-                    Ok(None) => continue,
-                    Err(error) => return Err(error),
-                };
-                let handle = handle.clone();
-                workers.spawn(async move {
-                    let execution_work = work.clone();
-                    let command = work.command.clone();
-                    let outcome = bounded_deferred_agent_command_outcome(
-                        DEFERRED_AGENT_COMMAND_DEADLINE,
-                        &command,
-                        tokio::task::spawn_blocking(move || {
-                            crate::runtime::RuntimeSessionService::execute_deferred_agent_command(
-                                &execution_work,
-                            )
-                        }),
-                    )
-                    .await;
-                    handle.complete_agent_command_work(work, outcome).await?;
-                    Ok(None)
-                });
             }
             RuntimeSideEffect::DispatchRecordBrowserRefresh {
                 refresh_key,

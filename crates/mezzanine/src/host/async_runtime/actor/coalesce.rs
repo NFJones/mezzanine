@@ -15,6 +15,7 @@ use super::{
 /// render worker can drain it.
 pub(super) fn coalesce_output_side_effects_for_enqueue(
     queued: &mut VecDeque<RuntimeSideEffect>,
+    routes: &mut super::routes::RuntimeSideEffectRouter,
     side_effects: Vec<RuntimeSideEffect>,
 ) -> (Vec<RuntimeSideEffect>, usize) {
     let mut retained = Vec::new();
@@ -22,7 +23,8 @@ pub(super) fn coalesce_output_side_effects_for_enqueue(
     for effect in side_effects {
         match effect {
             RuntimeSideEffect::RenderClient { client_id, reason } => {
-                if coalesce_render_side_effect_into_queue(queued, &client_id, reason)
+                if routes.coalesce_pending_render(&client_id, reason)
+                    || coalesce_render_side_effect_into_queue(queued, &client_id, reason)
                     || coalesce_render_side_effect_into_vec(&mut retained, &client_id, reason)
                 {
                     coalesced = coalesced.saturating_add(1);
@@ -44,7 +46,8 @@ pub(super) fn coalesce_output_side_effects_for_enqueue(
                     line_style_spans,
                     modes,
                 });
-                if coalesce_flush_side_effect_into_queue(queued, &client_id, &mut effect)
+                if routes.coalesce_pending_flush(effect.clone().expect("flush effect is present"))
+                    || coalesce_flush_side_effect_into_queue(queued, &client_id, &mut effect)
                     || coalesce_flush_side_effect_into_vec(&mut retained, &client_id, &mut effect)
                 {
                     coalesced = coalesced.saturating_add(1);
@@ -349,18 +352,6 @@ pub(super) fn pane_io_side_effect_targets_instance(
     )
 }
 
-/// Runs the timer side effect targets timer worker operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn timer_side_effect_targets_timer_worker(effect: &RuntimeSideEffect) -> bool {
-    matches!(
-        effect,
-        RuntimeSideEffect::ScheduleTimer { .. } | RuntimeSideEffect::CancelTimer { .. }
-    )
-}
-
 /// Builds a compact count summary for queued side-effect diagnostics.
 pub(super) fn runtime_side_effect_kind_summary<'a>(
     effects: impl Iterator<Item = &'a RuntimeSideEffect>,
@@ -452,6 +443,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::Persist { .. } => "persist",
         RuntimeSideEffect::PersistAuditLog { .. } => "persist-audit-log",
         RuntimeSideEffect::PersistTranscriptEntries { .. } => "persist-transcript",
+        RuntimeSideEffect::PersistAgentSessionMetadata { .. } => "persist-agent-session-metadata",
         RuntimeSideEffect::PersistPresentationEntries { .. } => "persist-presentation",
         RuntimeSideEffect::PersistSessionArchive { .. } => "persist-session-archive",
         RuntimeSideEffect::PersistSavedSessionRetention { .. } => "persist-saved-session-retention",

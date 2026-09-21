@@ -774,9 +774,35 @@ pub(super) struct RuntimePaneStatusProviderCache {
     next_generation: u64,
     next_use_sequence: u64,
     last_scheduled: Option<RuntimePaneStatusProviderKey>,
+    reconciliation_dirty: bool,
+    last_reconciled_session_revision: Option<u64>,
+    reconciliation_scans: u64,
+    reconciliation_skips: u64,
 }
 
 impl RuntimePaneStatusProviderCache {
+    /// Returns whether the current render must rebuild the visible provider contexts.
+    ///
+    /// Configuration and pane-context owners mark the cache dirty directly. Session
+    /// revisions cover focus, zoom, navigation, and pane lifecycle changes without
+    /// making unchanged render frames rediscover every eligible provider.
+    pub(super) fn reconciliation_needed(&mut self, session_revision: u64) -> bool {
+        let needed = self.reconciliation_dirty
+            || self.last_reconciled_session_revision != Some(session_revision);
+        if needed {
+            self.reconciliation_scans = self.reconciliation_scans.saturating_add(1);
+        } else {
+            self.reconciliation_skips = self.reconciliation_skips.saturating_add(1);
+        }
+        needed
+    }
+
+    /// Records completion of the current full context discovery pass.
+    pub(super) fn finish_reconciliation(&mut self, session_revision: u64) {
+        self.reconciliation_dirty = false;
+        self.last_reconciled_session_revision = Some(session_revision);
+    }
+
     /// Reconciles exact visible provider contexts without policy or filesystem work.
     pub(super) fn reconcile(&mut self, mut requests: Vec<RuntimePaneStatusProviderRequest>) {
         requests.sort_by(|left, right| left.key.cmp(&right.key));
@@ -1130,6 +1156,7 @@ impl RuntimePaneStatusProviderCache {
             }
         }
         self.states.clear();
+        self.reconciliation_dirty = true;
     }
 
     /// Cancels active work while retaining bounded same-context display values.
@@ -1141,6 +1168,7 @@ impl RuntimePaneStatusProviderCache {
             state.pending_generation = None;
             state.active = false;
         }
+        self.reconciliation_dirty = true;
     }
 
     /// Cancels and removes every context owned by one closed or changed pane.
@@ -1158,6 +1186,7 @@ impl RuntimePaneStatusProviderCache {
             }
             keep
         });
+        self.reconciliation_dirty = true;
     }
 }
 
@@ -1168,6 +1197,18 @@ impl crate::runtime::RuntimeSessionService {
             .pane_status_provider_cache
             .borrow_mut()
             .suspend_all();
+    }
+
+    /// Cancels and removes provider work whose exact pane context has changed.
+    ///
+    /// Process observers update working-directory and environment identity outside
+    /// mux mutations, so they must call this boundary before an unchanged render
+    /// can safely skip full provider-context discovery.
+    pub(crate) fn invalidate_pane_status_provider_context(&self, pane_id: &str) {
+        self.presentation
+            .pane_status_provider_cache
+            .borrow_mut()
+            .remove_pane(pane_id);
     }
 
     /// Derives the exact current cache identity for one configured pane provider.
@@ -1299,6 +1340,13 @@ impl crate::runtime::RuntimeSessionService {
             .count()
     }
 
+    /// Returns reconciliation scan and unchanged-render skip counts for focused render tests.
+    #[cfg(test)]
+    pub(crate) fn pane_status_provider_reconciliation_counts_for_tests(&self) -> (u64, u64) {
+        let cache = self.presentation.pane_status_provider_cache.borrow();
+        (cache.reconciliation_scans, cache.reconciliation_skips)
+    }
+
     /// Reconciles pane-provider work for every window currently presented by an attached client.
     ///
     /// Configuration parsing retains exact source-layer provenance. This boundary additionally
@@ -1306,11 +1354,28 @@ impl crate::runtime::RuntimeSessionService {
     /// permission decision, and a successfully compiled OS-sandbox launch. Prompt and deny
     /// decisions remain inert and never enqueue approval requests from the refresh timer.
     pub(crate) fn reconcile_pane_status_providers(&mut self) {
+        let session_revision = self.session.mutation_revision();
+        if !self
+            .presentation
+            .pane_status_provider_cache
+            .borrow_mut()
+            .reconciliation_needed(session_revision)
+        {
+            return;
+        }
         if !self.effective_pane_frames_enabled() {
             self.presentation
                 .pane_status_provider_cache
                 .borrow_mut()
                 .suspend_all();
+            self.presentation
+                .pane_status_provider_cache
+                .borrow_mut()
+                .reconcile(Vec::new());
+            self.presentation
+                .pane_status_provider_cache
+                .borrow_mut()
+                .finish_reconciliation(session_revision);
             return;
         }
 
@@ -1324,6 +1389,10 @@ impl crate::runtime::RuntimeSessionService {
                 .pane_status_provider_cache
                 .borrow_mut()
                 .invalidate_all();
+            self.presentation
+                .pane_status_provider_cache
+                .borrow_mut()
+                .finish_reconciliation(session_revision);
             return;
         }
 
@@ -1378,6 +1447,10 @@ impl crate::runtime::RuntimeSessionService {
             .pane_status_provider_cache
             .borrow_mut()
             .reconcile(requests);
+        self.presentation
+            .pane_status_provider_cache
+            .borrow_mut()
+            .finish_reconciliation(session_revision);
     }
 
     /// Claims due contexts, performs bounded actor-side admission, and returns worker plans.

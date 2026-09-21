@@ -628,6 +628,22 @@ mod tests {
                 .mouse_resize_drag_baseline_view
                 .is_some()
         );
+        service.presentation.capture_projected_client_state();
+        assert!(std::sync::Arc::ptr_eq(
+            service
+                .presentation
+                .mouse_resize_drag_baseline_view
+                .as_ref()
+                .unwrap(),
+            service
+                .presentation
+                .client_states
+                .get(&primary)
+                .unwrap()
+                .mouse_resize_drag_baseline_view
+                .as_ref()
+                .unwrap(),
+        ));
         let hidden = view(&mut service, &primary);
         assert!(!hidden.lines.iter().any(|line| line.contains("drag-focus")));
         assert!(service.expire_zen_focus_labels_for_client(&primary, u64::MAX));
@@ -932,6 +948,8 @@ mod tests {
             .start_initial_pane_process(Some("cat >/dev/null"))
             .unwrap();
         service.reconcile_pane_status_providers();
+        let (initial_scans, initial_skips) =
+            service.pane_status_provider_reconciliation_counts_for_tests();
         let plans = service.prepare_pane_status_provider_refreshes(4);
         assert_eq!(
             plans.len(),
@@ -951,6 +969,17 @@ mod tests {
                 0
             );
         }
+        let (scans_after_unchanged_renders, skips_after_unchanged_renders) =
+            service.pane_status_provider_reconciliation_counts_for_tests();
+        assert_eq!(
+            scans_after_unchanged_renders,
+            initial_scans + 1,
+            "the zen transition must reconcile once while unchanged renders skip discovery"
+        );
+        assert!(
+            skips_after_unchanged_renders > initial_skips,
+            "unchanged renders must skip the pane/provider eligibility scan"
+        );
         assert!(plans[0].cancellation.is_cancelled());
         service.expire_zen_focus_labels_for_client(&primary, u64::MAX);
         let _ = view(&mut service, &primary);

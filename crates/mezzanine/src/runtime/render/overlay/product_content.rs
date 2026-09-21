@@ -98,6 +98,7 @@ pub(crate) fn runtime_primary_prompt_input(
 /// renderer and copy-preservation path as model-authored markdown `say`
 /// actions. Plain output remains line-oriented because legacy command display
 /// bodies are key/value text rather than presentation markup.
+#[derive(Debug)]
 pub(crate) enum RuntimeAgentShellDisplayOutput {
     /// No user-facing display should be rendered for this command response.
     Suppressed,

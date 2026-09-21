@@ -133,27 +133,23 @@ fn apply_openai_prompt_cache_policy(
     Ok(())
 }
 
-/// Marks the explicit GPT-5.6+ cache boundary at the end of the stable prefix.
+/// Marks bounded explicit GPT-5.6+ cache checkpoints in the durable prefix.
 ///
-/// Explicit mode allows exactly one breakpoint, and the boundary must not move as
-/// chronology appends newer developer-role blocks: the target is therefore the
-/// last `input_text` block of the last stable-prefix message, whatever its role,
-/// never the newest developer-role message anywhere in `input`. SPEC.md requires
-/// exactly one semantic `input_text` marker and does not restrict its role, so a
-/// stable non-developer block is a valid boundary; requiring a developer block
-/// would refuse turns whose only developer-rendered blocks are volatile. Marking
-/// the volatile tail writes a suffix the provider cannot reuse, and rebuilding the
-/// marker on the next request moves the boundary away from the previously paid
-/// write.
+/// OpenAI permits up to four explicit writes per request. The first stable
+/// `input_text` checkpoint preserves the original stationary boundary, while
+/// the three newest stable checkpoints advance with durable chronology. A later
+/// request can therefore read the most recent completed conversation prefix and
+/// write the newly appended prefix without marking the volatile request suffix.
+/// The first checkpoint and rolling tail remain within OpenAI's explicit lookup
+/// boundaries, and the limit avoids cache-write amplification.
 ///
-/// Local diagnostics measure the wire bytes including this marker
-/// (`openai_prompt_cache_diagnostics_for_request_with_stream`), while the
-/// send-path append-only gate compares marker-free canonical renders: the two
-/// agree on which boundary is cached precisely because this position is stable
-/// across appends, so the gate never observes the marker moving.
+/// A stable non-developer block remains eligible: the wire role does not encode
+/// placement, and requiring a developer block would reject otherwise valid
+/// sessions whose only developer-rendered messages are volatile.
 pub(crate) fn apply_openai_prompt_cache_breakpoint(
     request: &ModelRequest,
     stable_input_positions: &[usize],
+    settled_history_cache_checkpoint_positions: &[usize],
     input: &mut [serde_json::Value],
 ) -> ProviderRequestAssemblyResult<()> {
     if request.model_capabilities.openai_prompt_cache_mode != OpenAiPromptCacheMode::Explicit {
@@ -170,47 +166,72 @@ pub(crate) fn apply_openai_prompt_cache_breakpoint(
             request.model
         )));
     }
-    let block = input
-        .stable_input_positions_marker_target(stable_input_positions)
-        .ok_or_else(|| {
-            ProviderRequestAssemblyError::invalid_args(
-                "OpenAI explicit prompt-cache mode requires a stable-prefix input_text content block",
-            )
-        })?;
-    block["prompt_cache_breakpoint"] = serde_json::json!({ "mode": "explicit" });
+    let targets = input.stable_input_positions_marker_targets(
+        stable_input_positions,
+        settled_history_cache_checkpoint_positions,
+    );
+    if targets.is_empty() {
+        return Err(ProviderRequestAssemblyError::invalid_args(
+            "OpenAI explicit prompt-cache mode requires a stable-prefix input_text content block",
+        ));
+    }
+    for (message_position, block_index) in targets {
+        input[message_position]["content"][block_index]["prompt_cache_breakpoint"] =
+            serde_json::json!({ "mode": "explicit" });
+    }
     Ok(())
 }
 
-/// Selects the last `input_text` block of the last stable-prefix message.
+/// Maximum explicit cache writes supported by GPT-5.6 Responses requests.
+const OPENAI_EXPLICIT_PROMPT_CACHE_BREAKPOINT_LIMIT: usize = 4;
+
+/// Selects the stationary stable boundary and up to three newest settled ones.
 trait StableInputMarkerTarget {
-    /// Returns the block the explicit breakpoint may attach to.
-    fn stable_input_positions_marker_target(
-        &mut self,
+    /// Returns ordered message and block coordinates for explicit breakpoints.
+    fn stable_input_positions_marker_targets(
+        &self,
         stable_input_positions: &[usize],
-    ) -> Option<&mut serde_json::Value>;
+        settled_history_cache_checkpoint_positions: &[usize],
+    ) -> Vec<(usize, usize)>;
 }
 
 impl StableInputMarkerTarget for [serde_json::Value] {
-    fn stable_input_positions_marker_target(
-        &mut self,
+    fn stable_input_positions_marker_targets(
+        &self,
         stable_input_positions: &[usize],
-    ) -> Option<&mut serde_json::Value> {
-        // Find the coordinates with immutable reads first: a mutable scan that
-        // returns a reference cannot be written as a loop, because the returned
-        // reference would outlive each iteration's borrow of the slice.
-        let (message_position, block_index) =
-            stable_input_positions.iter().rev().find_map(|position| {
-                let message = self.get(*position)?;
-                let content = message.get("content")?.as_array()?;
+        settled_history_cache_checkpoint_positions: &[usize],
+    ) -> Vec<(usize, usize)> {
+        let stable_boundary = stable_input_positions
+            .iter()
+            .rev()
+            .filter_map(|position| {
+                let content = self.get(*position)?.get("content")?.as_array()?;
                 let block_index = content.iter().rposition(|block| {
                     block.get("type").and_then(serde_json::Value::as_str) == Some("input_text")
                 })?;
                 Some((*position, block_index))
-            })?;
-        self.get_mut(message_position)?
-            .get_mut("content")?
-            .as_array_mut()?
-            .get_mut(block_index)
+            })
+            .next();
+        let mut targets = stable_boundary
+            .into_iter()
+            .chain(
+                settled_history_cache_checkpoint_positions
+                    .iter()
+                    .rev()
+                    .take(OPENAI_EXPLICIT_PROMPT_CACHE_BREAKPOINT_LIMIT - 1)
+                    .filter_map(|position| {
+                        let content = self.get(*position)?.get("content")?.as_array()?;
+                        let block_index = content.iter().rposition(|block| {
+                            block.get("type").and_then(serde_json::Value::as_str)
+                                == Some("input_text")
+                        })?;
+                        Some((*position, block_index))
+                    }),
+            )
+            .collect::<Vec<_>>();
+        targets.sort_unstable();
+        targets.dedup();
+        targets
     }
 }
 
@@ -234,14 +255,38 @@ pub fn openai_responses_request_body_with_stream(
     request: &ModelRequest,
     stream: bool,
 ) -> ProviderRequestAssemblyResult<String> {
+    openai_responses_request_body_with_stream_and_cache_comparison(request, stream, None)
+}
+
+/// Builds an OpenAI Responses request body with an optional diagnostic-only
+/// baseline response identifier.
+///
+/// The comparison identifier asks the service to explain cache reuse; it never
+/// changes model input, continuation state, or the prompt-cache routing key.
+pub fn openai_responses_request_body_with_stream_and_cache_comparison(
+    request: &ModelRequest,
+    stream: bool,
+    comparison_response_id: Option<&str>,
+) -> ProviderRequestAssemblyResult<String> {
     validate_provider_request_required("OpenAI model", &request.model)?;
     let rendered = openai_render_request_messages(request)?;
     let mut body = openai_responses_request_control_shape_with_stream(request, stream)?;
     body["instructions"] = serde_json::json!(rendered.instructions);
     let mut input = rendered.input;
-    apply_openai_prompt_cache_breakpoint(request, &rendered.stable_input_positions, &mut input)?;
+    apply_openai_prompt_cache_breakpoint(
+        request,
+        &rendered.stable_input_positions,
+        &rendered.settled_history_cache_checkpoint_positions,
+        &mut input,
+    )?;
     body["input"] = serde_json::json!(input);
     body["prompt_cache_key"] = serde_json::json!(openai_prompt_cache_key(request));
+    if body.get("prompt_cache_options").is_some()
+        && let Some(comparison_response_id) = comparison_response_id.filter(|id| !id.is_empty())
+    {
+        body["prompt_cache_options"]["comparison_response_id"] =
+            serde_json::json!(comparison_response_id);
+    }
     serde_json::to_string(&body).map_err(|error| {
         ProviderRequestAssemblyError::invalid_state(format!(
             "OpenAI request encoding failed: {error}"
@@ -327,5 +372,77 @@ mod tests {
 
         assert!(body.get("tools").is_none(), "{body}");
         assert!(body.get("tool_choice").is_none(), "{body}");
+    }
+
+    /// Verifies a GPT-5.6 Responses comparison baseline remains a
+    /// diagnostic-only cache option rather than prompt or continuation input.
+    #[test]
+    fn openai_responses_comparison_baseline_is_diagnostic_only_and_generation_gated() {
+        let mut request = ModelRequest {
+            provider: "openai".to_string(),
+            model: "gpt-5.6".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: Some("lineage-1".to_string()),
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: ModelInteractionKind::Compaction,
+            allowed_actions: AllowedActionSet::all_enabled(),
+            stop: None,
+            messages: vec![crate::ModelMessage {
+                role: crate::ModelMessageRole::User,
+                source: crate::ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "compare cache reuse".to_string(),
+            }]
+            .into(),
+        };
+
+        let body: serde_json::Value = serde_json::from_str(
+            &openai_responses_request_body_with_stream_and_cache_comparison(
+                &request,
+                false,
+                Some("resp-baseline"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            body.pointer("/prompt_cache_options/comparison_response_id"),
+            Some(&serde_json::json!("resp-baseline"))
+        );
+        assert!(!body["input"].to_string().contains("resp-baseline"));
+        assert!(
+            !body["prompt_cache_key"]
+                .as_str()
+                .unwrap()
+                .contains("resp-baseline")
+        );
+
+        request.model = "gpt-5.5".to_string();
+        let unsupported: serde_json::Value = serde_json::from_str(
+            &openai_responses_request_body_with_stream_and_cache_comparison(
+                &request,
+                false,
+                Some("resp-baseline"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            unsupported
+                .pointer("/prompt_cache_options/comparison_response_id")
+                .is_none()
+        );
     }
 }

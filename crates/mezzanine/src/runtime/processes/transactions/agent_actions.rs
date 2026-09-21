@@ -1487,6 +1487,44 @@ impl RuntimeSessionService {
         Ok(settled)
     }
 
+    /// Settles receiver-completed transactions owned by one pane after its
+    /// output handlers have unwound.
+    pub(crate) fn settle_ready_receiver_ends_for_pane(&mut self, pane_id: &str) -> Result<usize> {
+        let ready_ends = self
+            .process
+            .shell_receiver_pending_ends
+            .iter()
+            .filter(|(marker, (_, _, end_pane_id, _))| {
+                end_pane_id == pane_id
+                    && !self
+                        .process
+                        .shell_receiver_completion_required
+                        .contains(*marker)
+            })
+            .map(|(marker, end)| (marker.clone(), end.clone()))
+            .collect::<Vec<_>>();
+        let mut settled = 0usize;
+        for (marker, (turn_id, agent_id, end_pane_id, exit_code)) in ready_ends {
+            self.process.shell_receiver_pending_ends.remove(&marker);
+            settled = settled.saturating_add(
+                self.observe_agent_shell_transaction_end_with_sandbox_assessment(
+                    &end_pane_id,
+                    &marker,
+                    &turn_id,
+                    &agent_id,
+                    &end_pane_id,
+                    ShellTransactionSettlement {
+                        exit_code,
+                        sandbox_assessment: None,
+                        sandbox_backend: None,
+                        defer_foreign_settlement: true,
+                    },
+                )?,
+            );
+        }
+        Ok(settled)
+    }
+
     /// Settles foreign transaction ends recorded by the pane-output frame.
     ///
     /// The identity-probe end and the bootstrap end both resolve typed shell
@@ -1514,6 +1552,43 @@ impl RuntimeSessionService {
                 Err(error) => {
                     pending.insert(marker, end);
                     self.process.pending_deferred_foreign_transaction_ends = pending;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(settled)
+    }
+
+    /// Settles deferred foreign transaction ends observed in one pane's output.
+    pub(crate) fn settle_deferred_foreign_transaction_ends_for_pane(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<usize> {
+        let pending = self
+            .process
+            .pending_deferred_foreign_transaction_ends
+            .iter()
+            .filter(|(_, end)| end.output_pane_id == pane_id)
+            .map(|(marker, end)| (marker.clone(), end.clone()))
+            .collect::<Vec<_>>();
+        let mut settled = 0usize;
+        for (marker, end) in pending {
+            self.process
+                .pending_deferred_foreign_transaction_ends
+                .remove(&marker);
+            match self.observe_agent_shell_transaction_end(
+                &end.output_pane_id,
+                &marker,
+                &end.turn_id,
+                &end.agent_id,
+                &end.pane_id,
+                end.exit_code,
+            ) {
+                Ok(observed) => settled = settled.saturating_add(observed),
+                Err(error) => {
+                    self.process
+                        .pending_deferred_foreign_transaction_ends
+                        .insert(marker, end);
                     return Err(error);
                 }
             }

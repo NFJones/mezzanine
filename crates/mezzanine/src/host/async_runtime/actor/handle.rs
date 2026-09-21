@@ -25,6 +25,8 @@ use super::queue::is_retryable_side_effect_queue_full_error;
 
 /// Bounded retries for one chunk submitted into a transiently full effect queue.
 const SIDE_EFFECT_QUEUE_FULL_RETRIES: u32 = 5;
+/// Maximum worker render attempts before reporting sustained render churn.
+const CLIENT_RENDER_WORK_ATTEMPTS: u32 = 4;
 
 /// Merges one chunk ingress report into the aggregated submission report.
 ///
@@ -201,6 +203,58 @@ impl AsyncRuntimeSessionHandle {
         config: TerminalClientLoopConfig,
         render: bool,
     ) -> Result<AsyncRenderedClientFrame> {
+        if render {
+            for attempt in (0..CLIENT_RENDER_WORK_ATTEMPTS)
+                .map(|attempt| u32::from(attempt + 1 == CLIENT_RENDER_WORK_ATTEMPTS))
+            {
+                let work = self
+                    .request(|reply| AsyncRuntimeRequest::CaptureClientRenderWork {
+                        client_id: client_id.clone(),
+                        role,
+                        client_size,
+                        config: AsyncTerminalClientConfigInput::Raw(Box::new(config.clone())),
+                        reply,
+                    })
+                    .await??;
+                let snapshot = work.snapshot.clone();
+                #[cfg(test)]
+                let composition_started = work.composition_started.clone();
+                #[cfg(test)]
+                let composition_release = work.composition_release.clone();
+                let view = tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    if let Some(started) = composition_started {
+                        started.notify_one();
+                    }
+                    #[cfg(test)]
+                    if let Some(release) = composition_release {
+                        let (released, wake) = &*release;
+                        let mut released = released.lock().unwrap();
+                        while !*released {
+                            released = wake.wait(released).unwrap();
+                        }
+                    }
+                    crate::runtime::compose_client_render_snapshot(snapshot)
+                })
+                .await
+                .map_err(|_| MezError::invalid_state("client render worker did not complete"))??;
+                match self
+                    .request(|reply| AsyncRuntimeRequest::CompleteClientRenderWork {
+                        work: Box::new(work),
+                        view,
+                        reply,
+                    })
+                    .await?
+                {
+                    Ok(frame) => return Ok(frame),
+                    Err(error)
+                        if attempt == 0 && error.kind() == crate::error::MezErrorKind::Conflict => {
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            return Err(MezError::conflict("client render work remained stale"));
+        }
         self.request(|reply| AsyncRuntimeRequest::RenderClientFrame {
             client_id,
             role,
@@ -218,12 +272,56 @@ impl AsyncRuntimeSessionHandle {
         client_id: ClientId,
         invalidate_output: bool,
     ) -> Result<Option<AsyncIrohRenderSnapshot>> {
-        self.request(|reply| AsyncRuntimeRequest::RenderIrohClientSnapshot {
-            client_id,
-            invalidate_output,
-            reply,
-        })
-        .await?
+        for attempt in (0..CLIENT_RENDER_WORK_ATTEMPTS)
+            .map(|attempt| u32::from(attempt + 1 == CLIENT_RENDER_WORK_ATTEMPTS))
+        {
+            let Some(work) = self
+                .request(|reply| AsyncRuntimeRequest::CaptureIrohClientRenderWork {
+                    client_id: client_id.clone(),
+                    reply,
+                })
+                .await??
+            else {
+                return Ok(None);
+            };
+            let snapshot = work.snapshot.clone();
+            #[cfg(test)]
+            let composition_started = work.composition_started.clone();
+            #[cfg(test)]
+            let composition_release = work.composition_release.clone();
+            let view = tokio::task::spawn_blocking(move || {
+                #[cfg(test)]
+                if let Some(started) = composition_started {
+                    started.notify_one();
+                }
+                #[cfg(test)]
+                if let Some(release) = composition_release {
+                    let (released, wake) = &*release;
+                    let mut released = released.lock().unwrap();
+                    while !*released {
+                        released = wake.wait(released).unwrap();
+                    }
+                }
+                crate::runtime::compose_client_render_snapshot(snapshot)
+            })
+            .await
+            .map_err(|_| MezError::invalid_state("Iroh client render worker did not complete"))??;
+            match self
+                .request(|reply| AsyncRuntimeRequest::CompleteIrohClientRenderWork {
+                    work: Box::new(work),
+                    view,
+                    invalidate_output,
+                    reply,
+                })
+                .await?
+            {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error)
+                    if attempt == 0 && error.kind() == crate::error::MezErrorKind::Conflict => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(MezError::conflict("Iroh client render work remained stale"))
     }
 
     /// Arms generation-matched focus labels after a transport commits a frame.
@@ -253,6 +351,58 @@ impl AsyncRuntimeSessionHandle {
         config: AsyncTerminalClientConfigSnapshot,
         render: bool,
     ) -> Result<AsyncRenderedClientFrame> {
+        if render {
+            for attempt in (0..CLIENT_RENDER_WORK_ATTEMPTS)
+                .map(|attempt| u32::from(attempt + 1 == CLIENT_RENDER_WORK_ATTEMPTS))
+            {
+                let work = self
+                    .request(|reply| AsyncRuntimeRequest::CaptureClientRenderWork {
+                        client_id: client_id.clone(),
+                        role,
+                        client_size,
+                        config: AsyncTerminalClientConfigInput::Snapshot(config.clone()),
+                        reply,
+                    })
+                    .await??;
+                let snapshot = work.snapshot.clone();
+                #[cfg(test)]
+                let composition_started = work.composition_started.clone();
+                #[cfg(test)]
+                let composition_release = work.composition_release.clone();
+                let view = tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    if let Some(started) = composition_started {
+                        started.notify_one();
+                    }
+                    #[cfg(test)]
+                    if let Some(release) = composition_release {
+                        let (released, wake) = &*release;
+                        let mut released = released.lock().unwrap();
+                        while !*released {
+                            released = wake.wait(released).unwrap();
+                        }
+                    }
+                    crate::runtime::compose_client_render_snapshot(snapshot)
+                })
+                .await
+                .map_err(|_| MezError::invalid_state("client render worker did not complete"))??;
+                match self
+                    .request(|reply| AsyncRuntimeRequest::CompleteClientRenderWork {
+                        work: Box::new(work),
+                        view,
+                        reply,
+                    })
+                    .await?
+                {
+                    Ok(frame) => return Ok(frame),
+                    Err(error)
+                        if attempt == 0 && error.kind() == crate::error::MezErrorKind::Conflict => {
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            return Err(MezError::conflict("client render work remained stale"));
+        }
         self.request(|reply| AsyncRuntimeRequest::RenderClientFrame {
             client_id,
             role,
@@ -273,12 +423,14 @@ impl AsyncRuntimeSessionHandle {
     pub async fn render_client_side_effect(
         &self,
         client_id: ClientId,
+        reason: crate::runtime::RenderInvalidationReason,
         config: TerminalClientLoopConfig,
         status: Option<ClientStatusLine>,
         cursor_blink_elapsed_ms: u64,
     ) -> Result<Option<AsyncRenderedClientFlush>> {
         self.request(|reply| AsyncRuntimeRequest::RenderClientSideEffect {
             client_id,
+            reason,
             config,
             status,
             cursor_blink_elapsed_ms,
@@ -500,6 +652,42 @@ impl AsyncRuntimeSessionHandle {
     /// Returns a non-consuming side-effect delivery revision watcher.
     pub fn side_effect_delivery_watcher(&self) -> watch::Receiver<u64> {
         self.side_effect_delivery_rx.clone()
+    }
+
+    /// Returns a revision watcher for one exact pane-process route.
+    pub fn pane_process_side_effect_delivery_watcher(
+        &self,
+        instance: crate::runtime::PaneProcessInstance,
+    ) -> watch::Receiver<u64> {
+        let mut routes = self
+            .pane_process_side_effect_delivery_txs
+            .lock()
+            .expect("pane-process side-effect delivery lock must not be poisoned");
+        routes
+            .entry(instance)
+            .or_insert_with(|| watch::channel(0u64).0)
+            .subscribe()
+    }
+
+    /// Retires the targeted delivery channel after its exact-process worker
+    /// exits. Process generations make this key distinct from replacements.
+    pub fn unregister_pane_process_side_effect_delivery_watcher(
+        &self,
+        instance: &crate::runtime::PaneProcessInstance,
+    ) {
+        self.pane_process_side_effect_delivery_txs
+            .lock()
+            .expect("pane-process side-effect delivery lock must not be poisoned")
+            .remove(instance);
+    }
+
+    /// Returns the number of live exact-process delivery channels.
+    #[cfg(test)]
+    pub fn pane_process_side_effect_delivery_watcher_count(&self) -> usize {
+        self.pane_process_side_effect_delivery_txs
+            .lock()
+            .expect("pane-process side-effect delivery lock must not be poisoned")
+            .len()
     }
 
     /// Runs the event wakeups operation for this subsystem.
@@ -1092,6 +1280,17 @@ impl AsyncRuntimeSessionHandle {
     ) -> Result<Vec<RuntimeSideEffect>> {
         self.request(
             |reply| AsyncRuntimeRequest::DrainAgentProviderDispatchSideEffects { limit, reply },
+        )
+        .await?
+    }
+
+    /// Drains deferred interactive command dispatches from their dedicated lane.
+    pub async fn drain_agent_command_dispatch_side_effects(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        self.request(
+            |reply| AsyncRuntimeRequest::DrainAgentCommandDispatchSideEffects { limit, reply },
         )
         .await?
     }

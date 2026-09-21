@@ -179,8 +179,11 @@ impl AsyncRuntimeSessionActor {
         let terminal_config_invalidated = side_effects
             .iter()
             .any(runtime_side_effect_invalidates_terminal_config);
-        let (mut side_effects, coalesced) =
-            coalesce_output_side_effects_for_enqueue(&mut self.side_effects, side_effects);
+        let (mut side_effects, coalesced) = coalesce_output_side_effects_for_enqueue(
+            &mut self.side_effects,
+            &mut self.side_effect_routes,
+            side_effects,
+        );
         // Repaint work is level-triggered, so a transient backlog drops the
         // oldest droppable repaint effect - queued work first, then incoming
         // work when non-droppable queued work already consumes capacity -
@@ -191,8 +194,12 @@ impl AsyncRuntimeSessionActor {
         let mut owed_full_redraws: Vec<ClientId> = Vec::new();
         let mut evicted_render_clients = 0usize;
         let mut evicted_flush_outputs = 0usize;
-        let mut over_capacity =
-            self.side_effects.len() + side_effects.len() > self.side_effect_buffer;
+        let mut over_capacity = self
+            .side_effects
+            .len()
+            .saturating_add(self.side_effect_routes.len())
+            .saturating_add(side_effects.len())
+            > self.side_effect_buffer;
         while over_capacity {
             let dropped = match self
                 .side_effects
@@ -203,12 +210,15 @@ impl AsyncRuntimeSessionActor {
                     .side_effects
                     .remove(position)
                     .expect("queued repaint position is valid by construction"),
-                None => match side_effects
-                    .iter()
-                    .position(runtime_side_effect_is_droppable_repaint)
-                {
-                    Some(position) => side_effects.remove(position),
-                    None => break,
+                None => match self.side_effect_routes.pop_droppable_repaint() {
+                    Some(effect) => effect,
+                    None => match side_effects
+                        .iter()
+                        .position(runtime_side_effect_is_droppable_repaint)
+                    {
+                        Some(position) => side_effects.remove(position),
+                        None => break,
+                    },
                 },
             };
             match droppable_repaint_effect(&dropped) {
@@ -226,7 +236,12 @@ impl AsyncRuntimeSessionActor {
                 }
                 None => break,
             }
-            over_capacity = self.side_effects.len() + side_effects.len() > self.side_effect_buffer;
+            over_capacity = self
+                .side_effects
+                .len()
+                .saturating_add(self.side_effect_routes.len())
+                .saturating_add(side_effects.len())
+                > self.side_effect_buffer;
         }
         let evicted_repaint_effects = evicted_render_clients.saturating_add(evicted_flush_outputs);
         if evicted_repaint_effects > 0 {
@@ -264,19 +279,34 @@ impl AsyncRuntimeSessionActor {
                     .metrics
                     .runtime_side_effects_queued
                     .saturating_add(u64::try_from(compensation_redraws).unwrap_or(u64::MAX));
-                self.metrics.side_effect_queue_depth = self.side_effects.len();
+                self.metrics.side_effect_queue_depth = self
+                    .side_effects
+                    .len()
+                    .saturating_add(self.side_effect_routes.len());
                 self.metrics.side_effect_queue_high_water = self
                     .metrics
                     .side_effect_queue_high_water
-                    .max(self.side_effects.len());
+                    .max(self.metrics.side_effect_queue_depth);
                 self.notify_side_effect_delivery();
             }
             return Err(MezError::invalid_state(format!(
                 "{SIDE_EFFECT_QUEUE_FULL_PREFIX}: queued={} incoming={} capacity={} queued_kinds={} incoming_kinds={}",
-                self.side_effects.len(),
+                self.side_effects
+                    .len()
+                    .saturating_add(self.side_effect_routes.len()),
                 side_effects.len(),
                 self.side_effect_buffer,
-                runtime_side_effect_kind_summary(self.side_effects.iter()),
+                if self.side_effects.is_empty() {
+                    self.side_effect_routes.kind_summary()
+                } else if self.side_effect_routes.is_empty() {
+                    runtime_side_effect_kind_summary(self.side_effects.iter())
+                } else {
+                    format!(
+                        "{},{}",
+                        runtime_side_effect_kind_summary(self.side_effects.iter()),
+                        self.side_effect_routes.kind_summary()
+                    )
+                },
                 runtime_side_effect_kind_summary(side_effects.iter())
             )));
         }
@@ -306,6 +336,16 @@ impl AsyncRuntimeSessionActor {
             .iter()
             .filter(|effect| matches!(effect, RuntimeSideEffect::CancelTimer { .. }))
             .count();
+        let pane_processes = side_effects
+            .iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::PaneProcessIo { instance, .. } => Some(instance.clone()),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let has_non_pane_process_effect = side_effects
+            .iter()
+            .any(|effect| !matches!(effect, RuntimeSideEffect::PaneProcessIo { .. }));
         // Compensation redraws count as queued work and must notify the
         // delivery chain: an eviction-only enqueue adds no incoming effect, so
         // otherwise the redraw could wait for an unrelated notification.
@@ -317,7 +357,9 @@ impl AsyncRuntimeSessionActor {
         for effect in side_effects {
             self.enqueue_runtime_side_effect(effect);
         }
-        if self.side_effect_queue_nonempty_since.is_none() && !self.side_effects.is_empty() {
+        if self.side_effect_queue_nonempty_since.is_none()
+            && (!self.side_effects.is_empty() || !self.side_effect_routes.is_empty())
+        {
             self.side_effect_queue_nonempty_since = Some(std::time::Instant::now());
         }
         if should_notify {
@@ -341,16 +383,22 @@ impl AsyncRuntimeSessionActor {
             .metrics
             .render_invalidations_coalesced
             .saturating_add(u64::try_from(coalesced).unwrap_or(u64::MAX));
-        self.metrics.side_effect_queue_depth = self.side_effects.len();
+        self.metrics.side_effect_queue_depth = self
+            .side_effects
+            .len()
+            .saturating_add(self.side_effect_routes.len());
         self.metrics.side_effect_queue_high_water = self
             .metrics
             .side_effect_queue_high_water
-            .max(self.side_effects.len());
+            .max(self.metrics.side_effect_queue_depth);
         self.metrics
             .side_effect_queue_depth_samples
-            .record(u64::try_from(self.side_effects.len()).unwrap_or(u64::MAX));
-        if should_notify {
+            .record(u64::try_from(self.metrics.side_effect_queue_depth).unwrap_or(u64::MAX));
+        if should_notify && (has_non_pane_process_effect || compensation_redraws > 0) {
             self.notify_side_effect_delivery();
+        }
+        for instance in pane_processes {
+            self.notify_pane_process_side_effect_delivery(&instance);
         }
         Ok(())
     }
@@ -372,7 +420,84 @@ impl AsyncRuntimeSessionActor {
                         && delivery.delivery_id.as_deref() == Some(delivery_id.as_str())
                 )
             });
-            self.side_effects.push_front(effect);
+            let instance = instance.clone();
+            let delivery_id = delivery_id.clone();
+            self.side_effect_routes.cancel_pane_process_shell_input(
+                &instance,
+                &delivery_id,
+                effect,
+            );
+            return;
+        }
+        if matches!(effect, RuntimeSideEffect::ReadHostClipboard { .. }) {
+            self.side_effect_routes.push_clipboard(effect);
+            return;
+        }
+        if matches!(effect, RuntimeSideEffect::RunProgramHook { .. }) {
+            self.side_effect_routes.push_hook(effect);
+            return;
+        }
+        if matches!(
+            effect,
+            RuntimeSideEffect::Persist { .. }
+                | RuntimeSideEffect::PersistAuditLog { .. }
+                | RuntimeSideEffect::PersistTranscriptEntries { .. }
+                | RuntimeSideEffect::PersistAgentSessionMetadata { .. }
+                | RuntimeSideEffect::PersistPresentationEntries { .. }
+                | RuntimeSideEffect::PersistSessionArchive { .. }
+                | RuntimeSideEffect::PersistSavedSessionRetention { .. }
+                | RuntimeSideEffect::PersistPromptHistory { .. }
+                | RuntimeSideEffect::PersistCommandPromptHistory { .. }
+                | RuntimeSideEffect::PersistTokenUsage { .. }
+                | RuntimeSideEffect::SettleAgentProviderPersistence { .. }
+                | RuntimeSideEffect::PersistRegistry { .. }
+        ) {
+            self.side_effect_routes.push_persistence(effect);
+            return;
+        }
+        if matches!(
+            effect,
+            RuntimeSideEffect::RefreshStatusPill { .. }
+                | RuntimeSideEffect::PreparePaneStatusProviders
+                | RuntimeSideEffect::RefreshPaneStatusProvider { .. }
+        ) {
+            self.side_effect_routes.push_status(effect);
+            return;
+        }
+        if matches!(
+            effect,
+            RuntimeSideEffect::ScheduleTimer { .. } | RuntimeSideEffect::CancelTimer { .. }
+        ) {
+            self.side_effect_routes.push_timer(effect);
+            return;
+        }
+        if matches!(effect, RuntimeSideEffect::DispatchAgentCommand { .. }) {
+            self.side_effect_routes.push_command(effect);
+            return;
+        }
+        if matches!(
+            effect,
+            RuntimeSideEffect::DispatchAgentProvider { .. }
+                | RuntimeSideEffect::DispatchApprovedExternalAction { .. }
+                | RuntimeSideEffect::DispatchNativeShellAction { .. }
+                | RuntimeSideEffect::DispatchAgentCompaction { .. }
+                | RuntimeSideEffect::DispatchAgentRemember { .. }
+                | RuntimeSideEffect::DispatchAgentSessionTitle { .. }
+                | RuntimeSideEffect::DispatchAgentPresentationResize { .. }
+        ) {
+            self.side_effect_routes.push_provider(effect);
+            return;
+        }
+        if matches!(effect, RuntimeSideEffect::PaneProcessIo { .. }) {
+            self.side_effect_routes.push_pane_process(effect);
+            return;
+        }
+        if let RuntimeSideEffect::RenderClient { client_id, reason } = effect {
+            self.side_effect_routes.push_render(client_id, reason);
+            return;
+        }
+        if matches!(effect, RuntimeSideEffect::FlushClientOutput { .. }) {
+            self.side_effect_routes.push_flush(effect);
             return;
         }
         let priority_pane_id = match &effect {
@@ -496,20 +621,16 @@ impl AsyncRuntimeSessionActor {
     ) -> Result<usize> {
         let side_effects = self.client_render_timer_side_effects(client_id)?;
         let queued = side_effects.len();
-        let pending_owner_render = self.side_effects.iter().any(|effect| {
-            matches!(
-                effect,
-                RuntimeSideEffect::RenderClient {
-                    client_id: pending_client_id,
-                    ..
-                } if pending_client_id == client_id
-            )
-        });
-        let exceeds_capacity =
-            self.side_effects.len().saturating_add(queued) > self.side_effect_buffer;
+        let pending_owner_render = self.side_effect_routes.has_pending_render(client_id);
+        let queued_depth = self
+            .side_effects
+            .len()
+            .saturating_add(self.side_effect_routes.len());
+        let exceeds_capacity = queued_depth.saturating_add(queued) > self.side_effect_buffer;
         let fits_after_render = self
             .side_effects
             .len()
+            .saturating_add(self.side_effect_routes.len())
             .saturating_sub(usize::from(pending_owner_render))
             .saturating_add(queued)
             <= self.side_effect_buffer;

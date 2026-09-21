@@ -85,8 +85,10 @@ fn coalesce_config_persistence_effects_keeps_latest_text_per_target() {
 #[test]
 fn pane_status_provider_preparation_signals_are_coalesced() {
     let mut queued = VecDeque::from([RuntimeSideEffect::PreparePaneStatusProviders]);
+    let mut routes = super::routes::RuntimeSideEffectRouter::default();
     let (retained, coalesced) = coalesce_output_side_effects_for_enqueue(
         &mut queued,
+        &mut routes,
         vec![
             RuntimeSideEffect::PreparePaneStatusProviders,
             RuntimeSideEffect::PreparePaneStatusProviders,

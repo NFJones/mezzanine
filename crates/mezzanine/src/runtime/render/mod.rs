@@ -55,6 +55,20 @@ const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
 /// How long the copied-word highlight remains visible after a double click.
 const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 
+/// Exact client and pane generations used to validate one rendered primary view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeClientRenderIdentity {
+    /// Attached primary whose navigation supplies the rendered window.
+    pub(crate) view_source_client_id: mez_core::ids::ClientId,
+    pub(crate) window_id: String,
+    pub(crate) navigation_revision: u64,
+    pub(crate) layout_revision: u64,
+    pub(crate) presentation_revision: u64,
+    /// Opaque active-editor lease identity when an editor owns the active pane.
+    pub(crate) external_editor_session: Option<(String, String)>,
+    pub(crate) pane_render_generations: Vec<(String, u64)>,
+}
+
 /// Immutable presentation configuration replaced atomically on config reload.
 ///
 /// Parsing builds a complete value before the live component changes, so an
@@ -447,13 +461,13 @@ struct RuntimeClientPresentationState {
     primary_prefix_key_pending: bool,
     primary_display_overlay: Option<RuntimeDisplayOverlay>,
     zen_focus_labels: RuntimeZenFocusLabelState,
-    agent_prompt_inputs: std::collections::BTreeMap<String, RuntimeAgentPromptInput>,
+    agent_prompt_inputs: RuntimeAgentPromptInputs,
     active_copy_modes: std::collections::BTreeMap<(String, PaneSurfaceKind), CopyMode>,
     scrollback_copy_mode_panes: std::collections::BTreeSet<(String, PaneSurfaceKind)>,
     mouse_resize_drag_state: Option<MouseResizeDragState>,
     mouse_resize_drag_window_id: Option<String>,
     mouse_resize_drag_changed: bool,
-    mouse_resize_drag_baseline_view: Option<RenderedClientView>,
+    mouse_resize_drag_baseline_view: Option<std::sync::Arc<RenderedClientView>>,
     mouse_resize_drag_baseline_border_cells: Vec<MouseBorderCell>,
     mouse_resize_drag_baseline_geometries: Vec<crate::runtime::PaneGeometry>,
     pending_divider_layout_commit: Option<RuntimePendingDividerLayoutCommit>,
@@ -464,6 +478,61 @@ struct RuntimeClientPresentationState {
     primary_error_status_overlay: Option<String>,
     pane_agent_status_selector: Option<RuntimePaneAgentStatusSelector>,
     presentation_revision: u64,
+}
+
+/// Per-pane prompt handles shared between client projections until one exact
+/// pane is edited.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RuntimeAgentPromptInputs(
+    std::collections::BTreeMap<String, RuntimeAgentPromptInputHandle>,
+);
+
+impl std::ops::Deref for RuntimeAgentPromptInputs {
+    type Target = std::collections::BTreeMap<String, RuntimeAgentPromptInputHandle>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for RuntimeAgentPromptInputs {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeAgentPromptInputHandle(std::sync::Arc<RuntimeAgentPromptInput>);
+
+impl From<RuntimeAgentPromptInput> for RuntimeAgentPromptInputHandle {
+    fn from(input: RuntimeAgentPromptInput) -> Self {
+        Self(std::sync::Arc::new(input))
+    }
+}
+
+impl RuntimeAgentPromptInputHandle {
+    fn into_inner(self) -> RuntimeAgentPromptInput {
+        std::sync::Arc::try_unwrap(self.0).unwrap_or_else(|input| (*input).clone())
+    }
+
+    #[cfg(test)]
+    fn shares_storage_with(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::ops::Deref for RuntimeAgentPromptInputHandle {
+    type Target = RuntimeAgentPromptInput;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for RuntimeAgentPromptInputHandle {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -488,7 +557,7 @@ pub(crate) struct RuntimePresentationComponent {
     /// Copy, paste-buffer, and host-clipboard state.
     copy: RuntimeCopyPresentationState,
     /// Active agent prompt editor state keyed by pane id.
-    agent_prompt_inputs: std::collections::BTreeMap<String, RuntimeAgentPromptInput>,
+    agent_prompt_inputs: RuntimeAgentPromptInputs,
     /// Exact prompt snapshots retained while an external editor owns a pane.
     external_agent_prompt_edits:
         std::collections::BTreeMap<String, external_prompt::RuntimeAgentPromptEditSnapshot>,
@@ -576,7 +645,7 @@ pub(crate) struct RuntimePresentationComponent {
     /// Whether the active divider gesture has changed layout geometry.
     mouse_resize_drag_changed: bool,
     /// Exact pre-drag client view retained for outer chrome during divider movement.
-    mouse_resize_drag_baseline_view: Option<RenderedClientView>,
+    mouse_resize_drag_baseline_view: Option<std::sync::Arc<RenderedClientView>>,
     /// Absolute divider cells retained for drag-origin and cleanup bookkeeping.
     mouse_resize_drag_baseline_border_cells: Vec<MouseBorderCell>,
     /// Pane geometry represented by the retained pre-drag layout.
@@ -610,27 +679,44 @@ pub(crate) struct RuntimePresentationComponent {
     completion_attention_panes: std::collections::BTreeSet<String>,
 }
 
-/// Bounded pane-row projection cache owned by the active presentation window.
-#[derive(Debug, Default)]
-struct RuntimePaneStyledRowCache {
-    rows: std::collections::BTreeMap<
-        String,
-        (u64, std::sync::Arc<[mez_terminal::TerminalStyledLine]>),
-    >,
-    hits: u64,
-    misses: u64,
+/// Maximum immutable pane-row projections retained across window switches.
+const RUNTIME_PANE_STYLED_ROW_CACHE_LIMIT: usize = 32;
+/// Maximum immutable window-presentation plans retained across window switches.
+const RUNTIME_WINDOW_PRESENTATION_PLAN_CACHE_LIMIT: usize = 8;
+
+/// One generation-fenced immutable pane-row projection retained by recency.
+#[derive(Debug)]
+struct RuntimePaneStyledRowCacheEntry {
+    generation: u64,
+    rows: std::sync::Arc<[mez_terminal::TerminalStyledLine]>,
+    last_used: u64,
 }
 
-/// One-entry presentation-plan cache keyed by every geometry-affecting input.
+/// Bounded pane-row projection cache retained across window switches.
 #[derive(Debug, Default)]
-struct RuntimeWindowPresentationPlanCache {
-    entry: Option<(
-        mez_mux::layout::Window,
-        mez_mux::presentation::WindowPresentationOptions,
-        std::sync::Arc<mez_mux::presentation::WindowPresentationPlan>,
-    )>,
+struct RuntimePaneStyledRowCache {
+    rows: std::collections::BTreeMap<String, RuntimePaneStyledRowCacheEntry>,
     hits: u64,
     misses: u64,
+    next_use: u64,
+}
+
+/// One generation-fenced immutable presentation plan retained by recency.
+#[derive(Debug)]
+struct RuntimeWindowPresentationPlanCacheEntry {
+    window: mez_mux::layout::Window,
+    options: mez_mux::presentation::WindowPresentationOptions,
+    plan: std::sync::Arc<mez_mux::presentation::WindowPresentationPlan>,
+    last_used: u64,
+}
+
+/// Bounded presentation-plan cache keyed by every geometry-affecting input.
+#[derive(Debug, Default)]
+struct RuntimeWindowPresentationPlanCache {
+    entries: Vec<RuntimeWindowPresentationPlanCacheEntry>,
+    hits: u64,
+    misses: u64,
+    next_use: u64,
 }
 
 /// One in-flight pane-local selector candidate discovery.
@@ -1668,8 +1754,10 @@ impl RuntimePresentationComponent {
         conversation_id: &str,
         size: Size,
     ) {
-        self.agent_prompt_inputs
-            .insert(pane_id.to_string(), default_runtime_agent_prompt_input());
+        self.agent_prompt_inputs.insert(
+            pane_id.to_string(),
+            default_runtime_agent_prompt_input().into(),
+        );
         let baseline_screen =
             TerminalScreen::new(size, 10).expect("test presentation screen should be valid");
         self.agent_shell_output_previews.insert(
@@ -1823,7 +1911,7 @@ impl RuntimePresentationComponent {
             | MouseResizeDragState::Horizontal { geometries, .. } => geometries.clone(),
         };
         if self.mouse_resize_drag_baseline_view.is_none() {
-            self.mouse_resize_drag_baseline_view = Some(baseline_view);
+            self.mouse_resize_drag_baseline_view = Some(std::sync::Arc::new(baseline_view));
             self.mouse_resize_drag_baseline_border_cells = baseline_border_cells;
             self.mouse_resize_drag_baseline_geometries = initial_geometries.clone();
         }
@@ -2088,7 +2176,11 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> RuntimeAgentResumePresentationSnapshot {
         RuntimeAgentResumePresentationSnapshot {
-            prompt_input: self.presentation.agent_prompt_inputs.get(pane_id).cloned(),
+            prompt_input: self
+                .presentation
+                .agent_prompt_inputs
+                .get(pane_id)
+                .map(|input| (**input).clone()),
             shell_output_previews: self
                 .presentation
                 .agent_shell_output_previews
@@ -2204,7 +2296,7 @@ impl RuntimeSessionService {
         if let Some(value) = snapshot.prompt_input {
             self.presentation
                 .agent_prompt_inputs
-                .insert(pane_id.to_string(), value);
+                .insert(pane_id.to_string(), value.into());
         }
         self.presentation
             .agent_shell_output_previews
@@ -2354,17 +2446,13 @@ impl RuntimeSessionService {
 
     /// Returns active agent prompt editors for integration tests.
     #[cfg(test)]
-    pub(crate) fn agent_prompt_inputs_for_tests(
-        &self,
-    ) -> &std::collections::BTreeMap<String, RuntimeAgentPromptInput> {
+    pub(crate) fn agent_prompt_inputs_for_tests(&self) -> &RuntimeAgentPromptInputs {
         &self.presentation.agent_prompt_inputs
     }
 
     /// Returns mutable agent prompt editors for integration fixtures.
     #[cfg(test)]
-    pub(crate) fn agent_prompt_inputs_mut_for_tests(
-        &mut self,
-    ) -> &mut std::collections::BTreeMap<String, RuntimeAgentPromptInput> {
+    pub(crate) fn agent_prompt_inputs_mut_for_tests(&mut self) -> &mut RuntimeAgentPromptInputs {
         &mut self.presentation.agent_prompt_inputs
     }
 
@@ -2517,6 +2605,11 @@ impl RuntimeSessionService {
     /// Returns the active product UI theme.
     pub(crate) fn ui_theme(&self) -> &UiTheme {
         &self.presentation.settings.ui_theme
+    }
+
+    /// Returns the configured maximum width for product-owned agent display rows.
+    pub(crate) fn terminal_agent_wrap_column_cap(&self) -> usize {
+        self.presentation.settings.terminal_agent_wrap_column_cap
     }
 
     /// Returns the structured blocking-editor command candidates.
@@ -2769,7 +2862,10 @@ impl RuntimeSessionService {
         self.presentation
             .agent_prompt_selector_refreshes
             .retain(|(_, candidate), _| candidate != pane_id);
-        self.presentation.agent_prompt_inputs.remove(pane_id)
+        self.presentation
+            .agent_prompt_inputs
+            .remove(pane_id)
+            .map(RuntimeAgentPromptInputHandle::into_inner)
     }
 
     /// Returns mutable agent prompt editor state for one pane.
@@ -2777,7 +2873,10 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Option<&mut RuntimeAgentPromptInput> {
-        self.presentation.agent_prompt_inputs.get_mut(pane_id)
+        self.presentation
+            .agent_prompt_inputs
+            .get_mut(pane_id)
+            .map(|input| &mut **input)
     }
 
     /// Clones one pane prompt from the exact client's transient presentation.
@@ -2791,7 +2890,7 @@ impl RuntimeSessionService {
             .client_states
             .get(client_id)
             .and_then(|state| state.agent_prompt_inputs.get(pane_id))
-            .cloned()
+            .map(|input| (**input).clone())
     }
 
     /// Replaces one pane prompt in the exact client's transient presentation.
@@ -2808,7 +2907,7 @@ impl RuntimeSessionService {
         if self.presentation.projected_client_id.as_ref() == Some(client_id) {
             self.presentation
                 .agent_prompt_inputs
-                .insert(pane_id.to_string(), prompt_input);
+                .insert(pane_id.to_string(), prompt_input.into());
             self.presentation.capture_projected_client_state();
             return;
         }
@@ -2819,7 +2918,7 @@ impl RuntimeSessionService {
             .or_default();
         state
             .agent_prompt_inputs
-            .insert(pane_id.to_string(), prompt_input);
+            .insert(pane_id.to_string(), prompt_input.into());
         state.presentation_revision = state.presentation_revision.saturating_add(1);
     }
 
@@ -2951,22 +3050,50 @@ impl RuntimeSessionService {
             .effective_frame_geometry(self.session.window_groups().len() > 1)
     }
 
-    /// Returns the exact render identity currently owned by an attached primary.
+    /// Returns the exact render identity currently owned by an attached client.
     pub(crate) fn client_render_identity(
         &mut self,
         client_id: &mez_core::ids::ClientId,
-    ) -> Result<(String, u64, u64, u64)> {
-        self.prepare_client_render(client_id, ClientViewRole::Primary)?;
-        let window_id = self.session.active_window_for(client_id)?.id.to_string();
-        let navigation_revision = self.session.navigation(client_id)?.revision;
+        role: ClientViewRole,
+    ) -> Result<RuntimeClientRenderIdentity> {
+        self.prepare_client_render(client_id, role)?;
+        let view_source_client_id = match role {
+            ClientViewRole::Primary => client_id.clone(),
+            ClientViewRole::Observer => self
+                .session
+                .observer_attachments()
+                .iter()
+                .find(|observer| observer.client_id == *client_id)
+                .map(|observer| observer.view_source_client_id.clone())
+                .ok_or_else(|| MezError::forbidden("observer has no attached view source"))?,
+        };
+        let window = self.session.active_window_for(&view_source_client_id)?;
+        let window_id = window.id.to_string();
+        let navigation_revision = self.session.navigation(&view_source_client_id)?.revision;
         let layout_revision = self.session.mutation_revision();
         let presentation_revision = self.presentation.client_presentation_revision(client_id);
-        Ok((
+        let active_pane_id = window.active_pane().id.as_str();
+        let external_editor_session = self
+            .external_editor_session_id(active_pane_id)
+            .map(|session_id| (active_pane_id.to_string(), session_id.to_string()));
+        let pane_render_generations = window
+            .panes()
+            .iter()
+            .filter_map(|pane| {
+                self.external_editor_screen(pane.id.as_str())
+                    .or_else(|| self.presented_pane_screen(pane.id.as_str()))
+                    .map(|screen| (pane.id.to_string(), screen.presentation_render_generation()))
+            })
+            .collect();
+        Ok(RuntimeClientRenderIdentity {
+            view_source_client_id,
             window_id,
             navigation_revision,
             layout_revision,
             presentation_revision,
-        ))
+            external_editor_session,
+            pane_render_generations,
+        })
     }
 
     /// Cancels coordinate input derived from a stale frame and notifies its owner.
@@ -3094,7 +3221,7 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn window_presentation_plan_cache_stats_for_tests(&self) -> (u64, u64, usize) {
         let cache = self.presentation.window_presentation_plan_cache.borrow();
-        (cache.hits, cache.misses, usize::from(cache.entry.is_some()))
+        (cache.hits, cache.misses, cache.entries.len())
     }
 
     /// Returns the cached presentation plan for one test window snapshot.
@@ -3181,11 +3308,14 @@ pub(crate) use overlay::RuntimeCommandDisplayOverlayContent;
 pub(in crate::runtime) use overlay::default_runtime_agent_prompt_input;
 pub(crate) use overlay::runtime_display_field_text;
 use overlay::{
-    OverlayActionRegistry, RuntimeAgentShellDisplayOutput, agent_shell_mcp_display_state_name,
-    runtime_agent_shell_display_output, runtime_agent_shell_visibility,
+    OverlayActionRegistry, agent_shell_mcp_display_state_name,
     runtime_command_display_overlay_content, runtime_command_display_should_open_overlay,
     runtime_pane_agent_selector_rendition, runtime_pane_agent_status_selector_layout,
     runtime_primary_prompt_input, runtime_selector_line,
+};
+pub(crate) use overlay::{
+    RuntimeAgentShellDisplayOutput, runtime_agent_shell_display_output,
+    runtime_agent_shell_visibility,
 };
 #[cfg(test)]
 use overlay::{runtime_agent_shell_markdown_overlay_content, runtime_human_readable_display_lines};
@@ -3285,5 +3415,6 @@ impl MouseSelectionEdge {
 }
 
 mod focus_composition;
+pub(crate) use client_view::{RuntimeClientRenderSnapshot, compose_client_render_snapshot};
 #[cfg(test)]
 mod tests;

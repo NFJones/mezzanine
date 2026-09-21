@@ -466,3 +466,59 @@ async fn async_host_clipboard_worker_does_not_block_actor_heartbeats() {
     let ((), exit) = tokio::join!(client, actor.run());
     assert!(exit.commands_processed >= 5);
 }
+
+/// Verifies host clipboard reads use their dedicated worker route without
+/// scanning or consuming unrelated provider dispatch work in the compatibility
+/// queue. The provider effect remains available to its owning worker after the
+/// clipboard worker claims its bounded read request.
+#[tokio::test(flavor = "current_thread")]
+async fn async_host_clipboard_drain_preserves_unrelated_provider_dispatch() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let clipboard = HostClipboard::commands(
+        Vec::new(),
+        vec![HostClipboardCommand::new(
+            "printf",
+            vec!["clipboard".to_string()],
+        )],
+    );
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: AgentId::opaque("agent-%1").unwrap(),
+                    turn_id: "turn-clipboard-route".to_string(),
+                },
+                RuntimeSideEffect::ReadHostClipboard {
+                    generation: 1,
+                    plan: clipboard.read_plan(),
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .drain_host_clipboard_side_effects(1)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(1)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque("agent-%1").unwrap(),
+                turn_id: "turn-clipboard-route".to_string(),
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}

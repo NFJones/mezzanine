@@ -816,6 +816,14 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             metrics.actor_normal_queue_depth
         ),
         format!(
+            "pane_output_ready_processes = {}",
+            metrics.pane_output_ready_processes
+        ),
+        format!(
+            "pane_output_ready_processes_high_water = {}",
+            metrics.pane_output_ready_processes_high_water
+        ),
+        format!(
             "actor_maintenance_queue_depth = {}",
             metrics.actor_maintenance_queue_depth
         ),
@@ -836,6 +844,10 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             metrics.render_client_frame_requests
         ),
         format!(
+            "render_compositions_skipped = {}",
+            metrics.render_compositions_skipped
+        ),
+        format!(
             "terminal_step_control_requests = {}",
             metrics.terminal_step_control_requests
         ),
@@ -851,6 +863,10 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
         format!(
             "runtime_events_applied = {}",
             metrics.runtime_events_applied
+        ),
+        format!(
+            "runtime_event_global_reconciliation_skipped = {}",
+            metrics.runtime_event_global_reconciliation_skipped
         ),
         format!(
             "runtime_side_effects_queued = {}",
@@ -874,6 +890,10 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
         ),
         format!("pane_output_chunks = {}", metrics.pane_output_chunks),
         format!("pane_output_bytes = {}", metrics.pane_output_bytes),
+        format!(
+            "pane_output_round_robin_services = {}",
+            metrics.pane_output_round_robin_services
+        ),
         format!(
             "render_invalidations_coalesced = {}",
             metrics.render_invalidations_coalesced

@@ -90,6 +90,65 @@ async fn async_persistence_side_effect_service_writes_bytes_and_reports_completi
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies the persistence worker claims its dedicated FIFO route without
+/// scanning or consuming unrelated provider dispatch work in the compatibility
+/// queue.
+#[tokio::test(flavor = "current_thread")]
+async fn async_persistence_drain_preserves_unrelated_provider_dispatch() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-persistence-route-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("route.jsonl");
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: AgentId::opaque("agent-%1").unwrap(),
+                    turn_id: "turn-persistence-route".to_string(),
+                },
+                RuntimeSideEffect::Persist {
+                    target: PersistenceTarget::AuditLog,
+                    path,
+                    bytes: b"route\n".to_vec(),
+                    mode: PersistenceWriteMode::Append,
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .drain_persistence_side_effects(1)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(1)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque("agent-%1").unwrap(),
+                turn_id: "turn-persistence-route".to_string(),
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies adjacent audit appends with one destination and retention policy
 /// share a single durability and retention batch without losing per-record
 /// completion accounting or chronological JSONL order.

@@ -104,6 +104,7 @@ impl RuntimeSessionService {
     ) -> Result<crate::runtime::RuntimeTransition> {
         let mut schedule_next_retention = false;
         let mut queued_retention_rerun = false;
+        let mut queued_metadata_retry = false;
         let mut redispatch_presentation_resizes = false;
         let mut render_overlay = true;
         let payload = match event {
@@ -143,6 +144,44 @@ impl RuntimeSessionService {
                     "target": target.as_str(),
                     "path": path.to_string_lossy(),
                     "state": "failed",
+                    "error": error,
+                })
+                .to_string()
+            }
+            crate::runtime::PersistenceEvent::AgentSessionMetadataCompleted {
+                mezzanine_session_id,
+                generation,
+                path,
+                records,
+                bytes,
+            } => serde_json::json!({
+                "worker": "async-persistence",
+                "target": "agent_session_metadata",
+                "session_id": mezzanine_session_id,
+                "generation": generation,
+                "path": path.to_string_lossy(),
+                "state": "completed",
+                "records": records,
+                "bytes": bytes,
+            })
+            .to_string(),
+            crate::runtime::PersistenceEvent::AgentSessionMetadataFailed {
+                effect,
+                path,
+                error,
+            } => {
+                let retry = self.persistence.retry_agent_session_metadata(&effect);
+                let retry_queued = retry.is_some();
+                if let Some(retry) = retry {
+                    self.persistence.queue_transcript(retry);
+                    queued_metadata_retry = true;
+                }
+                serde_json::json!({
+                    "worker": "async-persistence",
+                    "target": "agent_session_metadata",
+                    "path": path.to_string_lossy(),
+                    "state": "failed",
+                    "retry_queued": retry_queued,
                     "error": error,
                 })
                 .to_string()
@@ -350,6 +389,11 @@ impl RuntimeSessionService {
                 ));
         }
         if queued_retention_rerun {
+            transition
+                .side_effects
+                .extend(self.drain_transcript_persistence_transition().side_effects);
+        }
+        if queued_metadata_retry {
             transition
                 .side_effects
                 .extend(self.drain_transcript_persistence_transition().side_effects);

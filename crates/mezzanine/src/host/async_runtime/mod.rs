@@ -179,8 +179,8 @@ pub(crate) use client::attached_terminal_client_service_exit;
 #[cfg(test)]
 pub use client::build_async_attached_terminal_client_service;
 pub use client::{
-    AsyncAttachedTerminalClientServiceConfig, run_async_agent_provider_service,
-    run_async_attached_terminal_client_service,
+    AsyncAttachedTerminalClientServiceConfig, run_async_agent_command_service,
+    run_async_agent_provider_service, run_async_attached_terminal_client_service,
 };
 pub(crate) use config::AsyncRuntimeRequestLane;
 pub(crate) use config::ClientClipboardRouteLease;

@@ -217,17 +217,14 @@ fn explicit_prompt_cache_breakpoint_positions(
     positions
 }
 
-/// Verifies the explicit prompt-cache breakpoint stays on the stable prefix.
+/// Verifies explicit cache checkpoints retain the stationary prefix while
+/// advancing across settled durable chronology.
 ///
-/// Explicit mode permits exactly one breakpoint on an `input_text` block, and
-/// durable chronology appends Context-role blocks that also render as developer
-/// messages. The marker must therefore stay at the end of the stable developer
-/// prefix as those blocks arrive: the newest developer-role block sits in the
-/// volatile suffix, so marking it writes bytes the provider cannot reuse, and
-/// rebuilding the marker there drops the previously paid boundary from every
-/// later request.
+/// GPT-5.6 supports four explicit writes. The oldest stable checkpoint remains
+/// available while up to three newest settled transcript messages advance the
+/// reusable prefix; current request-local context remains unmarked.
 #[test]
-fn openai_explicit_prompt_cache_breakpoint_stays_on_the_stable_prefix() {
+fn openai_explicit_prompt_cache_checkpoints_follow_settled_chronology() {
     let mut request = openai_prompt_cache_retention_test_request("gpt-5.6-2026-01-01");
     request.messages.push(mez_agent::ModelMessage {
         role: mez_agent::ModelMessageRole::Developer,
@@ -235,48 +232,56 @@ fn openai_explicit_prompt_cache_breakpoint_stays_on_the_stable_prefix() {
         placement: mez_agent::ContextPlacement::StablePrefix,
         content: "stable cache boundary".to_string(),
     });
+    request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::Developer,
+        source: mez_agent::ContextSourceKind::ProjectGuidance,
+        placement: mez_agent::ContextPlacement::StablePrefix,
+        content: "latest stable cache boundary".to_string(),
+    });
     request.model_capabilities.openai_prompt_cache_mode =
         mez_agent::model_capabilities::OpenAiPromptCacheMode::Explicit;
     let stable_positions = explicit_prompt_cache_breakpoint_positions(&request);
     assert_eq!(
         stable_positions.len(),
         1,
-        "explicit mode must emit exactly one breakpoint: {stable_positions:?}"
+        "the stationary prefix needs one initial checkpoint: {stable_positions:?}"
     );
 
-    // Durable chronology appends a block that renders as a developer message too.
+    for index in 0..5 {
+        request.messages.push(mez_agent::ModelMessage {
+            role: mez_agent::ModelMessageRole::User,
+            source: mez_agent::ContextSourceKind::TranscriptUser,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            content: format!("settled user turn {index}"),
+        });
+    }
     request.messages.push(mez_agent::ModelMessage {
         role: mez_agent::ModelMessageRole::Context,
-        source: mez_agent::ContextSourceKind::Policy,
+        source: mez_agent::ContextSourceKind::RuntimeHint,
         placement: mez_agent::ContextPlacement::ConversationAppend,
-        content: "request state transition one".to_string(),
+        content: "current request state is volatile".to_string(),
     });
-    let after_one_append = explicit_prompt_cache_breakpoint_positions(&request);
-    assert_eq!(
-        after_one_append, stable_positions,
-        "appending chronology must not move or duplicate the breakpoint"
-    );
 
-    request.messages.push(mez_agent::ModelMessage {
-        role: mez_agent::ModelMessageRole::Context,
-        source: mez_agent::ContextSourceKind::Policy,
-        placement: mez_agent::ContextPlacement::ConversationAppend,
-        content: "request state transition two".to_string(),
-    });
-    let after_two_appends = explicit_prompt_cache_breakpoint_positions(&request);
+    let checkpoints = explicit_prompt_cache_breakpoint_positions(&request);
     assert_eq!(
-        after_two_appends, stable_positions,
-        "later appends must not move the breakpoint either"
+        checkpoints.len(),
+        4,
+        "cache writes must stay bounded: {checkpoints:?}"
+    );
+    assert_eq!(checkpoints[0], stable_positions[0]);
+    assert_eq!(
+        checkpoints,
+        vec![(2, 0), (5, 0), (6, 0), (7, 0)],
+        "the final stable-prefix boundary and newest three settled messages should remain lookup candidates"
     );
 }
 
-/// Verifies a stable non-developer block can carry the explicit breakpoint.
+/// Verifies a stable non-developer block can carry an explicit checkpoint.
 ///
-/// SPEC.md requires exactly one semantic `input_text` marker and does not restrict
-/// its role, while a minimal session can have no stable developer block at all:
-/// its only developer-rendered messages are appended Context blocks. Requiring a
-/// developer block would refuse those turns, so the stable boundary may be any
-/// stable-prefix block and the volatile developer blocks must still be ignored.
+/// SPEC.md permits one to four semantic `input_text` checkpoints and does not
+/// restrict their roles. A minimal session can have no stable developer block
+/// at all, so the stationary boundary may be any stable-prefix block while
+/// volatile developer blocks must still be ignored.
 #[test]
 fn openai_explicit_prompt_cache_breakpoint_marks_a_stable_non_developer_block() {
     let mut request = openai_prompt_cache_retention_test_request("gpt-5.6-2026-01-01");

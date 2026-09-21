@@ -13,6 +13,7 @@ use super::{
     runtime_approval_policy_name, runtime_cooperation_mode_name, runtime_markdown_table,
     runtime_permission_preset_name,
 };
+use crate::runtime::runtime_agent_turn_duration_display;
 use crate::storage::token_usage::TOKEN_USAGE_WINDOWS_DAYS;
 use crate::ui::command::auth_status_store_table_row;
 
@@ -249,12 +250,9 @@ impl RuntimeSessionService {
         });
         let running_turn_elapsed = running_turn_record
             .map(|turn| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|elapsed| elapsed.as_secs())
-                    .unwrap_or_default()
-                    .saturating_sub(turn.started_at_unix_seconds)
-                    .to_string()
+                runtime_agent_turn_duration_display(
+                    current_unix_seconds().saturating_sub(turn.started_at_unix_seconds),
+                )
             })
             .unwrap_or_else(|| "none".to_string());
         // A claimed lease is the window this field exists to expose, so the
@@ -285,7 +283,7 @@ impl RuntimeSessionService {
                 agent_shell_visibility_json_name(session.visibility).to_string(),
             ],
             vec!["Running turn".to_string(), running_turn],
-            vec!["Turn elapsed (s)".to_string(), running_turn_elapsed],
+            vec!["Turn elapsed".to_string(), running_turn_elapsed],
             vec!["Provider claim".to_string(), provider_claim],
             vec!["Provider retry".to_string(), provider_retry],
             vec![

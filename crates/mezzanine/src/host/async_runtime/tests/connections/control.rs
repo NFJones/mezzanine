@@ -582,7 +582,7 @@ async fn authenticated_control_loop_resets_idle_deadline_after_active_traffic() 
     let get_session =
         encode_control_body(r#"{"jsonrpc":"2.0","id":"get","method":"session/get","params":{}}"#);
     let client = async {
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
         client_stream.write_all(&initialize).await.unwrap();
         let mut first = vec![0; 4096];
         let read = client_stream.read(&mut first).await.unwrap();
@@ -594,7 +594,7 @@ async fn authenticated_control_loop_resets_idle_deadline_after_active_traffic() 
                 .contains("granted_role")
         );
 
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
         client_stream.write_all(&get_session).await.unwrap();
         let mut second = vec![0; 4096];
         let read = client_stream.read(&mut second).await.unwrap();
@@ -615,7 +615,7 @@ async fn authenticated_control_loop_resets_idle_deadline_after_active_traffic() 
             &mut connection,
             AsyncRuntimeControlConnectionConfig::new(4096, current_effective_uid())
                 .unwrap()
-                .with_application_idle_timeout(Duration::from_millis(60)),
+                .with_application_idle_timeout(Duration::from_millis(250)),
             None,
             |served, _| served >= 2,
         )

@@ -614,6 +614,7 @@ max_input_tokens = 20000
                 previous_input_tokens,
                 max_input_tokens,
             },
+        plan,
         ..
     } = &queued.target
     else {
@@ -621,6 +622,11 @@ max_input_tokens = 20000
     };
     assert_eq!(*pass, 1);
     assert!(*previous_input_tokens > *max_input_tokens);
+    assert_eq!(
+        queued.request.max_output_tokens,
+        Some(plan.summary_budget_words()),
+        "the active compactor must not emit a profile-sized summary that exceeds the frozen plan"
+    );
 
     let compactor_estimate = mez_agent::provider_request_input_estimate(
         &queued.request,
@@ -651,12 +657,18 @@ max_input_tokens = 20000
         compactor_requests = compactor_requests.saturating_add(1);
         let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
             pending_blocks,
+            plan,
             ..
         } = &dispatch.task.target
         else {
             panic!("expected active-turn compactor dispatch");
         };
         observed_split |= !pending_blocks.is_empty();
+        assert_eq!(
+            dispatch.task.request.max_output_tokens,
+            Some(plan.summary_budget_words()),
+            "every post-split compactor dispatch must retain the frozen summary ceiling"
+        );
         assert!(
             compactor_requests <= 256,
             "configured-cap compactor recursion did not settle"

@@ -2672,7 +2672,14 @@ impl RuntimeSessionService {
         pane_id: &str,
         reason: RuntimePaneEnvironmentAuthorityUnavailableReason,
     ) {
-        self.process.pane_environment_signatures.remove(pane_id);
+        if self
+            .process
+            .pane_environment_signatures
+            .remove(pane_id)
+            .is_some()
+        {
+            self.invalidate_pane_status_provider_context(pane_id);
+        }
         self.process
             .pane_path_scopes
             .retain(|key, _| key.pane_id != pane_id);
@@ -5739,7 +5746,14 @@ impl RuntimeSessionService {
         self.process
             .pane_readiness_overrides
             .revoke(pane_id, ReadinessOverrideRevocation::PaneClosed);
-        self.process.pane_environment_signatures.remove(pane_id);
+        if self
+            .process
+            .pane_environment_signatures
+            .remove(pane_id)
+            .is_some()
+        {
+            self.invalidate_pane_status_provider_context(pane_id);
+        }
         self.process
             .pane_environment_authority_failures
             .remove(pane_id);

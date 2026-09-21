@@ -90,7 +90,7 @@ fn client_agent_drafts_are_isolated_and_removed_with_their_pane() {
     first_prompt.prompt.buffer.set_line("first draft");
     presentation
         .agent_prompt_inputs
-        .insert("%1".to_string(), first_prompt);
+        .insert("%1".to_string(), first_prompt.into());
     presentation
         .copy
         .active_copy_modes
@@ -102,7 +102,7 @@ fn client_agent_drafts_are_isolated_and_removed_with_their_pane() {
     second_prompt.prompt.buffer.set_line("second draft");
     presentation
         .agent_prompt_inputs
-        .insert("%1".to_string(), second_prompt);
+        .insert("%1".to_string(), second_prompt.into());
     presentation
         .copy
         .active_copy_modes
@@ -121,4 +121,50 @@ fn client_agent_drafts_are_isolated_and_removed_with_their_pane() {
         assert!(!presentation.agent_prompt_inputs.contains_key("%1"));
         assert!(!presentation.copy.active_copy_modes.contains_key(&key));
     }
+}
+
+/// Verifies capturing a client projection shares untouched pane prompt storage
+/// rather than duplicating its editable draft payload.
+#[test]
+fn client_projection_shares_untouched_prompt_storage() {
+    let client = ClientId::new('c', 7);
+    let mut presentation = RuntimePresentationComponent::default();
+
+    presentation.activate_client_state(&client);
+    let mut prompt = default_runtime_agent_prompt_input();
+    prompt.prompt.buffer.set_line("retained draft");
+    presentation
+        .agent_prompt_inputs
+        .insert("%retained".to_string(), prompt.into());
+    presentation.capture_projected_client_state();
+
+    let stored = presentation.client_states[&client]
+        .agent_prompt_inputs
+        .get("%retained")
+        .unwrap();
+    let projected = presentation.agent_prompt_inputs.get("%retained").unwrap();
+    assert!(stored.shares_storage_with(projected));
+    assert_eq!(projected.prompt.buffer.line(), "retained draft");
+
+    presentation
+        .agent_prompt_inputs
+        .get_mut("%retained")
+        .unwrap()
+        .prompt
+        .buffer
+        .set_line("edited draft");
+    assert_eq!(
+        presentation.client_states[&client].agent_prompt_inputs["%retained"]
+            .prompt
+            .buffer
+            .line(),
+        "retained draft"
+    );
+    assert_eq!(
+        presentation.agent_prompt_inputs["%retained"]
+            .prompt
+            .buffer
+            .line(),
+        "edited draft"
+    );
 }

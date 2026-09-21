@@ -250,6 +250,71 @@ async fn async_side_effect_delivery_watcher_broadcasts_to_all_workers() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies that an exact-process side effect wakes only the worker which owns
+/// that process route. This prevents unrelated pane workers from polling when
+/// another pane receives input or lifecycle work.
+#[tokio::test(flavor = "current_thread")]
+async fn async_pane_process_side_effect_delivery_wakes_only_owning_worker() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let owner = PaneProcessInstance {
+        pane_id: "%1".to_string(),
+        generation: 1,
+    };
+    let unrelated = PaneProcessInstance {
+        pane_id: "%2".to_string(),
+        generation: 1,
+    };
+    let mut owner_watcher = handle.pane_process_side_effect_delivery_watcher(owner.clone());
+    let mut unrelated_watcher = handle.pane_process_side_effect_delivery_watcher(unrelated);
+    let mut global_watcher = handle.side_effect_delivery_watcher();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PaneProcessIo {
+                instance: owner.clone(),
+                effect: PaneProcessIoEffect::WriteInput {
+                    bytes: b"owner-only".to_vec(),
+                },
+            }])
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_millis(50), owner_watcher.changed())
+            .await
+            .expect("owning pane-process worker should observe its delivery revision")
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), unrelated_watcher.changed())
+                .await
+                .is_err()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), global_watcher.changed())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            handle
+                .drain_pane_process_io_side_effects(owner.clone(), 1)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::PaneProcessIo {
+                instance: owner,
+                effect: PaneProcessIoEffect::WriteInput {
+                    bytes: b"owner-only".to_vec(),
+                },
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.side_effect_delivery_notifications, 0);
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that the side-effect worker wakes from actor notifications instead
 /// of relying on its bounded idle probe. This keeps queued render or pane I/O
 /// work responsive on the normal notification path while the probe remains only

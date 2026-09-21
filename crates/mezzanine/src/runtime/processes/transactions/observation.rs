@@ -343,6 +343,30 @@ impl RuntimeSessionService {
         Ok(settled)
     }
 
+    /// Releases a loader payload only when this pane's worker has published the
+    /// matching launch proof, without scanning other foreign-shell boundaries.
+    pub(crate) fn settle_pending_foreign_loader_handoff_for_pane(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<usize> {
+        let marker = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .filter(|boundary| {
+                boundary.loader_ready_awaits_launch_proof
+                    && boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+            })
+            .and_then(|boundary| boundary.loader_marker.clone());
+        let Some(marker) = marker else {
+            return Ok(0);
+        };
+        if !self.foreign_loader_launch_proof_observed(pane_id) {
+            return Ok(0);
+        }
+        self.release_foreign_shell_loader_payload(pane_id, &marker)
+    }
+
     /// Settles the correlated dependency-free loader after its child returns.
     fn observe_foreign_shell_loader_exited(
         &mut self,
@@ -823,7 +847,14 @@ impl RuntimeSessionService {
         self.process
             .bootstrap_shell_certification_evidence
             .retain(|_, evidence| evidence.pane_id != pane_id);
-        self.process.pane_environment_signatures.remove(pane_id);
+        if self
+            .process
+            .pane_environment_signatures
+            .remove(pane_id)
+            .is_some()
+        {
+            self.invalidate_pane_status_provider_context(pane_id);
+        }
         self.process
             .pane_path_scopes
             .retain(|key, _| key.pane_id != pane_id);
@@ -1139,7 +1170,14 @@ impl RuntimeSessionService {
                 deferred_bootstrap_wrapper: None,
             },
         );
-        self.process.pane_environment_signatures.remove(pane_id);
+        if self
+            .process
+            .pane_environment_signatures
+            .remove(pane_id)
+            .is_some()
+        {
+            self.invalidate_pane_status_provider_context(pane_id);
+        }
         self.process
             .pane_path_scopes
             .retain(|key, _| key.pane_id != pane_id);
@@ -2019,9 +2057,13 @@ impl RuntimeSessionService {
         self.process
             .pane_environment_evidence
             .retain(|key, _| key.pane_id != pane_id);
+        let changed = self.process.pane_environment_signatures.get(pane_id) != Some(&signature);
         self.process
             .pane_environment_signatures
             .insert(pane_id.to_string(), signature.clone());
+        if changed {
+            self.invalidate_pane_status_provider_context(pane_id);
+        }
         if let Some(inventory) = tool_inventory {
             self.record_agent_tool_inventory(signature, inventory);
         }
@@ -2099,7 +2141,14 @@ impl RuntimeSessionService {
         rejection: RuntimeAgentSubshellCertificationRejection,
     ) {
         self.process.pane_certified_shell_identities.remove(pane_id);
-        self.process.pane_environment_signatures.remove(pane_id);
+        if self
+            .process
+            .pane_environment_signatures
+            .remove(pane_id)
+            .is_some()
+        {
+            self.invalidate_pane_status_provider_context(pane_id);
+        }
         self.process
             .pane_path_scopes
             .retain(|key, _| key.pane_id != pane_id);
@@ -2219,7 +2268,14 @@ impl RuntimeSessionService {
             .pane_agent_subshell_certification_rejections
             .remove(pane_id);
         self.clear_pane_environment_authority_failure(pane_id);
-        self.process.pane_environment_signatures.remove(pane_id);
+        if self
+            .process
+            .pane_environment_signatures
+            .remove(pane_id)
+            .is_some()
+        {
+            self.invalidate_pane_status_provider_context(pane_id);
+        }
         self.process
             .pane_path_scopes
             .retain(|key, _| key.pane_id != pane_id);

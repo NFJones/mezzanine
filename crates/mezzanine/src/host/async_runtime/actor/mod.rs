@@ -71,6 +71,7 @@ mod events;
 mod handle;
 mod queue;
 mod requests;
+pub(super) mod routes;
 
 #[cfg(test)]
 mod tests;

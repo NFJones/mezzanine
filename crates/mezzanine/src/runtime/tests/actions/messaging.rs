@@ -522,7 +522,9 @@ fn runtime_post_context_pre_cursor_expiry_does_not_admit_provider_work() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let now_ms = current_unix_seconds()
+        .saturating_mul(1000)
+        .saturating_sub(2);
     let recipient = service
         .ensure_runtime_message_identity(
             "agent-%1",
@@ -1430,6 +1432,18 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
         })
         .unwrap();
     service.checkpoint_agent_session_metadata().unwrap();
+    let metadata_records = service
+        .drain_transcript_persistence_transition()
+        .side_effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::PersistAgentSessionMetadata { records, .. } => Some(records),
+            _ => None,
+        })
+        .expect("queued metadata checkpoint before restart");
+    store
+        .save_agent_session_metadata_checkpoint(service.session().id.as_str(), &metadata_records)
+        .unwrap();
     let mut snapshot =
         crate::storage::snapshot::SessionSnapshotPayload::from_session(service.session());
     snapshot.message_state = Some(service.message_service().snapshot_state());

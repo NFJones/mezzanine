@@ -433,68 +433,72 @@ where
                 .windows(b"\x1b[<".len())
                 .any(|sequence| sequence == b"\x1b[<")
         });
-        let (primary_step_application, pre_render_actions, keyboard_input_consumed) = if request.role == ClientViewRole::Primary
-            && request.primary_client_id.as_ref() == Some(&request.client_id)
-            && let Some(keyboard_input) = keyboard_input
-        {
-            let keyboard_step = plan_attached_terminal_client_step_with_host_paste_buffer(
-                &readiness,
-                Some(keyboard_input),
-                None,
-                None,
-                terminal_config.config(),
-                &mut crate::host::terminal::HostBracketedPasteBufferState {
-                    active: &mut host_bracketed_paste_active,
-                    buffer: &mut host_bracketed_paste_buffer,
-                    started_at: &mut host_bracketed_paste_started_at,
-                },
-            )?;
-            report.host_bracketed_paste_active = host_bracketed_paste_active;
-            report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
-            if keyboard_step.actions.is_empty() {
-                (None, Vec::new(), true)
-            } else {
-                let pre_render_actions = keyboard_step.actions.clone();
-                let application_result = handle
-                    .apply_attached_terminal_step_plan_for_frame(
-                        request.client_id.clone(),
-                        None,
-                        keyboard_step,
-                    )
-                    .await;
-                (
-                    Some(match application_result {
-                    Ok(application) => application,
-                    Err(error) => {
-                        recover_attached_terminal_error(
-                            handle,
-                            io,
-                            AsyncAttachedTerminalErrorRecovery {
-                                client_id: request.client_id.clone(),
-                                error,
-                                client_size: request.client_size,
-                                terminal_config: terminal_config.config().clone(),
-                                cursor_blink_epoch,
-                                output_writable,
-                            },
-                            &mut report,
+        let (primary_step_application, pre_render_actions, keyboard_input_consumed) =
+            if request.role == ClientViewRole::Primary
+                && request.primary_client_id.as_ref() == Some(&request.client_id)
+                && let Some(keyboard_input) = keyboard_input
+            {
+                let keyboard_step = plan_attached_terminal_client_step_with_host_paste_buffer(
+                    &readiness,
+                    Some(keyboard_input),
+                    None,
+                    None,
+                    terminal_config.config(),
+                    &mut crate::host::terminal::HostBracketedPasteBufferState {
+                        active: &mut host_bracketed_paste_active,
+                        buffer: &mut host_bracketed_paste_buffer,
+                        started_at: &mut host_bracketed_paste_started_at,
+                    },
+                )?;
+                report.host_bracketed_paste_active = host_bracketed_paste_active;
+                report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
+                if keyboard_step.actions.is_empty() {
+                    (None, Vec::new(), true)
+                } else {
+                    let pre_render_actions = keyboard_step.actions.clone();
+                    let application_result = handle
+                        .apply_attached_terminal_step_plan_for_frame(
+                            request.client_id.clone(),
+                            None,
+                            keyboard_step,
                         )
-                        .await?;
-                        report.host_bracketed_paste_active = host_bracketed_paste_active;
-                        report.host_bracketed_paste_buffer = host_bracketed_paste_buffer;
-                        report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
-                        return Ok(report);
-                    }
-                    }),
-                    pre_render_actions,
-                    true,
-                )
-            }
-        } else {
-            (None, Vec::new(), false)
-        };
+                        .await;
+                    (
+                        Some(match application_result {
+                            Ok(application) => application,
+                            Err(error) => {
+                                recover_attached_terminal_error(
+                                    handle,
+                                    io,
+                                    AsyncAttachedTerminalErrorRecovery {
+                                        client_id: request.client_id.clone(),
+                                        error,
+                                        client_size: request.client_size,
+                                        terminal_config: terminal_config.config().clone(),
+                                        cursor_blink_epoch,
+                                        output_writable,
+                                    },
+                                    &mut report,
+                                )
+                                .await?;
+                                report.host_bracketed_paste_active = host_bracketed_paste_active;
+                                report.host_bracketed_paste_buffer = host_bracketed_paste_buffer;
+                                report.host_bracketed_paste_started_at =
+                                    host_bracketed_paste_started_at;
+                                return Ok(report);
+                            }
+                        }),
+                        pre_render_actions,
+                        true,
+                    )
+                }
+            } else {
+                (None, Vec::new(), false)
+            };
         if primary_step_application.is_some() {
-            terminal_config = handle.refresh_terminal_client_loop_config(terminal_config).await?;
+            terminal_config = handle
+                .refresh_terminal_client_loop_config(terminal_config)
+                .await?;
         }
         let frame = if output_writable {
             await_attached_terminal_step(
@@ -698,9 +702,7 @@ where
                 )
                 .await?;
             }
-            if application.view_refresh_required
-                && output_writable
-                && pre_render_actions.is_empty()
+            if application.view_refresh_required && output_writable && pre_render_actions.is_empty()
             {
                 let refreshed = await_attached_terminal_step(
                     "refreshed client frame render",

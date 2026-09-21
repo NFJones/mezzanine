@@ -316,6 +316,8 @@ mod json;
 /// its wire, parser, credential, and authority-file invariants are established.
 #[allow(dead_code, unused_imports)]
 pub(crate) mod x11;
+#[cfg(test)]
+pub(crate) use integration::RuntimeClientRenderCompositionGate;
 pub(crate) use integration::RuntimeIntegrationComponent;
 /// Exposes the lifecycle module boundary.
 ///
@@ -352,8 +354,10 @@ pub(crate) use processes::{
 mod render;
 pub(crate) use render::{
     RuntimeAgentPresentationResizeResult, RuntimeAgentPresentationResizeWork,
-    RuntimePaneHarnessStatus, RuntimePresentationComponent, RuntimePresentationSettings,
-    RuntimeStreamingSayProjectionResult, RuntimeStreamingSayProjectionWork,
+    RuntimeAgentShellDisplayOutput, RuntimeClientRenderSnapshot, RuntimePaneHarnessStatus,
+    RuntimePresentationComponent, RuntimePresentationSettings, RuntimeStreamingSayProjectionResult,
+    RuntimeStreamingSayProjectionWork, compose_client_render_snapshot,
+    runtime_agent_shell_display_output, runtime_agent_shell_visibility,
 };
 /// Exposes the service module boundary.
 ///
@@ -433,6 +437,7 @@ pub use pane_io::{
 pub(crate) use processes::execute_native_shell_dispatch;
 pub(crate) use processes::execute_native_shell_dispatch_with_progress;
 pub(crate) use processes::execute_pane_status_provider_launch;
+pub(crate) use render::RuntimeClientRenderIdentity;
 pub use service_state::{
     DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
     DEFAULT_AGENT_LOOP_LIMIT, DEFAULT_AGENT_PEER_MESSAGE_LOOP_LIMIT, DEFAULT_AGENT_ROUTING,

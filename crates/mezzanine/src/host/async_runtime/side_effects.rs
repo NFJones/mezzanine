@@ -925,15 +925,16 @@ where
     while report.polls < config.max_polls {
         let state = *lifecycle_watcher.borrow_and_update();
         report.terminal_state = state;
-        if should_stop(report.polls, state) {
-            return Ok(report);
-        }
+        let stopping = should_stop(report.polls, state);
 
-        report.polls = report.polls.saturating_add(1);
         let effects = handle
             .drain_persistence_side_effects(config.drain_limit)
             .await?;
         if effects.is_empty() {
+            if stopping {
+                return Ok(report);
+            }
+            report.polls = report.polls.saturating_add(1);
             if report.polls >= config.max_polls {
                 return Ok(report);
             }
@@ -948,6 +949,8 @@ where
             .await;
             continue;
         }
+
+        report.polls = report.polls.saturating_add(1);
 
         report.drained = report
             .drained
@@ -1080,6 +1083,54 @@ where
                         }));
                     }
                 },
+                RuntimeSideEffect::PersistAgentSessionMetadata {
+                    store,
+                    mezzanine_session_id,
+                    generation,
+                    retry_attempt,
+                    records,
+                } => {
+                    let path = store.agent_session_metadata_file();
+                    match persist_agent_session_metadata(
+                        store.clone(),
+                        mezzanine_session_id.clone(),
+                        records.clone(),
+                    )
+                    .await
+                    {
+                        Ok(bytes) => {
+                            report.completed = report.completed.saturating_add(1);
+                            report.bytes_written = report.bytes_written.saturating_add(bytes);
+                            batch.push(RuntimeEvent::Persistence(
+                                PersistenceEvent::AgentSessionMetadataCompleted {
+                                    mezzanine_session_id,
+                                    generation,
+                                    path,
+                                    records: records.len(),
+                                    bytes,
+                                },
+                            ));
+                        }
+                        Err(error) => {
+                            report.failed = report.failed.saturating_add(1);
+                            batch.push(RuntimeEvent::Persistence(
+                                PersistenceEvent::AgentSessionMetadataFailed {
+                                    effect: Box::new(
+                                        RuntimeSideEffect::PersistAgentSessionMetadata {
+                                            store,
+                                            mezzanine_session_id,
+                                            generation,
+                                            retry_attempt,
+                                            records,
+                                        },
+                                    ),
+                                    path,
+                                    error: error.message().to_string(),
+                                },
+                            ));
+                        }
+                    }
+                }
                 RuntimeSideEffect::PersistPresentationEntries {
                     store,
                     path,
@@ -1412,12 +1463,12 @@ where
             .drained
             .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
         for effect in effects {
-            let RuntimeSideEffect::RenderClient { client_id, .. } = effect else {
+            let RuntimeSideEffect::RenderClient { client_id, reason } = effect else {
                 continue;
             };
             let status = status_provider(&client_id, report.applied)?;
             let Some(flush) = handle
-                .render_client_side_effect(client_id, terminal_config.clone(), status, 0)
+                .render_client_side_effect(client_id, reason, terminal_config.clone(), status, 0)
                 .await?
             else {
                 continue;
@@ -1994,6 +2045,23 @@ async fn persist_transcript_entries(
     entries: Vec<TranscriptEntry>,
 ) -> Result<usize> {
     store.append_many_async(&entries).await
+}
+
+/// Persists an immutable active-session metadata snapshot on the blocking pool.
+async fn persist_agent_session_metadata(
+    store: AgentTranscriptStore,
+    mezzanine_session_id: String,
+    records: Vec<mez_agent::transcript::AgentSessionMetadata>,
+) -> Result<usize> {
+    tokio::task::spawn_blocking(move || {
+        store.save_agent_session_metadata_checkpoint(&mezzanine_session_id, &records)
+    })
+    .await
+    .map_err(|error| {
+        MezError::invalid_state(format!(
+            "agent session metadata worker join failed: {error}"
+        ))
+    })?
 }
 
 /// Executes compression, verification, extraction, and archive deletion on the blocking pool.

@@ -23,7 +23,8 @@ use super::{
 use crate::runtime::{
     RuntimeAgentCommandAsyncOutcome, RuntimeAgentCommandAsyncWork, RuntimeAgentCommandDispatch,
     RuntimeAgentCommandLifecyclePhase, RuntimeAgentCommandPrepared,
-    runtime_agent_shell_deferred_command_response_json,
+    runtime_agent_shell_deferred_command_response_json, runtime_agent_shell_display_output,
+    runtime_agent_shell_visibility,
 };
 
 /// Slash commands whose store or filesystem reads already run off the actor.
@@ -491,12 +492,22 @@ impl RuntimeSessionService {
         {
             return Ok(None);
         }
+        #[cfg(test)]
+        let (deferred_agent_command_started, deferred_agent_command_release) =
+            self.integration.deferred_agent_command_probe();
         Ok(Some(RuntimeAgentCommandAsyncWork {
             pane_id: pane_id.to_string(),
             conversation_id: conversation_id.to_string(),
             command: command.to_string(),
             input: input.to_string(),
             claim_generation,
+            display_theme: self.ui_theme().clone(),
+            display_width: usize::from(self.session.authoritative_size.columns).max(1),
+            display_wrap_column_cap: self.terminal_agent_wrap_column_cap(),
+            #[cfg(test)]
+            deferred_agent_command_started,
+            #[cfg(test)]
+            deferred_agent_command_release,
             prepared,
         }))
     }
@@ -870,6 +881,46 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Builds the immutable display projection for one deferred command outcome.
+    ///
+    /// The command worker owns response parsing, Markdown layout, and line
+    /// construction against the theme and width captured when it claimed the
+    /// command. The actor only validates the pane-owned claim and installs this
+    /// already-resolved result.
+    pub(crate) fn project_deferred_agent_command_outcome(
+        work: &RuntimeAgentCommandAsyncWork,
+        outcome: RuntimeAgentCommandAsyncOutcome,
+    ) -> Result<RuntimeAgentCommandAsyncOutcome> {
+        let (body, failed, record_browser) = match outcome {
+            RuntimeAgentCommandAsyncOutcome::Response { body } => (body, false, None),
+            RuntimeAgentCommandAsyncOutcome::Failed { message, kind } => (
+                RuntimeSessionService::deferred_agent_command_failure_body(work, &message, kind),
+                true,
+                None,
+            ),
+            RuntimeAgentCommandAsyncOutcome::RecordBrowser {
+                body,
+                command,
+                browser,
+                source,
+            } => (body, false, Some((command, browser, source))),
+            projected @ RuntimeAgentCommandAsyncOutcome::Projected { .. } => return Ok(projected),
+        };
+        let hide_prompt = runtime_agent_shell_visibility(&body).as_deref() == Some("hidden");
+        let display_output = runtime_agent_shell_display_output(
+            &body,
+            &work.display_theme,
+            work.display_width,
+            work.display_wrap_column_cap,
+        )?;
+        Ok(RuntimeAgentCommandAsyncOutcome::Projected {
+            display_output,
+            hide_prompt,
+            failed,
+            record_browser,
+        })
+    }
+
     /// Applies one settled deferred slash command outcome on the actor.
     ///
     /// Stale outcomes are dropped: the pane's current claim generation must still
@@ -928,6 +979,47 @@ impl RuntimeSessionService {
                     source,
                 );
                 body
+            }
+            RuntimeAgentCommandAsyncOutcome::Projected {
+                display_output,
+                hide_prompt,
+                failed,
+                record_browser,
+            } => {
+                if let Some((command, browser, source)) = record_browser {
+                    self.register_pending_record_browser_overlay(
+                        &work.pane_id,
+                        &command,
+                        *browser,
+                        source,
+                    );
+                }
+                if let Err(error) = self.apply_deferred_agent_shell_display_output(
+                    &work.pane_id,
+                    display_output,
+                    hide_prompt,
+                ) {
+                    self.agent.settle_agent_command(
+                        &work.pane_id,
+                        &work.conversation_id,
+                        work.claim_generation,
+                        RuntimeAgentCommandLifecyclePhase::Failed,
+                    );
+                    return Err(error);
+                }
+                if !self.agent.settle_agent_command(
+                    &work.pane_id,
+                    &work.conversation_id,
+                    work.claim_generation,
+                    if failed {
+                        RuntimeAgentCommandLifecyclePhase::Failed
+                    } else {
+                        RuntimeAgentCommandLifecyclePhase::Completed
+                    },
+                ) {
+                    return Ok(false);
+                }
+                return Ok(true);
             }
         };
         if let Err(error) = self.apply_deferred_agent_shell_response_body(&work.pane_id, &body) {
@@ -1003,6 +1095,9 @@ impl RuntimeSessionService {
                         &work, message, *kind,
                     )
                 }
+                RuntimeAgentCommandAsyncOutcome::Projected { .. } => {
+                    panic!("the direct executor must return an unprojected command outcome")
+                }
             };
             if !self.complete_agent_command_work(&work, outcome)? {
                 continue;
@@ -1060,6 +1155,11 @@ mod tests {
             command: "auth-status".to_string(),
             input: "/auth-status".to_string(),
             claim_generation: 1,
+            display_theme: mez_mux::theme::UiTheme::default(),
+            display_width: 80,
+            display_wrap_column_cap: 80,
+            deferred_agent_command_started: None,
+            deferred_agent_command_release: None,
             prepared: RuntimeAgentCommandPrepared::AuthStatus {
                 providers: Vec::new(),
                 auth_store: None,
@@ -1092,6 +1192,11 @@ mod tests {
             command: "list-skills".to_string(),
             input: "/list-skills".to_string(),
             claim_generation: 1,
+            display_theme: mez_mux::theme::UiTheme::default(),
+            display_width: 80,
+            display_wrap_column_cap: 80,
+            deferred_agent_command_started: None,
+            deferred_agent_command_release: None,
             prepared: RuntimeAgentCommandPrepared::Catalog {
                 config_root: None,
                 project_root: None,
@@ -1114,5 +1219,56 @@ mod tests {
             body, expected,
             "the deferred catalog body must match the inline body byte for byte"
         );
+    }
+
+    /// Verifies worker projection retains the separately captured agent wrap cap
+    /// when the terminal is wider than product-owned command rows may occupy.
+    #[test]
+    fn runtime_agent_deferred_projection_uses_captured_wrap_cap() {
+        let work = RuntimeAgentCommandAsyncWork {
+            pane_id: "%1".to_string(),
+            conversation_id: "conversation-1".to_string(),
+            command: "show-issues".to_string(),
+            input: "/show-issues".to_string(),
+            claim_generation: 1,
+            display_theme: mez_mux::theme::UiTheme::default(),
+            display_width: 120,
+            display_wrap_column_cap: 24,
+            deferred_agent_command_started: None,
+            deferred_agent_command_release: None,
+            prepared: RuntimeAgentCommandPrepared::Catalog {
+                config_root: None,
+                project_root: None,
+            },
+        };
+        let body = r#"{"kind":"display","command":"show-issues","content_type":"text/markdown; charset=utf-8","presentation":"pager","body":"| Field | Value |\n| --- | --- |\n| description | alpha beta gamma delta epsilon zeta |"}"#;
+        let expected = runtime_agent_shell_display_output(
+            body,
+            &work.display_theme,
+            work.display_width,
+            work.display_wrap_column_cap,
+        )
+        .unwrap();
+        let RuntimeAgentCommandAsyncOutcome::Projected {
+            display_output: projected,
+            ..
+        } = RuntimeSessionService::project_deferred_agent_command_outcome(
+            &work,
+            RuntimeAgentCommandAsyncOutcome::Response {
+                body: body.to_string(),
+            },
+        )
+        .unwrap()
+        else {
+            panic!("worker projection must produce a prepared display output");
+        };
+        let (
+            crate::runtime::RuntimeAgentShellDisplayOutput::Overlay(projected),
+            crate::runtime::RuntimeAgentShellDisplayOutput::Overlay(expected),
+        ) = (projected, expected)
+        else {
+            panic!("explicit pager response must remain an overlay");
+        };
+        assert_eq!(projected, expected);
     }
 }

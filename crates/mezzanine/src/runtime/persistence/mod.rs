@@ -38,6 +38,7 @@ pub(crate) struct RuntimePersistenceComponent {
     queued_pane_pipe_effects: Vec<(String, RuntimeSideEffect)>,
     queued_audit_effects: Vec<RuntimeSideEffect>,
     queued_transcript_effects: Vec<RuntimeSideEffect>,
+    metadata_checkpoint_generations: BTreeMap<String, u64>,
     pending_session_archive_conversation_ids: BTreeSet<String>,
     pending_session_archive_resumes: BTreeMap<String, (ClientId, String)>,
     saved_session_retention_pending: bool,

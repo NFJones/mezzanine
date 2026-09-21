@@ -8,6 +8,7 @@ use super::{BTreeMap, ExposeSecret, MaapBatch, MezError, Result, SecretString};
 use sha2::{Digest, Sha256};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -29,6 +30,30 @@ fn openai_response_is_json(headers: &BTreeMap<String, String>) -> bool {
             let value = value.to_ascii_lowercase();
             value.contains("application/json") || value.contains("+json")
         })
+}
+
+/// Extracts a completed Responses identifier for private comparison lineage.
+///
+/// The identifier is never projected into observations or transcript content.
+fn openai_response_id(response: &mez_agent::ProviderHttpResponse) -> Option<String> {
+    let body = serde_json::from_str::<serde_json::Value>(&response.body)
+        .ok()
+        .or_else(|| {
+            mez_agent::parse_sse_events(
+                &response.body,
+                "OpenAI response ID did not contain SSE data events",
+            )
+            .ok()?
+            .into_iter()
+            .rev()
+            .find_map(|event| serde_json::from_str::<serde_json::Value>(&event.data).ok())
+        })?;
+    body.get("response")
+        .unwrap_or(&body)
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
 }
 
 /// Removes the direct-OpenAI cache option unsupported by the ChatGPT backend.
@@ -139,6 +164,10 @@ fn openai_response_diagnostics(
                 .find(|(name, _)| name.eq_ignore_ascii_case(CHATGPT_TURN_STATE_HEADER))
                 .map(|(_, value)| sha256_hex(value)),
             effective_service_tier: None,
+            cache_comparison_outcome: None,
+            cache_miss_reason: None,
+            comparison_reusable_tokens: None,
+            cache_missed_tokens: None,
             native_output_kinds: Vec::new(),
             reasoning_payload_present: false,
         };
@@ -169,6 +198,20 @@ fn openai_response_diagnostics(
             .get("service_tier")
             .and_then(serde_json::Value::as_str)
             .map(openai_service_tier_category),
+        cache_comparison_outcome: response_value
+            .pointer("/prompt_cache_diagnostics/type")
+            .and_then(serde_json::Value::as_str)
+            .map(openai_cache_comparison_outcome_category),
+        cache_miss_reason: response_value
+            .pointer("/prompt_cache_diagnostics/reason")
+            .and_then(serde_json::Value::as_str)
+            .map(openai_cache_miss_reason_category),
+        comparison_reusable_tokens: response_value
+            .pointer("/prompt_cache_diagnostics/comparison_reusable_tokens")
+            .and_then(serde_json::Value::as_u64),
+        cache_missed_tokens: response_value
+            .pointer("/prompt_cache_diagnostics/cache_missed_tokens")
+            .and_then(serde_json::Value::as_u64),
         native_output_kinds: output
             .into_iter()
             .flatten()
@@ -190,6 +233,32 @@ fn openai_response_diagnostics(
 fn openai_service_tier_category(value: &str) -> String {
     match value {
         "default" | "flex" | "priority" | "auto" | "standard" => value.to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Maps a server cache-comparison outcome onto a bounded category.
+fn openai_cache_comparison_outcome_category(value: &str) -> String {
+    match value {
+        "cache_hit" | "cache_miss" | "comparison_response_not_found" | "unavailable" => {
+            value.to_string()
+        }
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Maps a documented cache-miss reason onto a bounded category.
+fn openai_cache_miss_reason_category(value: &str) -> String {
+    match value {
+        "model_changed"
+        | "prompt_cache_key_changed"
+        | "service_tier_changed"
+        | "tools_changed"
+        | "text_format_changed"
+        | "reasoning_effort_changed"
+        | "verbosity_changed"
+        | "context_compacted"
+        | "input_changed" => value.to_string(),
         _ => "unknown".to_string(),
     }
 }
@@ -317,7 +386,7 @@ mod openai_response_diagnostics_tests {
             headers: BTreeMap::new(),
             body: concat!(
                 "event: response.completed\n",
-                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"PRIVATE_SSE_RESPONSE_ID\",\"service_tier\":\"flex\",\"output\":[{\"type\":\"reasoning\",\"summary\":[{\"text\":\"PRIVATE_SSE_REASONING\"}]}]}}\n\n"
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"PRIVATE_SSE_RESPONSE_ID\",\"service_tier\":\"flex\",\"prompt_cache_diagnostics\":{\"type\":\"cache_miss\",\"reason\":\"tools_changed\",\"comparison_reusable_tokens\":5629,\"cache_missed_tokens\":5629},\"output\":[{\"type\":\"reasoning\",\"summary\":[{\"text\":\"PRIVATE_SSE_REASONING\"}]}]}}\n\n"
             )
             .to_string(),
         };
@@ -325,6 +394,16 @@ mod openai_response_diagnostics_tests {
         let diagnostics = openai_response_diagnostics(&response);
 
         assert_eq!(diagnostics.effective_service_tier.as_deref(), Some("flex"));
+        assert_eq!(
+            diagnostics.cache_comparison_outcome.as_deref(),
+            Some("cache_miss")
+        );
+        assert_eq!(
+            diagnostics.cache_miss_reason.as_deref(),
+            Some("tools_changed")
+        );
+        assert_eq!(diagnostics.comparison_reusable_tokens, Some(5629));
+        assert_eq!(diagnostics.cache_missed_tokens, Some(5629));
         assert_eq!(diagnostics.native_output_kinds, ["reasoning"]);
         assert!(diagnostics.reasoning_payload_present);
         assert_eq!(
@@ -369,7 +448,10 @@ use mez_agent::{
     openai_models_endpoint_for_responses_endpoint, openai_responses_endpoint_for_base_url,
     provider_catalog_reasoning_levels,
 };
-use mez_agent::{openai_responses_request_body_with_stream, parse_openai_responses_provider_body};
+use mez_agent::{
+    openai_responses_request_body_with_stream_and_cache_comparison,
+    parse_openai_responses_provider_body,
+};
 use mez_agent::{parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn};
 use mez_agent::{
     provider_error_detail as openai_provider_error_detail,
@@ -532,6 +614,14 @@ pub struct OpenAiResponseDiagnostics {
     pub chatgpt_turn_state_sha256: Option<String>,
     /// Effective server-selected service tier, when reported.
     pub effective_service_tier: Option<String>,
+    /// Bounded server cache-comparison outcome, when requested and reported.
+    pub cache_comparison_outcome: Option<String>,
+    /// Bounded cache-miss reason, when reported.
+    pub cache_miss_reason: Option<String>,
+    /// Server-estimated reusable comparison-prefix tokens, when reported.
+    pub comparison_reusable_tokens: Option<u64>,
+    /// Server-estimated comparison-prefix tokens not reused, when reported.
+    pub cache_missed_tokens: Option<u64>,
     /// Ordered native output-item kinds without their contents.
     pub native_output_kinds: Vec<String>,
     /// Whether any native output item carries a reasoning payload.
@@ -1043,6 +1133,93 @@ struct ChatGptTurnState {
 #[derive(Debug, Clone, Default)]
 pub struct OpenAiChatGptTurnState(Arc<Mutex<Option<ChatGptTurnState>>>);
 
+/// One bounded diagnostic-only Responses baseline scoped to a prompt lineage.
+#[derive(Debug, Clone)]
+struct OpenAiCacheComparisonState {
+    response_id: String,
+    request_generation: u64,
+}
+
+/// Maximum independently scoped cache-comparison baselines retained per conversation.
+const OPENAI_CACHE_COMPARISON_BASELINE_LIMIT: usize = 16;
+
+/// One scoped comparison-baseline lookup key.
+type OpenAiCacheComparisonKey = (String, String, String);
+
+/// Bounded comparison baselines retained for one conversation.
+type OpenAiCacheComparisonStates = BTreeMap<OpenAiCacheComparisonKey, OpenAiCacheComparisonState>;
+
+/// Shared bounded Responses baselines keyed by lineage, model, and account-routed namespace.
+#[derive(Debug, Clone)]
+pub struct OpenAiCacheComparisonLineage {
+    states: Arc<Mutex<OpenAiCacheComparisonStates>>,
+    next_request_generation: Arc<AtomicU64>,
+}
+
+impl Default for OpenAiCacheComparisonLineage {
+    fn default() -> Self {
+        Self {
+            states: Arc::new(Mutex::new(BTreeMap::new())),
+            next_request_generation: Arc::new(AtomicU64::new(1)),
+        }
+    }
+}
+
+/// Returns the latest direct-Responses baseline only for the same configured
+/// model, durable prompt-cache lineage, and account-routed namespace.
+fn openai_cache_comparison_response_id(
+    state: &OpenAiCacheComparisonLineage,
+    request: &ModelRequest,
+    cache_namespace: Option<&str>,
+) -> Option<String> {
+    let lineage_id = request.prompt_cache_lineage_id.as_deref()?;
+    let cache_namespace = cache_namespace?;
+    state
+        .states
+        .lock()
+        .ok()?
+        .get(&(
+            lineage_id.to_string(),
+            request.model.clone(),
+            cache_namespace.to_string(),
+        ))
+        .map(|baseline| baseline.response_id.clone())
+}
+
+/// Reserves an ordering fence for one direct-Responses comparison baseline.
+fn reserve_openai_cache_comparison_generation(
+    state: &OpenAiCacheComparisonLineage,
+    cache_namespace: Option<&str>,
+) -> Option<u64> {
+    cache_namespace.map(|_| {
+        state
+            .next_request_generation
+            .fetch_add(1, Ordering::Relaxed)
+            .max(1)
+    })
+}
+
+/// Returns a direct-Responses comparison namespace only when an explicit
+/// non-secret organization routing identity prevents cross-account reuse.
+fn openai_cache_comparison_namespace<T>(provider: &OpenAiResponsesProvider<T>) -> Option<String> {
+    if provider
+        .extra_headers
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case(CHATGPT_ACCOUNT_ID_HEADER))
+        || !provider
+            .extra_headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(OPENAI_ORGANIZATION_HEADER))
+    {
+        return None;
+    }
+    Some(provider_cache_namespace_with_headers(
+        provider.provider_id(),
+        &provider.endpoint,
+        &provider.extra_headers,
+    ))
+}
+
 /// Derives one opaque, account-isolated ChatGPT Responses session affinity id.
 fn chatgpt_responses_session_id(
     body: &serde_json::Value,
@@ -1301,6 +1478,8 @@ pub struct OpenAiResponsesProvider<T> {
     /// The runtime shares this opaque handle across providers reconstructed
     /// for continuations of the same logical turn.
     chatgpt_turn_state: OpenAiChatGptTurnState,
+    /// Stores the latest same-lineage direct-Responses baseline for diagnostics.
+    cache_comparison_lineage: OpenAiCacheComparisonLineage,
     /// Stores the transport value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -1476,6 +1655,7 @@ impl<T> OpenAiResponsesProvider<T> {
             stream,
             timeout_ms,
             chatgpt_turn_state: OpenAiChatGptTurnState::default(),
+            cache_comparison_lineage: OpenAiCacheComparisonLineage::default(),
             transport,
         })
     }
@@ -1484,6 +1664,53 @@ impl<T> OpenAiResponsesProvider<T> {
     pub fn with_chatgpt_turn_state(mut self, state: OpenAiChatGptTurnState) -> Self {
         self.chatgpt_turn_state = state;
         self
+    }
+
+    /// Replaces the private diagnostic baseline state shared across provider
+    /// workers reconstructed for one logical turn.
+    pub fn with_cache_comparison_lineage(mut self, state: OpenAiCacheComparisonLineage) -> Self {
+        self.cache_comparison_lineage = state;
+        self
+    }
+
+    /// Records one successful direct-Responses baseline for a later
+    /// diagnostic-only comparison in the same model and prompt lineage.
+    fn record_openai_cache_comparison_baseline(
+        &self,
+        request: &ModelRequest,
+        response: &mez_agent::ProviderHttpResponse,
+        request_generation: Option<u64>,
+    ) {
+        let Some(cache_namespace) = openai_cache_comparison_namespace(self) else {
+            return;
+        };
+        let response_id = openai_response_id(response);
+        let Some(lineage_id) = request.prompt_cache_lineage_id.clone() else {
+            return;
+        };
+        let Some(response_id) = response_id else {
+            return;
+        };
+        let Some(request_generation) = request_generation else {
+            return;
+        };
+        let key = (lineage_id, request.model.clone(), cache_namespace);
+        if let Ok(mut states) = self.cache_comparison_lineage.states.lock()
+            && states
+                .get(&key)
+                .is_none_or(|current| current.request_generation <= request_generation)
+        {
+            states.insert(
+                key,
+                OpenAiCacheComparisonState {
+                    response_id,
+                    request_generation,
+                },
+            );
+            while states.len() > OPENAI_CACHE_COMPARISON_BASELINE_LIMIT {
+                let _ = states.pop_first();
+            }
+        }
     }
 
     /// Builds request headers, replaying only the current ChatGPT turn token.
@@ -1990,13 +2217,24 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
             ));
         }
         let request_headers = self.headers_for_request(request);
-        let http_request = build_openai_responses_http_request_with_headers(
+        let cache_namespace = openai_cache_comparison_namespace(self);
+        let comparison_generation = reserve_openai_cache_comparison_generation(
+            &self.cache_comparison_lineage,
+            cache_namespace.as_deref(),
+        );
+        let comparison_response_id = openai_cache_comparison_response_id(
+            &self.cache_comparison_lineage,
+            request,
+            cache_namespace.as_deref(),
+        );
+        let http_request = build_openai_responses_http_request_with_headers_and_cache_comparison(
             request,
             self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
             &self.endpoint,
             &request_headers,
             self.stream,
             self.timeout_ms,
+            comparison_response_id.as_deref(),
         )?;
         let response = self.transport.send(&http_request)?;
         if !(200..300).contains(&response.status_code) {
@@ -2034,6 +2272,7 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
                 .map_err(|error| provider_maap_parse_error(error, &raw_text))?,
             }
         };
+        self.record_openai_cache_comparison_baseline(request, &response, comparison_generation);
         Ok(ModelResponse {
             provider: ModelProvider::provider_id(self).to_string(),
             model,
@@ -2056,6 +2295,11 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
         progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     ) -> Pin<Box<dyn Future<Output = Result<OpenAiResponsesCompleted>> + Send + 'a>> {
         Box::pin(async move {
+            let cache_namespace = openai_cache_comparison_namespace(self);
+            let comparison_generation = reserve_openai_cache_comparison_generation(
+                &self.cache_comparison_lineage,
+                cache_namespace.as_deref(),
+            );
             let mut stream_decoder = OpenAiResponsesStreamDecoder::default();
             let mut streaming_say_extractor = mez_agent::StreamingSayExtractor::default();
             let mut stream_error = None;
@@ -2143,6 +2387,13 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                     provider_transcript_events,
                 })
             })();
+            if result.is_ok() {
+                self.record_openai_cache_comparison_baseline(
+                    request,
+                    &response,
+                    comparison_generation,
+                );
+            }
             Ok((result, response_diagnostics))
         })
     }
@@ -2260,14 +2511,22 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 ));
             }
             let request_headers = self.headers_for_request(request);
-            let http_request = build_openai_responses_http_request_with_headers(
+            let cache_namespace = openai_cache_comparison_namespace(self);
+            let comparison_response_id = openai_cache_comparison_response_id(
+                &self.cache_comparison_lineage,
                 request,
-                self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
-                &self.endpoint,
-                &request_headers,
-                self.stream,
-                self.timeout_ms,
-            )?;
+                cache_namespace.as_deref(),
+            );
+            let http_request =
+                build_openai_responses_http_request_with_headers_and_cache_comparison(
+                    request,
+                    self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
+                    &self.endpoint,
+                    &request_headers,
+                    self.stream,
+                    self.timeout_ms,
+                    comparison_response_id.as_deref(),
+                )?;
             self.send_openai_responses_http_request_async(request, http_request, progress)
                 .await
                 .and_then(|(response, _)| response)
@@ -2287,14 +2546,22 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 ));
             }
             let request_headers = self.headers_for_request(request);
-            let http_request = build_openai_responses_http_request_with_headers(
+            let cache_namespace = openai_cache_comparison_namespace(self);
+            let comparison_response_id = openai_cache_comparison_response_id(
+                &self.cache_comparison_lineage,
                 request,
-                self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
-                &self.endpoint,
-                &request_headers,
-                self.stream,
-                self.timeout_ms,
-            )?;
+                cache_namespace.as_deref(),
+            );
+            let http_request =
+                build_openai_responses_http_request_with_headers_and_cache_comparison(
+                    request,
+                    self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
+                    &self.endpoint,
+                    &request_headers,
+                    self.stream,
+                    self.timeout_ms,
+                    comparison_response_id.as_deref(),
+                )?;
             let final_wire_diagnostics = openai_final_wire_diagnostics(&http_request);
             let started_at = Instant::now();
             let completed = self
@@ -2355,6 +2622,10 @@ pub fn build_openai_responses_http_request(
 ///
 /// The caller supplies non-secret routing headers only. When a bearer
 /// credential is supplied, it is placed in the `Authorization` header.
+#[allow(
+    dead_code,
+    reason = "public test-facing request builder preserves the no-comparison default"
+)]
 pub fn build_openai_responses_http_request_with_headers(
     request: &ModelRequest,
     api_key: Option<&str>,
@@ -2362,6 +2633,28 @@ pub fn build_openai_responses_http_request_with_headers(
     extra_headers: &BTreeMap<String, String>,
     stream: bool,
     timeout_ms: u64,
+) -> Result<ProviderHttpRequest> {
+    build_openai_responses_http_request_with_headers_and_cache_comparison(
+        request,
+        api_key,
+        endpoint,
+        extra_headers,
+        stream,
+        timeout_ms,
+        None,
+    )
+}
+
+/// Builds an OpenAI Responses request with an optional diagnostic-only cache
+/// comparison baseline.
+fn build_openai_responses_http_request_with_headers_and_cache_comparison(
+    request: &ModelRequest,
+    api_key: Option<&str>,
+    endpoint: &str,
+    extra_headers: &BTreeMap<String, String>,
+    stream: bool,
+    timeout_ms: u64,
+    comparison_response_id: Option<&str>,
 ) -> Result<ProviderHttpRequest> {
     if let Some(api_key) = api_key {
         validate_non_empty("OpenAI provider bearer credential", api_key)?;
@@ -2377,13 +2670,18 @@ pub fn build_openai_responses_http_request_with_headers(
         ));
     }
     let mut extra_headers = extra_headers.clone();
-    let mut body: serde_json::Value =
-        serde_json::from_str(&openai_responses_request_body_with_stream(request, stream)?)
-            .map_err(|error| {
-                MezError::invalid_state(format!(
-                    "OpenAI Responses request body was not JSON: {error}"
-                ))
-            })?;
+    let mut body: serde_json::Value = serde_json::from_str(
+        &openai_responses_request_body_with_stream_and_cache_comparison(
+            request,
+            stream,
+            comparison_response_id,
+        )?,
+    )
+    .map_err(|error| {
+        MezError::invalid_state(format!(
+            "OpenAI Responses request body was not JSON: {error}"
+        ))
+    })?;
     if extra_headers
         .keys()
         .any(|name| name.eq_ignore_ascii_case(CHATGPT_ACCOUNT_ID_HEADER))

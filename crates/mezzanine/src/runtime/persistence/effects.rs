@@ -205,6 +205,73 @@ impl RuntimePersistenceComponent {
         self.queued_transcript_effects.push(effect);
     }
 
+    /// Replaces a pending metadata checkpoint for one Mezzanine session at the
+    /// newest causal position among other persistence work.
+    pub(crate) fn queue_agent_session_metadata(
+        &mut self,
+        store: crate::storage::transcript::AgentTranscriptStore,
+        mezzanine_session_id: String,
+        records: Vec<mez_agent::transcript::AgentSessionMetadata>,
+    ) -> usize {
+        let generation = self
+            .metadata_checkpoint_generations
+            .entry(mezzanine_session_id.clone())
+            .and_modify(|generation| *generation = generation.saturating_add(1))
+            .or_insert(1);
+        let effect = RuntimeSideEffect::PersistAgentSessionMetadata {
+            store,
+            mezzanine_session_id: mezzanine_session_id.clone(),
+            generation: *generation,
+            retry_attempt: 0,
+            records,
+        };
+        if let Some(position) = self.queued_transcript_effects.iter().position(|queued| {
+            matches!(
+                queued,
+                RuntimeSideEffect::PersistAgentSessionMetadata {
+                    mezzanine_session_id: queued_session_id,
+                    ..
+                } if queued_session_id == &mezzanine_session_id
+            )
+        }) {
+            self.queued_transcript_effects.remove(position);
+        }
+        self.queued_transcript_effects.push(effect);
+        self.pending_agent_session_metadata_record_count()
+    }
+
+    /// Returns a single retry only when this failed checkpoint is still the
+    /// newest snapshot for its session.
+    pub(crate) fn retry_agent_session_metadata(
+        &self,
+        effect: &RuntimeSideEffect,
+    ) -> Option<RuntimeSideEffect> {
+        let RuntimeSideEffect::PersistAgentSessionMetadata {
+            mezzanine_session_id,
+            generation,
+            retry_attempt,
+            ..
+        } = effect
+        else {
+            return None;
+        };
+        (self
+            .metadata_checkpoint_generations
+            .get(mezzanine_session_id)
+            .copied()
+            == Some(*generation)
+            && *retry_attempt == 0)
+            .then(|| {
+                let mut retry = effect.clone();
+                if let RuntimeSideEffect::PersistAgentSessionMetadata { retry_attempt, .. } =
+                    &mut retry
+                {
+                    *retry_attempt = 1;
+                }
+                retry
+            })
+    }
+
     /// Cancels queued transcript entries and their sequence reservation for one
     /// abandoned conversation.
     ///
@@ -370,6 +437,21 @@ impl RuntimePersistenceComponent {
     /// Drains queued transcript and prompt-history effects.
     pub(crate) fn take_transcript_effects(&mut self) -> Vec<RuntimeSideEffect> {
         std::mem::take(&mut self.queued_transcript_effects)
+    }
+
+    /// Returns the newest queued metadata checkpoint record count for tests and
+    /// lightweight checkpoint accounting.
+    pub(crate) fn pending_agent_session_metadata_record_count(&self) -> usize {
+        self.queued_transcript_effects
+            .iter()
+            .rev()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::PersistAgentSessionMetadata { records, .. } => {
+                    Some(records.len())
+                }
+                _ => None,
+            })
+            .unwrap_or(0)
     }
 
     /// Queues one durable token-accounting append.

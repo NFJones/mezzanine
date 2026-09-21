@@ -436,6 +436,7 @@ impl RuntimeSessionService {
     pub(super) fn peer_message_turn_context(
         &mut self,
         pane_id: &str,
+        now_ms: u64,
     ) -> Result<RuntimePeerMessageTurnContext> {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
@@ -443,7 +444,6 @@ impl RuntimeSessionService {
         let mut blocks = history.blocks;
         let imported_execution_events = history.execution_events;
         let imported_history_events = blocks.len();
-        let now_ms = super::current_unix_seconds().saturating_mul(1000);
         let identity = self.ensure_runtime_message_identity(
             &format!("agent-{pane_id}"),
             PaneId::opaque(pane_id.to_string()),

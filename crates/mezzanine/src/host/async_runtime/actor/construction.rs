@@ -6,6 +6,7 @@ use super::{
     RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, decode_control_frame, mpsc, watch,
 };
+use crate::host::async_runtime::{HashMap, Mutex};
 /// Maximum interactive requests served before pending normal work must advance.
 pub(super) const MAX_INTERACTIVE_REQUEST_BURST: u8 = 4;
 /// Maximum elapsed actor time spent on one interactive or normal burst before
@@ -238,6 +239,7 @@ impl AsyncRuntimeSessionActor {
         let (event_delivery_revision_tx, event_delivery_revision_rx) = watch::channel(0u64);
         let side_effect_delivery_notify = Arc::new(Notify::new());
         let (side_effect_delivery_tx, side_effect_delivery_rx) = watch::channel(0u64);
+        let pane_process_side_effect_delivery_txs = Arc::new(Mutex::new(HashMap::new()));
         let (lifecycle_state_tx, lifecycle_state_rx) = watch::channel(service.lifecycle_state());
         let (terminal_config_generation_tx, terminal_config_generation_rx) = watch::channel(0u64);
         service.use_audit_effect_adapter();
@@ -265,6 +267,7 @@ impl AsyncRuntimeSessionActor {
             event_delivery_revision_rx,
             side_effect_delivery_notify: side_effect_delivery_notify.clone(),
             side_effect_delivery_rx,
+            pane_process_side_effect_delivery_txs: pane_process_side_effect_delivery_txs.clone(),
             lifecycle_state_rx,
             terminal_config_generation_rx,
         };
@@ -296,10 +299,13 @@ impl AsyncRuntimeSessionActor {
             client_clipboard_route_cleanup_rx,
             side_effect_delivery_notify,
             side_effect_delivery_tx,
+            pane_process_side_effect_delivery_txs,
             lifecycle_state_tx,
             terminal_config_generation: 0,
             terminal_config_generation_tx,
+            rendered_client_side_effects: Default::default(),
             side_effects: Default::default(),
+            side_effect_routes: Default::default(),
             side_effect_queue_nonempty_since: None,
             pane_input_leases: Default::default(),
             timers: Default::default(),
@@ -322,7 +328,7 @@ impl AsyncRuntimeSessionActor {
             .urgent_requests
             .len()
             .saturating_add(ingress.interactive_requests.len())
-            .saturating_add(ingress.normal_requests.len())
+            .saturating_add(ingress.normal_request_count())
             .saturating_add(ingress.maintenance_requests.len())
     }
 
@@ -360,7 +366,7 @@ impl AsyncRuntimeSessionActor {
         match next_actor_request_lane(
             !ingress.urgent_requests.is_empty(),
             !ingress.interactive_requests.is_empty(),
-            !ingress.normal_requests.is_empty(),
+            ingress.has_normal_requests(),
             !ingress.maintenance_requests.is_empty(),
             self.request_scheduler.interactive_request_burst,
             self.request_scheduler.normal_request_burst,
@@ -402,10 +408,15 @@ impl AsyncRuntimeSessionActor {
                         .actor_normal_fairness_services
                         .saturating_add(1);
                 }
-                ingress
-                    .normal_requests
-                    .pop_front()
-                    .map(|request| request.envelope)
+                let pane_output_selected = ingress.next_normal_request_is_pane_output();
+                let request = ingress.dequeue_normal_request();
+                if pane_output_selected && request.is_some() {
+                    self.metrics.pane_output_round_robin_services = self
+                        .metrics
+                        .pane_output_round_robin_services
+                        .saturating_add(1);
+                }
+                request.map(|request| request.envelope)
             }
             ActorRequestLane::Maintenance => {
                 self.request_scheduler.interactive_request_burst = 0;
@@ -555,11 +566,14 @@ impl AsyncRuntimeSessionActor {
             .urgent_requests
             .len()
             .saturating_add(ingress.interactive_requests.len())
-            .saturating_add(ingress.normal_requests.len())
+            .saturating_add(ingress.normal_request_count())
             .saturating_add(ingress.maintenance_requests.len());
         metrics.actor_urgent_queue_depth = ingress.urgent_requests.len();
         metrics.actor_interactive_queue_depth = ingress.interactive_requests.len();
-        metrics.actor_normal_queue_depth = ingress.normal_requests.len();
+        metrics.actor_normal_queue_depth = ingress.normal_request_count();
+        metrics.pane_output_ready_processes = ingress.ready_pane_output_process_count();
+        metrics.pane_output_ready_processes_high_water =
+            ingress.ready_pane_output_process_high_water();
         metrics.actor_maintenance_queue_depth = ingress.maintenance_requests.len();
         metrics.actor_oldest_local_queue_wait_ms = oldest_queued_request_wait_ms(
             ingress
@@ -570,16 +584,16 @@ impl AsyncRuntimeSessionActor {
                 .interactive_requests
                 .front()
                 .map(|request| &request.envelope),
-            ingress
-                .normal_requests
-                .front()
-                .map(|request| &request.envelope),
+            ingress.oldest_normal_request(),
             ingress
                 .maintenance_requests
                 .front()
                 .map(|request| &request.envelope),
         );
-        metrics.side_effect_queue_depth = self.side_effects.len();
+        metrics.side_effect_queue_depth = self
+            .side_effects
+            .len()
+            .saturating_add(self.side_effect_routes.len());
         metrics
     }
     /// Copies the current actor metrics snapshot into runtime service state.

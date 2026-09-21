@@ -433,6 +433,22 @@ pub(super) fn record(
     query::record(&connection, conversation_id)
 }
 
+/// Loads one catalog record for a durable mutation path.
+///
+/// Unlike picker reads, callers already own a persistence operation whose
+/// result must not be discarded merely because a concurrent catalog writer
+/// briefly holds SQLite. Use the standard bounded catalog wait while retaining
+/// the interactive helper above for actor-owned discovery requests.
+pub(super) fn record_for_mutation(
+    store: &AgentTranscriptStore,
+    conversation_id: &str,
+) -> Result<Option<CatalogRecord>> {
+    note_indexed_query();
+    let _lock = acquire_shared_lock(store)?;
+    let connection = schema::open(&catalog_path(store))?;
+    query::record(&connection, conversation_id)
+}
+
 /// Keyset position for one walk of the latest-root ordering.
 ///
 /// The ordering is `(last_created_at DESC, first_created_at DESC,

@@ -953,14 +953,33 @@ impl RuntimeSessionService {
         )?;
         let provider = match provider {
             RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-                let state = self
+                let chatgpt_state = self
                     .agent
                     .agent_turn_chatgpt_routing_states
                     .entry(turn_id.to_string())
                     .or_default()
                     .clone();
+                let cache_comparison_lineage = self
+                    .agent
+                    .agent_conversation_openai_cache_comparison_lineages
+                    .entry(turn.conversation_id.clone())
+                    .or_default()
+                    .clone();
+                while self
+                    .agent
+                    .agent_conversation_openai_cache_comparison_lineages
+                    .len()
+                    > super::AGENT_PROVIDER_REQUEST_CHAIN_LIMIT
+                {
+                    let _ = self
+                        .agent
+                        .agent_conversation_openai_cache_comparison_lineages
+                        .pop_first();
+                }
                 RuntimeAgentProviderDispatchProvider::OpenAi(
-                    provider.with_chatgpt_turn_state(state),
+                    provider
+                        .with_chatgpt_turn_state(chatgpt_state)
+                        .with_cache_comparison_lineage(cache_comparison_lineage),
                 )
             }
             provider => provider,

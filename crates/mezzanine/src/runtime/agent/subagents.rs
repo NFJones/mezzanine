@@ -889,7 +889,29 @@ impl RuntimeSessionService {
             return Ok(unavailable()?);
         };
         if self.find_pane_descriptor(pane_id.as_str()).is_none() {
-            return Ok(unavailable()?);
+            self.remove_subagent_task_routes_for_parent(agent_id);
+            self.remove_joined_subagent_dependencies_for_agent(agent_id);
+            self.integration
+                .model_profile_overrides_mut()
+                .agent_profiles
+                .remove(agent_id);
+            self.integration
+                .model_profile_overrides_mut()
+                .subagent_profiles
+                .remove(agent_id);
+            self.remove_subagent_authority_state(agent_id);
+            self.deregister_macro_managed_subagent(agent_id);
+            if let Some(identity) = mez_core::ids::AgentId::opaque(agent_id.to_string()) {
+                self.control
+                    .message_service_mut()
+                    .retire_agent_identity(&identity);
+            }
+            return Ok(ActionResult::succeeded(
+                turn,
+                action,
+                vec!["persistent child was already closed".to_string()],
+                Some(serde_json::json!({"closed": false, "agent_id": agent_id}).to_string()),
+            ));
         }
         let Some(primary) = self.session.layout_owner_client_id().cloned() else {
             return Ok(unavailable()?);

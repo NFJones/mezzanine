@@ -900,6 +900,64 @@ fn runtime_render_reuses_unchanged_pane_styled_rows_by_generation() {
     assert_eq!(service.pane_styled_row_cache_stats_for_tests(), (1, 2, 1));
 }
 
+/// Verifies immutable pane-row projections survive a switch away from an
+/// unchanged window and are reused when the original window becomes active.
+///
+/// Window navigation must not evict safe screen-generation entries merely
+/// because another window was rendered. Entries remain generation-fenced, so a
+/// later screen mutation still forces a fresh projection.
+#[test]
+fn runtime_pane_styled_row_cache_reuses_unchanged_pane_after_window_switch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let size = Size::new(80, 24).unwrap();
+    let config = TerminalClientLoopConfig::default();
+    let first_window_id = service.session().active_window().unwrap().id.clone();
+    let first_pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let mut first_screen = TerminalScreen::new(size, 120).unwrap();
+    first_screen.feed(b"first cached window rows");
+    service.set_pane_screen(first_pane_id, first_screen);
+
+    service
+        .render_client_view(ClientViewRole::Primary, size, &config)
+        .unwrap();
+    let second_window_id = service
+        .session
+        .new_window(&primary, "second", true)
+        .unwrap();
+    let second_pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let mut second_screen = TerminalScreen::new(size, 120).unwrap();
+    second_screen.feed(b"second cached window rows");
+    service.set_pane_screen(second_pane_id, second_screen);
+    service
+        .render_client_view(ClientViewRole::Primary, size, &config)
+        .unwrap();
+    service
+        .session
+        .select_window(&primary, first_window_id.as_str())
+        .unwrap();
+    service
+        .render_client_view(ClientViewRole::Primary, size, &config)
+        .unwrap();
+
+    assert_ne!(first_window_id, second_window_id);
+    assert_eq!(service.pane_styled_row_cache_stats_for_tests(), (1, 2, 2));
+}
+
 /// Verifies repeated presentation queries reuse one bounded window snapshot,
 /// while a geometry mutation replaces that entry instead of returning stale
 /// pane regions.
@@ -938,7 +996,50 @@ fn runtime_window_presentation_plan_cache_tracks_geometry_changes() {
     assert_eq!(split.panes.len(), 2);
     assert_eq!(
         service.window_presentation_plan_cache_stats_for_tests(),
-        (1, 2, 1)
+        (1, 2, 2)
+    );
+}
+
+/// Verifies immutable presentation plans survive a switch away from an
+/// unchanged window and are reused when that window becomes active again.
+///
+/// Repeated window navigation must not discard valid geometry plans merely
+/// because another window was presented in between. The bounded cache still
+/// replaces an entry when the same window's geometry changes.
+#[test]
+fn runtime_window_presentation_plan_cache_reuses_unchanged_window_after_switch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let first_window = service.session().active_window().unwrap().clone();
+    let first = service
+        .window_presentation_plan_for_tests(&first_window)
+        .unwrap();
+    let second_window_id = service
+        .session
+        .new_window(&primary, "second", true)
+        .unwrap();
+    let second_window = service.session().active_window().unwrap().clone();
+    let second = service
+        .window_presentation_plan_for_tests(&second_window)
+        .unwrap();
+
+    service
+        .session
+        .select_window(&primary, first_window.id.as_str())
+        .unwrap();
+    let revisited_window = service.session().active_window().unwrap().clone();
+    let revisited = service
+        .window_presentation_plan_for_tests(&revisited_window)
+        .unwrap();
+
+    assert_ne!(first_window.id, second_window_id);
+    assert!(!std::sync::Arc::ptr_eq(&first, &second));
+    assert!(std::sync::Arc::ptr_eq(&first, &revisited));
+    assert_eq!(
+        service.window_presentation_plan_cache_stats_for_tests(),
+        (1, 2, 2)
     );
 }
 

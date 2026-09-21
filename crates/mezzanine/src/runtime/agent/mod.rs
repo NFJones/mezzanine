@@ -260,7 +260,7 @@ use presentation::{
 };
 
 /// Maximum conversation-scoped provider request chains retained in memory.
-const AGENT_PROVIDER_REQUEST_CHAIN_LIMIT: usize = 4096;
+pub(super) const AGENT_PROVIDER_REQUEST_CHAIN_LIMIT: usize = 4096;
 
 /// Owns application-side agent execution state and lifecycle invariants.
 ///
@@ -431,6 +431,12 @@ pub(crate) struct RuntimeAgentComponent {
     /// retained by the actor and never enters durable chronology or prompts.
     agent_turn_chatgpt_routing_states:
         BTreeMap<String, crate::integrations::agent::provider::OpenAiChatGptTurnState>,
+    /// Private OpenAI cache-comparison baselines retained for live conversations.
+    ///
+    /// Provider workers are rebuilt between continuations, so this state stays
+    /// actor-owned and never enters prompts, transcripts, or persistence.
+    agent_conversation_openai_cache_comparison_lineages:
+        BTreeMap<String, crate::integrations::agent::provider::OpenAiCacheComparisonLineage>,
     /// Last ordinary provider request retained for each active conversation.
     ///
     /// OpenAI uses this bounded ledger to preserve the exact wire prefix when
@@ -2732,6 +2738,9 @@ impl RuntimeSessionService {
         self.agent
             .agent_conversation_provider_request_chains
             .remove(conversation_id);
+        self.agent
+            .agent_conversation_openai_cache_comparison_lineages
+            .remove(conversation_id);
     }
 
     /// Starts a replacement cache epoch for repaired durable transcript history.
@@ -2776,6 +2785,9 @@ impl RuntimeSessionService {
         self.agent.agent_turn_provider_request_chains.clear();
         self.agent
             .agent_conversation_provider_request_chains
+            .clear();
+        self.agent
+            .agent_conversation_openai_cache_comparison_lineages
             .clear();
         self.agent.repaired_transcript_history_identities.clear();
         self.agent.agent_turn_configured_model_profiles.clear();

@@ -47,7 +47,7 @@ mod terminal_service;
 
 #[cfg(test)]
 pub(in crate::host::async_runtime) use provider_service::classify_provider_monitor_liveness;
-pub use provider_service::run_async_agent_provider_service;
+pub use provider_service::{run_async_agent_command_service, run_async_agent_provider_service};
 pub(crate) use terminal_service::attached_terminal_client_service_exit;
 #[cfg(test)]
 pub use terminal_service::build_async_attached_terminal_client_service;

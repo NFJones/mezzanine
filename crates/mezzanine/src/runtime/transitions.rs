@@ -12,7 +12,7 @@ use crate::security::audit::AuditRetentionPolicy;
 use crate::storage::registry::SessionRegistry;
 use crate::storage::token_usage::{TokenUsageEvent, TokenUsageStore};
 use crate::storage::transcript::AgentTranscriptStore;
-use mez_agent::transcript::TranscriptEntry;
+use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry};
 use mez_agent::{AgentTurnExecution, ModelResponse};
 use mez_core::ids::{AgentId, ClientId};
 use mez_mux::layout::Size;
@@ -585,6 +585,28 @@ pub enum PersistenceEvent {
         /// Human-readable write failure.
         error: String,
     },
+    /// One generation-fenced active-session metadata checkpoint completed.
+    AgentSessionMetadataCompleted {
+        /// Durable Mezzanine session whose bindings were checkpointed.
+        mezzanine_session_id: String,
+        /// Actor-owned checkpoint generation.
+        generation: u64,
+        /// Destination metadata file written by the worker.
+        path: PathBuf,
+        /// Number of pane-session records in the immutable snapshot.
+        records: usize,
+        /// Number of durable bytes written.
+        bytes: usize,
+    },
+    /// One generation-fenced active-session metadata checkpoint failed.
+    AgentSessionMetadataFailed {
+        /// Failed immutable checkpoint, retained for a bounded retry when current.
+        effect: Box<RuntimeSideEffect>,
+        /// Destination metadata file attempted by the worker.
+        path: PathBuf,
+        /// Human-readable write failure.
+        error: String,
+    },
     /// One ordered durable presentation append completed.
     PresentationCompleted {
         /// Durable conversation receiving the presentation entries.
@@ -1047,6 +1069,19 @@ pub enum RuntimeSideEffect {
         path: PathBuf,
         /// Entries to append in sequence order.
         entries: Vec<TranscriptEntry>,
+    },
+    /// Replace one active-session metadata checkpoint on the persistence worker.
+    PersistAgentSessionMetadata {
+        /// Transcript store that owns the checkpoint and action catalogs.
+        store: AgentTranscriptStore,
+        /// Durable Mezzanine session whose bindings are checkpointed.
+        mezzanine_session_id: String,
+        /// Monotonic actor-owned snapshot generation for stale-result fencing.
+        generation: u64,
+        /// Number of prior worker retries for this immutable checkpoint.
+        retry_attempt: u8,
+        /// Immutable pane-to-agent-session bindings captured by the actor.
+        records: Vec<AgentSessionMetadata>,
     },
     /// Append agent presentation entries through the ordered persistence worker.
     PersistPresentationEntries {

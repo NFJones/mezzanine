@@ -1,9 +1,8 @@
 //! Typed side-effect draining and client rendering.
 
 use super::coalesce::{
-    async_runtime_current_unix_millis, coalesce_render_invalidation_reason,
-    pane_io_side_effect_targets_instance, pane_io_side_effect_targets_pane,
-    timer_side_effect_targets_timer_worker,
+    async_runtime_current_unix_millis, pane_io_side_effect_targets_instance,
+    pane_io_side_effect_targets_pane,
 };
 use super::{
     AsyncRenderedClientFlush, AsyncRuntimeSessionActor, AttachedTerminalOutputModes, ClientId,
@@ -26,9 +25,20 @@ impl AsyncRuntimeSessionActor {
                 "async runtime side-effect drain limit must be greater than zero",
             ));
         }
-        let drain_count = limit.min(self.side_effects.len());
-        let effects = self.side_effects.drain(..drain_count).collect();
-        self.record_side_effect_drain(drain_count);
+        // Provider dispatches previously shared this queue and therefore
+        // remained observable before later repaint work to generic test
+        // adapters. Claim that dedicated route first so moving the provider
+        // worker does not change the established compatibility order.
+        let mut effects = self.side_effect_routes.drain_provider(limit);
+        let drain_count = limit
+            .saturating_sub(effects.len())
+            .min(self.side_effects.len());
+        effects.extend(self.side_effects.drain(..drain_count));
+        effects.extend(
+            self.side_effect_routes
+                .drain_compat(limit.saturating_sub(effects.len())),
+        );
+        self.record_side_effect_drain(effects.len());
         Ok(effects)
     }
 
@@ -47,22 +57,25 @@ impl AsyncRuntimeSessionActor {
         self.metrics
             .runtime_side_effect_drain_sizes
             .record(u64::try_from(drained).unwrap_or(u64::MAX));
-        self.metrics.side_effect_queue_depth = self.side_effects.len();
+        self.metrics.side_effect_queue_depth = self
+            .side_effects
+            .len()
+            .saturating_add(self.side_effect_routes.len());
         self.metrics
             .side_effect_queue_depth_samples
-            .record(u64::try_from(self.side_effects.len()).unwrap_or(u64::MAX));
+            .record(u64::try_from(self.metrics.side_effect_queue_depth).unwrap_or(u64::MAX));
         if let Some(nonempty_since) = self.side_effect_queue_nonempty_since
-            && (drained > 0 || self.side_effects.is_empty())
+            && (drained > 0 || (self.side_effects.is_empty() && self.side_effect_routes.is_empty()))
         {
             self.metrics.record_phase_latency(
                 crate::host::async_runtime::AsyncRuntimeLatencyPhase::SideEffectQueueAge,
                 u64::try_from(nonempty_since.elapsed().as_millis()).unwrap_or(u64::MAX),
             );
         }
-        if self.side_effects.is_empty() {
+        if self.side_effects.is_empty() && self.side_effect_routes.is_empty() {
             self.side_effect_queue_nonempty_since = None;
         }
-        if drained > 0 && !self.side_effects.is_empty() {
+        if drained > 0 && (!self.side_effects.is_empty() || !self.side_effect_routes.is_empty()) {
             self.notify_side_effect_delivery();
         }
     }
@@ -81,28 +94,22 @@ impl AsyncRuntimeSessionActor {
                 "async runtime provider dispatch drain limit must be greater than zero",
             ));
         }
-        let mut drained = Vec::new();
-        let mut retained = VecDeque::with_capacity(self.side_effects.len());
-        while let Some(effect) = self.side_effects.pop_front() {
-            if drained.len() < limit
-                && matches!(
-                    effect,
-                    RuntimeSideEffect::DispatchAgentProvider { .. }
-                        | RuntimeSideEffect::DispatchApprovedExternalAction { .. }
-                        | RuntimeSideEffect::DispatchNativeShellAction { .. }
-                        | RuntimeSideEffect::DispatchAgentCompaction { .. }
-                        | RuntimeSideEffect::DispatchAgentRemember { .. }
-                        | RuntimeSideEffect::DispatchAgentSessionTitle { .. }
-                        | RuntimeSideEffect::DispatchAgentCommand { .. }
-                        | RuntimeSideEffect::DispatchAgentPresentationResize { .. }
-                )
-            {
-                drained.push(effect);
-            } else {
-                retained.push_back(effect);
-            }
+        let drained = self.side_effect_routes.drain_provider(limit);
+        self.record_side_effect_drain(drained.len());
+        Ok(drained)
+    }
+
+    /// Drains deferred interactive command dispatches from their dedicated lane.
+    pub(super) fn drain_agent_command_dispatch_side_effects(
+        &mut self,
+        limit: usize,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        if limit == 0 {
+            return Err(MezError::invalid_args(
+                "async runtime command dispatch drain limit must be greater than zero",
+            ));
         }
-        self.side_effects = retained;
+        let drained = self.side_effect_routes.drain_commands(limit);
         self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
@@ -121,41 +128,9 @@ impl AsyncRuntimeSessionActor {
                 "async runtime render side-effect drain limit must be greater than zero",
             ));
         }
-        let mut drained: Vec<(ClientId, RenderInvalidationReason)> = Vec::new();
-        let mut removed = 0usize;
-        let mut coalesced = 0usize;
-        let mut retained = VecDeque::with_capacity(self.side_effects.len());
-        while let Some(effect) = self.side_effects.pop_front() {
-            match effect {
-                RuntimeSideEffect::RenderClient { client_id, reason } => {
-                    if let Some((_, retained_reason)) = drained
-                        .iter_mut()
-                        .find(|(drained_client_id, _)| drained_client_id == &client_id)
-                    {
-                        *retained_reason =
-                            coalesce_render_invalidation_reason(*retained_reason, reason);
-                        removed = removed.saturating_add(1);
-                        coalesced = coalesced.saturating_add(1);
-                    } else if drained.len() < limit {
-                        drained.push((client_id, reason));
-                        removed = removed.saturating_add(1);
-                    } else {
-                        retained.push_back(RuntimeSideEffect::RenderClient { client_id, reason });
-                    }
-                }
-                effect => retained.push_back(effect),
-            }
-        }
-        self.side_effects = retained;
-        self.record_side_effect_drain(removed);
-        self.metrics.render_invalidations_coalesced = self
-            .metrics
-            .render_invalidations_coalesced
-            .saturating_add(u64::try_from(coalesced).unwrap_or(u64::MAX));
-        Ok(drained
-            .into_iter()
-            .map(|(client_id, reason)| RuntimeSideEffect::RenderClient { client_id, reason })
-            .collect())
+        let drained = self.side_effect_routes.drain_renders(limit);
+        self.record_side_effect_drain(drained.len());
+        Ok(drained)
     }
 
     /// Runs the drain render side effects for client operation for this subsystem.
@@ -173,47 +148,16 @@ impl AsyncRuntimeSessionActor {
                 "async runtime render side-effect drain limit must be greater than zero",
             ));
         }
-        let mut drained: Vec<RenderInvalidationReason> = Vec::new();
-        let mut removed = 0usize;
-        let mut coalesced = 0usize;
-        let mut retained = VecDeque::with_capacity(self.side_effects.len());
-        while let Some(effect) = self.side_effects.pop_front() {
-            match effect {
-                RuntimeSideEffect::RenderClient {
-                    client_id: effect_client_id,
-                    reason,
-                } if &effect_client_id == client_id => {
-                    if let Some(retained_reason) = drained.first_mut() {
-                        *retained_reason =
-                            coalesce_render_invalidation_reason(*retained_reason, reason);
-                        coalesced = coalesced.saturating_add(1);
-                    } else if drained.len() < limit {
-                        drained.push(reason);
-                    } else {
-                        retained.push_back(RuntimeSideEffect::RenderClient {
-                            client_id: effect_client_id,
-                            reason,
-                        });
-                        continue;
-                    }
-                    removed = removed.saturating_add(1);
-                }
-                effect => retained.push_back(effect),
-            }
-        }
-        self.side_effects = retained;
-        self.record_side_effect_drain(removed);
-        self.metrics.render_invalidations_coalesced = self
-            .metrics
-            .render_invalidations_coalesced
-            .saturating_add(u64::try_from(coalesced).unwrap_or(u64::MAX));
-        Ok(drained
-            .into_iter()
-            .map(|reason| RuntimeSideEffect::RenderClient {
-                client_id: client_id.clone(),
-                reason,
-            })
-            .collect())
+        let drained = if limit > 0 {
+            self.side_effect_routes
+                .drain_render_for_client(client_id)
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.record_side_effect_drain(drained.len());
+        Ok(drained)
     }
 
     /// Runs the drain client output flush side effects operation for this subsystem.
@@ -231,24 +175,7 @@ impl AsyncRuntimeSessionActor {
                 "async runtime client output flush drain limit must be greater than zero",
             ));
         }
-        let mut drained = Vec::new();
-        let mut retained = VecDeque::with_capacity(self.side_effects.len());
-        while let Some(effect) = self.side_effects.pop_front() {
-            if drained.len() < limit {
-                match &effect {
-                    RuntimeSideEffect::FlushClientOutput {
-                        client_id: effect_client_id,
-                        ..
-                    } if client_id.is_none_or(|target| target == effect_client_id) => {
-                        drained.push(effect);
-                    }
-                    _ => retained.push_back(effect),
-                }
-            } else {
-                retained.push_back(effect);
-            }
-        }
-        self.side_effects = retained;
+        let drained = self.side_effect_routes.drain_flushes(client_id, limit);
         self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
@@ -267,16 +194,7 @@ impl AsyncRuntimeSessionActor {
                 "async runtime timer side-effect drain limit must be greater than zero",
             ));
         }
-        let mut drained = Vec::new();
-        let mut retained = VecDeque::with_capacity(self.side_effects.len());
-        while let Some(effect) = self.side_effects.pop_front() {
-            if drained.len() < limit && timer_side_effect_targets_timer_worker(&effect) {
-                drained.push(effect);
-            } else {
-                retained.push_back(effect);
-            }
-        }
-        self.side_effects = retained;
+        let drained = self.side_effect_routes.drain_timers(limit);
         self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
@@ -295,31 +213,7 @@ impl AsyncRuntimeSessionActor {
                 "async runtime persistence side-effect drain limit must be greater than zero",
             ));
         }
-        let mut drained = Vec::new();
-        let mut retained = VecDeque::with_capacity(self.side_effects.len());
-        while let Some(effect) = self.side_effects.pop_front() {
-            if drained.len() < limit
-                && matches!(
-                    effect,
-                    RuntimeSideEffect::Persist { .. }
-                        | RuntimeSideEffect::PersistAuditLog { .. }
-                        | RuntimeSideEffect::PersistTranscriptEntries { .. }
-                        | RuntimeSideEffect::PersistPresentationEntries { .. }
-                        | RuntimeSideEffect::PersistSessionArchive { .. }
-                        | RuntimeSideEffect::PersistSavedSessionRetention { .. }
-                        | RuntimeSideEffect::PersistPromptHistory { .. }
-                        | RuntimeSideEffect::PersistCommandPromptHistory { .. }
-                        | RuntimeSideEffect::PersistTokenUsage { .. }
-                        | RuntimeSideEffect::SettleAgentProviderPersistence { .. }
-                        | RuntimeSideEffect::PersistRegistry { .. }
-                )
-            {
-                drained.push(effect);
-            } else {
-                retained.push_back(effect);
-            }
-        }
-        self.side_effects = retained;
+        let drained = self.side_effect_routes.drain_persistence(limit);
         self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
@@ -338,16 +232,7 @@ impl AsyncRuntimeSessionActor {
                 "async runtime hook side-effect drain limit must be greater than zero",
             ));
         }
-        let mut drained = Vec::new();
-        let mut retained = VecDeque::with_capacity(self.side_effects.len());
-        while let Some(effect) = self.side_effects.pop_front() {
-            if drained.len() < limit && matches!(effect, RuntimeSideEffect::RunProgramHook { .. }) {
-                drained.push(effect);
-            } else {
-                retained.push_back(effect);
-            }
-        }
-        self.side_effects = retained;
+        let drained = self.side_effect_routes.drain_hooks(limit);
         self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
@@ -362,18 +247,7 @@ impl AsyncRuntimeSessionActor {
                 "async runtime host clipboard side-effect drain limit must be greater than zero",
             ));
         }
-        let mut drained = Vec::new();
-        let mut retained = VecDeque::with_capacity(self.side_effects.len());
-        while let Some(effect) = self.side_effects.pop_front() {
-            if drained.len() < limit
-                && matches!(effect, RuntimeSideEffect::ReadHostClipboard { .. })
-            {
-                drained.push(effect);
-            } else {
-                retained.push_back(effect);
-            }
-        }
-        self.side_effects = retained;
+        let drained = self.side_effect_routes.drain_clipboard(limit);
         self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
@@ -388,24 +262,15 @@ impl AsyncRuntimeSessionActor {
                 "async runtime status pill side-effect drain limit must be greater than zero",
             ));
         }
-        let mut drained = Vec::new();
-        let mut retained = VecDeque::with_capacity(self.side_effects.len());
+        let mut drained = self.side_effect_routes.drain_status(limit);
         let mut prepare_pane_providers = false;
-        while let Some(effect) = self.side_effects.pop_front() {
-            match effect {
-                RuntimeSideEffect::PreparePaneStatusProviders => {
-                    prepare_pane_providers = true;
-                }
-                RuntimeSideEffect::RefreshStatusPill { .. }
-                | RuntimeSideEffect::RefreshPaneStatusProvider { .. }
-                    if drained.len() < limit =>
-                {
-                    drained.push(effect);
-                }
-                _ => retained.push_back(effect),
+        drained.retain(|effect| match effect {
+            RuntimeSideEffect::PreparePaneStatusProviders => {
+                prepare_pane_providers = true;
+                false
             }
-        }
-        self.side_effects = retained;
+            _ => true,
+        });
         if prepare_pane_providers || drained.len() < limit {
             let pane_limit = limit
                 .saturating_sub(drained.len())
@@ -445,7 +310,15 @@ impl AsyncRuntimeSessionActor {
         }
         let mut drained = Vec::new();
         let mut retained = VecDeque::with_capacity(self.side_effects.len());
-        while let Some(effect) = self.side_effects.pop_front() {
+        // Legacy pane adapters do not carry a process generation, but test
+        // adapters and retiring workers still use them. Make their drain see
+        // all keyed generations for this pane while direct process workers
+        // continue to claim only their exact FIFO.
+        let mut routed = self
+            .side_effect_routes
+            .take_pane_processes_for_pane(pane_id);
+        routed.append(&mut self.side_effects);
+        while let Some(effect) = routed.pop_front() {
             if let RuntimeSideEffect::PaneProcessIo {
                 instance: effect_instance,
                 effect: crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { owner_id },
@@ -474,7 +347,17 @@ impl AsyncRuntimeSessionActor {
                 retained.push_back(effect);
             }
         }
-        self.side_effects = retained;
+        let mut legacy = VecDeque::with_capacity(retained.len());
+        while let Some(effect) = retained.pop_front() {
+            if matches!(effect, RuntimeSideEffect::PaneProcessIo { .. })
+                && pane_io_side_effect_targets_pane(&effect, pane_id)
+            {
+                self.side_effect_routes.push_pane_process(effect);
+            } else {
+                legacy.push_back(effect);
+            }
+        }
+        self.side_effects = legacy;
         self.record_side_effect_drain(drained.len());
         Ok(drained
             .into_iter()
@@ -557,8 +440,9 @@ impl AsyncRuntimeSessionActor {
             ));
         }
         let mut drained = Vec::new();
-        let mut retained = VecDeque::with_capacity(self.side_effects.len());
-        while let Some(effect) = self.side_effects.pop_front() {
+        let mut retained = VecDeque::new();
+        let mut queued = self.side_effect_routes.take_pane_process(instance);
+        while let Some(effect) = queued.pop_front() {
             if let RuntimeSideEffect::PaneProcessIo {
                 instance: effect_instance,
                 effect: crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { owner_id },
@@ -631,7 +515,8 @@ impl AsyncRuntimeSessionActor {
                 retained.push_back(effect);
             }
         }
-        self.side_effects = retained;
+        self.side_effect_routes
+            .restore_pane_process(instance.clone(), retained);
         self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
@@ -644,6 +529,7 @@ impl AsyncRuntimeSessionActor {
     pub(super) fn render_client_side_effect(
         &mut self,
         client_id: ClientId,
+        reason: RenderInvalidationReason,
         config: TerminalClientLoopConfig,
         status: Option<ClientStatusLine>,
         cursor_blink_elapsed_ms: u64,
@@ -665,6 +551,22 @@ impl AsyncRuntimeSessionActor {
         };
         self.service.prepare_client_render(&client_id, role)?;
         let config = self.service.terminal_client_loop_config(config)?;
+        let render_token = self.client_render_token(&client_id, role)?;
+        if reason == RenderInvalidationReason::PaneOutput
+            && let Some(render_token) = render_token.as_ref()
+            && self
+                .rendered_client_side_effects
+                .get(&client_id)
+                .is_some_and(|(previous, previous_config, previous_status)| {
+                    previous == render_token
+                        && previous_config == &config
+                        && previous_status == &status
+                })
+        {
+            self.metrics.render_compositions_skipped =
+                self.metrics.render_compositions_skipped.saturating_add(1);
+            return Ok(None);
+        }
         let composition_started = std::time::Instant::now();
         let (view, presentation_ids) = self
             .service
@@ -681,6 +583,12 @@ impl AsyncRuntimeSessionActor {
         let Some(view) = view else {
             return Ok(None);
         };
+        if let Some(render_token) = render_token {
+            self.rendered_client_side_effects.insert(
+                client_id.clone(),
+                (render_token, config.clone(), status.clone()),
+            );
+        }
         let status_pill_effects = self
             .service
             .drain_status_pill_refresh_transition()

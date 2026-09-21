@@ -3147,6 +3147,121 @@ fn transcript_store_interactive_catalog_read_fails_fast_when_busy() {
     holder.execute_batch("ROLLBACK;").unwrap();
 }
 
+/// Verifies a durable catalog mutation waits for a brief active writer instead
+/// of inheriting the interactive picker-read busy budget.
+///
+/// Checkpoints and transcript writes must preserve their durable update after
+/// short SQLite contention, while picker reads remain separately fail-fast.
+#[test]
+fn transcript_store_catalog_mutation_waits_for_brief_writer_contention() {
+    let root = temp_root("catalog-mutation-waits-for-writer");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+
+    let catalog = super::catalog::catalog_path(&store);
+    let writer_ready = Arc::new(Barrier::new(2));
+    let writer_ready_for_thread = writer_ready.clone();
+    let writer = thread::spawn(move || {
+        let holder = Connection::open(catalog).unwrap();
+        holder
+            .busy_timeout(std::time::Duration::from_millis(0))
+            .unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        writer_ready_for_thread.wait();
+        thread::sleep(std::time::Duration::from_millis(300));
+        holder.execute_batch("ROLLBACK;").unwrap();
+    });
+    writer_ready.wait();
+
+    store
+        .append(&entry("mutation-waits", 1, TranscriptRole::User))
+        .expect("durable catalog mutation should wait for the active writer");
+    writer.join().unwrap();
+    assert!(
+        store
+            .catalog_saved_session("mutation-waits")
+            .unwrap()
+            .is_some()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies archiving waits for a brief SQLite writer instead of using the
+/// interactive picker-read budget for its catalog record lookup.
+#[test]
+fn transcript_store_archive_waits_for_brief_writer_contention() {
+    let root = temp_root("archive-waits-for-writer");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("archive-waits", 1, TranscriptRole::User))
+        .unwrap();
+
+    let catalog = super::catalog::catalog_path(&store);
+    let writer_ready = Arc::new(Barrier::new(2));
+    let writer_ready_for_thread = writer_ready.clone();
+    let writer = thread::spawn(move || {
+        let holder = Connection::open(catalog).unwrap();
+        holder
+            .busy_timeout(std::time::Duration::from_millis(0))
+            .unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        writer_ready_for_thread.wait();
+        thread::sleep(std::time::Duration::from_millis(300));
+        holder.execute_batch("ROLLBACK;").unwrap();
+    });
+    writer_ready.wait();
+
+    store
+        .archive_session("archive-waits", 100)
+        .expect("archive should wait for the active catalog writer");
+    writer.join().unwrap();
+    assert!(root.join("archived/archive-waits.tar.zst").is_file());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies retention deletion waits for a brief SQLite writer instead of
+/// reporting the interactive picker-read busy diagnostic.
+#[test]
+fn transcript_store_retention_waits_for_brief_writer_contention() {
+    let root = temp_root("retention-waits-for-writer");
+    let _ = fs::remove_dir_all(&root);
+    let mut store = AgentTranscriptStore::new(root.clone());
+    store
+        .set_saved_session_retention_policy(super::SavedSessionRetentionPolicy {
+            max_active_sessions: 1,
+            retention_days: 1,
+        })
+        .unwrap();
+    let mut expired = entry("retention-waits", 1, TranscriptRole::User);
+    expired.created_at_unix_seconds = 1;
+    store.append(&expired).unwrap();
+
+    let catalog = super::catalog::catalog_path(&store);
+    let writer_ready = Arc::new(Barrier::new(2));
+    let writer_ready_for_thread = writer_ready.clone();
+    let writer = thread::spawn(move || {
+        let holder = Connection::open(catalog).unwrap();
+        holder
+            .busy_timeout(std::time::Duration::from_millis(0))
+            .unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        writer_ready_for_thread.wait();
+        thread::sleep(std::time::Duration::from_millis(300));
+        holder.execute_batch("ROLLBACK;").unwrap();
+    });
+    writer_ready.wait();
+
+    let report = store
+        .enforce_saved_session_retention(24 * 60 * 60 + 1, &BTreeSet::new())
+        .expect("retention should wait for the active catalog writer");
+    writer.join().unwrap();
+    assert_eq!(report.deleted_conversation_ids, ["retention-waits"]);
+    assert!(report.failures.is_empty(), "{report:?}");
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies an interactive catalog read surfaces the retryable busy diagnostic
 /// when the exclusive migration lock is already held.
 ///

@@ -297,6 +297,20 @@ pub fn prune_stale_socket_files_in_directory(directory: &Path, owner_uid: u32) -
 /// - `path`: The candidate Unix socket path.
 /// - `owner_uid`: The user id that must own removable socket files.
 pub fn remove_stale_socket_file_if_unserved(path: &Path, owner_uid: u32) -> Result<bool> {
+    remove_stale_socket_file_if_unserved_with_probe(path, owner_uid, |path| {
+        UnixStream::connect(path)
+    })
+}
+
+/// Removes one stale socket file using the supplied liveness probe.
+fn remove_stale_socket_file_if_unserved_with_probe<F>(
+    path: &Path,
+    owner_uid: u32,
+    mut probe: F,
+) -> Result<bool>
+where
+    F: FnMut(&Path) -> std::io::Result<UnixStream>,
+{
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -306,7 +320,7 @@ pub fn remove_stale_socket_file_if_unserved(path: &Path, owner_uid: u32) -> Resu
         return Ok(false);
     }
     for attempt in 0..2 {
-        match UnixStream::connect(path) {
+        match probe(path) {
             Ok(stream) => match unix_peer_uid(stream.as_raw_fd()) {
                 Ok(peer_uid) if peer_uid == owner_uid => return Ok(false),
                 Ok(_) => {
@@ -317,6 +331,10 @@ pub fn remove_stale_socket_file_if_unserved(path: &Path, owner_uid: u32) -> Resu
                 Err(_) => return Ok(false),
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused && attempt == 0 => {
+                std::thread::yield_now();
+                continue;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
                 remove_stale_socket_path(path)?;
                 return Ok(true);
@@ -727,4 +745,66 @@ pub(super) fn unix_peer_uid(raw_fd: RawFd) -> Result<u32> {
 /// on duplicated control-flow logic.
 pub(super) fn effective_uid() -> u32 {
     geteuid().as_raw()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies one transient refused probe does not delete a live listener.
+    #[test]
+    fn stale_socket_probe_retries_a_transient_refusal_before_removal() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-runtime-socket-probe-retry-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        ensure_private_socket_directory(&root, effective_uid()).unwrap();
+        let path = root.join("live.sock");
+        let _listener = bind_control_socket(&path, effective_uid()).unwrap();
+        let mut attempts = 0usize;
+
+        let removed =
+            remove_stale_socket_file_if_unserved_with_probe(&path, effective_uid(), |path| {
+                attempts = attempts.saturating_add(1);
+                if attempts == 1 {
+                    Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused))
+                } else {
+                    UnixStream::connect(path)
+                }
+            })
+            .unwrap();
+
+        assert!(!removed);
+        assert_eq!(attempts, 2);
+        assert!(path.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies a repeated refused probe still removes an unserved socket.
+    #[test]
+    fn stale_socket_probe_removes_after_repeated_refusal() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-runtime-socket-probe-refused-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        ensure_private_socket_directory(&root, effective_uid()).unwrap();
+        let path = root.join("stale.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        drop(listener);
+        let mut attempts = 0usize;
+
+        let removed =
+            remove_stale_socket_file_if_unserved_with_probe(&path, effective_uid(), |_| {
+                attempts = attempts.saturating_add(1);
+                Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused))
+            })
+            .unwrap();
+
+        assert!(removed);
+        assert_eq!(attempts, 2);
+        assert!(!path.exists());
+        let _ = fs::remove_dir_all(root);
+    }
 }

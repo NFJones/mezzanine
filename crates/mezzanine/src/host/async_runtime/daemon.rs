@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::provider::build_async_agent_provider_service;
+use super::provider::{build_async_agent_command_service, build_async_agent_provider_service};
 use super::{
     AsyncRuntimeDaemonConfig, AsyncRuntimeDaemonListeners, AsyncRuntimeMessageConnectionConfig,
     AsyncRuntimeService, AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle, MezError, Result,
@@ -143,6 +143,7 @@ pub fn build_async_runtime_session_services(
             handle.clone(),
             Default::default(),
         )?,
+        build_async_agent_command_service("agent-command", handle.clone(), Default::default())?,
         build_async_agent_provider_service("agent-provider", handle, Default::default())?,
     ];
     Ok(services)

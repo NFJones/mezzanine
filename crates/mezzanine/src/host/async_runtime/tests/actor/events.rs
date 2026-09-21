@@ -115,17 +115,22 @@ fn async_runtime_event_batch_preserves_pane_output_fifo_when_prioritized() {
     assert!(matches!(prioritized.last(), Some(RuntimeEvent::Timer(_))));
 }
 
-/// Verifies multiple applied events trigger one global reconciliation pass,
-/// while a later no-op batch does not scan global runtime state again.
+/// Verifies presentation-only client signals do not trigger global runtime
+/// reconciliation, while an ownership-changing client event still does.
 ///
-/// Direct event application and ingress accounting remain per event, but
-/// bootstrap discovery, progress repair, deferred draining, and timer
-/// regeneration belong to the coherent batch boundary.
+/// Resize and output-ready signals already queue exact-client presentation
+/// work, so scanning pane bootstrap and every agent-progress owner after them
+/// would add session-wide cost without advancing an affected invariant. A
+/// client resize retains the global convergence boundary because it can change
+/// layout-owned process geometry and associated lifecycle state.
 #[tokio::test(flavor = "current_thread")]
-async fn async_actor_reconciles_global_state_once_per_applied_event_batch() {
+async fn async_actor_scopes_global_reconciliation_to_owner_changing_events() {
     let mut service = test_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -137,7 +142,7 @@ async fn async_actor_reconciles_global_state_once_per_applied_event_batch() {
             client_id: primary.clone(),
         }));
         applied.push(RuntimeEvent::Client(ClientEvent::OutputReady {
-            client_id: primary,
+            client_id: primary.clone(),
         }));
         let report = handle.submit_runtime_events(applied).await.unwrap();
         assert_eq!(report.accepted, 2);
@@ -145,7 +150,43 @@ async fn async_actor_reconciles_global_state_once_per_applied_event_batch() {
 
         let metrics = handle.metrics().await.unwrap();
         assert_eq!(metrics.runtime_events_applied, 2);
-        assert_eq!(metrics.runtime_event_reconciliation_passes, 1);
+        assert_eq!(metrics.runtime_event_reconciliation_passes, 0);
+        assert_eq!(metrics.runtime_event_global_reconciliation_skipped, 1);
+
+        let mut pane_output = RuntimeEventBatch::new();
+        pane_output.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"owner-scoped output\n".to_vec(),
+        }));
+        let report = handle.submit_runtime_events(pane_output).await.unwrap();
+        assert_eq!(report.applied, 1);
+        let metrics = handle.metrics().await.unwrap();
+        assert_eq!(metrics.runtime_event_reconciliation_passes, 0);
+        assert_eq!(metrics.runtime_event_global_reconciliation_skipped, 2);
+
+        let mut owner_changing = RuntimeEventBatch::new();
+        owner_changing.push(RuntimeEvent::Client(ClientEvent::Resize {
+            client_id: primary,
+            size: Size::new(100, 30).unwrap(),
+        }));
+        let report = handle.submit_runtime_events(owner_changing).await.unwrap();
+        assert_eq!(report.applied, 1);
+        assert_eq!(
+            handle
+                .metrics()
+                .await
+                .unwrap()
+                .runtime_event_reconciliation_passes,
+            1
+        );
+        assert_eq!(
+            handle
+                .metrics()
+                .await
+                .unwrap()
+                .runtime_event_global_reconciliation_skipped,
+            2
+        );
 
         let mut no_op = RuntimeEventBatch::new();
         no_op.push(RuntimeEvent::Pane(PaneEvent::InputWritten {

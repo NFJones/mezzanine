@@ -196,6 +196,11 @@ impl RuntimeSessionService {
         self.external_editor.is_active(pane_id)
     }
 
+    /// Returns the opaque active editor lease identity used to fence render work.
+    pub(crate) fn external_editor_session_id(&self, pane_id: &str) -> Option<&str> {
+        self.external_editor.active_session_id(pane_id)
+    }
+
     /// Returns the initiating primary client's complete terminal geometry.
     ///
     /// An active editor owns the whole attached terminal rather than the

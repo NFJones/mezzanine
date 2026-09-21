@@ -613,6 +613,7 @@ async fn serve_host_only_connection(
         .await
         .map_err(|_| MezError::invalid_state("host Iroh ALPN setup timed out"))?
         .map_err(|error| MezError::invalid_state(format!("host Iroh ALPN failed: {error}")))?;
+    let control_setup_deadline = tokio::time::Instant::now() + policy.setup_timeout;
     let codec = RuntimeIrohCompressionCodec::from_alpn(&alpn)?;
     if !policy.compression_codecs.contains(&codec) {
         return Err(MezError::forbidden("host Iroh negotiated a disabled codec"));
@@ -623,7 +624,7 @@ async fn serve_host_only_connection(
         policy.compression_zstd_level,
         HOST_CONTROL_MAX_CONTENT_LENGTH + 1024,
     )?;
-    let connection = tokio::time::timeout_at(setup_deadline, accepting)
+    let connection = tokio::time::timeout_at(control_setup_deadline, accepting)
         .await
         .map_err(|_| MezError::invalid_state("host Iroh connection setup timed out"))?
         .map_err(|error| {
@@ -640,7 +641,7 @@ async fn serve_host_only_connection(
         endpoint_id: client_endpoint_id.clone(),
         route: remote_route.to_owned(),
     };
-    let (send, recv) = tokio::time::timeout_at(setup_deadline, connection.accept_bi())
+    let (send, recv) = tokio::time::timeout_at(control_setup_deadline, connection.accept_bi())
         .await
         .map_err(|_| MezError::invalid_state("host Iroh control stream setup timed out"))?
         .map_err(|error| MezError::invalid_state(format!("host Iroh stream failed: {error}")))?;
@@ -653,7 +654,7 @@ async fn serve_host_only_connection(
         HOST_CONTROL_MAX_CONTENT_LENGTH,
     )?;
     let request = tokio::time::timeout_at(
-        setup_deadline,
+        control_setup_deadline,
         read_one_control_frame(bridge.stream_mut(), policy.idle_timeout),
     )
     .await

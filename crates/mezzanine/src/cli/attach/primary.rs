@@ -14,17 +14,15 @@ use super::requests::{
     request_and_render_primary_view_async, request_primary_resize_async,
     request_primary_view_frame_async, terminal_step_control_request,
     terminal_step_if_changed_control_request, write_async_control_body_or_disconnected,
-    write_styled_output_or_disconnected_async,
 };
 use super::responses::{
     control_response_forbidden, terminal_step_response_client_frame,
     terminal_step_response_refresh_requirement,
 };
-use super::watchdog::{AttachResponseWatchdog, compose_operator_hint};
 use super::{
     AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
-    AttachAnimationRefresh, AttachHintFrame, AttachTerminalSizeRefresh, ClientId, MezError, Result,
-    Size, UnixStream, decode_control_frame, io,
+    AttachAnimationRefresh, AttachTerminalSizeRefresh, ClientId, MezError, Result, Size,
+    UnixStream, decode_control_frame, io,
 };
 
 /// Runs the run control socket attached primary client operation for this subsystem.
@@ -283,80 +281,6 @@ async fn present_iroh_wakeup_while_step_pending<I: AsyncAttachedTerminalIo>(
         }
         AttachRenderAction::None => Ok(()),
     }
-}
-
-/// Frame rows a locally painted busy hint can be overlaid on.
-trait AttachBusyHintFrame {
-    /// Returns the frame's rows, their style spans, and its output modes.
-    fn busy_hint_rows(
-        &self,
-    ) -> (
-        &[String],
-        &[Vec<mez_terminal::TerminalStyleSpan>],
-        super::AttachedTerminalOutputModes,
-    );
-}
-
-impl AttachBusyHintFrame for super::AttachClientFrame {
-    fn busy_hint_rows(
-        &self,
-    ) -> (
-        &[String],
-        &[Vec<mez_terminal::TerminalStyleSpan>],
-        super::AttachedTerminalOutputModes,
-    ) {
-        (&self.lines, &self.line_style_spans, self.modes)
-    }
-}
-
-impl AttachBusyHintFrame for AttachHintFrame {
-    fn busy_hint_rows(
-        &self,
-    ) -> (
-        &[String],
-        &[Vec<mez_terminal::TerminalStyleSpan>],
-        super::AttachedTerminalOutputModes,
-    ) {
-        (&self.lines, &self.line_style_spans, self.modes)
-    }
-}
-
-/// Paints the local busy hint while a terminal-step response is outstanding.
-///
-/// The hint is the client's own feedback for a stalled daemon, so it never
-/// depends on a prior render: a cached frame with rows keeps its layout and only
-/// its last row is replaced, with that row's server styles dropped, while a
-/// client with nothing to overlay (no frame yet, or an empty frame the daemon
-/// sent between renders) still gets a bare hint line in default output modes.
-/// The caller invalidates the frame when the response clears the hint, which
-/// repaints the real layout.
-///
-/// Returns whether the attached terminal is still connected.
-async fn paint_attached_busy_hint<I, F>(
-    terminal_io: &mut I,
-    cached_frame: Option<&F>,
-    hint: &str,
-) -> Result<bool>
-where
-    I: AsyncAttachedTerminalIo,
-    F: AttachBusyHintFrame + ?Sized,
-{
-    let overlaid = cached_frame.filter(|frame| !frame.busy_hint_rows().0.is_empty());
-    let (lines, line_style_spans, modes) = match overlaid {
-        Some(frame) => {
-            let (frame_lines, frame_spans, modes) = frame.busy_hint_rows();
-            let row = frame_lines.len().saturating_sub(1);
-            let (lines, line_style_spans) =
-                compose_operator_hint(frame_lines, frame_spans, row, hint);
-            (lines, line_style_spans, modes)
-        }
-        None => (
-            vec![hint.to_string()],
-            vec![Vec::new()],
-            super::AttachedTerminalOutputModes::default(),
-        ),
-    };
-    write_styled_output_or_disconnected_async(terminal_io, &lines, &line_style_spans, modes).await
 }
 
 #[allow(
@@ -690,12 +614,10 @@ where
                 ));
             }
         }
-        // A stalled daemon must not read as a frozen terminal on the pushed
-        // path either: the wait below paints the same local feedback as the
-        // control-socket loop until the acknowledgement arrives. The request
-        // timeout still decides when the attach gives up outright.
-        let mut watchdog = AttachResponseWatchdog::new(std::time::Instant::now());
-        let mut hint_check_at = tokio::time::Instant::now() + watchdog.poll_interval();
+        // Terminal-step response latency is expected while command work runs.
+        // Keep servicing pushed output, input, and runtime wakeups until the
+        // bounded response arrives, but do not replace terminal chrome with a
+        // transport-status message merely because the response is slow.
         let response = {
             let response_deadline = tokio::time::Instant::now() + request_timeout;
             let response = tokio::time::timeout(
@@ -718,7 +640,6 @@ where
                                 "Iroh attach terminal disconnected while flushing pushed output",
                             ));
                         }
-                        let mut due_hint: Option<String> = None;
                         let event = {
                             let input = read_attached_client_input_or_deadline(
                                 terminal_io,
@@ -740,32 +661,9 @@ where
                                     }
                                     None
                                 }
-                                _ = tokio::time::sleep_until(hint_check_at) => {
-                                    hint_check_at =
-                                        tokio::time::Instant::now() + watchdog.poll_interval();
-                                    due_hint =
-                                        watchdog.pending_hint(std::time::Instant::now());
-                                    None
-                                }
                                 event = event_receiver.recv() => Some(event),
                             }
                         };
-                        // The pinned input future above borrows the terminal for
-                        // the whole select, so the hint is painted once that
-                        // borrow ends instead of inside the timeout arm.
-                        if let Some(hint) = due_hint.take() {
-                            let painted = paint_attached_busy_hint(
-                                terminal_io,
-                                cached_frame.as_ref(),
-                                hint.as_str(),
-                            )
-                            .await?;
-                            if !painted {
-                                return Err(MezError::invalid_state(
-                                    "Iroh attach terminal disconnected while painting the busy hint",
-                                ));
-                            }
-                        }
                         if let Some(event) = event {
                             match event {
                                 Some(Ok(wakeup)) => {
@@ -791,61 +689,12 @@ where
                         }
                     }
                 } else {
-                    loop {
-                        tokio::select! {
-                            biased;
-                            response = response.as_mut() => break response,
-                            _ = tokio::time::sleep_until(hint_check_at) => {
-                                hint_check_at =
-                                    tokio::time::Instant::now() + watchdog.poll_interval();
-                                if let Some(hint) =
-                                    watchdog.pending_hint(std::time::Instant::now())
-                                {
-                                    let painted = paint_attached_busy_hint(
-                                        terminal_io,
-                                        cached_frame.as_ref(),
-                                        hint.as_str(),
-                                    )
-                                    .await?;
-                                    if !painted {
-                                        return Err(MezError::invalid_state(
-                                            "Iroh attach terminal disconnected while painting the busy hint",
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    response.await
                 }
             } else {
-                loop {
-                    tokio::select! {
-                        biased;
-                        response = response.as_mut() => break response,
-                        _ = tokio::time::sleep_until(hint_check_at) => {
-                            hint_check_at =
-                                tokio::time::Instant::now() + watchdog.poll_interval();
-                            if let Some(hint) = watchdog.pending_hint(std::time::Instant::now()) {
-                                let painted = paint_attached_busy_hint(
-                                    terminal_io,
-                                    cached_frame.as_ref(),
-                                    hint.as_str(),
-                                )
-                                .await?;
-                                if !painted {
-                                    return Err(MezError::invalid_state(
-                                        "Iroh attach terminal disconnected while painting the busy hint",
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
+                response.await
             }
         };
-        if watchdog.clear() {
-            terminal_io.invalidate_output_frame().await?;
-        }
         let response = match response {
             Ok(Ok(response)) => response,
             Ok(Err(_)) | Err(_) => {
@@ -1404,22 +1253,16 @@ mod pushed_snapshot_tests {
         );
     }
 
-    /// Verifies a stalled daemon response paints the local busy hint instead of
-    /// leaving the terminal silently frozen, and that the arriving response
-    /// clears the hint and repaints the real layout.
+    /// Verifies an ordinary delayed Iroh terminal-step acknowledgement does not
+    /// write elapsed-time transport status into a client with no pending frame.
     ///
-    /// The production threshold is 500 ms; the task-scoped test override
-    /// shortens it so the assertion is deterministic. The daemon holds its
-    /// acknowledgement until the client has written the hint frame, which pins
-    /// the ordering under test: the hint is the client's own feedback, not
-    /// server output, and this client has no cached frame yet, so the hint must
-    /// be painted as a bare line with no server spans.
+    /// Command work may take longer than a UI feedback threshold. The response
+    /// remains bounded by its request timeout, but latency alone must not render
+    /// implementation-facing text into the terminal.
     #[tokio::test(flavor = "current_thread")]
-    async fn primary_v3_paints_busy_hint_for_a_delayed_response() {
+    async fn primary_v3_delayed_response_does_not_paint_transport_status() {
         let (mut client_stream, mut server_stream) = tokio::io::duplex(16 * 1024);
-        let hint_painted = std::sync::Arc::new(tokio::sync::Notify::new());
         let mut terminal_io = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
-        terminal_io.notify_on_write(hint_painted.clone());
         terminal_io.push_input(b"x".to_vec());
 
         let server = async {
@@ -1428,9 +1271,7 @@ mod pushed_snapshot_tests {
                 .unwrap();
             let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
             assert!(body.contains(r#""method":"terminal/step""#), "{body}");
-            tokio::time::timeout(std::time::Duration::from_secs(5), hint_painted.notified())
-                .await
-                .expect("the client must paint a busy hint while the response is delayed");
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
             tokio::io::AsyncWriteExt::write_all(
                 &mut server_stream,
                 &super::super::encode_control_body(
@@ -1443,52 +1284,29 @@ mod pushed_snapshot_tests {
                 .await
                 .unwrap();
         };
-        let client = super::super::watchdog::with_test_hint_threshold(
-            1,
-            run_iroh_attached_primary_client_loop_async_with_events(
-                &mut client_stream,
-                &mut terminal_io,
-                None,
-                ClientId::parse('c', "c1".to_string()).unwrap(),
-                Size::new(80, 24).unwrap(),
-                std::time::Duration::from_secs(10),
-                None,
-                true,
-            ),
+        let client = run_iroh_attached_primary_client_loop_async_with_events(
+            &mut client_stream,
+            &mut terminal_io,
+            None,
+            ClientId::parse('c', "c1".to_string()).unwrap(),
+            Size::new(80, 24).unwrap(),
+            std::time::Duration::from_secs(10),
+            None,
+            true,
         );
         let (client, ()) = tokio::join!(client, server);
         client.unwrap();
 
-        let hinted = terminal_io
-            .written_frames
-            .iter()
-            .find(|frame| {
-                frame
-                    .lines
-                    .iter()
-                    .any(|line| line.contains("waiting for daemon"))
-            })
-            .expect("a delayed response must paint the local busy hint");
-        assert_eq!(
-            hinted.lines,
-            ["waiting for daemon (0s)"],
-            "without a cached frame the hint is painted as a bare line"
-        );
         assert!(
-            hinted.line_style_spans.iter().all(Vec::is_empty),
-            "locally authored hint text must not carry server style spans"
-        );
-        assert!(
-            terminal_io.invalidated_output_frames >= 1,
-            "the response clears the hint and repaints the layout"
+            terminal_io.written_frames.is_empty(),
+            "a delayed acknowledgement without a server frame must not paint transport status"
         );
     }
 
-    /// Verifies the busy hint overlays the newest pushed frame instead of
-    /// discarding it, so a client that already has a rendered frame keeps its
-    /// layout while the daemon is stalled.
+    /// Verifies a delayed Iroh acknowledgement leaves a pushed frame intact
+    /// rather than replacing its final row with transport-status text.
     #[tokio::test(flavor = "current_thread")]
-    async fn primary_v3_paints_busy_hint_over_the_cached_pushed_frame() {
+    async fn primary_v3_delayed_response_keeps_pushed_frame() {
         let (mut client_stream, mut server_stream) = tokio::io::duplex(16 * 1024);
         let mut terminal_io = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
         terminal_io.push_input(b"x".to_vec());
@@ -1517,8 +1335,8 @@ mod pushed_snapshot_tests {
                 )))
                 .await
                 .unwrap();
-            // Hold the acknowledgement past the client's hint poll so the hint
-            // is painted over the cached frame rather than as a bare line.
+            // Hold the acknowledgement long enough to cover ordinary command
+            // latency after the pushed frame has been presented.
             tokio::time::sleep(std::time::Duration::from_millis(600)).await;
             tokio::io::AsyncWriteExt::write_all(
                 &mut server_stream,
@@ -1532,40 +1350,37 @@ mod pushed_snapshot_tests {
                 .await
                 .unwrap();
         };
-        let client = super::super::watchdog::with_test_hint_threshold(
-            1,
-            run_iroh_attached_primary_client_loop_async_with_events(
-                &mut client_stream,
-                &mut terminal_io,
-                None,
-                ClientId::parse('c', "c1".to_string()).unwrap(),
-                Size::new(80, 24).unwrap(),
-                std::time::Duration::from_secs(10),
-                Some(&mut receiver),
-                true,
-            ),
+        let client = run_iroh_attached_primary_client_loop_async_with_events(
+            &mut client_stream,
+            &mut terminal_io,
+            None,
+            ClientId::parse('c', "c1".to_string()).unwrap(),
+            Size::new(80, 24).unwrap(),
+            std::time::Duration::from_secs(10),
+            Some(&mut receiver),
+            true,
         );
         let (client, ()) = tokio::join!(client, server);
         client.unwrap();
 
-        let hinted = terminal_io
+        let pushed = terminal_io
             .written_frames
             .iter()
-            .find(|frame| {
+            .find(|frame| frame.lines.iter().any(|line| line == "cached row two"))
+            .expect("the pushed frame must remain visible while the acknowledgement is delayed");
+        assert_eq!(
+            pushed.lines,
+            ["cached row one", "cached row two"],
+            "ordinary latency must not replace a cached terminal row"
+        );
+        assert!(
+            terminal_io.written_frames.iter().all(|frame| {
                 frame
                     .lines
                     .iter()
-                    .any(|line| line.contains("waiting for daemon"))
-            })
-            .expect("the cached frame must be overlaid with the busy hint");
-        assert_eq!(
-            hinted.lines,
-            ["cached row one", "waiting for daemon (0s)"],
-            "the hint replaces only the cached frame's last row"
-        );
-        assert!(
-            hinted.line_style_spans.last().is_some_and(Vec::is_empty),
-            "locally authored hint text must not carry server style spans"
+                    .all(|line| !line.contains("waiting for daemon"))
+            }),
+            "ordinary latency must not render daemon-status text"
         );
     }
 
@@ -1699,16 +1514,15 @@ mod pushed_snapshot_tests {
     }
 
     /// Verifies the runtime-events control-socket loop keeps the last painted
-    /// frame when a later view carries no frame at all, so a delayed terminal
-    /// step still paints the busy hint over the layout the client is showing.
+    /// frame when a later view carries no frame and a terminal-step response is
+    /// delayed, without painting transport-status text over that layout.
     ///
     /// The daemon answers the first view with two rows and the second view with
     /// no frame, then injects input so the loop issues a terminal step whose
-    /// acknowledgement is withheld past the hint threshold. Without the retained
-    /// frame the hint would degrade to a bare line even though the earlier rows
-    /// are still on screen.
+    /// acknowledgement is withheld. Ordinary command latency must leave the
+    /// earlier rows alone until the real response arrives.
     #[tokio::test(flavor = "current_thread")]
-    async fn control_socket_loop_paints_busy_hint_over_the_last_painted_frame() {
+    async fn control_socket_loop_delayed_response_keeps_last_painted_frame() {
         let (client_stream, server_stream) = std::os::unix::net::UnixStream::pair().unwrap();
         client_stream.set_nonblocking(true).unwrap();
         server_stream.set_nonblocking(true).unwrap();
@@ -1780,15 +1594,12 @@ mod pushed_snapshot_tests {
             tokio::time::sleep(std::time::Duration::from_millis(600)).await;
             write_control_body(&mut server_stream, &response).await;
         };
-        let client = super::super::watchdog::with_test_hint_threshold(
-            1,
-            run_control_socket_attached_primary_client_loop_async_with_runtime_events(
-                &mut client_stream,
-                &mut terminal_io,
-                ClientId::parse('c', "c1".to_string()).unwrap(),
-                Size::new(80, 24).unwrap(),
-                None,
-            ),
+        let client = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
+            &mut client_stream,
+            &mut terminal_io,
+            ClientId::parse('c', "c1".to_string()).unwrap(),
+            Size::new(80, 24).unwrap(),
+            None,
         );
         let (client, ()) = tokio::join!(client, server);
         client.unwrap();
@@ -1801,31 +1612,14 @@ mod pushed_snapshot_tests {
             ]),
             "the first view caches the two rendered rows"
         );
-        let hinted = terminal_io
-            .frames
-            .iter()
-            .find(|frame| {
+        assert!(
+            terminal_io.frames.iter().all(|frame| {
                 frame
                     .lines
                     .iter()
-                    .any(|line| line.contains("waiting for daemon"))
-            })
-            .expect("a delayed terminal step must paint the local busy hint");
-        assert_eq!(
-            hinted.lines.first().map(String::as_str),
-            Some("cached row one"),
-            "the hint overlays the last painted frame instead of degrading to a bare line"
-        );
-        assert!(
-            hinted
-                .lines
-                .last()
-                .is_some_and(|line| line.contains("waiting for daemon")),
-            "the overlaid row carries the busy hint"
-        );
-        assert!(
-            hinted.line_style_spans.last().is_some_and(Vec::is_empty),
-            "locally authored hint text must not carry server style spans"
+                    .all(|line| !line.contains("waiting for daemon"))
+            }),
+            "ordinary latency must not overwrite the cached frame with daemon-status text"
         );
     }
 }
@@ -1968,7 +1762,6 @@ where
     let mut event_stream = event_stream.map(AttachedRuntimeEventStream::new);
     let mut animation_refresh = AttachAnimationRefresh::default();
     let mut size_refresh = AttachTerminalSizeRefresh::default();
-    let mut hint_frame: Option<AttachHintFrame> = None;
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
@@ -2024,12 +1817,6 @@ where
                 break Ok(());
             }
             animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
-            // A view that carries no frame (an empty server frame, or a render
-            // path that does not retain one) must not discard the last frame
-            // the client already painted: the hint still overlays what is on
-            // screen, and the post-response invalidation repaints real state.
-            let rendered_frame = outcome.hint_frame.filter(|frame| !frame.lines.is_empty());
-            hint_frame = rendered_frame.or(hint_frame);
             render_requested = false;
             iteration = iteration.saturating_add(1);
             continue;
@@ -2044,35 +1831,11 @@ where
         if !write_async_control_body_or_disconnected(stream, &request).await? {
             break Ok(());
         }
-        // A stalled actor must not read as a frozen terminal, so the wait is
-        // bounded by the response watchdog: a due hint repaints the last
-        // composed frame locally, and the response clears it. The connection is
-        // never dropped on the first slow response.
-        let mut watchdog = AttachResponseWatchdog::new(std::time::Instant::now());
-        let response = {
-            let mut response_future = std::pin::pin!(
-                read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1)
-            );
-            loop {
-                tokio::select! {
-                    biased;
-                    response = &mut response_future => break response?,
-                    _ = tokio::time::sleep(watchdog.poll_interval()) => {
-                        let Some(hint) = watchdog.pending_hint(std::time::Instant::now()) else {
-                            continue;
-                        };
-                        if !paint_attached_busy_hint(terminal_io, hint_frame.as_ref(), &hint)
-                            .await?
-                        {
-                            break None;
-                        }
-                    }
-                }
-            }
-        };
-        if watchdog.clear() {
-            terminal_io.invalidate_output_frame().await?;
-        }
+        // Terminal-step response latency is expected while command work runs.
+        // Await the response without replacing the currently rendered terminal
+        // chrome with an elapsed-time transport status.
+        let response =
+            read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await?;
         let Some(response) = response else {
             break Ok(());
         };

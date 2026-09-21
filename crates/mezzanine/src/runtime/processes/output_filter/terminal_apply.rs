@@ -173,9 +173,15 @@ impl RuntimeSessionService {
         if let Some(current_working_directory) = current_working_directory
             && !current_working_directory.trim().is_empty()
         {
+            let current_working_directory = PathBuf::from(current_working_directory);
+            let changed = self.process.pane_current_working_directories.get(&pane_id)
+                != Some(&current_working_directory);
             self.process
                 .pane_current_working_directories
-                .insert(pane_id.clone(), PathBuf::from(current_working_directory));
+                .insert(pane_id.clone(), current_working_directory);
+            if changed {
+                self.invalidate_pane_status_provider_context(&pane_id);
+            }
         }
         let previous_foreground_process_group = self
             .process

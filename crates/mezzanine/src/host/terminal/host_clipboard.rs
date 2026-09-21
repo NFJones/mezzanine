@@ -630,9 +630,9 @@ fn host_clipboard_paste_commands() -> Vec<HostClipboardCommand> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HostClipboard, HostClipboardCommand, WSL_POWERSHELL_COPY_SCRIPT,
-        host_clipboard_copy_commands_for_environment, kernel_release_is_wsl,
-        read_host_clipboard_plan_async,
+        DEFAULT_HOST_CLIPBOARD_READ_MAX_BYTES, HostClipboard, HostClipboardCommand,
+        WSL_POWERSHELL_COPY_SCRIPT, host_clipboard_copy_commands_for_environment,
+        kernel_release_is_wsl, read_host_clipboard_plan_async,
     };
     use std::time::Duration;
 
@@ -727,6 +727,10 @@ mod tests {
                     vec!["-c".to_string(), "printf fallback".to_string()],
                 ),
             ],
+        )
+        .with_read_limits(
+            Duration::from_secs(1),
+            DEFAULT_HOST_CLIPBOARD_READ_MAX_BYTES,
         );
 
         assert_eq!(

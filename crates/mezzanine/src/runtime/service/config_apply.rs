@@ -209,6 +209,39 @@ impl RuntimeSessionService {
             .set_config_reload_preparation_probe(started, release);
     }
 
+    /// Injects a deterministic deferred-command worker gate for actor tests.
+    #[cfg(test)]
+    pub(crate) fn set_deferred_agent_command_probe_for_tests(
+        &mut self,
+        started: std::sync::Arc<tokio::sync::Notify>,
+        release: std::sync::Arc<tokio::sync::Notify>,
+    ) {
+        self.integration
+            .set_deferred_agent_command_probe(started, release);
+    }
+
+    /// Injects a deterministic off-actor frame-composition gate for actor tests.
+    #[cfg(test)]
+    pub(crate) fn set_client_render_composition_probe_for_tests(
+        &mut self,
+        started: std::sync::Arc<tokio::sync::Notify>,
+        release: crate::runtime::RuntimeClientRenderCompositionGate,
+    ) {
+        self.integration
+            .set_client_render_composition_probe(started, release);
+    }
+
+    /// Clones the active frame-composition worker gate for actor tests.
+    #[cfg(test)]
+    pub(crate) fn client_render_composition_probe_for_tests(
+        &self,
+    ) -> (
+        Option<std::sync::Arc<tokio::sync::Notify>>,
+        Option<crate::runtime::RuntimeClientRenderCompositionGate>,
+    ) {
+        self.integration.client_render_composition_probe()
+    }
+
     /// Reads and validates a reload candidate outside serialized actor ownership.
     ///
     /// Path-backed layers use Tokio filesystem work, while composition and the

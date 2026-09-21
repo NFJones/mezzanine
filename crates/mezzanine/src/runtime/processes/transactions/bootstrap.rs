@@ -991,6 +991,100 @@ impl RuntimeSessionService {
             .saturating_add(pending_child_launch_dispatches))
     }
 
+    /// Settles deferred bootstrap work owned by one pane after its output
+    /// handlers unwind, without scanning unrelated pane state.
+    pub(crate) fn settle_deferred_foreign_bootstrap_work_for_pane(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<usize> {
+        let settled_receiver_ends = self.settle_ready_receiver_ends_for_pane(pane_id)?;
+        let settled_foreign_ends =
+            self.settle_deferred_foreign_transaction_ends_for_pane(pane_id)?;
+        let released_loader_handoffs =
+            self.settle_pending_foreign_loader_handoff_for_pane(pane_id)?;
+        let child_launches = self.dispatch_pending_foreign_child_launch_for_pane(pane_id)?;
+        let prompt_ready_dispatches =
+            self.dispatch_prompt_ready_bootstrap_wrapper_for_pane(pane_id)?;
+        Ok(settled_receiver_ends
+            .saturating_add(settled_foreign_ends)
+            .saturating_add(released_loader_handoffs)
+            .saturating_add(child_launches)
+            .saturating_add(prompt_ready_dispatches))
+    }
+
+    /// Dispatches one pane's ready bootstrap work without scanning other panes.
+    fn dispatch_prompt_ready_bootstrap_wrapper_for_pane(&mut self, pane_id: &str) -> Result<usize> {
+        let awaiting_foreign_prompt = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingPrompt
+                    && self.process.pane_bootstrap_pending.contains(pane_id)
+                    && matches!(
+                        self.pane_readiness_state(pane_id),
+                        PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
+                    )
+            });
+        if awaiting_foreign_prompt {
+            self.begin_dependency_free_foreign_shell_bootstrap(pane_id)?;
+            return Ok(1);
+        }
+        let has_deferred_wrapper = self
+            .process
+            .pane_shell_handoffs
+            .get(pane_id)
+            .is_some_and(|handoff| handoff.deferred_bootstrap_wrapper.is_some());
+        let awaits_managed_receiver = has_deferred_wrapper
+            && matches!(
+                self.shell_classification_for_pane(pane_id),
+                mez_agent::ShellClassification::Bash
+                    | mez_agent::ShellClassification::Fish
+                    | mez_agent::ShellClassification::Zsh
+            );
+        let managed_fish_is_ready = !self.process.pane_fish_compatibility.contains_key(pane_id)
+            || self.managed_fish_adapter_is_ready_for_pane(pane_id);
+        if !self.process.pane_bootstrap_pending.contains(pane_id)
+            || self.effective_agent_shell_mode_for_pane(pane_id)
+                == crate::runtime::config::ShellMode::Native
+            || self.pane_has_uncertified_foreign_shell_boundary(pane_id)
+            || self.pane_agent_subshell_certification_is_pending(pane_id)
+            || awaits_managed_receiver
+            || !managed_fish_is_ready
+            || (!has_deferred_wrapper
+                && self
+                    .process
+                    .running_shell_transactions
+                    .values()
+                    .any(|transaction| transaction.pane_id == pane_id))
+            || !matches!(
+                self.pane_readiness_state(pane_id),
+                PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
+            )
+        {
+            return Ok(0);
+        }
+        let deferred = self
+            .process
+            .pane_shell_handoffs
+            .get_mut(pane_id)
+            .and_then(|handoff| {
+                let marker = handoff.bootstrap_marker.clone()?;
+                let wrapper = handoff.deferred_bootstrap_wrapper.take()?;
+                Some((marker, wrapper))
+            });
+        if let Some((marker, wrapper)) = deferred {
+            if let Err(error) = self.write_runtime_pane_shell_input(pane_id, wrapper.as_bytes()) {
+                self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
+                return Err(error);
+            }
+            self.record_bootstrap_sent(pane_id, &marker)?;
+        } else {
+            self.dispatch_bootstrap_to_pane(pane_id)?;
+        }
+        Ok(1)
+    }
+
     /// Dispatches hidden bootstrap wrappers for pending panes that have reached
     /// prompt-like readiness.
     ///
@@ -1124,69 +1218,90 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut dispatched = 0usize;
         for pane_id in pending_child_launches {
-            match self.begin_dependency_free_foreign_child_bootstrap(&pane_id) {
-                Ok(()) => dispatched = dispatched.saturating_add(1),
-                Err(error) => {
-                    let message = format!(
-                        "dependency-free foreign child launch failed: {}",
-                        error.message()
-                    );
-                    if let Some(boundary) =
-                        self.process.pane_foreign_shell_boundaries.get_mut(&pane_id)
-                    {
-                        boundary.phase = RuntimeForeignShellBootstrapPhase::Failed;
-                        boundary.phase_started_at_unix_ms = current_unix_millis();
-                        boundary.child_token = None;
-                        boundary.child_shell = None;
-                        boundary.child_staging_source = None;
-                        boundary.loader_marker = None;
-                        boundary.loader_payload = None;
-                        boundary.loader_ready = false;
-                        boundary.identity_marker = None;
-                    }
-                    // `Failed` is terminal, so it has no bounded owner for the
-                    // generic foreign-bootstrap expiry to normalize and this
-                    // branch must clear the state that
-                    // `begin_dependency_free_foreign_child_bootstrap` recorded
-                    // before its fallible staging steps failed, exactly like the
-                    // sibling failure paths in `write_failures.rs` and the
-                    // loader-exit settlement. A leaked `child_shell` would keep
-                    // `active_zsh_trigger_for_pane` advertising an EscapeM trigger
-                    // for a failed boundary.
-                    self.process.pane_managed_shell_handoffs.remove(&pane_id);
-                    self.process.pane_shell_handoffs.remove(&pane_id);
-                    self.process
-                        .pane_agent_subshell_parent_return_pending
-                        .remove(&pane_id);
-                    self.process
-                        .pending_agent_subshell_start_observations
-                        .remove(&pane_id);
-                    self.process
-                        .pending_agent_subshell_certifications
-                        .remove(&pane_id);
-                    self.process.pane_bootstrap_pending.remove(&pane_id);
-                    self.process.pane_probed_shell_identities.remove(&pane_id);
-                    self.clear_agent_subshell_shell_identity(&pane_id);
-                    self.mark_pane_environment_authority_unavailable(
-                        &pane_id,
-                        RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapTransactionFailed,
-                    );
-                    self.set_pane_readiness(&pane_id, PaneReadinessState::Degraded);
-                    self.append_agent_error_text_to_terminal_buffer(
-                        &pane_id,
-                        &format!("agent: {message}"),
-                    )?;
-                    self.append_lifecycle_event(
+            dispatched = dispatched
+                .saturating_add(self.dispatch_pending_foreign_child_launch_for_pane(&pane_id)?);
+        }
+        Ok(dispatched)
+    }
+
+    /// Dispatches a dependency-free child launch only when the addressed pane
+    /// owns a settled identity probe. Pane-output handling uses this narrow
+    /// entry point so unrelated pending foreign boundaries remain untouched.
+    pub(crate) fn dispatch_pending_foreign_child_launch_for_pane(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<usize> {
+        let pending = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::ChildLaunchPending
+            });
+        if !pending {
+            return Ok(0);
+        }
+        match self.begin_dependency_free_foreign_child_bootstrap(pane_id) {
+            Ok(()) => Ok(1),
+            Err(error) => {
+                let message = format!(
+                    "dependency-free foreign child launch failed: {}",
+                    error.message()
+                );
+                if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id)
+                {
+                    boundary.phase = RuntimeForeignShellBootstrapPhase::Failed;
+                    boundary.phase_started_at_unix_ms = current_unix_millis();
+                    boundary.child_token = None;
+                    boundary.child_shell = None;
+                    boundary.child_staging_source = None;
+                    boundary.loader_marker = None;
+                    boundary.loader_payload = None;
+                    boundary.loader_ready = false;
+                    boundary.identity_marker = None;
+                }
+                // `Failed` is terminal, so it has no bounded owner for the
+                // generic foreign-bootstrap expiry to normalize and this
+                // branch must clear the state that
+                // `begin_dependency_free_foreign_child_bootstrap` recorded
+                // before its fallible staging steps failed, exactly like the
+                // sibling failure paths in `write_failures.rs` and the
+                // loader-exit settlement. A leaked `child_shell` would keep
+                // `active_zsh_trigger_for_pane` advertising an EscapeM trigger
+                // for a failed boundary.
+                self.process.pane_managed_shell_handoffs.remove(pane_id);
+                self.process.pane_shell_handoffs.remove(pane_id);
+                self.process
+                    .pane_agent_subshell_parent_return_pending
+                    .remove(pane_id);
+                self.process
+                    .pending_agent_subshell_start_observations
+                    .remove(pane_id);
+                self.process
+                    .pending_agent_subshell_certifications
+                    .remove(pane_id);
+                self.process.pane_bootstrap_pending.remove(pane_id);
+                self.process.pane_probed_shell_identities.remove(pane_id);
+                self.clear_agent_subshell_shell_identity(pane_id);
+                self.mark_pane_environment_authority_unavailable(
+                    pane_id,
+                    RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapTransactionFailed,
+                );
+                self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+                self.append_agent_error_text_to_terminal_buffer(
+                    pane_id,
+                    &format!("agent: {message}"),
+                )?;
+                self.append_lifecycle_event(
                         EventKind::AgentStatus,
                         format!(
                             r#"{{"pane_id":"{}","foreign_bootstrap":"failed","phase":"child-launch-pending","transport":"dependency-free","state":"degraded","error":"{}"}}"#,
-                            json_escape(&pane_id),
+                            json_escape(pane_id),
                             json_escape(&message)
                         ),
                     )?;
-                }
+                Ok(0)
             }
         }
-        Ok(dispatched)
     }
 }

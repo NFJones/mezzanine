@@ -1514,7 +1514,8 @@ fn runtime_interrupted_turn_pending_transcript_is_visible_to_immediate_continuat
                     protected_conversation_ids,
                     schedule_next: false,
                     ..
-                }
+                },
+                RuntimeSideEffect::PersistAgentSessionMetadata { .. }
             ] if protected_conversation_ids.contains(&conversation_id)
         ),
         "{persistence:#?}"

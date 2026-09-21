@@ -807,15 +807,11 @@ async fn async_attached_terminal_loop_keeps_mixed_sgr_input_frame_fenced() {
         )));
         assert!(report.actions.iter().any(|action| matches!(
             action,
-            TerminalClientLoopAction::HandleMouse(_) | TerminalClientLoopAction::ForwardMouseToPane { .. }
+            TerminalClientLoopAction::HandleMouse(_)
+                | TerminalClientLoopAction::ForwardMouseToPane { .. }
         )));
         assert!(
-            handle
-                .metrics()
-                .await
-                .unwrap()
-                .render_client_frame_requests
-                >= 1,
+            handle.metrics().await.unwrap().render_client_frame_requests >= 1,
             "mixed SGR input must render before coordinate actions are applied"
         );
         handle.shutdown().await.unwrap();

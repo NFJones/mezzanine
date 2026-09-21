@@ -1084,9 +1084,14 @@ fn runtime_close_agent_retires_owned_persistent_child_runtime_state() {
             objective: "stale persistent child".to_string(),
         },
     );
-    let denied = execute_close_agent_for_test(&mut service, &parent_turn, "agent-%997");
-    assert_eq!(close_agent_denial_signature(&denied), unavailable);
-    assert!(service.persistent_subagent("agent-%997").is_some());
+    let stale = execute_close_agent_for_test(&mut service, &parent_turn, "agent-%997");
+    assert_eq!(stale.status, ActionStatus::Succeeded);
+    assert_eq!(
+        stale.structured_content_json.as_deref(),
+        Some(r#"{"closed":false,"agent_id":"agent-%997"}"#),
+        "a missing owned pane is an idempotently completed close rather than a retry loop"
+    );
+    assert!(service.persistent_subagent("agent-%997").is_none());
     assert!(service.persistent_subagent(&child_agent_id).is_some());
     assert!(service.find_pane_descriptor(&child_pane_id).is_some());
     assert!(

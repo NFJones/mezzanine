@@ -71,7 +71,7 @@ async fn async_attached_terminal_step_uses_runtime_rendered_view() {
 
     let ((), exit) = tokio::join!(client, actor.run());
 
-    assert_eq!(exit.commands_processed, 2);
+    assert_eq!(exit.commands_processed, 3);
 }
 
 /// Verifies async attached terminal step can be applied through actor.

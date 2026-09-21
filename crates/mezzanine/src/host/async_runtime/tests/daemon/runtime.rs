@@ -178,25 +178,27 @@ async fn async_runtime_daemon_supervises_named_control_and_message_listeners() {
     services.sort_by(|left, right| left.name.cmp(&right.name));
 
     assert!(report.shutdown_requested);
-    assert_eq!(services.len(), 9);
-    assert_eq!(services[0].name, "agent-provider");
+    assert_eq!(services.len(), 10);
+    assert_eq!(services[0].name, "agent-command");
     assert_eq!(services[0].exit.work_units, 0);
-    assert_eq!(services[1].name, "control");
+    assert_eq!(services[1].name, "agent-provider");
     assert_eq!(services[1].exit.work_units, 0);
-    assert_eq!(services[2].name, "hook");
+    assert_eq!(services[2].name, "control");
     assert_eq!(services[2].exit.work_units, 0);
-    assert_eq!(services[3].name, "host-clipboard");
+    assert_eq!(services[3].name, "hook");
     assert_eq!(services[3].exit.work_units, 0);
-    assert_eq!(services[4].name, "message");
+    assert_eq!(services[4].name, "host-clipboard");
     assert_eq!(services[4].exit.work_units, 0);
-    assert_eq!(services[5].name, "pane-process-supervisor");
+    assert_eq!(services[5].name, "message");
     assert_eq!(services[5].exit.work_units, 0);
-    assert_eq!(services[6].name, "persistence");
+    assert_eq!(services[6].name, "pane-process-supervisor");
     assert_eq!(services[6].exit.work_units, 0);
-    assert_eq!(services[7].name, "status-pill");
+    assert_eq!(services[7].name, "persistence");
     assert_eq!(services[7].exit.work_units, 0);
-    assert_eq!(services[8].name, "timer");
+    assert_eq!(services[8].name, "status-pill");
     assert_eq!(services[8].exit.work_units, 0);
+    assert_eq!(services[9].name, "timer");
+    assert_eq!(services[9].exit.work_units, 0);
 
     let _ = std::fs::remove_file(&control_path);
     let _ = std::fs::remove_file(&message_path);

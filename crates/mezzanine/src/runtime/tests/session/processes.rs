@@ -1419,6 +1419,31 @@ fn runtime_service_can_handoff_running_pane_process_to_async_owner() {
             .as_deref(),
         Some(Path::new("/tmp/mez-async-cwd"))
     );
+    service.reconcile_pane_status_providers();
+    let (scans_before_cwd_only_change, _) =
+        service.pane_status_provider_reconciliation_counts_for_tests();
+    let revision_before_cwd_only_change = service.session().mutation_revision();
+    service
+        .apply_pane_foreground_process_event(
+            &started.pane_id,
+            "vim",
+            started.primary_pid.saturating_add(1),
+            Some("/tmp/mez-async-cwd-next".to_string()),
+        )
+        .unwrap();
+    assert_eq!(
+        service.session().mutation_revision(),
+        revision_before_cwd_only_change,
+        "a CWD-only observation must not rely on an unrelated mux mutation"
+    );
+    service.reconcile_pane_status_providers();
+    let (scans_after_cwd_only_change, _) =
+        service.pane_status_provider_reconciliation_counts_for_tests();
+    assert_eq!(
+        scans_after_cwd_only_change,
+        scans_before_cwd_only_change + 1,
+        "a CWD-only observation must force provider context reconciliation"
+    );
     assert_eq!(
         service
             .restore_running_pane_process_from_adapter(&started.pane_id, process)

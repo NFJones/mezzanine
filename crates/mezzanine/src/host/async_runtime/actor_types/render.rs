@@ -13,10 +13,41 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::host::async_runtime) struct AsyncClientRenderToken {
     pub(in crate::host::async_runtime) client_id: ClientId,
+    /// Attached primary whose navigation supplied the rendered window.
+    pub(in crate::host::async_runtime) view_source_client_id: ClientId,
     pub(in crate::host::async_runtime) window_id: String,
     pub(in crate::host::async_runtime) navigation_revision: u64,
     pub(in crate::host::async_runtime) layout_revision: u64,
     pub(in crate::host::async_runtime) presentation_revision: u64,
+    /// Opaque active-editor lease identity for the captured active pane.
+    pub(in crate::host::async_runtime) external_editor_session: Option<(String, String)>,
+    /// Visible pane screen generations in exact window presentation order.
+    pub(in crate::host::async_runtime) pane_render_generations: Vec<(String, u64)>,
+}
+
+/// Immutable actor-captured input for one off-actor base-frame composition.
+#[derive(Debug, Clone)]
+pub(in crate::host::async_runtime) struct AsyncClientRenderWork {
+    /// Exact attached client that owns this render generation.
+    pub(in crate::host::async_runtime) client_id: ClientId,
+    /// Render role selected from the attached client state.
+    pub(in crate::host::async_runtime) role: mez_mux::presentation::ClientViewRole,
+    /// Generation fence captured with the exact client presentation state.
+    pub(in crate::host::async_runtime) render_token: Option<AsyncClientRenderToken>,
+    /// Actor-resolved terminal configuration used to capture this work.
+    pub(in crate::host::async_runtime) config: AsyncTerminalClientConfigSnapshot,
+    /// Complete immutable source required by the pure base-frame renderer.
+    pub(in crate::host::async_runtime) snapshot: crate::runtime::RuntimeClientRenderSnapshot,
+    /// Whether actor-owned overlays and presentation receipts apply to this frame.
+    pub(in crate::host::async_runtime) apply_overlays: bool,
+    /// Test-only signal raised after the worker receives immutable work.
+    #[cfg(test)]
+    pub(in crate::host::async_runtime) composition_started:
+        Option<std::sync::Arc<tokio::sync::Notify>>,
+    /// Test-only blocking gate for deterministic worker responsiveness coverage.
+    #[cfg(test)]
+    pub(in crate::host::async_runtime) composition_release:
+        Option<crate::runtime::RuntimeClientRenderCompositionGate>,
 }
 
 /// Immutable actor-resolved terminal configuration shared across client requests.

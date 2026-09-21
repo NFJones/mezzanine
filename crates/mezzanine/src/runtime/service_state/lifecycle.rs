@@ -187,6 +187,18 @@ pub(crate) struct RuntimeAgentCommandAsyncWork {
     pub input: String,
     /// Actor-owned claim generation compared when the outcome settles.
     pub claim_generation: u64,
+    /// Theme captured when the command claim was accepted for off-actor display projection.
+    pub display_theme: mez_mux::theme::UiTheme,
+    /// Terminal width captured when the command claim was accepted for off-actor display projection.
+    pub display_width: usize,
+    /// Agent display wrap cap captured with the terminal width for off-actor projection.
+    pub display_wrap_column_cap: usize,
+    /// Test-only gate used to hold one claimed worker outside actor ownership.
+    #[cfg(test)]
+    pub deferred_agent_command_started: Option<std::sync::Arc<tokio::sync::Notify>>,
+    /// Test-only gate release paired with `deferred_agent_command_started`.
+    #[cfg(test)]
+    pub deferred_agent_command_release: Option<std::sync::Arc<tokio::sync::Notify>>,
     /// Owned inputs the deferred execution reads instead of live actor state.
     pub prepared: RuntimeAgentCommandPrepared,
 }
@@ -389,6 +401,21 @@ pub(crate) enum RuntimeAgentCommandAsyncOutcome {
         browser: Box<mez_mux::record_browser::RecordBrowser>,
         /// Overlay source retained for refreshes and scope indicators.
         source: Option<super::RuntimeRecordBrowserOverlaySource>,
+    },
+    /// Immutable command display projection built outside actor ownership.
+    Projected {
+        /// Preparsed and width-resolved display content ready for actor-owned installation.
+        display_output: crate::runtime::RuntimeAgentShellDisplayOutput,
+        /// Whether the resolved response removes the pane prompt.
+        hide_prompt: bool,
+        /// Whether the command settles through its ordinary failure lifecycle.
+        failed: bool,
+        /// Optional record browser that must be registered before overlay installation.
+        record_browser: Option<(
+            String,
+            Box<mez_mux::record_browser::RecordBrowser>,
+            Option<super::RuntimeRecordBrowserOverlaySource>,
+        )>,
     },
 }
 

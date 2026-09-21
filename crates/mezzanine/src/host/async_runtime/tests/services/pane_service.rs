@@ -79,6 +79,48 @@ async fn async_pane_process_service_defers_large_input_remainders() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies an exact-process worker retires its targeted delivery watcher when
+/// it exits, so successive process generations cannot retain stale routes.
+#[tokio::test(flavor = "current_thread")]
+async fn async_pane_process_service_retires_exact_delivery_watcher_on_exit() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let instance = PaneProcessInstance {
+        pane_id: "%1".to_string(),
+        generation: 1,
+    };
+    let mut driver = AsyncPaneProcessDriver::new_for_instance(
+        instance,
+        AsyncFakePaneProcessIo::default(),
+        AsyncPaneProcessDriverConfig::default(),
+    )
+    .unwrap();
+
+    let client = async {
+        let report = run_async_pane_process_service(
+            &handle,
+            &mut driver,
+            AsyncPaneProcessServiceConfig {
+                max_polls: 1,
+                output_drain_limit: 1,
+                drain_limit: 1,
+                idle_interval: Duration::from_millis(1),
+                foreground_metadata_interval: Duration::from_secs(60),
+            },
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.polls, 1);
+        assert_eq!(handle.pane_process_side_effect_delivery_watcher_count(), 0);
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that partial PTY write progress remains observable and ordered.
 ///
 /// A backend can accept only part of a pane input chunk before applying

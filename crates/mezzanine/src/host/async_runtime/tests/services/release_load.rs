@@ -367,12 +367,12 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
                     if output_events.is_multiple_of(4) {
                         let render_started = Instant::now();
                         handle
-                            .render_client_frame(
+                            .render_client_side_effect(
                                 primary.clone(),
-                                ClientViewRole::Primary,
-                                Size::new(120, 40).unwrap(),
+                                RenderInvalidationReason::PaneOutput,
                                 TerminalClientLoopConfig::default(),
-                                true,
+                                None,
+                                0,
                             )
                             .await
                             .unwrap();

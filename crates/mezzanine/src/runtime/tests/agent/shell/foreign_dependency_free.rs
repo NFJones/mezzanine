@@ -620,8 +620,11 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
         .pane_processes_mut()
         .set_foreground_process_group_id_for_test(&pane_id, Some(primary_pid.saturating_add(2)));
     assert!(
-        service.settle_deferred_foreign_bootstrap_work().unwrap() >= 1,
-        "the deferred pass should release the staged loader payload once the loader launch is observed"
+        service
+            .settle_deferred_foreign_bootstrap_work_for_pane(&pane_id)
+            .unwrap()
+            >= 1,
+        "the pane-scoped deferred pass should release the staged loader payload once the loader launch is observed"
     );
     let release_effects = service.drain_pane_io_transition().side_effects;
     let release_inputs = pane_input_effects(&release_effects);

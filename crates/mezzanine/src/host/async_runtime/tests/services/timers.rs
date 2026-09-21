@@ -99,6 +99,46 @@ async fn async_timer_side_effect_service_fires_scheduled_timers() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies the timer worker claims its dedicated FIFO route without scanning
+/// or consuming unrelated provider dispatch work in the compatibility queue.
+#[tokio::test(flavor = "current_thread")]
+async fn async_timer_drain_preserves_unrelated_provider_dispatch() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: AgentId::opaque("agent-%1").unwrap(),
+                    turn_id: "turn-timer-route".to_string(),
+                },
+                RuntimeSideEffect::ScheduleTimer {
+                    key: RuntimeTimerKey::new(RuntimeTimerKind::ProviderPoll, "route", 1),
+                    delay_ms: 1,
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(handle.drain_timer_side_effects(1).await.unwrap().len(), 1);
+        assert_eq!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(1)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque("agent-%1").unwrap(),
+                turn_id: "turn-timer-route".to_string(),
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
 /// Verifies that cancelled runtime timers are removed before they can emit
 /// stale events. This prevents old readiness, shell transaction, or resize
 /// generations from racing later actor state after a newer timer supersedes

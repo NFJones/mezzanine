@@ -664,7 +664,7 @@ impl AgentTranscriptStore {
         conversation_id: &str,
     ) -> Result<Option<CatalogCandidate>> {
         validate_conversation_id(conversation_id)?;
-        let existing = catalog::record(self, conversation_id)?;
+        let existing = catalog::record_for_mutation(self, conversation_id)?;
         let named = self.read_named_sessions_index()?.remove(conversation_id);
         let session_dir = self.session_dir_for(conversation_id)?;
         let directory_transcript = session_dir.join(SESSION_TRANSCRIPT_FILE_NAME).is_file();
@@ -1245,7 +1245,7 @@ impl AgentTranscriptStore {
 
     /// Updates one catalog row after a presentation append without replaying history.
     fn upsert_catalog_after_presentation(&self, entry: &AgentPresentationEntry) -> Result<()> {
-        let existing = catalog::record(self, &entry.conversation_id)?;
+        let existing = catalog::record_for_mutation(self, &entry.conversation_id)?;
         let named = if existing.is_none() {
             self.read_named_sessions_index()?
                 .remove(&entry.conversation_id)
@@ -2175,6 +2175,51 @@ impl AgentTranscriptStore {
         Ok(records.len())
     }
 
+    /// Atomically persists captured action catalogs with the active session
+    /// metadata checkpoint, restoring newly captured catalogs if the metadata
+    /// replacement cannot be committed.
+    pub fn save_agent_session_metadata_checkpoint(
+        &self,
+        mezzanine_session_id: &str,
+        records: &[AgentSessionMetadata],
+    ) -> Result<usize> {
+        let previous_catalogs = records
+            .iter()
+            .filter_map(|record| {
+                record.allowed_actions.as_ref().map(|_| {
+                    self.conversation_allowed_actions(&record.conversation_id)
+                        .map(|catalog| (record.conversation_id.clone(), catalog))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for record in records {
+            if let Some(allowed_actions) = record.allowed_actions.clone()
+                && let Err(error) = self.save_conversation_allowed_actions(
+                    &record.conversation_id,
+                    Some(allowed_actions),
+                )
+            {
+                for (conversation_id, previous_catalog) in previous_catalogs.iter().rev() {
+                    let _ = self.restore_conversation_allowed_actions(
+                        conversation_id,
+                        previous_catalog.clone(),
+                    );
+                }
+                return Err(error);
+            }
+        }
+        if let Err(error) = self.save_agent_session_metadata(mezzanine_session_id, records) {
+            for (conversation_id, previous_catalog) in previous_catalogs.iter().rev() {
+                let _ = self.restore_conversation_allowed_actions(
+                    conversation_id,
+                    previous_catalog.clone(),
+                );
+            }
+            return Err(error);
+        }
+        Ok(records.len())
+    }
+
     /// Deletes a conversation transcript.
     ///
     /// Returns true when a file was removed and false when the conversation was
@@ -2460,7 +2505,6 @@ impl AgentTranscriptStore {
     }
 
     /// Returns the durable active agent-session metadata file path.
-    #[cfg(test)]
     pub fn agent_session_metadata_file(&self) -> PathBuf {
         self.agent_session_metadata_path()
     }
@@ -2814,7 +2858,7 @@ impl AgentTranscriptStore {
                 if protected_conversation_ids.contains(&conversation_id) {
                     return Ok(false);
                 }
-                let Some(record) = catalog::record(self, &conversation_id)? else {
+                let Some(record) = catalog::record_for_mutation(self, &conversation_id)? else {
                     return Ok(false);
                 };
                 if record.session.archived_at_unix_seconds.is_some()

@@ -308,6 +308,12 @@ impl RuntimeExternalEditorComponent {
         self.active_by_pane.get(pane_id)
     }
 
+    /// Returns the opaque active editor session identity for render fencing.
+    pub(super) fn active_session_id(&self, pane_id: &str) -> Option<&str> {
+        self.active(pane_id)
+            .map(|session| session.session_id.as_str())
+    }
+
     /// Returns exact pane and transaction identities owned by one primary client.
     pub(super) fn active_targets_for_client(&self, client_id: &str) -> Vec<(String, String)> {
         self.active_by_pane

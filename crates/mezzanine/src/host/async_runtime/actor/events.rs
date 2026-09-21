@@ -42,6 +42,25 @@ fn runtime_event_queue_error_after_service_drain(error: MezError, applied: usize
     MezError::invalid_state(format!("{} applied={applied} consumed=1", error.message()))
 }
 
+/// Returns whether an event can change an owner that requires the global
+/// bootstrap, agent-progress, and timer convergence pass.
+///
+/// Render-ready and resize signals affect only the addressed client's retained
+/// presentation. They already enqueue their exact-client invalidation during
+/// application, so reconciling pane bootstrap and agent progress after each
+/// such signal only scans unrelated session state.
+fn runtime_event_requires_global_reconciliation(event: &RuntimeEvent) -> bool {
+    !matches!(
+        event,
+        RuntimeEvent::Client(ClientEvent::ResizeSignal { .. } | ClientEvent::OutputReady { .. })
+            | RuntimeEvent::Pane(PaneEvent::Output { .. })
+            | RuntimeEvent::PaneProcess {
+                event: PaneProcessEvent::Pane(PaneEvent::Output { .. }),
+                ..
+            }
+    )
+}
+
 impl AsyncRuntimeSessionActor {
     /// Runs the notify message delivery operation for this subsystem.
     ///
@@ -86,6 +105,21 @@ impl AsyncRuntimeSessionActor {
             .send(self.metrics.side_effect_delivery_notifications);
         self.side_effect_delivery_notify.notify_waiters();
         self.side_effect_delivery_notify.notify_one();
+    }
+
+    /// Publishes one delivery revision only to the owning exact-process worker.
+    pub(super) fn notify_pane_process_side_effect_delivery(
+        &self,
+        instance: &crate::runtime::PaneProcessInstance,
+    ) {
+        let routes = self
+            .pane_process_side_effect_delivery_txs
+            .lock()
+            .expect("pane-process side-effect delivery lock must not be poisoned");
+        if let Some(sender) = routes.get(instance) {
+            let revision = sender.borrow().wrapping_add(1);
+            let _ = sender.send(revision);
+        }
     }
 
     /// Runs the notify lifecycle state if changed operation for this subsystem.
@@ -145,13 +179,18 @@ impl AsyncRuntimeSessionActor {
         let mut report = batch.ingress_report();
         let mut registry_persistence_queued = false;
         let mut registry_persistence_required = false;
+        let mut global_reconciliation_required = false;
         for event in batch.prioritized_events() {
             let event_requires_registry_persistence =
                 runtime_event_requires_registry_persistence(&event);
+            let event_requires_global_reconciliation =
+                runtime_event_requires_global_reconciliation(&event);
             let application = self.apply_runtime_event(event).await?;
             if application.applied {
                 registry_persistence_required =
                     registry_persistence_required || event_requires_registry_persistence;
+                global_reconciliation_required =
+                    global_reconciliation_required || event_requires_global_reconciliation;
                 report.applied = report.applied.saturating_add(1);
             }
             registry_persistence_queued = registry_persistence_queued
@@ -163,7 +202,7 @@ impl AsyncRuntimeSessionActor {
                 .map_err(|error| runtime_event_queue_error_with_applied(error, report.applied))?;
         }
         let mut batch_side_effects = Vec::new();
-        if report.applied > 0 {
+        if global_reconciliation_required {
             let reconciliation_started = std::time::Instant::now();
             self.metrics.runtime_event_reconciliation_passes = self
                 .metrics
@@ -188,6 +227,11 @@ impl AsyncRuntimeSessionActor {
                 crate::host::async_runtime::AsyncRuntimeLatencyPhase::EventReconciliation,
                 u64::try_from(reconciliation_started.elapsed().as_millis()).unwrap_or(u64::MAX),
             );
+        } else if report.applied > 0 {
+            self.metrics.runtime_event_global_reconciliation_skipped = self
+                .metrics
+                .runtime_event_global_reconciliation_skipped
+                .saturating_add(1);
         }
         batch_side_effects.extend(self.deferred_service_side_effects_from_service());
         registry_persistence_queued = registry_persistence_queued
@@ -290,6 +334,10 @@ impl AsyncRuntimeSessionActor {
                 let pane_id_for_pipe_health = pane_id.clone();
                 let mut transition = self.service.apply_pane_output_transition(pane_id, bytes)?;
                 if transition.applied {
+                    self.service
+                        .settle_deferred_foreign_bootstrap_work_for_pane(
+                            &pane_id_for_pipe_health,
+                        )?;
                     self.metrics.pane_output_chunks =
                         self.metrics.pane_output_chunks.saturating_add(1);
                     self.metrics.pane_output_bytes = self
@@ -314,6 +362,15 @@ impl AsyncRuntimeSessionActor {
                     transition
                         .side_effects
                         .extend(self.pending_provider_dispatch_side_effects()?);
+                    transition
+                        .side_effects
+                        .extend(self.cancel_stale_shell_transaction_timer_side_effects());
+                    transition
+                        .side_effects
+                        .extend(self.shell_transaction_timer_side_effects());
+                    transition
+                        .side_effects
+                        .extend(self.idle_cleanup_timer_side_effects());
                 }
                 Ok(transition)
             }
@@ -848,7 +905,7 @@ impl AsyncRuntimeSessionActor {
 
     /// Returns true when a queued compaction dispatch already exists for a pane.
     pub(super) fn compaction_dispatch_is_already_queued(&self, target_pane_id: &str) -> bool {
-        self.side_effects.iter().any(|effect| {
+        self.side_effect_routes.any_provider(|effect| {
             matches!(
                 effect,
                 RuntimeSideEffect::DispatchAgentCompaction { pane_id }
@@ -859,7 +916,7 @@ impl AsyncRuntimeSessionActor {
 
     /// Returns true when a queued durable memory dispatch already exists for a pane.
     pub(super) fn remember_dispatch_is_already_queued(&self, target_pane_id: &str) -> bool {
-        self.side_effects.iter().any(|effect| {
+        self.side_effect_routes.any_provider(|effect| {
             matches!(
                 effect,
                 RuntimeSideEffect::DispatchAgentRemember { pane_id } if pane_id == target_pane_id
@@ -872,7 +929,7 @@ impl AsyncRuntimeSessionActor {
         &self,
         target_conversation_id: &str,
     ) -> bool {
-        self.side_effects.iter().any(|effect| {
+        self.side_effect_routes.any_provider(|effect| {
             matches!(
                 effect,
                 RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id }
@@ -1027,7 +1084,7 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn provider_dispatch_is_already_queued(&self, turn_id: &str) -> bool {
-        self.side_effects.iter().any(|effect| {
+        self.side_effect_routes.any_provider(|effect| {
             matches!(
                 effect,
                 RuntimeSideEffect::DispatchAgentProvider {
@@ -1040,7 +1097,7 @@ impl AsyncRuntimeSessionActor {
 
     /// Returns whether one approved external action already has a queued dispatch.
     fn approved_external_dispatch_is_already_queued(&self, turn_id: &str, action_id: &str) -> bool {
-        self.side_effects.iter().any(|effect| {
+        self.side_effect_routes.any_provider(|effect| {
             matches!(
                 effect,
                 RuntimeSideEffect::DispatchApprovedExternalAction {
@@ -1053,7 +1110,7 @@ impl AsyncRuntimeSessionActor {
 
     /// Returns whether one native shell action already has a queued dispatch.
     fn native_shell_dispatch_is_already_queued(&self, turn_id: &str, action_id: &str) -> bool {
-        self.side_effects.iter().any(|effect| {
+        self.side_effect_routes.any_provider(|effect| {
             matches!(
                 effect,
                 RuntimeSideEffect::DispatchNativeShellAction {
@@ -1120,7 +1177,7 @@ impl AsyncRuntimeSessionActor {
             ClientEvent::OutputReady { client_id } => Ok(self
                 .apply_runtime_client_render_signal_event(
                     client_id,
-                    RenderInvalidationReason::FullRedraw,
+                    RenderInvalidationReason::PaneOutput,
                 )),
             ClientEvent::Input { client_id, bytes } => self
                 .service

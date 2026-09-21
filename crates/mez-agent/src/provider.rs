@@ -22,6 +22,9 @@ pub type ProviderRequestAssemblyResult<T> = Result<T, ProviderRequestAssemblyErr
 /// It is stripped before the rendered messages are returned, so it exists only
 /// inside one `openai_render_messages` call and never reaches a caller or wire.
 const STABLE_PREFIX_TAG: &str = "__mez_stable_prefix";
+/// Internal render tag for durable history eligible to advance an explicit
+/// OpenAI cache checkpoint. It is removed before the rendered request escapes.
+const DURABLE_CACHE_CHECKPOINT_TAG: &str = "__mez_durable_cache_checkpoint";
 
 /// Provider-specific rendering of model messages for OpenAI Responses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +42,12 @@ pub struct OpenAiRenderedMessages {
     /// what lets the marker stay at the end of the stable developer group as
     /// chronology appends newer developer-role blocks.
     pub stable_input_positions: Vec<usize>,
+    /// Positions in `input` rendered from settled durable chronology.
+    ///
+    /// These advance explicit checkpoints after the separate stationary
+    /// stable-prefix boundary; current user input and live action results remain
+    /// outside the advancing boundary.
+    pub settled_history_cache_checkpoint_positions: Vec<usize>,
 }
 
 /// Renders provider-independent messages into OpenAI Responses input shape.
@@ -69,6 +78,22 @@ pub fn openai_render_messages(
                     object.insert(STABLE_PREFIX_TAG.to_string(), serde_json::Value::Bool(true));
                 }
             }
+        } else if matches!(
+            message.source,
+            ContextSourceKind::Transcript
+                | ContextSourceKind::TranscriptUser
+                | ContextSourceKind::TranscriptAssistant
+                | ContextSourceKind::TranscriptTool
+                | ContextSourceKind::CommittedEvidence
+        ) {
+            for item in input.iter_mut().skip(first_item) {
+                if let Some(object) = item.as_object_mut() {
+                    object.insert(
+                        DURABLE_CACHE_CHECKPOINT_TAG.to_string(),
+                        serde_json::Value::Bool(true),
+                    );
+                }
+            }
         }
     }
     // A legacy transcript can retain a tool result whose assistant function
@@ -78,6 +103,7 @@ pub fn openai_render_messages(
     // Pairing can drop items, so the stable positions are resolved after it and
     // the internal tag never reaches a caller or the wire.
     let mut stable_input_positions = Vec::new();
+    let mut settled_history_cache_checkpoint_positions = Vec::new();
     for (position, item) in input.iter_mut().enumerate() {
         let stable = item
             .as_object_mut()
@@ -85,6 +111,13 @@ pub fn openai_render_messages(
             .is_some();
         if stable {
             stable_input_positions.push(position);
+        }
+        let durable_checkpoint = item
+            .as_object_mut()
+            .and_then(|object| object.remove(DURABLE_CACHE_CHECKPOINT_TAG))
+            .is_some();
+        if durable_checkpoint {
+            settled_history_cache_checkpoint_positions.push(position);
         }
     }
     if input.is_empty() {
@@ -97,6 +130,7 @@ pub fn openai_render_messages(
         stable_input: input.clone(),
         input,
         stable_input_positions,
+        settled_history_cache_checkpoint_positions,
     })
 }
 

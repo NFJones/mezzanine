@@ -365,7 +365,7 @@ impl RuntimeSessionService {
                 .presentation
                 .agent_prompt_inputs
                 .entry(pane_id.to_string())
-                .or_insert_with(default_runtime_agent_prompt_input);
+                .or_insert_with(|| default_runtime_agent_prompt_input().into());
             state.decoder.decode(input)?
         };
         let mut clipboard_requested = false;
@@ -399,7 +399,7 @@ impl RuntimeSessionService {
                 .presentation
                 .agent_prompt_inputs
                 .entry(pane_id.to_string())
-                .or_insert_with(default_runtime_agent_prompt_input);
+                .or_insert_with(|| default_runtime_agent_prompt_input().into());
             state.prompt.set_prompt_body_columns(prompt_body_columns);
             state
                 .prompt
@@ -605,7 +605,7 @@ impl RuntimeSessionService {
                 .presentation
                 .agent_prompt_inputs
                 .entry(pane_id.to_string())
-                .or_insert_with(default_runtime_agent_prompt_input);
+                .or_insert_with(|| default_runtime_agent_prompt_input().into());
             state
                 .pending_ctrl_c_exit_at_unix_ms
                 .is_some_and(|started| now.saturating_sub(started) <= CTRL_C_EXIT_CONFIRM_WINDOW_MS)
@@ -681,7 +681,7 @@ impl RuntimeSessionService {
             .presentation
             .agent_prompt_inputs
             .entry(pane_id.to_string())
-            .or_insert_with(default_runtime_agent_prompt_input);
+            .or_insert_with(|| default_runtime_agent_prompt_input().into());
         state.prompt.set_selector_extra_candidates(candidates);
         state.selector_extra_candidates_initialized = true;
     }
@@ -759,7 +759,7 @@ impl RuntimeSessionService {
             .presentation
             .agent_prompt_inputs
             .entry(pane_id.to_string())
-            .or_insert_with(default_runtime_agent_prompt_input);
+            .or_insert_with(|| default_runtime_agent_prompt_input().into());
         if state.selector_extra_candidates_loaded {
             return;
         }
@@ -910,7 +910,7 @@ impl RuntimeSessionService {
             .presentation
             .agent_prompt_inputs
             .entry(pane_id.to_string())
-            .or_insert_with(default_runtime_agent_prompt_input);
+            .or_insert_with(|| default_runtime_agent_prompt_input().into());
         state.selector_extra_candidates_loaded = false;
         let generation = state.selector_extra_candidates_generation;
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
@@ -1069,7 +1069,7 @@ impl RuntimeSessionService {
         self.presentation
             .agent_prompt_inputs
             .entry(pane_id.to_string())
-            .or_insert_with(default_runtime_agent_prompt_input)
+            .or_insert_with(|| default_runtime_agent_prompt_input().into())
             .prompt
             .buffer
             .set_structured_history(history);
@@ -1085,7 +1085,7 @@ impl RuntimeSessionService {
         self.presentation
             .agent_prompt_inputs
             .entry(pane_id.to_string())
-            .or_insert_with(default_runtime_agent_prompt_input)
+            .or_insert_with(|| default_runtime_agent_prompt_input().into())
             .prompt
             .buffer
             .set_structured_history(history);
@@ -1116,7 +1116,7 @@ impl RuntimeSessionService {
             .presentation
             .agent_prompt_inputs
             .entry(pane_id.to_string())
-            .or_insert_with(default_runtime_agent_prompt_input);
+            .or_insert_with(|| default_runtime_agent_prompt_input().into());
         state.display_lines.clear();
         Ok(())
     }
@@ -1184,6 +1184,20 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Installs an already-resolved deferred command display projection.
+    pub(crate) fn apply_deferred_agent_shell_display_output(
+        &mut self,
+        pane_id: &str,
+        display_output: RuntimeAgentShellDisplayOutput,
+        hide_prompt: bool,
+    ) -> Result<()> {
+        self.set_agent_prompt_display_output(pane_id, display_output)?;
+        if hide_prompt {
+            self.remove_agent_prompt_input(pane_id);
+        }
+        Ok(())
+    }
+
     /// Appends agent shell display output using the declared content renderer.
     pub(super) fn set_agent_prompt_display_output(
         &mut self,
@@ -1196,7 +1210,7 @@ impl RuntimeSessionService {
                     .presentation
                     .agent_prompt_inputs
                     .entry(pane_id.to_string())
-                    .or_insert_with(default_runtime_agent_prompt_input);
+                    .or_insert_with(|| default_runtime_agent_prompt_input().into());
                 state.display_lines.clear();
             }
             RuntimeAgentShellDisplayOutput::TransientStatus(display_lines) => {
@@ -1205,7 +1219,7 @@ impl RuntimeSessionService {
                     .presentation
                     .agent_prompt_inputs
                     .entry(pane_id.to_string())
-                    .or_insert_with(default_runtime_agent_prompt_input);
+                    .or_insert_with(|| default_runtime_agent_prompt_input().into());
                 state.display_lines.clear();
             }
             RuntimeAgentShellDisplayOutput::TransientErrorStatus(display_lines) => {
@@ -1214,7 +1228,7 @@ impl RuntimeSessionService {
                     .presentation
                     .agent_prompt_inputs
                     .entry(pane_id.to_string())
-                    .or_insert_with(default_runtime_agent_prompt_input);
+                    .or_insert_with(|| default_runtime_agent_prompt_input().into());
                 state.display_lines.clear();
             }
             RuntimeAgentShellDisplayOutput::Lines(display_lines) => {
@@ -1227,7 +1241,7 @@ impl RuntimeSessionService {
                     .presentation
                     .agent_prompt_inputs
                     .entry(pane_id.to_string())
-                    .or_insert_with(default_runtime_agent_prompt_input);
+                    .or_insert_with(|| default_runtime_agent_prompt_input().into());
                 state.display_lines.clear();
             }
             RuntimeAgentShellDisplayOutput::Overlay(content) => {
@@ -1284,7 +1298,7 @@ impl RuntimeSessionService {
                     .presentation
                     .agent_prompt_inputs
                     .entry(pane_id.to_string())
-                    .or_insert_with(default_runtime_agent_prompt_input);
+                    .or_insert_with(|| default_runtime_agent_prompt_input().into());
                 state.display_lines.clear();
             }
         }

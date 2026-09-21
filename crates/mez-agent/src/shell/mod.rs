@@ -259,6 +259,42 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .expect("the shell test process should spawn");
+        let stdout = child
+            .stdout
+            .take()
+            .expect("the shell test process stdout should be piped");
+        let stderr = child
+            .stderr
+            .take()
+            .expect("the shell test process stderr should be piped");
+        let observed = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
+        let reader_observed = Arc::clone(&observed);
+        let stdout_reader = thread::spawn(move || {
+            let mut stdout = stdout;
+            let mut chunk = [0_u8; 1024];
+            loop {
+                let count = stdout
+                    .read(&mut chunk)
+                    .expect("the shell test process stdout should remain readable");
+                if count == 0 {
+                    break;
+                }
+                let (bytes, changed) = &*reader_observed;
+                bytes
+                    .lock()
+                    .expect("the shell output observation lock should remain available")
+                    .extend_from_slice(&chunk[..count]);
+                changed.notify_all();
+            }
+        });
+        let stderr_reader = thread::spawn(move || {
+            let mut stderr = stderr;
+            let mut bytes = Vec::new();
+            stderr
+                .read_to_end(&mut bytes)
+                .expect("the shell test process stderr should remain readable");
+            bytes
+        });
         let stdin = child
             .stdin
             .as_mut()
@@ -266,7 +302,22 @@ mod tests {
         stdin
             .write_all(input.wrapper.as_bytes())
             .expect("the transaction wrapper should be written");
-        thread::sleep(Duration::from_millis(50));
+        stdin
+            .flush()
+            .expect("the transaction wrapper should be flushed");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let start_marker = b"\x1b]133;C;";
+        if !wait_for_observed_shell_output(&observed, deadline, |bytes| {
+            bytes
+                .windows(start_marker.len())
+                .any(|window| window == start_marker)
+        }) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "the shell transaction wrapper did not emit its start marker before the deadline"
+            );
+        }
         stdin
             .write_all(input.payload.as_bytes())
             .expect("the transaction payload should be written");
@@ -274,9 +325,23 @@ mod tests {
             .write_all(suffix.as_bytes())
             .expect("the transaction suffix should be written");
         drop(child.stdin.take());
-        child
-            .wait_with_output()
-            .expect("the shell test process should finish")
+        let status = child.wait().expect("the shell test process should finish");
+        stdout_reader
+            .join()
+            .expect("the shell stdout reader should finish");
+        let stderr = stderr_reader
+            .join()
+            .expect("the shell stderr reader should finish");
+        let stdout = observed
+            .0
+            .lock()
+            .expect("the shell output observation lock should remain available")
+            .clone();
+        Output {
+            status,
+            stdout,
+            stderr,
+        }
     }
 
     /// Writes one complete script to a spawned shell process.

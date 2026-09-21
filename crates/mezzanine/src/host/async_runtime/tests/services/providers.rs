@@ -1,6 +1,7 @@
 //! Async-runtime tests owned by providers behavior.
 
 use super::super::*;
+use crate::host::async_runtime::run_async_agent_command_service;
 
 /// Verifies async agent provider service polls runtime queue.
 ///
@@ -31,6 +32,306 @@ async fn async_agent_provider_service_polls_runtime_queue() {
     assert_eq!(report.idle_polls, 1);
     assert_eq!(report.executions, 0);
     assert!(exit.commands_processed >= 3);
+}
+
+/// Verifies the provider worker claims its dedicated FIFO route without
+/// scanning or consuming unrelated timer work from another worker route.
+#[tokio::test(flavor = "current_thread")]
+async fn async_provider_drain_preserves_unrelated_timer_work() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+
+    let client = async {
+        let key = RuntimeTimerKey::new(RuntimeTimerKind::ProviderPoll, "provider-route", 1);
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::ScheduleTimer {
+                    key: key.clone(),
+                    delay_ms: 1,
+                },
+                RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: AgentId::opaque("agent-%1").unwrap(),
+                    turn_id: "turn-provider-route".to_string(),
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(1)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque("agent-%1").unwrap(),
+                turn_id: "turn-provider-route".to_string(),
+            }]
+        );
+        assert_eq!(
+            handle.drain_timer_side_effects(1).await.unwrap(),
+            vec![RuntimeSideEffect::ScheduleTimer { key, delay_ms: 1 }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
+/// Verifies deferred interactive commands use their dedicated route instead of
+/// competing with provider dispatch claims.
+///
+/// A saturated provider worker can drain only provider-owned work; the command
+/// lane retains its exact dispatch until the command service claims it.
+#[tokio::test(flavor = "current_thread")]
+async fn async_command_drain_preserves_unrelated_provider_dispatch() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let command = RuntimeSideEffect::DispatchAgentCommand {
+            primary_client_id: primary,
+            pane_id: "%1".to_string(),
+            conversation_id: "conversation-route".to_string(),
+            command: "auth-status".to_string(),
+            input: "/auth-status".to_string(),
+            claim_generation: 1,
+        };
+        let provider = RuntimeSideEffect::DispatchAgentProvider {
+            agent_id: AgentId::opaque("agent-%1").unwrap(),
+            turn_id: "turn-command-route".to_string(),
+        };
+        handle
+            .queue_runtime_side_effects(vec![provider.clone(), command.clone()])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(1)
+                .await
+                .unwrap(),
+            vec![provider]
+        );
+        assert_eq!(
+            handle
+                .drain_agent_command_dispatch_side_effects(1)
+                .await
+                .unwrap(),
+            vec![command]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
+/// Verifies the production deferred-command worker acknowledges a submitted
+/// command, keeps its owning prompt synchronous while execution is held outside
+/// the actor, and still permits another pane to accept input and render.
+///
+/// The worker gate is an explicit test-only handoff point rather than a timing
+/// race: it proves the complete submit, dispatch, claim, execute, settle, and
+/// render path without relying on filesystem latency or scheduler luck.
+#[tokio::test(flavor = "current_thread")]
+async fn async_command_worker_keeps_other_panes_responsive_while_command_runs() {
+    let started = StdArc::new(tokio::sync::Notify::new());
+    let release = StdArc::new(tokio::sync::Notify::new());
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let second_pane = service
+        .split_pane_with_process(
+            &primary,
+            mez_mux::layout::SplitDirection::Vertical,
+            Some("cat >/dev/null"),
+        )
+        .unwrap()
+        .pane_id;
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(second_pane.as_str())
+        .unwrap();
+    service
+        .session_mut_for_tests()
+        .select_pane(&primary, "%1")
+        .unwrap();
+    service.set_deferred_agent_command_probe_for_tests(started.clone(), release.clone());
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let stop = StdArc::new(AtomicBool::new(false));
+    let client = async {
+        let worker_handle = handle.clone();
+        let worker_stop = StdArc::clone(&stop);
+        let worker = tokio::spawn(async move {
+            run_async_agent_command_service(
+                &worker_handle,
+                AsyncAgentProviderServiceConfig::new(1)
+                    .unwrap()
+                    .with_idle_interval(Duration::from_millis(5))
+                    .unwrap(),
+                move |_, state| {
+                    worker_stop.load(Ordering::SeqCst)
+                        || matches!(state, RuntimeLifecycleState::Stopping)
+                },
+            )
+            .await
+        });
+
+        let submit = AttachedTerminalClientStepPlan {
+            actions: vec![TerminalClientLoopAction::ForwardToPane(
+                b"/list-skills\r".to_vec(),
+            )],
+            output_lines: Vec::new(),
+            output_line_style_spans: Vec::new(),
+            input_hangup: false,
+            output_hangup: false,
+            error_roles: Vec::new(),
+        };
+        handle
+            .apply_attached_terminal_step_plan(primary.clone(), submit)
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .expect("production command worker must claim the submitted command");
+
+        let busy_view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let busy_text = busy_view.lines.join("\n");
+        assert!(busy_text.contains("command running"), "{busy_text}");
+        assert!(!busy_text.contains("waiting for daemon"), "{busy_text}");
+        assert!(!busy_text.contains("async"), "{busy_text}");
+
+        handle
+            .execute_terminal_command(primary.clone(), format!("select-pane -t {second_pane}"))
+            .await
+            .unwrap();
+        let other_pane = handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"x".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(other_pane.agent_prompt_inputs_applied, 1);
+
+        let second_pane_view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            second_pane_view.is_some(),
+            "the second pane must remain renderable while command work is blocked"
+        );
+
+        handle
+            .execute_terminal_command(primary.clone(), "select-pane -t %1".to_string())
+            .await
+            .unwrap();
+        let refused = handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"x".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(refused.agent_prompt_inputs_applied, 1);
+
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let view = handle
+                    .render_client_view(
+                        ClientViewRole::Primary,
+                        Size::new(80, 24).unwrap(),
+                        TerminalClientLoopConfig::default(),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if !view
+                    .lines
+                    .iter()
+                    .any(|line| line.contains("command running"))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("released command worker must settle before shutdown");
+        stop.store(true, Ordering::SeqCst);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), worker)
+                .await
+                .expect("command worker must settle after release")
+                .unwrap()
+                .unwrap(),
+            1
+        );
+        let settled_view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !settled_view
+                .lines
+                .iter()
+                .any(|line| line.contains("command running")),
+            "{:?}",
+            settled_view.lines
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that an idle provider service performs a bounded actor-state probe
@@ -1594,8 +1895,10 @@ executable = "{bubblewrap_executable}"
     let workers_done = StdArc::new(AtomicBool::new(false));
     let provider_handle = handle.clone();
     let provider_stop = StdArc::clone(&workers_done);
+    let (provider_ready_tx, provider_ready_rx) = tokio::sync::oneshot::channel();
     let (provider_stopped_tx, provider_stopped_rx) = tokio::sync::oneshot::channel();
     let provider = async move {
+        let _ = provider_ready_tx.send(());
         let report = run_async_agent_provider_service(
             &provider_handle,
             AsyncAgentProviderServiceConfig::new(1)
@@ -1614,8 +1917,10 @@ executable = "{bubblewrap_executable}"
     };
     let pane_worker_handle = handle.clone();
     let pane_worker_stop = StdArc::clone(&workers_done);
+    let (pane_worker_ready_tx, pane_worker_ready_rx) = tokio::sync::oneshot::channel();
     let (pane_worker_stopped_tx, pane_worker_stopped_rx) = tokio::sync::oneshot::channel();
     let pane_worker = async move {
+        let _ = pane_worker_ready_tx.send(());
         let report = run_async_pane_process_supervisor_service(
             pane_worker_handle,
             AsyncPaneProcessSupervisorServiceConfig {
@@ -1644,9 +1949,12 @@ executable = "{bubblewrap_executable}"
     let client_child_agent_id = child_agent_id.clone();
     let client_child_turn_id = child_turn_id.clone();
     let client = async move {
-        for _ in 0..8 {
-            tokio::task::yield_now().await;
-        }
+        provider_ready_rx
+            .await
+            .expect("provider worker should start before routed dispatch");
+        pane_worker_ready_rx
+            .await
+            .expect("pane worker should start before routed dispatch");
         let queued = client_handle
             .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
                 agent_id: AgentId::opaque(client_child_agent_id).unwrap(),

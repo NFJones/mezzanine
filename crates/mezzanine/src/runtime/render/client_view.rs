@@ -28,6 +28,141 @@ use super::{
 };
 use crate::host::terminal::project_provisional_pane_resize;
 
+/// Immutable inputs required to compose the base window view for one client.
+///
+/// The actor captures this value after selecting the exact client state. Frame
+/// composition can then run without borrowing the mutable runtime service;
+/// callers must still fence and apply transient receipts under actor ownership.
+#[derive(Debug, Clone)]
+pub(crate) enum RuntimeClientRenderSnapshot {
+    /// Normal window composition from owned pane terminal snapshots.
+    Window {
+        window: mez_mux::layout::Window,
+        screens: std::collections::BTreeMap<String, std::sync::Arc<TerminalScreen>>,
+        presentation_plan: std::sync::Arc<WindowPresentationPlan>,
+        role: ClientViewRole,
+        client_size: Size,
+        config: Box<TerminalClientLoopConfig>,
+    },
+    /// Full-terminal projection while an external editor owns the active pane.
+    ExternalEditor {
+        role: ClientViewRole,
+        client_size: Size,
+        config: Box<TerminalClientLoopConfig>,
+        screen: std::sync::Arc<TerminalScreen>,
+    },
+    /// Retained outer chrome with live provisional divider geometry during a drag.
+    ProvisionalResize {
+        view: Box<RenderedClientView>,
+        geometries: Vec<crate::runtime::PaneGeometry>,
+        body_row_offset: u16,
+        body_size: Size,
+        active_pane_index: usize,
+        ui_theme: mez_mux::theme::UiTheme,
+    },
+}
+
+impl RuntimeClientRenderSnapshot {
+    /// Returns whether actor-owned overlays and presentation receipts apply.
+    pub(crate) const fn requires_actor_overlays(&self) -> bool {
+        matches!(self, Self::Window { .. })
+    }
+}
+
+/// Composes the immutable base window view captured by the runtime actor.
+pub(crate) fn compose_client_render_snapshot(
+    snapshot: RuntimeClientRenderSnapshot,
+) -> Result<Option<RenderedClientView>> {
+    match snapshot {
+        RuntimeClientRenderSnapshot::Window {
+            window,
+            screens,
+            presentation_plan,
+            role,
+            client_size,
+            config,
+        } => render_attached_client_view_with_screen_and_row_resolvers(
+            role,
+            &window,
+            |pane_id| screens.get(pane_id).map(|screen| screen.as_ref()),
+            |_pane_id, screen| std::sync::Arc::from(screen.presentation_visible_styled_lines()),
+            presentation_plan.as_ref(),
+            &config,
+            client_size,
+        ),
+        RuntimeClientRenderSnapshot::ExternalEditor {
+            role,
+            client_size,
+            config,
+            screen,
+        } => Ok(Some(external_editor_takeover_snapshot_view(
+            role,
+            client_size,
+            &config,
+            screen.as_ref(),
+        ))),
+        RuntimeClientRenderSnapshot::ProvisionalResize {
+            mut view,
+            geometries,
+            body_row_offset,
+            body_size,
+            active_pane_index,
+            ui_theme,
+        } => {
+            project_provisional_pane_resize(
+                &mut view,
+                &geometries,
+                body_row_offset,
+                body_size,
+                active_pane_index,
+                &ui_theme,
+            );
+            Ok(Some(*view))
+        }
+    }
+}
+
+/// Builds the full-terminal external-editor projection from an owned screen.
+fn external_editor_takeover_snapshot_view(
+    role: ClientViewRole,
+    client_size: Size,
+    config: &TerminalClientLoopConfig,
+    screen: &TerminalScreen,
+) -> RenderedClientView {
+    let styled_lines = screen.presentation_visible_styled_lines();
+    let cursor = screen.presentation_cursor_state();
+    RenderedClientView {
+        role,
+        authoritative_size: client_size,
+        client_size,
+        lines: styled_lines.iter().map(|line| line.text.clone()).collect(),
+        line_style_spans: styled_lines
+            .into_iter()
+            .map(|line| line.style_spans)
+            .collect(),
+        selection: None,
+        requires_client_scroll: false,
+        viewport_row: 0,
+        viewport_column: 0,
+        cursor_row: cursor.row,
+        cursor_column: cursor.column,
+        cursor_visible: screen.presentation_cursor_visible(),
+        cursor_style: config.cursor_style,
+        cursor_blink: config.cursor_blink,
+        cursor_blink_interval_ms: config.cursor_blink_interval_ms,
+        application_keypad: screen.application_keypad_enabled(),
+        bracketed_paste: screen.bracketed_paste_enabled(),
+        focus_events: screen.focus_events_enabled(),
+        alternate_screen: screen.presentation_alternate_screen_active(),
+        host_mouse_reporting: screen.application_mouse_enabled(),
+        animation_refresh_interval_ms: 0,
+        ui_theme: config.ui_theme.clone(),
+        agent_prompt_region: None,
+        primary_prompt_active: false,
+        readline_input_active: false,
+    }
+}
+
 /// Runs the apply copy mode selection spans operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -250,6 +385,123 @@ impl RuntimeSessionService {
         self.render_client_view_with_resolved_config_and_receipts(role, client_size, config)
     }
 
+    /// Captures the immutable base-frame inputs for one exact attached client.
+    ///
+    /// This deliberately excludes client-local overlays and focus-label
+    /// receipts, which remain actor-owned because their acceptance is fenced by
+    /// current presentation state.
+    pub(crate) fn capture_client_render_snapshot(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+        role: ClientViewRole,
+        client_size: Size,
+        config: &TerminalClientLoopConfig,
+    ) -> Result<RuntimeClientRenderSnapshot> {
+        self.prepare_client_render(client_id, role)?;
+        let window = self.session.active_window().cloned().ok_or_else(|| {
+            MezError::invalid_state("cannot capture a client render without an active window")
+        })?;
+        let active_pane_id = window.active_pane().id.as_str();
+        if self.external_editor_session_is_active(active_pane_id)
+            && let Some(screen) = self.external_editor_screen(active_pane_id)
+        {
+            return Ok(RuntimeClientRenderSnapshot::ExternalEditor {
+                role,
+                client_size,
+                config: Box::new(config.clone()),
+                screen: std::sync::Arc::new(screen.clone()),
+            });
+        }
+        let presentation_plan = self
+            .window_presentation_plan(&window)
+            .ok_or_else(|| MezError::invalid_state("cannot plan a window with no visible panes"))?;
+        if role == ClientViewRole::Primary
+            && let Some(view) = self.presentation.mouse_resize_drag_baseline_view.clone()
+        {
+            return Ok(RuntimeClientRenderSnapshot::ProvisionalResize {
+                view: Box::new((*view).clone()),
+                geometries: presentation_plan.pane_geometries(),
+                body_row_offset: presentation_plan.body_row_offset,
+                body_size: presentation_plan.body_size,
+                active_pane_index: window.active_pane_index(),
+                ui_theme: config.ui_theme.clone(),
+            });
+        }
+        let screens = window
+            .panes()
+            .iter()
+            .filter_map(|pane| {
+                self.presented_pane_screen(pane.id.as_str())
+                    .map(|screen| (pane.id.to_string(), std::sync::Arc::new(screen.clone())))
+            })
+            .collect();
+        Ok(RuntimeClientRenderSnapshot::Window {
+            window,
+            screens,
+            presentation_plan,
+            role,
+            client_size,
+            config: Box::new(config.clone()),
+        })
+    }
+
+    /// Applies client-local overlays and focus-label receipts to a worker-built base frame.
+    pub(crate) fn complete_client_render_snapshot(
+        &mut self,
+        role: ClientViewRole,
+        config: &TerminalClientLoopConfig,
+        mut view: Option<RenderedClientView>,
+    ) -> Result<(Option<RenderedClientView>, Vec<u64>)> {
+        let Some(window) = self.session.active_window() else {
+            return Ok((view, Vec::new()));
+        };
+        if role == ClientViewRole::Primary
+            && let Some(view) = view.as_mut()
+        {
+            self.overlay_copy_modes_on_view(window, view)?;
+        }
+        let presentation_plan = self
+            .window_presentation_plan(window)
+            .ok_or_else(|| MezError::invalid_state("cannot plan a window with no visible panes"))?;
+        let presentation_ids = view
+            .as_mut()
+            .map(|view| {
+                self.overlay_zen_focus_labels(window, presentation_plan.as_ref(), config, view)
+            })
+            .unwrap_or_default();
+        if role == ClientViewRole::Primary
+            && let Some(view) = view.as_mut()
+            && let Some(selector) = self.presentation.pane_agent_status_selector.as_ref()
+        {
+            self.overlay_pane_agent_status_selector(view, selector);
+        }
+        if role == ClientViewRole::Primary
+            && let Some(view) = view.as_mut()
+            && let Some(prompt_input) = self.presentation.primary_prompt_input.as_ref()
+        {
+            self.overlay_primary_prompt_input(view, prompt_input);
+        }
+        if role == ClientViewRole::Primary
+            && let Some(view) = view.as_mut()
+            && let Some(overlay) = self.presentation.primary_display_overlay.as_ref()
+        {
+            self.overlay_primary_display_overlay(view, overlay);
+            if let Some(live_source) = overlay.live_source.as_ref() {
+                view.animation_refresh_interval_ms = match view.animation_refresh_interval_ms {
+                    0 => live_source.refresh_interval_ms,
+                    interval_ms => interval_ms.min(live_source.refresh_interval_ms),
+                };
+            }
+        }
+        if role == ClientViewRole::Primary
+            && let Some(view) = view.as_mut()
+            && let Some(message) = self.presentation.primary_error_status_overlay.as_ref()
+        {
+            self.overlay_primary_error_status(view, message);
+        }
+        Ok((view, presentation_ids))
+    }
+
     pub fn render_client_view(
         &self,
         role: ClientViewRole,
@@ -293,8 +545,9 @@ impl RuntimeSessionService {
             return Ok((Some(view), Vec::new()));
         }
         if role == ClientViewRole::Primary
-            && let Some(mut view) = self.presentation.mouse_resize_drag_baseline_view.clone()
+            && let Some(view) = self.presentation.mouse_resize_drag_baseline_view.clone()
         {
+            let mut view = (*view).clone();
             let plan = self.window_presentation_plan(window).ok_or_else(|| {
                 MezError::invalid_state("cannot plan a window with no visible panes")
             })?;
@@ -308,16 +561,6 @@ impl RuntimeSessionService {
             );
             return Ok((Some(view), Vec::new()));
         }
-        let active_pane_ids = window
-            .panes()
-            .iter()
-            .map(|pane| pane.id.to_string())
-            .collect::<std::collections::BTreeSet<_>>();
-        self.presentation
-            .pane_styled_row_cache
-            .borrow_mut()
-            .rows
-            .retain(|pane_id, _| active_pane_ids.contains(pane_id));
         let pane_styled_row_cache = &self.presentation.pane_styled_row_cache;
         let presentation_plan = self
             .window_presentation_plan(window)
@@ -329,11 +572,16 @@ impl RuntimeSessionService {
             |pane_id, screen| {
                 let generation = screen.presentation_render_generation();
                 let mut cache = pane_styled_row_cache.borrow_mut();
+                cache.next_use = cache.next_use.wrapping_add(1);
+                let last_used = cache.next_use;
                 if let Some(rows) = cache
                     .rows
-                    .get(pane_id)
-                    .filter(|(cached_generation, _)| *cached_generation == generation)
-                    .map(|(_, rows)| rows.clone())
+                    .get_mut(pane_id)
+                    .filter(|entry| entry.generation == generation)
+                    .map(|entry| {
+                        entry.last_used = last_used;
+                        entry.rows.clone()
+                    })
                 {
                     cache.hits = cache.hits.saturating_add(1);
                     return rows;
@@ -341,9 +589,23 @@ impl RuntimeSessionService {
                 let rows: std::sync::Arc<[TerminalStyledLine]> =
                     std::sync::Arc::from(screen.presentation_visible_styled_lines());
                 cache.misses = cache.misses.saturating_add(1);
-                cache
-                    .rows
-                    .insert(pane_id.to_string(), (generation, rows.clone()));
+                cache.rows.insert(
+                    pane_id.to_string(),
+                    super::RuntimePaneStyledRowCacheEntry {
+                        generation,
+                        rows: rows.clone(),
+                        last_used,
+                    },
+                );
+                if cache.rows.len() > super::RUNTIME_PANE_STYLED_ROW_CACHE_LIMIT
+                    && let Some(evicted) = cache
+                        .rows
+                        .iter()
+                        .min_by_key(|(_, entry)| entry.last_used)
+                        .map(|(pane_id, _)| pane_id.clone())
+                {
+                    cache.rows.remove(&evicted);
+                }
                 rows
             },
             presentation_plan.as_ref(),
@@ -741,21 +1003,39 @@ impl RuntimeSessionService {
             .presentation
             .window_presentation_plan_cache
             .borrow_mut();
-        if let Some((_, _, plan)) =
-            cache
-                .entry
-                .as_ref()
-                .filter(|(cached_window, cached_options, _)| {
-                    cached_window == window && *cached_options == options
-                })
+        cache.next_use = cache.next_use.wrapping_add(1);
+        let last_used = cache.next_use;
+        if let Some(plan) = cache
+            .entries
+            .iter_mut()
+            .find(|entry| entry.window == *window && entry.options == options)
+            .map(|entry| {
+                entry.last_used = last_used;
+                entry.plan.clone()
+            })
         {
-            let plan = plan.clone();
             cache.hits = cache.hits.saturating_add(1);
             return Some(plan);
         }
         let plan = std::sync::Arc::new(plan_window_presentation(window, options)?);
         cache.misses = cache.misses.saturating_add(1);
-        cache.entry = Some((window.clone(), options, plan.clone()));
+        cache
+            .entries
+            .push(super::RuntimeWindowPresentationPlanCacheEntry {
+                window: window.clone(),
+                options,
+                plan: plan.clone(),
+                last_used,
+            });
+        if cache.entries.len() > super::RUNTIME_WINDOW_PRESENTATION_PLAN_CACHE_LIMIT {
+            let evicted = cache
+                .entries
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(index, _)| index)?;
+            cache.entries.remove(evicted);
+        }
         Some(plan)
     }
 

@@ -2896,22 +2896,38 @@ mod tests {
     /// bounded deadline rather than on the first scheduler turn.
     #[tokio::test(flavor = "current_thread")]
     async fn iroh_endpoint_rebinds_stable_configured_port() {
-        let reservation = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let bind_port = reservation.local_addr().unwrap().port();
-        drop(reservation);
         let secret_key = SecretKey::generate();
         let endpoint_id = secret_key.public();
-        let policy = RuntimeIrohTransportPolicy {
-            enabled: true,
-            bind_port,
-            setup_timeout: std::time::Duration::from_secs(10),
-            ..RuntimeIrohTransportPolicy::default()
-        };
-
-        let first = bind_runtime_iroh_endpoint(policy.clone(), secret_key.clone())
+        let selection_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        let (bind_port, policy, first) = loop {
+            let reservation =
+                std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let bind_port = reservation.local_addr().unwrap().port();
+            drop(reservation);
+            let policy = RuntimeIrohTransportPolicy {
+                enabled: true,
+                bind_port,
+                setup_timeout: std::time::Duration::from_secs(10),
+                ..RuntimeIrohTransportPolicy::default()
+            };
+            match tokio::time::timeout_at(
+                selection_deadline,
+                bind_runtime_iroh_endpoint(policy.clone(), secret_key.clone()),
+            )
             .await
-            .unwrap()
-            .unwrap();
+            {
+                Ok(Ok(Some(first))) => break (bind_port, policy, first),
+                Ok(Ok(None)) => panic!("Iroh transport should remain enabled"),
+                Ok(Err(error)) => {
+                    assert!(
+                        tokio::time::Instant::now() < selection_deadline,
+                        "endpoint should bind an available configured port: {error}"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(_) => panic!("endpoint selection should finish within the bind deadline"),
+            }
+        };
         assert_eq!(first.endpoint().id(), endpoint_id);
         assert!(
             first

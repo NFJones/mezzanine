@@ -89,7 +89,7 @@ impl RuntimeSessionService {
                 // decide whether each committed message creates a pane row.
                 // The loop limit, a missing session, and any other refusal
                 // commit nothing and create no presentation.
-                let started = self.start_runtime_peer_message_turn(&pane_id)?;
+                let started = self.start_runtime_peer_message_turn(&pane_id, now_ms)?;
                 committed = committed.saturating_add(started);
                 continue;
             };
@@ -1051,7 +1051,7 @@ impl RuntimeSessionService {
     /// iterations; it never caps injected message counts, payload bytes, or
     /// per-window peer turns. The durable cursor advances only after the new turn
     /// stores the canonical peer-message events.
-    fn start_runtime_peer_message_turn(&mut self, pane_id: &str) -> Result<usize> {
+    fn start_runtime_peer_message_turn(&mut self, pane_id: &str, now_ms: u64) -> Result<usize> {
         let agent_id = format!("agent-{pane_id}");
         if self.agent_shell_store().get(pane_id).is_none() {
             return Ok(0);
@@ -1092,7 +1092,7 @@ impl RuntimeSessionService {
             delivered_messages,
             delivered_message_count,
             imported_history_events,
-        } = self.peer_message_turn_context(pane_id)?;
+        } = self.peer_message_turn_context(pane_id, now_ms)?;
         let Some(delivered_message_sequence) = delivered_message_sequence else {
             return Ok(0);
         };

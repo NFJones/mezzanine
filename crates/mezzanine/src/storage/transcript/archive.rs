@@ -299,7 +299,7 @@ impl AgentTranscriptStore {
         // this exact row while holding the conversation lock before selecting
         // the source and staging strategy for the archive transaction.
         self.upsert_catalog_from_files(conversation_id, None)?;
-        let record = catalog::record(self, conversation_id)?.ok_or_else(|| {
+        let record = catalog::record_for_mutation(self, conversation_id)?.ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
                 "saved conversation not found",

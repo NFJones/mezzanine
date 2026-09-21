@@ -45,6 +45,11 @@ use credentials::RuntimeCredentialState;
 use hooks::RuntimeHookState;
 use security::{PanePermissionOverride, RuntimeSecurityState};
 
+/// Test-only blocking gate used to hold one immutable client-frame composition.
+#[cfg(test)]
+pub(crate) type RuntimeClientRenderCompositionGate =
+    Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>;
+
 /// Owns concrete application integration bindings for one runtime session.
 #[derive(Debug)]
 pub(crate) struct RuntimeIntegrationComponent {
@@ -58,6 +63,14 @@ pub(crate) struct RuntimeIntegrationComponent {
     config_reload_preparation_started: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
     config_reload_preparation_release: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
+    deferred_agent_command_started: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
+    deferred_agent_command_release: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
+    client_render_composition_started: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
+    client_render_composition_release: Option<RuntimeClientRenderCompositionGate>,
     async_runtime_metrics: Option<AsyncRuntimeActorMetrics>,
     runtime_metrics: RuntimeMetricsSnapshot,
     security: RuntimeSecurityState,
@@ -84,6 +97,14 @@ impl RuntimeIntegrationComponent {
             config_reload_preparation_started: None,
             #[cfg(test)]
             config_reload_preparation_release: None,
+            #[cfg(test)]
+            deferred_agent_command_started: None,
+            #[cfg(test)]
+            deferred_agent_command_release: None,
+            #[cfg(test)]
+            client_render_composition_started: None,
+            #[cfg(test)]
+            client_render_composition_release: None,
             async_runtime_metrics: None,
             runtime_metrics: RuntimeMetricsSnapshot::default(),
             security: RuntimeSecurityState::default(),
@@ -130,6 +151,56 @@ impl RuntimeIntegrationComponent {
         (
             self.config_reload_preparation_started.clone(),
             self.config_reload_preparation_release.clone(),
+        )
+    }
+
+    /// Installs a deterministic deferred-command worker gate for actor tests.
+    #[cfg(test)]
+    pub(crate) fn set_deferred_agent_command_probe(
+        &mut self,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    ) {
+        self.deferred_agent_command_started = Some(started);
+        self.deferred_agent_command_release = Some(release);
+    }
+
+    /// Clones the active deferred-command worker gate for claimed work handoff.
+    #[cfg(test)]
+    pub(crate) fn deferred_agent_command_probe(
+        &self,
+    ) -> (
+        Option<Arc<tokio::sync::Notify>>,
+        Option<Arc<tokio::sync::Notify>>,
+    ) {
+        (
+            self.deferred_agent_command_started.clone(),
+            self.deferred_agent_command_release.clone(),
+        )
+    }
+
+    /// Installs a deterministic off-actor frame-composition gate for actor tests.
+    #[cfg(test)]
+    pub(crate) fn set_client_render_composition_probe(
+        &mut self,
+        started: Arc<tokio::sync::Notify>,
+        release: RuntimeClientRenderCompositionGate,
+    ) {
+        self.client_render_composition_started = Some(started);
+        self.client_render_composition_release = Some(release);
+    }
+
+    /// Clones the active frame-composition worker gate for render handoff.
+    #[cfg(test)]
+    pub(crate) fn client_render_composition_probe(
+        &self,
+    ) -> (
+        Option<Arc<tokio::sync::Notify>>,
+        Option<RuntimeClientRenderCompositionGate>,
+    ) {
+        (
+            self.client_render_composition_started.clone(),
+            self.client_render_composition_release.clone(),
         )
     }
 
