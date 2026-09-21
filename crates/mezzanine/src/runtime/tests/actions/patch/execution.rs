@@ -838,13 +838,12 @@ fn runtime_agent_loop_display_duration_uses_operation_start_and_falls_back_safel
         .expect("loop controller should remain active")
         .operation_started_at_unix_seconds = operation_started_at;
 
-    assert_eq!(
-        service.agent_display_duration_started_at(&first_turn),
-        operation_started_at
-    );
+    let display_duration_started_at = service.agent_display_duration_started_at(&first_turn);
+    assert_eq!(display_duration_started_at, operation_started_at);
 
     service.remove_agent_loop_state_by_id(&loop_id);
 
+    assert_eq!(display_duration_started_at, operation_started_at);
     assert_eq!(
         service.agent_display_duration_started_at(&first_turn),
         first_turn.started_at_unix_seconds

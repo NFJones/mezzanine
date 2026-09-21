@@ -134,6 +134,7 @@ impl RuntimeSessionService {
         }
         let awaiting_redirection = state == AgentTurnState::Interrupted
             && self.interrupted_subagent_awaits_redirection(turn_id);
+        let display_duration_started_at = self.agent_display_duration_started_at(&turn);
         if matches!(
             state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
@@ -143,10 +144,8 @@ impl RuntimeSessionService {
             self.emit_subagent_task_result_for_state(&turn, state)?;
         }
         if !suppress_exit_output
-            && let Some(footer) = runtime_agent_finished_footer_line(
-                state,
-                self.agent_display_duration_started_at(&turn),
-            )
+            && let Some(footer) =
+                runtime_agent_finished_footer_line(state, display_duration_started_at)
         {
             self.append_agent_status_text_to_terminal_buffer(pane_id, &footer)?;
         }
@@ -319,6 +318,7 @@ impl RuntimeSessionService {
         }
         let awaiting_redirection = state == AgentTurnState::Interrupted
             && self.interrupted_subagent_awaits_redirection(&turn.turn_id);
+        let display_duration_started_at = self.agent_display_duration_started_at(turn);
         if !conversation_was_replaced
             && matches!(
                 state,
@@ -331,10 +331,8 @@ impl RuntimeSessionService {
         }
         if pane_present
             && conversation_still_owned
-            && let Some(footer) = runtime_agent_finished_footer_line(
-                state,
-                self.agent_display_duration_started_at(turn),
-            )
+            && let Some(footer) =
+                runtime_agent_finished_footer_line(state, display_duration_started_at)
         {
             self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &footer)?;
         }
