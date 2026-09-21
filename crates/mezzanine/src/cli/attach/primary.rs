@@ -815,6 +815,91 @@ mod pushed_snapshot_tests {
         }
     }
 
+    /// Connects a local Iroh control stream and exposes raw framed bridges on
+    /// both sides without involving credentials, relays, or host routing.
+    async fn local_iroh_control_bridges() -> (
+        iroh::Endpoint,
+        iroh::Endpoint,
+        iroh::endpoint::Connection,
+        iroh::endpoint::Connection,
+        crate::runtime::IrohCompressionBridge,
+        crate::runtime::IrohCompressionBridge,
+    ) {
+        const TEST_ALPN: &[u8] = b"mezzanine/attach-primary-test/1";
+        let server = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(iroh::SecretKey::generate())
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(iroh::RelayMode::Disabled)
+            .clear_address_lookup()
+            .bind()
+            .await
+            .unwrap();
+        let client = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(iroh::SecretKey::generate())
+            .relay_mode(iroh::RelayMode::Disabled)
+            .clear_address_lookup()
+            .bind()
+            .await
+            .unwrap();
+        let server_addr = server.addr();
+        let server_accept = tokio::spawn({
+            let server = server.clone();
+            async move {
+                server
+                    .accept()
+                    .await
+                    .unwrap()
+                    .accept()
+                    .unwrap()
+                    .await
+                    .unwrap()
+            }
+        });
+        let client_connection = client.connect(server_addr, TEST_ALPN).await.unwrap();
+        let (mut client_send, client_recv) = client_connection.open_bi().await.unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut client_send, &[0])
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::flush(&mut client_send)
+            .await
+            .unwrap();
+        let server_connection = server_accept.await.unwrap();
+        let (server_send, mut server_recv) = server_connection.accept_bi().await.unwrap();
+        let mut marker = [0u8; 1];
+        tokio::io::AsyncReadExt::read_exact(&mut server_recv, &mut marker)
+            .await
+            .unwrap();
+        let compression = crate::runtime::IrohCompressionPolicy::new(
+            crate::runtime::RuntimeIrohCompressionCodec::None,
+            1,
+            3,
+            1024 * 1024 + 1024,
+        )
+        .unwrap();
+        let client_bridge = crate::runtime::IrohCompressionBridge::spawn(
+            client_recv,
+            client_send,
+            compression,
+            1024 * 1024,
+        )
+        .unwrap();
+        let server_bridge = crate::runtime::IrohCompressionBridge::spawn(
+            server_recv,
+            server_send,
+            compression,
+            1024 * 1024,
+        )
+        .unwrap();
+        (
+            server,
+            client,
+            server_connection,
+            client_connection,
+            server_bridge,
+            client_bridge,
+        )
+    }
+
     impl AsyncAttachedTerminalIo for SlowBoundedTerminalIo {
         fn poll_readiness<'a>(
             &'a mut self,
@@ -911,7 +996,9 @@ mod pushed_snapshot_tests {
             crate::host::async_runtime::AsyncTerminalOutputWriteReport,
         > {
             Box::pin(async move {
-                const RETAINED_BYTES: usize = 128;
+                const RETAINED_BYTES: usize =
+                    crate::host::async_runtime::DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES
+                        + 1024;
                 self.state
                     .pending_output_bytes
                     .store(RETAINED_BYTES - 1, std::sync::atomic::Ordering::SeqCst);
@@ -1479,6 +1566,131 @@ mod pushed_snapshot_tests {
         );
         let (client, ()) = tokio::join!(client, server);
         client.unwrap();
+    }
+
+    /// Verifies a real local Iroh control stream accepts the first step
+    /// acknowledgement and a follow-on input step while a pushed frame larger
+    /// than one terminal output pass remains pending. This protects the
+    /// transport path from reintroducing the output-driven response starvation
+    /// that the in-memory control-stream regression alone cannot observe.
+    #[tokio::test(flavor = "current_thread")]
+    async fn primary_v3_local_iroh_control_progresses_before_large_output_drains() {
+        let setup = local_iroh_control_bridges();
+        let (
+            server_endpoint,
+            client_endpoint,
+            server_connection,
+            client_connection,
+            mut server_bridge,
+            mut client_bridge,
+        ) = tokio::time::timeout(std::time::Duration::from_secs(5), setup)
+            .await
+            .expect("local Iroh control setup must complete");
+        let (mut terminal_io, terminal_state) = SlowBoundedTerminalIo::new();
+        terminal_state
+            .input
+            .lock()
+            .unwrap()
+            .push_back(b"x".to_vec());
+        terminal_state.input_ready.notify_one();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+
+        let server = async {
+            let first_request =
+                read_async_control_response_frames(server_bridge.stream_mut(), 1024 * 1024, 1)
+                    .await
+                    .unwrap();
+            let (body, _) = decode_control_frame(&first_request, 1024 * 1024).unwrap();
+            assert!(body.contains(r#""input_bytes":[120]"#), "{body}");
+            sender
+                .send(Ok(IrohAttachRenderWakeup::pushed_snapshot(
+                    super::super::event_stream::IrohPushedRenderSnapshot {
+                        revision: 3,
+                        frame: super::super::AttachClientFrame {
+                            lines: vec![format!(
+                                "transport-backed-large-frame-{}",
+                                "x".repeat(
+                                    crate::host::async_runtime::DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES
+                                        + 1024
+                                )
+                            )],
+                            line_style_spans: vec![Vec::new()],
+                            modes: super::super::AttachedTerminalOutputModes::default(),
+                            presentation_ids: Vec::new(),
+                            iroh_status_slot: None,
+                            event_cutoff: Some(9),
+                        },
+                        invalidate_output: false,
+                    },
+                )))
+                .await
+                .unwrap();
+            terminal_state.first_output_pass.notified().await;
+            terminal_state
+                .input
+                .lock()
+                .unwrap()
+                .push_back(b"y".to_vec());
+            terminal_state.input_ready.notify_one();
+            tokio::io::AsyncWriteExt::write_all(
+                server_bridge.stream_mut(),
+                &super::super::encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"cli-terminal-step-0","result":{"input_bytes":1,"application":{"forwarded_bytes":1,"mux_actions_applied":0,"mouse_actions_reported":0,"agent_prompt_inputs_applied":0,"view_refresh_required":false,"full_redraw_required":false,"unsupported_actions":[]},"view":null,"ui_theme":null}}"#,
+                ),
+            )
+            .await
+            .unwrap();
+            tokio::io::AsyncWriteExt::flush(server_bridge.stream_mut())
+                .await
+                .unwrap();
+
+            let second_request =
+                read_async_control_response_frames(server_bridge.stream_mut(), 1024 * 1024, 1)
+                    .await
+                    .unwrap();
+            let (body, _) = decode_control_frame(&second_request, 1024 * 1024).unwrap();
+            assert!(body.contains(r#""input_bytes":[121]"#), "{body}");
+            assert!(
+                terminal_state
+                    .pending_output_bytes
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                    > 0,
+                "follow-on Iroh input must advance before large pushed output drains"
+            );
+            tokio::io::AsyncWriteExt::write_all(
+                server_bridge.stream_mut(),
+                &super::super::encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"cli-terminal-step-1","result":{"input_bytes":1,"application":{"forwarded_bytes":1,"mux_actions_applied":0,"mouse_actions_reported":0,"agent_prompt_inputs_applied":0,"view_refresh_required":false,"full_redraw_required":false,"unsupported_actions":[]},"view":null,"ui_theme":null,"client_detached":true}}"#,
+                ),
+            )
+            .await
+            .unwrap();
+            tokio::io::AsyncWriteExt::flush(server_bridge.stream_mut())
+                .await
+                .unwrap();
+        };
+        let client = run_iroh_attached_primary_client_loop_async_with_events(
+            client_bridge.stream_mut(),
+            &mut terminal_io,
+            None,
+            ClientId::parse('c', "c1".to_string()).unwrap(),
+            Size::new(80, 24).unwrap(),
+            std::time::Duration::from_millis(200),
+            Some(&mut receiver),
+            true,
+        );
+        let (client, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(client, server)
+        })
+        .await
+        .expect("local Iroh control exchange must not stall behind retained output");
+        client.unwrap();
+        drop(client_bridge);
+        drop(server_bridge);
+        client_connection.close(iroh::endpoint::VarInt::from_u32(0), b"test complete");
+        server_connection.close(iroh::endpoint::VarInt::from_u32(0), b"test complete");
+        client_endpoint.close().await;
+        server_endpoint.close().await;
     }
 
     /// Decodes one control request, asserts its method, and builds the response.
