@@ -282,8 +282,14 @@ impl RuntimeSessionService {
             .insert(turn_id.to_string(), execution.clone());
         let _ = self.agent.agent_scheduler.block_running(turn_id);
         self.agent.pending_agent_provider_tasks.remove(turn_id);
-        self.agent_turn_ledger_mut()
-            .finish_turn(turn_id, AgentTurnState::Blocked)?;
+        if self
+            .agent_turn_ledger()
+            .turn(turn_id)
+            .is_some_and(|current| current.state == AgentTurnState::Running)
+        {
+            self.agent_turn_ledger_mut()
+                .finish_turn(turn_id, AgentTurnState::Blocked)?;
+        }
         self.reconcile_active_turn_sleep_inhibition();
         self.append_agent_trace_turn_transition(
             &turn,

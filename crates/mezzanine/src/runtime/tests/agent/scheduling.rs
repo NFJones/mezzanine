@@ -1211,6 +1211,150 @@ fn runtime_config_reload_starts_newly_runnable_agent_turns() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies a scheduler-start failure after admission cannot leave a turn
+/// consuming a running slot without provider work or pane-shell ownership.
+///
+/// Scheduler admission occurs before lifecycle publication. This regression
+/// injects a failure in that window and requires terminal cleanup to release
+/// every affected ownership record instead of stranding the queued turn.
+#[test]
+fn runtime_scheduler_start_failure_releases_admitted_turn_ownership() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(1)
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let second_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    for pane_id in ["%1", second_pane.as_str()] {
+        let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+        screen.feed(b"ready\n");
+        service.set_pane_screen(pane_id.to_string(), screen);
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(pane_id)
+            .unwrap();
+    }
+
+    let first = service.start_agent_prompt_turn("%1", "first").unwrap();
+    let second = service
+        .start_agent_prompt_turn(second_pane.as_str(), "second")
+        .unwrap();
+    assert_eq!(second.state, AgentTurnState::Queued);
+    service
+        .agent_scheduler_mut()
+        .complete(&first.turn_id)
+        .unwrap();
+    service.fail_next_scheduler_start_post_admission_for_tests();
+
+    let error = service.start_ready_agent_turns().unwrap_err();
+    assert!(error.message().contains("post-admission"), "{error}");
+    assert_eq!(service.agent_scheduler().snapshot().running, 0);
+    assert!(!service.agent_provider_task_is_owned(&second.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&second.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get(second_pane.as_str())
+            .and_then(|session| session.running_turn_id.as_deref()),
+        None
+    );
+    service.kill_session(&primary, true).unwrap();
+}
+
+/// Verifies scheduler-start rollback settles a joined child through the normal
+/// terminal handoff before releasing its child-specific runtime ownership.
+#[test]
+fn runtime_scheduler_start_failure_settles_joined_child_before_cleanup() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(1)
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let child_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    for pane_id in ["%1", child_pane.as_str()] {
+        let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+        screen.feed(b"ready\n");
+        service.set_pane_screen(pane_id.to_string(), screen);
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(pane_id)
+            .unwrap();
+    }
+
+    let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
+    let child = service
+        .start_agent_prompt_turn(child_pane.as_str(), "child")
+        .unwrap();
+    let parent_record = service
+        .agent_turn_ledger()
+        .turn(&parent.turn_id)
+        .cloned()
+        .unwrap();
+    let child_record = service
+        .agent_turn_ledger()
+        .turn(&child.turn_id)
+        .cloned()
+        .unwrap();
+    service.set_subagent_lineage(
+        child.agent_id.clone(),
+        RuntimeSubagentLineage {
+            parent_agent_id: parent.agent_id.clone(),
+            root_agent_id: parent.agent_id.clone(),
+            depth: 1,
+            display_name: "startup-failing child".to_string(),
+            terminal: false,
+        },
+    );
+    block_turn_on_joined_child(
+        &mut service,
+        &parent_record,
+        &child_record,
+        "spawn-startup-failing-child",
+        "startup-failing child",
+    );
+    service.fail_next_scheduler_start_post_admission_for_tests();
+
+    let error = service.start_ready_agent_turns().unwrap_err();
+    assert!(error.message().contains("post-admission"), "{error}");
+    assert!(!service.has_joined_subagent_dependency(&child.turn_id));
+    assert!(!service.has_subagent_authority_state(&child.agent_id));
+    assert!(service.subagent_task_parent(&child.turn_id).is_none());
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&child.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running)
+    );
+    assert!(service.agent_provider_task_is_owned(&parent.turn_id));
+    service.kill_session(&primary, true).unwrap();
+}
+
 /// Verifies scheduler-delayed work cannot start after `/new` replaces the
 /// conversation that originally owned the queued turn.
 #[test]

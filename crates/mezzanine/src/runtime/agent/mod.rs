@@ -615,6 +615,9 @@ pub(crate) struct RuntimeAgentComponent {
     /// Test-only one-shot failure injected after idle-turn scheduler admission.
     #[cfg(test)]
     fail_next_peer_message_turn_post_admission: bool,
+    /// Test-only one-shot failure injected after scheduler work enters running state.
+    #[cfg(test)]
+    fail_next_scheduler_start_post_admission: bool,
     /// Approval continuation metadata keyed by blocked approval id.
     blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
     /// Exact turn/action identities granted one unsandboxed retry after a
@@ -1690,6 +1693,18 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn take_peer_message_turn_post_admission_failure_for_tests(&mut self) -> bool {
         std::mem::take(&mut self.agent.fail_next_peer_message_turn_post_admission)
+    }
+
+    /// Injects one scheduler-start failure after scheduler admission.
+    #[cfg(test)]
+    pub(crate) fn fail_next_scheduler_start_post_admission_for_tests(&mut self) {
+        self.agent.fail_next_scheduler_start_post_admission = true;
+    }
+
+    /// Consumes the test-only post-admission scheduler-start failure.
+    #[cfg(test)]
+    pub(crate) fn take_scheduler_start_post_admission_failure_for_tests(&mut self) -> bool {
+        std::mem::take(&mut self.agent.fail_next_scheduler_start_post_admission)
     }
 
     /// Returns the parent macro turn for one child step turn.
