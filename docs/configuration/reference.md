@@ -1129,7 +1129,7 @@ evidence.
 | `model_profiles.<name>.multimodal` | boolean | omitted | Compatibility multimodal capability flag. |
 | `model_profiles.<name>.context_window_tokens` | integer | profile-specific | Display and compaction context denominator. |
 | `model_profiles.<name>.context_limit_tokens` | integer | omitted | Alternative explicit context limit. |
-| `model_profiles.<name>.max_input_tokens` | integer | profile-specific | Optional hard estimated cap for the complete provider request. Mez compacts eligible context before dispatch when the estimate exceeds this positive limit. |
+| `model_profiles.<name>.max_input_tokens` | integer | profile-specific | Optional inclusive threshold for provider-reported ordinary execution input. Mez compacts eligible context at a safe continuation boundary after a response reaches it; it does not preflight-gate the current request or guarantee the next one fits. Auxiliary router, compactor, and memory usage is excluded. |
 | `model_profiles.<name>.max_output_tokens` | integer | profile/provider-specific | Optional provider output-token cap. Generated built-in provider-model records carry editable defaults where available; a profile override remains authoritative. |
 | `model_profiles.<name>.provider_options` | table | see below | Provider-specific non-secret model options. |
 | `model_profiles.<name>.safety_tier` | string | `"high"` in generated profiles | Safety posture label. |

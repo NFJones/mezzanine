@@ -40,6 +40,7 @@ impl RuntimeSessionService {
                 "agent provider execution conversation no longer owns pane",
             ));
         }
+        self.clear_observed_input_compaction_fence(&turn.turn_id);
         self.scope_provider_execution_action_ids(turn, &mut execution)?;
         if mez_agent::outcome::runtime_execution_has_apply_patch_action(&execution) {
             self.record_agent_loop_apply_patch_for_turn(turn_id);
@@ -483,7 +484,13 @@ impl RuntimeSessionService {
                     "subagent task waiting for child subagents",
                 )?;
                 self.start_ready_agent_turns()?;
-            } else if runtime_execution_ready_for_provider_continuation(&execution) {
+            } else if runtime_execution_ready_for_provider_continuation(&execution)
+                && !self.defer_agent_provider_for_observed_input_limit(
+                    turn,
+                    model_profile,
+                    execution.latest_response_usage,
+                )?
+            {
                 self.agent
                     .pending_agent_provider_tasks
                     .insert(turn_id.to_string());

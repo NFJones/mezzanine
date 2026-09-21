@@ -597,12 +597,11 @@ pub enum RuntimeActiveTurnCompactionTrigger {
         /// Bounded provider retry attempt resumed after compaction.
         attempt: u32,
     },
-    /// Proactive enforcement of an explicitly configured request-input cap.
-    ConfiguredInputLimit {
-        /// One-based proactive compaction pass for this request.
-        pass: u32,
-        /// Complete request estimate that triggered this pass.
-        previous_input_tokens: usize,
+    /// Proactive compaction after an execution response reports input at or
+    /// above the configured threshold.
+    ObservedInputLimit {
+        /// Provider-reported total input tokens for the execution request.
+        observed_input_tokens: u64,
         /// Explicit configured input-token cap.
         max_input_tokens: usize,
     },

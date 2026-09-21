@@ -362,7 +362,7 @@ impl RuntimeSessionService {
                         .map(|tokens| tokens.to_string())
                         .unwrap_or_else(|| "unknown".to_string()),
                     if model_profile.max_input_tokens().is_some() {
-                        "configured-input-limit/provider-rejection/manual"
+                        "observed-input-limit/provider-rejection/manual"
                     } else {
                         "provider-rejection/manual"
                     }

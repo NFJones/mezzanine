@@ -297,14 +297,14 @@ impl RuntimeSessionService {
         let mut pending_blocks = Vec::new();
         let recovery_attempt = match trigger {
             RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { attempt } => attempt,
-            RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. } => 0,
+            RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => 0,
         };
         let (rejected_request_bytes, rejected_request_stream) = match trigger {
             RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => (
                 self.claimed_agent_provider_openai_request_bytes(turn_id),
                 self.claimed_agent_provider_openai_request_stream(turn_id),
             ),
-            RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. } => (None, None),
+            RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => (None, None),
         };
         let mut request = runtime_model_compaction_request_for_blocks(
             &model_profile,
@@ -344,8 +344,8 @@ impl RuntimeSessionService {
                 RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => {
                     "provider-context-limit".to_string()
                 }
-                RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. } => {
-                    "configured-input-limit".to_string()
+                RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => {
+                    "observed-input-limit".to_string()
                 }
             },
             // Proactive compaction must establish a durable epoch as well as
@@ -354,9 +354,7 @@ impl RuntimeSessionService {
             // unpersisted same-turn observations.
             transcript_entries: match trigger {
                 RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => 0,
-                RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. } => {
-                    transcript_entries
-                }
+                RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => transcript_entries,
             },
             retained_transcript_entries: 0,
             summarized_entries: plan.replacement_blocks().len(),
@@ -383,12 +381,11 @@ impl RuntimeSessionService {
                 "agent: provider rejected context as too large; requesting model-backed context compaction"
                     .to_string()
             }
-            RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit {
-                previous_input_tokens,
+            RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                observed_input_tokens,
                 max_input_tokens,
-                ..
             } => format!(
-                "agent: configured input cap deferred provider dispatch; requesting model-backed context compaction estimated_input_tokens={previous_input_tokens} max_input_tokens={max_input_tokens}"
+                "agent: observed execution input reached configured limit; requesting model-backed context compaction observed_input_tokens={observed_input_tokens} max_input_tokens={max_input_tokens}"
             ),
         };
         self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &status)?;
@@ -762,7 +759,7 @@ impl RuntimeSessionService {
                 }
                 if matches!(
                     trigger,
-                    RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. }
+                    RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. }
                 ) {
                     self.agent_turn_contexts_mut()
                         .insert(turn_id.clone(), compacted.clone());
@@ -773,9 +770,9 @@ impl RuntimeSessionService {
                         self.append_agent_status_text_to_terminal_buffer(
                             pane_id,
                             &format!(
-                                "agent: configured input-cap compaction applied durable model summary pass={} compacted_blocks={}",
+                                "agent: observed execution input compaction applied durable model summary observed_input_tokens={} compacted_blocks={}",
                                 match trigger {
-                                    RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { pass, .. } => pass,
+                                    RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { observed_input_tokens, .. } => observed_input_tokens,
                                     RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => unreachable!("configured compaction trigger was matched above"),
                                 },
                                 report.compacted_blocks
@@ -784,7 +781,7 @@ impl RuntimeSessionService {
                         self.append_agent_trace_turn_event(
                             pane_id,
                             &turn_id,
-                            "provider_request preflight_resuming reason=configured_input_limit_compaction_completed",
+                            "provider_request recovery_resuming reason=observed_input_limit_compaction_completed",
                         )?;
                         self.restore_agent_latest_request_usage(&task.conversation_id, None);
                         self.restore_agent_context_usage(&task.conversation_id, None, None);
@@ -802,7 +799,7 @@ impl RuntimeSessionService {
                             recovery_attempt,
                         )?;
                     }
-                    RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. } => {
+                    RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => {
                         self.queue_agent_provider_recovery_task_after_compaction(&turn_id)?;
                     }
                 }
@@ -814,12 +811,15 @@ impl RuntimeSessionService {
                         ),
                         "provider_request recovery_resuming reason=model_context_compaction_completed",
                     ),
-                    RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { pass, .. } => (
+                    RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                        observed_input_tokens,
+                        ..
+                    } => (
                         format!(
-                            "agent: configured input-cap compaction applied model summary pass={pass} compacted_blocks={}",
+                            "agent: observed execution input compaction applied model summary observed_input_tokens={observed_input_tokens} compacted_blocks={}",
                             report.compacted_blocks
                         ),
-                        "provider_request preflight_resuming reason=configured_input_limit_compaction_completed",
+                        "provider_request recovery_resuming reason=observed_input_limit_compaction_completed",
                     ),
                 };
                 self.append_agent_status_text_to_terminal_buffer(pane_id, &status)?;

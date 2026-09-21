@@ -191,7 +191,7 @@ An explicit Iroh primary `attach` also accepts these X11 options:
 | Option | Behavior |
 | --- | --- |
 | `--x11` | Request X SECURITY untrusted forwarding. Forwarding remains off unless requested, and this mode fails closed if a local untrusted credential cannot be prepared. |
-| `--x11-trusted` | Request full trusted X11 forwarding. This conflicts with `--x11` and requires `transport.iroh.x11.allow_trusted = true` on the host. |
+| `--x11-trusted` | Request full trusted X11 forwarding. This conflicts with `--x11`, requires `transport.iroh.x11.allow_trusted = true` on the host, and fails closed unless local `xauth` can issue a fresh trusted authorization. |
 | `--x11-takeover` | Explicitly replace another attachment's X11 route. It requires either `--x11` or `--x11-trusted`. |
 
 These flags require an authenticated Iroh primary and are rejected for

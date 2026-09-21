@@ -1424,11 +1424,11 @@ fn runtime_status_reports_turn_elapsed_provider_claim_and_retry() {
     );
 }
 
-/// Verifies `/status` identifies configured input limits as a proactive
+/// Verifies `/status` identifies observed execution usage as a proactive
 /// compaction trigger while retaining the existing trigger list when a profile
-/// does not configure that limit.
+/// does not configure that threshold.
 #[test]
-fn runtime_status_reports_configured_input_limit_compaction_policy() {
+fn runtime_status_reports_observed_input_limit_compaction_policy() {
     let mut without_limit = test_runtime_service();
     without_limit
         .replace_config_layers(vec![ConfigLayer {
@@ -1451,7 +1451,7 @@ fn runtime_status_reports_configured_input_limit_compaction_policy() {
         "{without_limit_status}"
     );
     assert!(
-        !without_limit_status.contains("configured-input-limit"),
+        !without_limit_status.contains("observed-input-limit"),
         "{without_limit_status}"
     );
 
@@ -1473,7 +1473,7 @@ fn runtime_status_reports_configured_input_limit_compaction_policy() {
         .unwrap();
     let with_limit_status = with_limit.runtime_agent_status_display("%1").unwrap();
     assert!(
-        with_limit_status.contains("compaction=configured-input-limit/provider-rejection/manual"),
+        with_limit_status.contains("compaction=observed-input-limit/provider-rejection/manual"),
         "{with_limit_status}"
     );
 }

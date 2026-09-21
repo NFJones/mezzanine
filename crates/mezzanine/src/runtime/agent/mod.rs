@@ -451,10 +451,9 @@ pub(crate) struct RuntimeAgentComponent {
     repaired_transcript_history_identities: BTreeMap<String, String>,
     /// Configured profile identities retained separately from display labels.
     agent_turn_configured_model_profiles: BTreeMap<String, String>,
-    /// Number of proactive configured-input-limit compaction passes per turn.
-    agent_turn_configured_input_compaction_passes: BTreeMap<String, u32>,
-    /// Complete request estimate that preceded the latest proactive pass.
-    agent_turn_configured_input_previous_tokens: BTreeMap<String, usize>,
+    /// Turns whose latest execution-usage sample has already queued one
+    /// observed-input compaction before the next provider response.
+    agent_turn_observed_input_compaction_turns: BTreeSet<String>,
     /// Turns whose automatic routing decision has already been applied.
     agent_turn_routing_applied: BTreeSet<String>,
     /// Provider turns queued for worker dispatch.
@@ -2461,6 +2460,13 @@ impl RuntimeSessionService {
         let task = self.agent.claimed_agent_compaction_tasks.remove(pane_id);
         self.agent.agent_compacting_panes.remove(pane_id);
         task
+    }
+
+    /// Re-arms observed-input compaction after a successful context replacement.
+    pub(crate) fn clear_observed_input_compaction_fence(&mut self, turn_id: &str) {
+        self.agent
+            .agent_turn_observed_input_compaction_turns
+            .remove(turn_id);
     }
 
     /// Removes all compaction state after provider failure.

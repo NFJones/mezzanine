@@ -17,18 +17,6 @@ use super::{
 use crate::runtime::RuntimeAutoSizingDecision;
 use sha2::{Digest, Sha256};
 
-/// Bounded configured input-cap compaction passes allowed for one turn.
-const CONFIGURED_INPUT_COMPACTION_PASS_LIMIT: u32 = 4;
-
-/// One bounded configured-cap compaction pass a preflight decided to queue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RuntimeConfiguredInputCapPassPlan {
-    /// One-based pass number the queued compaction runs as.
-    pub(crate) pass: u32,
-    /// Whether this pass retries because the previous pass did not reduce the estimate.
-    pub(crate) non_reducing: bool,
-}
-
 /// Renders the bounded safe state that follows an output-token cutoff.
 ///
 /// Native argument fragments are deliberately absent. A cutoff containing an
@@ -356,51 +344,6 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
-    /// Decides the next configured-cap compaction pass for one preflight.
-    ///
-    /// The cap measures estimated wire bytes while the compaction planner budgets
-    /// words, so a pass can legitimately fail to shrink the emitted estimate: code
-    /// heavy context or a summary near its word budget can replace fewer bytes than
-    /// it adds. Such a pass retries with a tightened budget while the bounded
-    /// allowance remains, and the cap is reported unsatisfiable only once that
-    /// allowance is exhausted - never as an internal consistency error.
-    pub(crate) fn plan_configured_input_cap_pass(
-        completed_passes: u32,
-        previous_input_tokens: Option<usize>,
-        current_input_tokens: usize,
-        max_input_tokens: usize,
-    ) -> Result<RuntimeConfiguredInputCapPassPlan> {
-        if completed_passes >= CONFIGURED_INPUT_COMPACTION_PASS_LIMIT {
-            return Err(MezError::invalid_state(format!(
-                "configured input cap cannot be satisfied for this turn after {completed_passes} bounded compaction passes: previous_input_tokens={} current_input_tokens={current_input_tokens} max_input_tokens={max_input_tokens}",
-                // The pass counter only advances together with a recorded estimate,
-                // so reaching the bounded terminal always has one to report.
-                previous_input_tokens.expect("bounded passes record their previous estimate")
-            )));
-        }
-        Ok(RuntimeConfiguredInputCapPassPlan {
-            pass: completed_passes.saturating_add(1),
-            non_reducing: previous_input_tokens
-                .is_some_and(|previous| current_input_tokens >= previous),
-        })
-    }
-
-    /// Returns the word budget one configured-cap compaction pass plans against.
-    ///
-    /// A non-reducing pass tightens the budget, because repeating the same budget
-    /// reproduces the same plan; the retry never drops below one word, so it still
-    /// has a budget to plan against.
-    pub(crate) fn configured_input_cap_pass_budget(
-        context_budget_words: usize,
-        non_reducing: bool,
-    ) -> usize {
-        if non_reducing {
-            context_budget_words.saturating_div(2).max(1)
-        } else {
-            context_budget_words
-        }
-    }
-
     /// Resolves the active provider's budget projection for one model profile.
     ///
     /// A missing provider record or an unknown configured API leaves the
@@ -453,172 +396,64 @@ impl RuntimeSessionService {
         plan.map_err(|error| MezError::invalid_state(error.message()))
     }
 
-    /// Converts one measured provider token budget into the planner's word unit.
+    /// Queues one compaction at a safe continuation boundary after an ordinary
+    /// execution response reports input at or above its configured threshold.
     ///
-    /// The cap and the guard measure estimated provider input tokens while the
-    /// planner budgets whitespace-delimited words, so carrying a token budget over
-    /// as if one token were one word over-budgets prose and under-budgets code by
-    /// the ratio between the two. Measuring that ratio over the same rendered
-    /// payloads the estimate covers keeps the plan in the cap's unit: the words it
-    /// plans to retain cost about the tokens it was given.
-    pub(crate) fn configured_input_cap_budget_words(
-        available_tokens: usize,
-        rendered_context_words: usize,
-        rendered_context_tokens: usize,
-    ) -> usize {
-        available_tokens
-            .saturating_mul(rendered_context_words)
-            .saturating_div(rendered_context_tokens.max(1))
-    }
-
-    /// Defers an oversized configured-cap request into bounded active-turn compaction.
-    ///
-    /// The supplied estimate is for the fully assembled provider wire request.
-    /// Repeated passes must strictly reduce that estimate, and no provider retry
-    /// attempt is consumed because no ordinary provider request has been sent.
-    pub(crate) fn defer_agent_provider_for_configured_input_limit(
+    /// The response sample is authoritative for the triggering decision. The
+    /// planner's word budget is only a bounded summary-sizing heuristic; it is
+    /// not a second request-submission gate.
+    pub(crate) fn defer_agent_provider_for_observed_input_limit(
         &mut self,
         turn: &AgentTurnRecord,
         model_profile: &ModelProfile,
-        context: &mez_agent::PreparedModelContext,
-        estimate: mez_agent::ProviderRequestInputEstimate,
-        max_input_tokens: usize,
+        observed_usage: mez_agent::ModelTokenUsage,
     ) -> Result<bool> {
-        if !estimate.exceeds_explicit_cap(max_input_tokens) {
-            self.agent
-                .agent_turn_configured_input_compaction_passes
-                .remove(&turn.turn_id);
-            self.agent
-                .agent_turn_configured_input_previous_tokens
-                .remove(&turn.turn_id);
+        let Some(max_input_tokens) = model_profile.max_input_tokens() else {
+            return Ok(false);
+        };
+        if observed_usage.input_tokens < max_input_tokens as u64
+            || !self
+                .agent
+                .agent_turn_observed_input_compaction_turns
+                .insert(turn.turn_id.clone())
+        {
             return Ok(false);
         }
-        let previous_input_tokens = self
-            .agent
-            .agent_turn_configured_input_previous_tokens
+        let context = self
+            .agent_turn_contexts()
             .get(&turn.turn_id)
-            .copied();
-        let completed_passes = self
-            .agent
-            .agent_turn_configured_input_compaction_passes
-            .get(&turn.turn_id)
-            .copied()
-            .unwrap_or(0);
-        let pass_plan = Self::plan_configured_input_cap_pass(
-            completed_passes,
-            previous_input_tokens,
-            estimate.input_tokens,
-            max_input_tokens,
-        )?;
-        let non_reducing_pass = pass_plan.non_reducing;
-        let pass = pass_plan.pass;
-        if non_reducing_pass {
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                &turn.turn_id,
-                &format!(
-                    "configured_input_limit non_reducing_pass completed_passes={completed_passes} previous_input_tokens={} current_input_tokens={} max_input_tokens={max_input_tokens} retry=tightened_budget",
-                    // A non-reducing pass is only ever a pass that followed a
-                    // recorded estimate, so the fallback is unreachable here.
-                    previous_input_tokens.expect("non-reducing passes record their previous estimate"),
-                    estimate.input_tokens
-                ),
-            )?;
-        }
-
-        // Only rendered blocks count toward the request estimate and the planner
-        // budget: a block the active provider never receives is not context the
-        // rebuilt request has to fit, and charging it would understate the fixed
-        // provider overhead the cap is measured against.
-        let provider_projection = self.agent_provider_budget_projection(model_profile);
-        let rendered_context = context.to_agent_context();
-        let mut rendered_context_tokens = 0usize;
-        let mut rendered_context_words = 0usize;
-        for (index, block) in rendered_context.blocks().iter().enumerate() {
-            if !mez_agent::provider_renders_context_block(
-                &rendered_context,
-                index,
-                provider_projection,
-            ) {
-                continue;
-            }
-            rendered_context_tokens = rendered_context_tokens.saturating_add(
-                mez_agent::provider_text_input_token_estimate(&format!(
-                    "{}{}",
-                    mez_agent::model_context_block_header(block),
-                    block.content
-                )),
-            );
-            rendered_context_words = rendered_context_words.saturating_add(
-                mez_agent::model_context_text_word_count(&mez_agent::model_context_block_header(
-                    block,
-                ))
-                .saturating_add(mez_agent::model_context_text_word_count(&block.content)),
-            );
-        }
-        let fixed_input_tokens = estimate
-            .input_tokens
-            .saturating_sub(rendered_context_tokens);
-        let available_tokens = max_input_tokens
-            .saturating_sub(fixed_input_tokens)
-            .saturating_mul(3)
-            .saturating_div(4);
-        let context_budget_words = Self::configured_input_cap_budget_words(
-            available_tokens,
-            rendered_context_words,
-            rendered_context_tokens,
-        );
-        let context_budget_words =
-            Self::configured_input_cap_pass_budget(context_budget_words, non_reducing_pass);
-        if context_budget_words == 0 {
-            return Err(MezError::invalid_state(format!(
-                "configured input cap is smaller than fixed provider request overhead: estimated_input_tokens={} fixed_input_tokens={fixed_input_tokens} max_input_tokens={max_input_tokens}",
-                estimate.input_tokens
-            )));
-        }
-        let durable = context.durable();
-        // A configured hard cap cannot reserve an optional raw tail when that
-        // reservation prevents the complete request from fitting. Exact and
-        // post-boundary context remains protected by the compaction planner.
-        let retained_tail_percent = 0;
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let plan = self.plan_agent_context_compaction(
-            provider_projection,
-            durable,
-            context_budget_words,
-            retained_tail_percent,
-            durable.event_sequence_high_water_mark(),
+            self.agent_provider_budget_projection(model_profile),
+            &context,
+            max_input_tokens.saturating_mul(3).saturating_div(4).max(1),
+            0,
+            context.event_sequence_high_water_mark(),
         )?;
-        if !plan.changes_context() {
-            return Err(MezError::invalid_state(format!(
-                "configured input cap exceeded but no eligible durable context can be compacted: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
-                estimate.input_tokens
-            )));
-        }
-        if !self.queue_agent_active_turn_compaction(
-            &turn.turn_id,
-            turn.model_profile.clone(),
-            model_profile.clone(),
-            crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit {
-                pass,
-                previous_input_tokens: estimate.input_tokens,
-                max_input_tokens,
-            },
-            plan,
-        )? {
+        if !plan.changes_context()
+            || !self.queue_agent_active_turn_compaction(
+                &turn.turn_id,
+                turn.model_profile.clone(),
+                model_profile.clone(),
+                crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                    observed_input_tokens: observed_usage.input_tokens,
+                    max_input_tokens,
+                },
+                plan,
+            )?
+        {
+            self.agent
+                .agent_turn_observed_input_compaction_turns
+                .remove(&turn.turn_id);
             return Ok(false);
         }
-        self.agent
-            .agent_turn_configured_input_compaction_passes
-            .insert(turn.turn_id.clone(), pass);
-        self.agent
-            .agent_turn_configured_input_previous_tokens
-            .insert(turn.turn_id.clone(), estimate.input_tokens);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
             &format!(
-                "configured_input_limit queued pass={pass} estimated_input_tokens={} max_input_tokens={max_input_tokens} fixed_input_tokens={fixed_input_tokens} context_budget_words={context_budget_words} retained_tail_percent={retained_tail_percent}",
-                estimate.input_tokens
+                "observed_input_limit queued observed_input_tokens={} max_input_tokens={max_input_tokens}",
+                observed_usage.input_tokens
             ),
         )?;
         Ok(true)

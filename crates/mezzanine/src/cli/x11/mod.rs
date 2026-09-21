@@ -23,10 +23,7 @@ mod forwarder;
 pub(crate) use display::{ResolvedX11Display, resolve_local_x11_display};
 pub(crate) use forwarder::{X11LocalStream, connect_local_x11, rewrite_local_x11_setup};
 
-use authority::{
-    X11CredentialLease, generate_untrusted_x11_cookie, load_trusted_x11_cookie,
-    process_xauthority_path,
-};
+use authority::{X11CredentialLease, generate_x11_cookie, process_xauthority_path};
 
 /// Fully prepared client-local state for one requested X11 attachment.
 pub(crate) struct PreparedX11Client {
@@ -164,28 +161,20 @@ async fn prepare_x11_client_with(
     command_timeout: Duration,
 ) -> Result<PreparedX11Client> {
     let display = resolve_local_x11_display(display_name)?;
-    let (real_cookie, lease) = match mode {
-        X11ForwardingMode::Trusted => (
-            load_trusted_x11_cookie(authority_path, &display)?,
-            X11CredentialLease::Trusted,
-        ),
-        X11ForwardingMode::Untrusted => {
-            let (cookie, lease) = generate_untrusted_x11_cookie(
-                authority_path,
-                &display,
-                xauth_executable,
-                command_timeout,
-            )
-            .await?;
-            (cookie, X11CredentialLease::Untrusted(lease))
-        }
-    };
+    let (real_cookie, lease) = generate_x11_cookie(
+        authority_path,
+        &display,
+        mode,
+        xauth_executable,
+        command_timeout,
+    )
+    .await?;
     Ok(PreparedX11Client {
         mode,
         display,
         fake_cookie: distinct_fake_cookie(&real_cookie, X11Cookie::random),
         real_cookie,
-        lease,
+        lease: X11CredentialLease::Generated(lease),
     })
 }
 
@@ -238,12 +227,33 @@ mod tests {
             .open(&authority_path)
             .unwrap();
         file.write_all(&record).unwrap();
+        let generated_path = root.join("generated-authority");
+        let mut generated_record = record;
+        let generated_cookie_start = generated_record.len() - crate::runtime::x11::X11_COOKIE_BYTES;
+        generated_record[generated_cookie_start..].fill(0x6b);
+        let mut generated_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&generated_path)
+            .unwrap();
+        generated_file.write_all(&generated_record).unwrap();
+        let xauth = root.join("fake-xauth");
+        fs::write(
+            &xauth,
+            format!(
+                "#!/bin/sh\n[ \"$XAUTHORITY\" = \"$4\" ] || exit 3\nif [ \"$5\" = generate ]; then [ \"$8\" = trusted ] || exit 4; cp '{}' \"$4\"; exit 0; fi\nif [ \"$5\" = remove ]; then : > \"$4\"; exit 0; fi\nexit 2\n",
+                generated_path.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&xauth, fs::Permissions::from_mode(0o700)).unwrap();
 
         let prepared = prepare_x11_client_with(
             X11ForwardingMode::Trusted,
             ":19",
             &authority_path,
-            OsStr::new("unused-xauth"),
+            xauth.as_os_str(),
             Duration::from_secs(1),
         )
         .await
@@ -252,8 +262,10 @@ mod tests {
         let debug = format!("{prepared:?}");
 
         assert_eq!(offer.mode, X11ForwardingMode::Trusted);
+        assert_eq!(prepared.real_cookie, X11Cookie::new([0x6b; 16]));
         assert!(!debug.contains(":19"));
         assert!(!debug.contains("5a"));
+        assert!(!debug.contains("6b"));
         prepared.close().await.unwrap();
         let _ = fs::remove_dir_all(root);
     }
@@ -287,7 +299,7 @@ mod tests {
                 display: resolve_local_x11_display(":21").unwrap(),
                 fake_cookie: X11Cookie::new([0x41; 16]),
                 real_cookie: X11Cookie::new([0x52; 16]),
-                lease: X11CredentialLease::Trusted,
+                lease: X11CredentialLease::None,
             };
             let mut setup = setup_packet(byte_order, prepared.fake_cookie.as_bytes());
             let original_len = setup.len();

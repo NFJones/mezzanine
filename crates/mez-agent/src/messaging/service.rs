@@ -1494,7 +1494,7 @@ fn expires_before_delivery(envelope: &Envelope) -> bool {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Result<()> {
-    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1 | 2 | 3) {
+    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=3) {
         return Err(MessageError::invalid_args(
             "snapshot MMP state has unsupported protocol or schema version",
         ));

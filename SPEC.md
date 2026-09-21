@@ -3456,13 +3456,17 @@ X11 forwarding MUST be an explicit feature of an authenticated Iroh primary
 attachment. Unix clients, observers, unauthenticated peers, and agent or
 automation roles MUST NOT activate it. Untrusted forwarding MUST be the
 default request mode. Trusted forwarding MUST require a separate explicit
-client request and `allow_trusted = true`; failure to prepare an untrusted X
-SECURITY credential MUST NOT fall back to trusted credentials. A session MUST
-have at most one exact X11 route owner. Ownership MUST be bound to the exact
-authenticated connection and a monotonic session-local generation. Replacing
-an owner MUST require explicit takeover, invalidate the old generation before
-publishing the new one, and ensure stale cleanup cannot deactivate a newer
-route.
+client request and `allow_trusted = true`. Trusted forwarding MUST use a fresh
+local `xauth generate ... trusted` authorization from a private authority copy;
+a raw matching `MIT-MAGIC-COOKIE-1` record MUST NOT be relayed as trusted
+because Xauthority records do not encode X SECURITY provenance. Trusted setup
+MUST fail closed when that authorization cannot be issued. Failure to prepare
+an untrusted X SECURITY credential MUST NOT fall back to trusted credentials.
+A session MUST have at most one exact X11 route owner. Ownership MUST be bound
+to the exact authenticated connection and a monotonic session-local generation.
+Replacing an owner MUST require explicit takeover, invalidate the old generation
+before publishing the new one, and ensure stale cleanup cannot deactivate a
+newer route.
 
 Every client-side `xauth` invocation MUST have one finite lifecycle deadline
 covering normal execution, nonblocking termination signalling, and process
@@ -4538,13 +4542,16 @@ MUST be normalized as if `reasoning_profile` were set when the canonical field
 is absent. `context_window_tokens`, `context_limit_tokens`, `max_input_tokens`, and
 `max_output_tokens` MUST be positive token counts when present.
 `context_window_tokens` and `context_limit_tokens` MUST drive context-usage
-display percentages. An explicitly configured `max_input_tokens` MUST be a
-hard estimated cap on complete provider-visible request input and MUST also cap
-explicit compaction budget targets when it is lower than the context-window
-limit. The estimate MUST be formed after final messages, system instructions,
-request-local recovery input, action and MCP schemas, response wrappers, and
-provider wire controls are assembled. A request whose estimate equals the cap
-MAY dispatch; a request whose estimate exceeds it MUST NOT dispatch.
+display percentages. An explicitly configured `max_input_tokens` MUST be an
+inclusive observed-input threshold for ordinary execution requests and MUST
+also bound explicit compaction budget targets when it is lower than the
+context-window limit. At a safe continuation boundary after an ordinary
+execution response reports input usage at or above that threshold, Mez MUST
+queue at most one active-turn compaction for that response sample. Provider
+usage is authoritative for this decision; local request estimates may guide
+diagnostics or auxiliary request sizing but MUST NOT gate ordinary execution
+request submission. The threshold does not guarantee that a later request fits
+the provider limit.
 Generated default model profiles SHOULD include provider/model-aware recommended
 `max_output_tokens` values for known agent workloads when the selected provider
 exposes a compatible output-budget control. Profiles for unknown or generic
@@ -4553,11 +4560,13 @@ applies. Mezzanine MUST send `max_output_tokens` only to providers whose active
 wire API accepts that field, and MUST NOT include it in prompt-cache identity
 material.
 Mezzanine MUST NOT use advisory context-window or fallback estimates as a
-prompt-submission gate when `max_input_tokens` is absent; provider-reported
-usage and provider context-limit errors remain the authoritative signals in
-that case. When `max_input_tokens` is explicit, Mezzanine MUST use its complete
-request estimate as a pre-dispatch gate while retaining provider context-limit
-errors as fallback recovery for tokenizer or hidden-overhead underestimation.
+prompt-submission gate. Provider-reported ordinary execution usage and provider
+context-limit errors remain the authoritative signals. Router, compactor, and
+memory-operation usage MUST NOT supply an ordinary execution threshold sample;
+missing or zero execution usage is unknown and MUST NOT trigger compaction.
+Provider context-limit errors remain bounded fallback recovery for a first
+request or new context that exceeds the provider limit before a usable observed
+execution sample exists.
 When both context fields are absent, Mezzanine SHOULD use built-in provider
 model metadata for known default model families before falling back to a
 conservative local token budget for display and explicit compaction targets.
@@ -6761,17 +6770,18 @@ content. When a block cannot fit, the harness MUST replace it with a compact
 diagnostic summary that preserves source, label, byte count, and recovery
 guidance.
 
-For an explicit `max_input_tokens`, the harness MUST defer an over-cap normal
-provider request before audit or provider I/O, subtract fixed and request-local
-overhead from the cap, and compact only eligible durable context. It MUST
-rebuild and re-estimate the complete request after compaction. Proactive passes
-MUST be bounded, MUST strictly reduce the estimate, and MUST NOT consume a
-provider retry attempt. Protected-only overflow, absent eligible context,
-nonshrinking summaries, or exhausted passes MUST fail explicitly without
-ordinary provider I/O. The same explicit-cap accounting MUST apply separately
-to internal auto-sizing router requests and model-compactor requests;
-active-turn compactor source MAY be split into temporary requests while the
-validated summary is applied atomically to the original frozen plan.
+For an explicit `max_input_tokens`, the harness MUST submit an ordinary
+provider request without an estimate-derived preflight gate. After a concrete
+ordinary execution response reports input usage at or above the threshold, it
+MUST wait for a safe continuation boundary, preserve any settled action group,
+and compact eligible durable context before queuing the continuation. It MUST
+fence the triggering response sample so it queues at most one compaction, and
+invalidate that fence after a successful replacement or when the turn ends.
+Auxiliary router, compactor, and memory-operation requests use owner-specific
+bounded handling and MUST NOT compact unrelated active-turn context. The
+provider context-limit recovery path remains available for authoritative
+rejections. Active-turn compactor source MAY be split into temporary requests
+while the validated summary is applied atomically to the original frozen plan.
 
 ### 9.7 Model Request and Response
 
@@ -12565,13 +12575,12 @@ choice while the turn is active and return to the user-selected default after
 the turn settles.
 
 Before a valid auto-sizing decision has been applied to the turn, context
-pressure checks for normal provider requests and provider context-limit
-recovery MUST use the smallest context window among the ordinary default
-profile and the configured `small`, `medium`, and `large` target profiles.
+pressure checks for provider context-limit recovery MUST use the smallest
+context window among the ordinary default profile and the configured `small`,
+`medium`, and `large` target profiles.
 This prevents pre-decision context handling from fitting the default profile
 while exceeding a smaller target that the router may choose. The router profile
-MUST be budgeted separately for the internal router request, including its own
-explicit `max_input_tokens` preflight when configured, and MUST NOT reduce the
+MUST be budgeted separately for its internal request and MUST NOT reduce the
 main provider request budget.
 
 If the router request fails, times out, returns malformed output, chooses an

@@ -992,7 +992,11 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<bool> {
-        let parent_turn_id = self.routed_parent_turn_id_for_child(&turn.turn_id);
+        let parent_turn_id = self
+            .agent
+            .routed_workflow_by_child_turn
+            .get(&turn.turn_id)
+            .cloned();
         let Some(parent_turn_id) = parent_turn_id else {
             return Ok(false);
         };
@@ -1002,6 +1006,13 @@ impl RuntimeSessionService {
             .get(&parent_turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("routed workflow state is unavailable"))?;
+        if state.child_turn_id.as_deref() != Some(turn.turn_id.as_str()) {
+            self.agent
+                .routed_workflow_by_child_turn
+                .remove(&turn.turn_id);
+            self.agent.subagent_task_routes.remove(&turn.turn_id);
+            return Ok(true);
+        }
         let transition =
             plan_routed_workflow_transition(&state, RoutedWorkflowEvent::ChildCancelled)
                 .map_err(MezError::invalid_state)?;

@@ -242,10 +242,7 @@ impl RuntimeSessionService {
         self.remove_agent_turn_provider_request_chain(turn_id);
         self.agent.agent_turn_chatgpt_routing_states.remove(turn_id);
         self.agent
-            .agent_turn_configured_input_compaction_passes
-            .remove(turn_id);
-        self.agent
-            .agent_turn_configured_input_previous_tokens
+            .agent_turn_observed_input_compaction_turns
             .remove(turn_id);
         self.remove_agent_turn_model_profile(turn_id);
         self.agent.pending_agent_provider_tasks.remove(turn_id);

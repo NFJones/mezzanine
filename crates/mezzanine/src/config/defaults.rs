@@ -677,8 +677,10 @@ subagent_name_mode = "nonhuman"
 max_depth = 2
 
 # Model profiles are materialized by authentication/catalog setup. When a
-# profile sets max_input_tokens, Mez treats it as a hard estimated cap on the
-# complete wire request and proactively compacts before provider I/O.
+# profile sets max_input_tokens, Mez uses provider-reported ordinary execution
+# input at or above that inclusive threshold to compact at a safe continuation
+# boundary. It does not preflight-gate the current request and cannot guarantee
+# that a later request fits the provider limit.
 # Authenticated DeepSeek Pro and Flash model records declare reasoning levels
 # ["high", "max"] and capability tags ["native_thinking", "function_tools",
 # "forced_tool_choice", "streaming", "max_output_tokens"]. Omit either list to

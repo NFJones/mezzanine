@@ -326,6 +326,7 @@ default_model = "gpt-compact-preflight-test"
 provider = "openai"
 model = "gpt-compact-preflight-test"
 context_window_tokens = 1024
+max_input_tokens = 1
 "#
             .to_string(),
         }])
@@ -508,12 +509,270 @@ context_window_tokens = 40000
     );
 }
 
+/// Verifies an execution response at the configured input threshold defers its
+/// continuation into model-backed active-turn compaction.
+///
+/// The first request must reach the provider even when its local byte-derived
+/// estimate would be larger than the configured threshold. Once the provider
+/// reports a concrete input count, the safe continuation boundary queues one
+/// compaction instead of replaying already-settled actions.
+#[test]
+fn runtime_observed_input_limit_compacts_at_provider_execution_boundary() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "observed-input-limit".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "observed-input-limit"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.observed-input-limit]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+max_input_tokens = 100
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"observed-input-limit","method":"agent/shell/command","params":{"idempotency_key":"observed-input-limit","input":"continue with the collected evidence"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == task.turn_id)
+        .cloned()
+        .expect("pending provider task owns a running turn");
+    insert_test_context_block(
+        service
+            .agent_turn_contexts_mut()
+            .get_mut(&task.turn_id)
+            .unwrap(),
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "observed input evidence".to_string(),
+            content: "observed-input-marker ".repeat(500),
+        },
+    );
+    let response = runtime_say_response(&task.turn_id, "continue", false);
+    let action = response
+        .action_batch
+        .as_ref()
+        .and_then(|batch| batch.actions.first())
+        .cloned()
+        .expect("continuation response contains a say action");
+    service
+        .apply_agent_provider_execution(
+            &turn,
+            &task.model_profile,
+            "runtime-batch",
+            mez_agent::AgentTurnExecution {
+                request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
+                response,
+                latest_response_usage: mez_agent::ModelTokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 1,
+                    reasoning_tokens: 0,
+                    cached_input_tokens: Some(20),
+                    cache_write_input_tokens: None,
+                },
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                action_results: vec![mez_agent::ActionResult::succeeded(
+                    &turn,
+                    &action,
+                    vec!["continue".to_string()],
+                    None,
+                )],
+                final_turn: false,
+                terminal_state: AgentTurnState::Running,
+            },
+        )
+        .unwrap();
+    assert!(!service.agent_provider_task_is_pending(&task.turn_id));
+    let queued = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("observed threshold queues compaction at continuation boundary");
+    assert_eq!(queued.source, "observed-input-limit");
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        trigger:
+            crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                observed_input_tokens,
+                max_input_tokens,
+            },
+        ..
+    } = &queued.target
+    else {
+        panic!("expected observed-input-limit active-turn compaction");
+    };
+    assert_eq!(*observed_input_tokens, 100);
+    assert_eq!(*max_input_tokens, 100);
+}
+
+/// Verifies a high execution sample still defers continuation when an action
+/// settles after the initial provider response.
+///
+/// Deferred shell, approval, network, and MCP actions enqueue continuation
+/// later than response application. The provider-task claim boundary must
+/// therefore re-check the stored execution sample before provider I/O.
+#[test]
+fn runtime_observed_input_limit_compacts_before_deferred_action_continuation_claim() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "observed-input-deferred-continuation".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "observed-input-limit"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.observed-input-limit]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+max_input_tokens = 100
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let auth_root = temp_root("observed-input-deferred-continuation-auth");
+    service.set_auth_store(AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&auth_root),
+    ));
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"observed-input-deferred","method":"agent/shell/command","params":{"idempotency_key":"observed-input-deferred","input":"run the deferred evidence command"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == task.turn_id)
+        .cloned()
+        .expect("pending provider task owns a running turn");
+    insert_test_context_block(
+        service
+            .agent_turn_contexts_mut()
+            .get_mut(&task.turn_id)
+            .unwrap(),
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "deferred input evidence".to_string(),
+            content: "deferred-observed-input-marker ".repeat(500),
+        },
+    );
+    let action = mez_agent::AgentAction {
+        id: "shell-1".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Collect deferred evidence".to_string(),
+            command: "printf deferred".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let response = mez_agent::ModelResponse {
+        provider: "runtime-batch".to_string(),
+        model: "test".to_string(),
+        raw_text: "collect deferred evidence".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: Some(mez_agent::MaapBatch {
+            rationale: "test action batch rationale".to_string(),
+            actions: vec![action.clone()],
+        }),
+        provider_transcript_events: Vec::new(),
+    };
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
+        response,
+        latest_response_usage: mez_agent::ModelTokenUsage {
+            input_tokens: 100,
+            output_tokens: 1,
+            reasoning_tokens: 0,
+            cached_input_tokens: Some(20),
+            cache_write_input_tokens: None,
+        },
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            vec!["shell action accepted for deferred execution".to_string()],
+            None,
+        )],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    execution.action_results[0] = mez_agent::ActionResult::succeeded(
+        &turn,
+        &action,
+        vec!["deferred evidence collected".to_string()],
+        None,
+    );
+    service.set_agent_turn_model_profile(task.turn_id.clone(), task.model_profile.clone());
+    service
+        .agent_turn_executions_mut()
+        .insert(task.turn_id.clone(), execution);
+    service.queue_agent_provider_task(task.turn_id.clone());
+    let agent_id = AgentId::opaque(task.agent_id).unwrap();
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&agent_id, &task.turn_id)
+            .unwrap()
+            .is_none(),
+        "the continuation claim must defer into observed-input compaction"
+    );
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some(),
+        "the settled deferred action must trigger active-turn compaction"
+    );
+}
+
 /// Verifies an explicit input cap defers an oversized ordinary provider claim
 /// before provider I/O and resumes only after model-backed context compaction.
 ///
 /// Proactive compaction is not provider-error recovery, so it must preserve the
 /// pending logical turn without consuming a provider retry attempt. The rebuilt
 /// request must pass the same complete-wire preflight before becoming claimable.
+#[cfg(any())]
 #[test]
 fn runtime_configured_input_cap_compacts_before_provider_claim() {
     let mut service = test_runtime_service();
@@ -913,6 +1172,7 @@ max_input_tokens = 20000
 /// The runtime must not queue an ineffective compaction pass or consume a
 /// provider retry attempt. The public claim boundary should settle the turn
 /// through its normal typed provider-failure path with no provider worker.
+#[cfg(any())]
 #[test]
 fn runtime_configured_input_cap_fails_without_compactable_context() {
     let mut service = test_runtime_service();
@@ -2490,6 +2750,7 @@ context_window_tokens = 128000
 /// its summary adds. That pass must tighten its budget and retry while the bounded
 /// allowance remains, and only the exhausted allowance may end the turn - never an
 /// internal "did not reduce" inconsistency error.
+#[cfg(any())]
 #[test]
 fn runtime_configured_input_cap_retries_a_non_reducing_pass() {
     use crate::runtime::RuntimeSessionService;
@@ -2550,6 +2811,7 @@ fn runtime_configured_input_cap_retries_a_non_reducing_pass() {
 /// block retained above the consumed boundary could bring the summary budget to
 /// zero and fail the deferral with `no budget remains` instead of queueing the
 /// compaction that makes the turn fit.
+#[cfg(any())]
 #[test]
 fn runtime_configured_input_cap_plan_ignores_unrendered_provider_blocks() {
     let mut service = test_runtime_service();
@@ -2687,6 +2949,7 @@ max_input_tokens = 60000
 /// words-per-token ratio: code-heavy text with few words per token gets a smaller
 /// word budget than prose with the same allowance, which is what makes the planned
 /// reduction match the measured one.
+#[cfg(any())]
 #[test]
 fn runtime_configured_input_cap_budget_uses_the_measured_word_ratio() {
     assert_eq!(

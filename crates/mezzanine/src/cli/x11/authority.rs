@@ -38,10 +38,13 @@ const XAUTH_TERMINATION_GRACE_MAX: Duration = Duration::from_millis(250);
 
 /// Attach-lifetime credential cleanup state.
 pub(super) enum X11CredentialLease {
-    /// Trusted lookup did not create temporary client state.
-    Trusted,
-    /// Untrusted X SECURITY state and its private authority copy.
-    Untrusted(UntrustedX11CredentialLease),
+    /// Server-issued X SECURITY state and its private authority copy.
+    Generated(GeneratedX11CredentialLease),
+    /// No private credential state is retained.
+    ///
+    /// Production setup always uses `Generated`; this variant keeps isolated
+    /// packet-rewrite tests independent from filesystem and helper setup.
+    None,
 }
 
 impl X11CredentialLease {
@@ -49,18 +52,18 @@ impl X11CredentialLease {
     /// attach cancellation prevents this method from running.
     pub(super) async fn close(&mut self) -> Result<()> {
         match self {
-            Self::Trusted => Ok(()),
-            Self::Untrusted(lease) => lease.close().await,
+            Self::Generated(lease) => lease.close().await,
+            Self::None => Ok(()),
         }
     }
 }
 
-/// Private generated credential state used only by the local attach client.
-pub(super) struct UntrustedX11CredentialLease {
+/// Private server-issued credential state used only by the local attach client.
+pub(super) struct GeneratedX11CredentialLease {
     cleanup: Option<XauthCleanup>,
 }
 
-impl UntrustedX11CredentialLease {
+impl GeneratedX11CredentialLease {
     /// Removes the generated local database entry and private artifacts.
     async fn close(&mut self) -> Result<()> {
         let Some(cleanup) = self.cleanup.take() else {
@@ -93,7 +96,7 @@ impl UntrustedX11CredentialLease {
     }
 }
 
-impl Drop for UntrustedX11CredentialLease {
+impl Drop for GeneratedX11CredentialLease {
     fn drop(&mut self) {
         if let Some(cleanup) = self.cleanup.take() {
             let _ = fs::remove_dir_all(cleanup.directory);
@@ -101,7 +104,7 @@ impl Drop for UntrustedX11CredentialLease {
     }
 }
 
-/// Owned arguments needed for explicit untrusted cleanup.
+/// Owned arguments needed for explicit generated-credential cleanup.
 struct XauthCleanup {
     executable: OsString,
     authority_path: PathBuf,
@@ -130,20 +133,26 @@ pub(super) fn load_trusted_x11_cookie(
     select_x11_cookie(&bytes, display)
 }
 
-/// Generates one short-lived untrusted credential without modifying the
-/// user's authority database.
-pub(super) async fn generate_untrusted_x11_cookie(
+/// Generates one server-issued credential of the requested forwarding mode
+/// without modifying the user's authority database.
+///
+/// The generated authorization is the only evidence used to classify a
+/// trusted credential. A raw `MIT-MAGIC-COOKIE-1` Xauthority record does not
+/// encode whether X SECURITY restricted it, so it must never be relayed as a
+/// full-trust credential.
+pub(super) async fn generate_x11_cookie(
     source_path: &Path,
     display: &ResolvedX11Display,
+    mode: crate::runtime::x11::X11ForwardingMode,
     executable: &OsStr,
     command_timeout: Duration,
-) -> Result<(X11Cookie, UntrustedX11CredentialLease)> {
+) -> Result<(X11Cookie, GeneratedX11CredentialLease)> {
     let trusted = load_trusted_x11_cookie(source_path, display)?;
     let directory = create_private_lease_directory()?;
     let authority_path = directory.join("authority");
     let seed = encode_seed_authority(display, &trusted)?;
     write_private_file(&authority_path, &seed)?;
-    let mut lease = UntrustedX11CredentialLease {
+    let mut lease = GeneratedX11CredentialLease {
         cleanup: Some(XauthCleanup {
             executable: executable.to_os_string(),
             authority_path: authority_path.clone(),
@@ -163,7 +172,10 @@ pub(super) async fn generate_untrusted_x11_cookie(
             OsString::from("generate"),
             OsString::from(display.display_name()),
             OsString::from(X11_AUTH_PROTOCOL_NAME),
-            OsString::from("untrusted"),
+            OsString::from(match mode {
+                crate::runtime::x11::X11ForwardingMode::Trusted => "trusted",
+                crate::runtime::x11::X11ForwardingMode::Untrusted => "untrusted",
+            }),
             OsString::from("timeout"),
             OsString::from(X11_UNTRUSTED_TIMEOUT_SECONDS.to_string()),
         ],
@@ -178,7 +190,7 @@ pub(super) async fn generate_untrusted_x11_cookie(
     if generated == trusted {
         let _ = lease.close().await;
         return Err(MezError::invalid_state(
-            "xauth did not produce a distinct untrusted X11 credential",
+            "xauth did not produce a distinct generated X11 credential",
         ));
     }
     Ok((generated, lease))
@@ -477,16 +489,17 @@ mod tests {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\n[ \"$XAUTHORITY\" = \"$4\" ] || exit 3\nif [ \"$5\" = generate ]; then cp '{}' \"$4\"; exit 0; fi\nif [ \"$5\" = remove ]; then : > \"$4\"; exit 0; fi\nexit 2\n",
+                "#!/bin/sh\n[ \"$XAUTHORITY\" = \"$4\" ] || exit 3\nif [ \"$5\" = generate ]; then [ \"$8\" = untrusted ] || exit 4; cp '{}' \"$4\"; exit 0; fi\nif [ \"$5\" = remove ]; then : > \"$4\"; exit 0; fi\nexit 2\n",
                 generated.display()
             ),
         )
         .unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
 
-        let (cookie, mut lease) = generate_untrusted_x11_cookie(
+        let (cookie, mut lease) = generate_x11_cookie(
             &source,
             &display,
+            crate::runtime::x11::X11ForwardingMode::Untrusted,
             script.as_os_str(),
             Duration::from_secs(2),
         )
@@ -569,7 +582,7 @@ mod tests {
         let authority_path = root.join("authority");
         write_private_file(&authority_path, &[]).unwrap();
         let missing_xauth = root.join("missing-xauth");
-        let mut lease = UntrustedX11CredentialLease {
+        let mut lease = GeneratedX11CredentialLease {
             cleanup: Some(XauthCleanup {
                 executable: missing_xauth.as_os_str().to_os_string(),
                 authority_path,

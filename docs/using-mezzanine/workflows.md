@@ -69,9 +69,15 @@ server. Non-loopback targets can expose the forwarded application to another
 machine, so select one only when that X server and network path are trusted.
 
 Use `--x11-trusted` only when the application requires full X11 authority and
-the host explicitly sets `transport.iroh.x11.allow_trusted = true`. If another
-primary already owns the session route, reconnect with `--x11-takeover` only
-when intentionally replacing that route:
+the host explicitly sets `transport.iroh.x11.allow_trusted = true`. Mez uses a
+bounded `xauth generate ... trusted` operation against a private authority
+copy; it never relays the matching raw Xauthority cookie because that file does
+not establish whether an existing `MIT-MAGIC-COOKIE-1` authorization was made
+untrusted by X SECURITY. Trusted setup fails closed if the X server or `xauth`
+cannot issue the fresh authorization, and cleanup removes the private
+credential artifacts when the attachment ends. If another primary already owns
+the session route, reconnect with `--x11-takeover` only when intentionally
+replacing that route:
 
 ```console
 mez --iroh-profile home-mez attach --x11-trusted --x11-takeover

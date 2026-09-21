@@ -1049,9 +1049,10 @@ reasoning_profile = "high"
         .child_turn_id
         .as_deref()
         .expect("worker completion should queue a handoff turn");
+    let handoff_turn_id = handoff_turn_id.to_string();
     let handoff_context = service
         .agent_turn_contexts()
-        .get(handoff_turn_id)
+        .get(&handoff_turn_id)
         .expect("handoff context should be recorded");
     assert!(handoff_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
@@ -1066,6 +1067,27 @@ reasoning_profile = "high"
             && block.label == "routed worker exact final result"
             && block.content == exact_worker_result
     }));
+
+    assert!(
+        service
+            .handle_routed_child_cancellation(&worker_turn)
+            .unwrap(),
+        "a late cancellation from the replaced worker must be consumed"
+    );
+    assert_eq!(
+        service
+            .routed_workflow_for_tests("turn-1")
+            .and_then(|workflow| workflow.child_turn_id.as_deref()),
+        Some(handoff_turn_id.as_str()),
+        "a stale worker cancellation must retain the active handoff child"
+    );
+    assert_eq!(
+        service
+            .routed_workflow_for_tests("turn-1")
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForHandoff),
+        "a stale worker cancellation must not queue parent error explanation"
+    );
 
     let handoff_turn = service
         .agent_turn_ledger()
@@ -1091,9 +1113,30 @@ reasoning_profile = "high"
         .child_turn_id
         .as_deref()
         .expect("invalid handoff should queue one repair turn");
+    let repair_turn_id = repair_turn_id.to_string();
+    assert!(
+        service
+            .handle_routed_child_cancellation(&handoff_turn)
+            .unwrap(),
+        "a late cancellation from the replaced handoff must be consumed"
+    );
+    assert_eq!(
+        service
+            .routed_workflow_for_tests("turn-1")
+            .and_then(|workflow| workflow.child_turn_id.as_deref()),
+        Some(repair_turn_id.as_str()),
+        "a stale cancellation must not replace the active repair child"
+    );
+    assert_eq!(
+        service
+            .routed_workflow_for_tests("turn-1")
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForHandoff),
+        "a stale cancellation must not queue parent error explanation"
+    );
     let repair_context = service
         .agent_turn_contexts()
-        .get(repair_turn_id)
+        .get(&repair_turn_id)
         .expect("repair context should be recorded");
     assert_eq!(
         repair_context
