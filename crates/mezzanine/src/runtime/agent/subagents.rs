@@ -5,7 +5,7 @@
 //! lifecycle coordination out of the main runtime agent facade.
 
 use mez_agent::{
-    MacroRunPhase, MacroStepTaskResult,
+    MacroRunPhase, MacroStepTaskResult, SchedulerErrorKind,
     outcome::{RuntimeSpawnAgentDenialReason, runtime_spawn_agent_denial_reason},
 };
 
@@ -691,7 +691,11 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        self.agent.agent_scheduler.requeue_waiting(parent_turn_id)?;
+        match self.agent.agent_scheduler.requeue_waiting(parent_turn_id) {
+            Ok(_) => {}
+            Err(error) if error.kind() == SchedulerErrorKind::QueueFull => return Ok(false),
+            Err(error) => return Err(error.into()),
+        }
         self.append_agent_trace_turn_event(
             &parent_turn.pane_id,
             parent_turn_id,

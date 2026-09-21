@@ -51,6 +51,7 @@ impl From<mez_agent::SchedulerError> for MezError {
         match error.kind() {
             mez_agent::SchedulerErrorKind::InvalidArgs => Self::invalid_args(error.message()),
             mez_agent::SchedulerErrorKind::InvalidState => Self::invalid_state(error.message()),
+            mez_agent::SchedulerErrorKind::QueueFull => Self::invalid_state(error.message()),
             mez_agent::SchedulerErrorKind::Conflict => Self::conflict(error.message()),
             mez_agent::SchedulerErrorKind::NotFound => {
                 Self::new(MezErrorKind::NotFound, error.message())

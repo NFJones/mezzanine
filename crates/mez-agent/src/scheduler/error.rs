@@ -13,6 +13,8 @@ pub enum SchedulerErrorKind {
     InvalidArgs,
     /// Internal scheduler state violated an expected invariant.
     InvalidState,
+    /// Ready-queue admission is temporarily unavailable.
+    QueueFull,
     /// A turn identifier conflicts with active scheduler state.
     Conflict,
     /// The requested turn identifier is not present.
@@ -43,6 +45,11 @@ impl SchedulerError {
     /// Creates an invalid-state scheduler error.
     pub fn invalid_state(message: impl Into<String>) -> Self {
         Self::new(SchedulerErrorKind::InvalidState, message)
+    }
+
+    /// Creates a retryable ready-queue admission error.
+    pub fn queue_full(message: impl Into<String>) -> Self {
+        Self::new(SchedulerErrorKind::QueueFull, message)
     }
 
     /// Creates a conflict scheduler error.

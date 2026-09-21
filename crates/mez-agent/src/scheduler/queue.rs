@@ -446,7 +446,7 @@ impl AgentScheduler {
             || self.queued_bytes.saturating_add(estimated_bytes) > self.max_queued_bytes
         {
             self.admission_rejections = self.admission_rejections.saturating_add(1);
-            return Err(SchedulerError::invalid_state(
+            return Err(SchedulerError::queue_full(
                 "scheduler queue admission limit exceeded",
             ));
         }

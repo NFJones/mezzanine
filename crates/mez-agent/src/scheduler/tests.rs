@@ -51,7 +51,7 @@ fn scheduler_enforces_queued_turn_count_budget() {
 
     let error = scheduler.enqueue(work("t3", "a3", "%3")).unwrap_err();
 
-    assert_eq!(error.kind(), SchedulerErrorKind::InvalidState);
+    assert_eq!(error.kind(), SchedulerErrorKind::QueueFull);
     assert_eq!(scheduler.snapshot().queued, 2);
     assert_eq!(scheduler.snapshot().admission_rejections, 1);
     scheduler.cancel("t1").unwrap();
@@ -72,7 +72,7 @@ fn scheduler_enforces_estimated_queued_byte_budget() {
     scheduler.enqueue(work("t1", "a1", "%1")).unwrap();
     let error = scheduler.enqueue(work("t2", "a2", "%2")).unwrap_err();
 
-    assert_eq!(error.kind(), SchedulerErrorKind::InvalidState);
+    assert_eq!(error.kind(), SchedulerErrorKind::QueueFull);
     assert_eq!(scheduler.snapshot().queued_bytes, exact_bytes);
     assert_eq!(scheduler.snapshot().admission_rejections, 1);
     scheduler.cancel("t1").unwrap();
@@ -346,6 +346,35 @@ fn scheduler_dependency_waits_release_capacity_and_reacquire_fairly() {
     assert_eq!(scheduler.snapshot().reacquiring, 0);
     scheduler.complete("parent").unwrap();
     assert_eq!(scheduler.start_ready().unwrap().turn_id, "same-pane");
+}
+
+/// Verifies a dependency-ready parent remains waiting when ready-queue
+/// admission is temporarily full, then can be requeued after capacity frees.
+///
+/// The scheduler must not consume the parent's retained ownership or lose its
+/// retry eligibility merely because the normal ready queue is saturated at the
+/// exact dependency-settlement boundary.
+#[test]
+fn scheduler_preserves_dependency_wait_when_requeue_admission_is_full() {
+    let mut scheduler = AgentScheduler::with_limits(1, 1, usize::MAX).unwrap();
+    scheduler
+        .enqueue(work("parent", "parent-agent", "%1"))
+        .unwrap();
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "parent");
+    scheduler.wait_running("parent").unwrap();
+    scheduler
+        .enqueue(work("queued", "queued-agent", "%2"))
+        .unwrap();
+
+    let error = scheduler.requeue_waiting("parent").unwrap_err();
+    assert_eq!(error.kind(), SchedulerErrorKind::QueueFull);
+    assert_eq!(scheduler.snapshot().waiting, 1);
+    assert_eq!(scheduler.snapshot().queued, 1);
+
+    scheduler.cancel("queued").unwrap();
+    scheduler.requeue_waiting("parent").unwrap();
+    assert_eq!(scheduler.snapshot().waiting, 0);
+    assert_eq!(scheduler.snapshot().reacquiring, 1);
 }
 
 /// Verifies cancellation removes both dependency waits and queued

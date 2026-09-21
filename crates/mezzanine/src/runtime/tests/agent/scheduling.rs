@@ -3021,7 +3021,26 @@ fn runtime_reconciliation_resumes_ready_dependency_wait() {
     service.remove_joined_subagent_dependencies_for_agent(&child.agent_id);
     service.remove_pending_agent_provider_task(&parent.turn_id);
 
+    service
+        .agent_scheduler_mut()
+        .set_queue_limits(1, usize::MAX)
+        .unwrap();
+
     assert!(service.ready_dependency_wait_recovery_needed());
+    assert_eq!(
+        service
+            .reconcile_agent_runtime_progress_paths_with_actor_progress(
+                &std::collections::BTreeSet::new(),
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
+
+    service
+        .agent_scheduler_mut()
+        .cancel(&child.turn_id)
+        .unwrap();
     assert_eq!(
         service
             .reconcile_agent_runtime_progress_paths_with_actor_progress(
