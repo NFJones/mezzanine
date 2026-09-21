@@ -312,6 +312,99 @@ context_window_tokens = 4500
     );
 }
 
+/// Verifies `/remember` costs remain auxiliary and do not replace the latest
+/// execution request's context measurement.
+#[test]
+fn runtime_agent_remember_usage_does_not_replace_execution_context_usage() {
+    let mut service = test_runtime_service();
+    let config_root = temp_root("runtime-agent-remember-usage");
+    service.set_config_root(config_root);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "remember-usage-history", 1)
+        .unwrap();
+    let (_, mut profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    profile
+        .provider_options
+        .insert("context_window_tokens".to_string(), "2000".to_string());
+    let execution_usage = mez_agent::ModelTokenUsage {
+        input_tokens: 1_200,
+        output_tokens: 20,
+        reasoning_tokens: 5,
+        cached_input_tokens: Some(100),
+        cache_write_input_tokens: None,
+    };
+    service.record_agent_provider_token_usage_with_profile(
+        "%1",
+        execution_usage,
+        execution_usage,
+        Some(&profile),
+    );
+
+    let queued = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"remember-usage","method":"agent/shell/command","params":{"idempotency_key":"remember-usage","input":"/remember Keep release checklists current."}}"#,
+        &primary,
+    );
+    assert!(queued.contains("state=queued"), "{queued}");
+    let task = service
+        .take_pending_agent_remember_task("%1")
+        .expect("queued remember task should be available before completion");
+    service.claim_agent_remember_task_state("%1", task);
+    let remember_usage = mez_agent::ModelTokenUsage {
+        input_tokens: 40,
+        output_tokens: 5,
+        reasoning_tokens: 1,
+        cached_input_tokens: Some(4),
+        cache_write_input_tokens: None,
+    };
+    let mut response = runtime_test_compaction_response(
+        r#"{"memories":[{"kind":"fact","summary":"release checklist","content":"Keep release checklists current."}]}"#,
+    );
+    response.usage = remember_usage;
+    assert!(
+        service
+            .apply_agent_remember_completed_event("%1", response)
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .agent_latest_request_usage("remember-usage-history")
+            .expect("remember usage must not replace the execution sample")
+            .usage,
+        execution_usage
+    );
+    assert!(
+        service
+            .agent_context_usage_snapshot("remember-usage-history")
+            .is_some(),
+        "remember must preserve the active execution context measurement"
+    );
+    let usage_by_model = service.agent_token_usage_for_conversation("remember-usage-history");
+    let accumulated = usage_by_model
+        .get(&mez_agent::ModelTokenUsageKey::new(
+            &profile.provider,
+            &profile.model,
+        ))
+        .expect("execution and remember usage must remain accounted");
+    assert_eq!(
+        accumulated.input_tokens,
+        execution_usage.input_tokens + remember_usage.input_tokens
+    );
+    assert_eq!(
+        accumulated.output_tokens,
+        execution_usage.output_tokens + remember_usage.output_tokens
+    );
+}
+
 /// Verifies that `/compact` converts the active conversation transcript into a
 /// bounded pane-scoped memory record, retains a raw recent transcript tail, and
 /// feeds both into the next prompt context. This keeps context pressure
@@ -398,7 +491,7 @@ context_window_tokens = 4500
             })
             .unwrap();
     }
-    service.set_agent_transcript_store(transcript_store);
+    service.set_agent_transcript_store(transcript_store.clone());
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -413,6 +506,22 @@ context_window_tokens = 4500
         .agent_shell_store_mut()
         .bind_conversation("%1", "as1", 12)
         .unwrap();
+    let (_, profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    let execution_usage = mez_agent::ModelTokenUsage {
+        input_tokens: 1_200,
+        output_tokens: 20,
+        reasoning_tokens: 5,
+        cached_input_tokens: Some(100),
+        cache_write_input_tokens: None,
+    };
+    service.record_agent_provider_token_usage_with_profile(
+        "%1",
+        execution_usage,
+        execution_usage,
+        Some(&profile),
+    );
 
     let compact = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"compact","method":"agent/shell/command","params":{"idempotency_key":"compact","input":"/compact"}}"#,
@@ -437,6 +546,23 @@ context_window_tokens = 4500
     );
 
     complete_runtime_test_compaction(&mut service, "%1", "summarize release plan\n[redacted]");
+    assert!(
+        service.agent_latest_request_usage("as1").is_none(),
+        "manual context replacement must leave execution usage unknown"
+    );
+    assert!(
+        service.agent_context_usage_snapshot("as1").is_none(),
+        "manual compactor usage must not become the context snapshot"
+    );
+    let metadata = transcript_store
+        .load_agent_session_metadata(service.session().id.as_str())
+        .unwrap();
+    let metadata = metadata
+        .iter()
+        .find(|metadata| metadata.conversation_id == "as1")
+        .expect("compaction completion must checkpoint conversation metadata");
+    assert!(metadata.latest_request_usage.is_none(), "{metadata:#?}");
+    assert!(metadata.context_usage_snapshot.is_none(), "{metadata:#?}");
     let pane_text = service
         .pane_screen("%1")
         .unwrap()

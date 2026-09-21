@@ -488,11 +488,15 @@ impl RuntimeSessionService {
         let Some(task) = self.finish_agent_remember_task(pane_id) else {
             return Ok(false);
         };
-        self.record_agent_provider_token_usage_with_profile(
+        self.record_agent_provider_token_usage_by_model(
             pane_id,
-            response.usage,
-            response.usage,
-            Some(&task.model_profile),
+            &std::collections::BTreeMap::from([(
+                mez_agent::ModelTokenUsageKey::new(
+                    &task.model_profile.provider,
+                    &task.model_profile.model,
+                ),
+                response.usage,
+            )]),
         );
         self.record_agent_provider_quota_usage(pane_id, &response.quota_usage);
         let candidates = runtime_remember_candidates_from_response(&response)?;

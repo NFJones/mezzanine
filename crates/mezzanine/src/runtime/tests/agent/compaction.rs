@@ -582,6 +582,19 @@ max_input_tokens = 20000
     assert!(start.contains(r#""state":"running""#), "{start}");
     let task = service.pending_agent_provider_tasks().remove(0);
     let agent_id = AgentId::opaque(task.agent_id.clone()).unwrap();
+    let execution_usage = mez_agent::ModelTokenUsage {
+        input_tokens: 1_200,
+        output_tokens: 20,
+        reasoning_tokens: 5,
+        cached_input_tokens: Some(100),
+        cache_write_input_tokens: None,
+    };
+    service.record_agent_provider_token_usage_with_profile(
+        "%1",
+        execution_usage,
+        execution_usage,
+        Some(&task.model_profile),
+    );
 
     let same_turn_group =
         mez_agent::ContextExecutionGroupId::new("configured-input-cap-same-turn").unwrap();
@@ -724,14 +737,19 @@ max_input_tokens = 20000
             compactor_requests <= 256,
             "configured-cap compactor recursion did not settle"
         );
+        let mut response = runtime_test_compaction_response(&format!(
+            "proactively compacted summary {compactor_requests}"
+        ));
+        response.usage = mez_agent::ModelTokenUsage {
+            input_tokens: 40,
+            output_tokens: 5,
+            reasoning_tokens: 1,
+            cached_input_tokens: Some(4),
+            cache_write_input_tokens: None,
+        };
         assert!(
             service
-                .apply_agent_compaction_completed_event(
-                    "%1",
-                    runtime_test_compaction_response(&format!(
-                        "proactively compacted summary {compactor_requests}"
-                    ))
-                )
+                .apply_agent_compaction_completed_event("%1", response)
                 .unwrap()
         );
     }
@@ -744,6 +762,39 @@ max_input_tokens = 20000
     assert!(
         observed_redaction,
         "selected sensitive source must be redacted"
+    );
+    assert!(
+        service
+            .agent_latest_request_usage("configured-input-cap-history")
+            .is_none(),
+        "context replacement must leave execution usage unknown until execution resumes"
+    );
+    assert!(
+        service
+            .agent_context_usage_display("configured-input-cap-history")
+            .is_none(),
+        "compactor usage must not become the context display"
+    );
+    assert!(
+        service
+            .agent_context_usage_snapshot("configured-input-cap-history")
+            .is_none(),
+        "compactor usage must not become the context snapshot"
+    );
+    let usage_by_model = service.agent_token_usage_for_conversation("configured-input-cap-history");
+    let accumulated = usage_by_model
+        .get(&mez_agent::ModelTokenUsageKey::new(
+            &task.model_profile.provider,
+            &task.model_profile.model,
+        ))
+        .expect("execution and compactor usage must remain accounted");
+    assert_eq!(
+        accumulated.input_tokens,
+        execution_usage.input_tokens + 40 * compactor_requests as u64
+    );
+    assert_eq!(
+        accumulated.output_tokens,
+        execution_usage.output_tokens + 5 * compactor_requests as u64
     );
     assert!(
         !service
@@ -1408,6 +1459,12 @@ context_window_tokens = 40000
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .expect("running pane retains its agent conversation")
+        .session_id
+        .clone();
     let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
     for (label, marker) in [
         ("older compaction input", "terminal-older-marker"),
@@ -1424,6 +1481,22 @@ context_window_tokens = 40000
         );
     }
     let original = context.blocks().to_vec();
+    let (_, profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    let execution_usage = mez_agent::ModelTokenUsage {
+        input_tokens: 1_200,
+        output_tokens: 20,
+        reasoning_tokens: 5,
+        cached_input_tokens: Some(100),
+        cache_write_input_tokens: None,
+    };
+    service.record_agent_provider_token_usage_with_profile(
+        "%1",
+        execution_usage,
+        execution_usage,
+        Some(&profile),
+    );
     let error = MezError::invalid_state("provider context length exceeded")
         .with_provider_failure_json(
             r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
@@ -1461,6 +1534,13 @@ context_window_tokens = 40000
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)
     );
     assert!(!service.agent_provider_task_is_pending("turn-1"));
+    assert_eq!(
+        service
+            .agent_latest_request_usage(&conversation_id)
+            .expect("failed compaction must retain the execution sample")
+            .usage,
+        execution_usage
+    );
     assert!(
         original
             .iter()

@@ -589,11 +589,15 @@ impl RuntimeSessionService {
         let Some(mut task) = self.finish_agent_compaction_task(pane_id) else {
             return Ok(false);
         };
-        self.record_agent_provider_token_usage_with_profile(
+        self.record_agent_provider_token_usage_by_model(
             pane_id,
-            response.usage,
-            response.usage,
-            Some(&task.model_profile),
+            &std::collections::BTreeMap::from([(
+                mez_agent::ModelTokenUsageKey::new(
+                    &task.model_profile.provider,
+                    &task.model_profile.model,
+                ),
+                response.usage,
+            )]),
         );
         self.record_agent_provider_quota_usage(pane_id, &response.quota_usage);
         let application = (|| -> Result<()> {
@@ -782,6 +786,9 @@ impl RuntimeSessionService {
                             &turn_id,
                             "provider_request preflight_resuming reason=configured_input_limit_compaction_completed",
                         )?;
+                        self.restore_agent_latest_request_usage(&task.conversation_id, None);
+                        self.restore_agent_context_usage(&task.conversation_id, None, None);
+                        self.checkpoint_agent_session_metadata()?;
                         return Ok(());
                     }
                 }
@@ -817,6 +824,9 @@ impl RuntimeSessionService {
                 };
                 self.append_agent_status_text_to_terminal_buffer(pane_id, &status)?;
                 self.append_agent_trace_turn_event(pane_id, &turn_id, trace)?;
+                self.restore_agent_latest_request_usage(&task.conversation_id, None);
+                self.restore_agent_context_usage(&task.conversation_id, None, None);
+                self.checkpoint_agent_session_metadata()?;
                 return Ok(());
             }
             self.persist_agent_compaction_epoch(pane_id, &task, &summary)?;
@@ -832,6 +842,9 @@ impl RuntimeSessionService {
                     )?;
                 }
             }
+            self.restore_agent_latest_request_usage(&task.conversation_id, None);
+            self.restore_agent_context_usage(&task.conversation_id, None, None);
+            self.checkpoint_agent_session_metadata()?;
             Ok(())
         })();
         if let Err(error) = application {

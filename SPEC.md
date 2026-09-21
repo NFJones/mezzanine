@@ -1098,7 +1098,10 @@ Pane frames MUST support the following fields:
   known sample for the same provider/model. A sample from an incompatible
   provider/model MUST NOT be displayed, and a retained sample MUST be
   recomputed or hidden when its effective context-window budget changes or
-  becomes unavailable.
+  becomes unavailable. A successful context-compaction replacement MUST clear
+  the prior execution sample and render this field unknown until a subsequent
+  execution response supplies a positive input-token count; compactor and
+  other auxiliary request usage MUST NOT become the replacement sample.
 - `policy.mode`: Active approval policy as `ask`, `auto-allow`, `full-access`,
   or `host-access`. `host-access` MUST use conspicuous warning styling.
 - `history.position`: Scrollback position when the pane is not at the live
