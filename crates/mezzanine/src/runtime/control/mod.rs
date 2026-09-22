@@ -80,7 +80,10 @@ pub(crate) use context::{
     runtime_owned_bridge_message, runtime_peer_message_block_label,
     runtime_peer_message_context_content, runtime_peer_message_logged_payload,
 };
-use context::{RuntimeAgentHistoryEpochInputs, runtime_agent_history_epoch_from_entries};
+pub(crate) use context::{
+    RuntimeAgentHistoryEpochInputs, RuntimeAgentHistoryEpochWork,
+    execute_runtime_agent_history_epoch_work,
+};
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
     parse_skill_prompt_invocation, project_guidance_context_block, skill_context_text,
@@ -189,6 +192,26 @@ impl RuntimeSessionService {
         }
         self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
         let history = self.runtime_agent_history_epoch_context(pane_id)?;
+        self.agent_context_for_pane_prompt_with_history(
+            pane_id,
+            prompt,
+            include_unread_messages,
+            history,
+        )
+    }
+
+    /// Completes prompt context assembly from one already prepared history epoch.
+    ///
+    /// History preparation may run on a worker, but message receipt, repair
+    /// handling, live configuration context, and turn admission remain owned by
+    /// the actor that validates and commits the resulting context.
+    pub(super) fn agent_context_for_pane_prompt_with_history(
+        &mut self,
+        pane_id: &str,
+        prompt: &str,
+        include_unread_messages: bool,
+        history: context::RuntimeAgentTranscriptContext,
+    ) -> Result<RuntimeAgentPromptContext> {
         if let Some(repair_identity) = history.provider_history_repair_identity.as_deref() {
             let conversation_id = self
                 .agent_shell_store()
@@ -670,13 +693,9 @@ impl RuntimeSessionService {
                 provider_history_repair_identity: None,
             });
         }
-        let entries = match store.inspect(transcript_conversation_id) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
-            Err(error) => return Err(error),
-        };
-        let transcript = runtime_agent_history_epoch_from_entries(
-            RuntimeAgentHistoryEpochInputs {
+        let transcript = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+            store: store.clone(),
+            inputs: RuntimeAgentHistoryEpochInputs {
                 pane_id: pane_id.to_string(),
                 conversation_id: transcript_conversation_id.to_string(),
                 ephemeral_source_entries: session.ephemeral.then_some(transcript_entries),
@@ -686,8 +705,7 @@ impl RuntimeSessionService {
                     .persistence
                     .pending_transcript_entries(transcript_conversation_id),
             },
-            entries,
-        );
+        })?;
         let provider_history_repair_identity = transcript.provider_history_repair_identity;
         blocks.extend(transcript.blocks);
         execution_events = transcript.execution_events;

@@ -6,6 +6,7 @@
 //! control request dispatcher from also owning model-context shaping details.
 
 use super::super::{ContextBlock, ContextSourceKind, Envelope, TranscriptEntry, TranscriptRole};
+use crate::error::{MezErrorKind, Result};
 use mez_agent::{
     AGENT_LIST_MAX_CAPABILITIES, ProviderTranscriptEvent, TranscriptContextEvent,
     agent_list_bounded_text,
@@ -17,7 +18,8 @@ const LEGACY_MAAP_ASSISTANT_CONTEXT: &str =
     "[legacy MAAP assistant execution omitted from transcript replay]";
 
 /// Exact transcript projection plus non-model-visible execution ownership.
-pub(super) struct RuntimeAgentTranscriptContext {
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeAgentTranscriptContext {
     /// Provider-visible blocks in durable transcript order.
     pub(super) blocks: Vec<ContextBlock>,
     /// Typed causal metadata for exact execution blocks.
@@ -32,7 +34,8 @@ pub(super) struct RuntimeAgentTranscriptContext {
 /// range before a blocking worker decodes durable transcript storage. Keeping
 /// the range in this value prevents worker preparation from consulting live
 /// pane state after the claim.
-pub(super) struct RuntimeAgentHistoryEpochInputs {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeAgentHistoryEpochInputs {
     /// Pane identity retained for canonical replay labels.
     pub(super) pane_id: String,
     /// Conversation whose durable transcript contributes history.
@@ -43,6 +46,35 @@ pub(super) struct RuntimeAgentHistoryEpochInputs {
     pub(super) active_entries: Option<usize>,
     /// Actor-captured persistence entries not yet visible in durable storage.
     pub(super) pending_entries: Vec<TranscriptEntry>,
+}
+
+/// Immutable transcript-store work prepared by the actor for one history epoch.
+///
+/// The worker receives no runtime service reference: it can only inspect the
+/// captured conversation and feed the rows through the canonical projection.
+/// Callers retain ownership of freshness checks and all prompt-admission side
+/// effects when this result returns to the actor.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeAgentHistoryEpochWork {
+    /// Store containing the captured source conversation.
+    pub(super) store: crate::storage::transcript::AgentTranscriptStore,
+    /// Immutable replay range and pending persistence rows captured by the actor.
+    pub(super) inputs: RuntimeAgentHistoryEpochInputs,
+}
+
+/// Reads and projects one actor-captured transcript epoch without live service state.
+pub(crate) fn execute_runtime_agent_history_epoch_work(
+    work: RuntimeAgentHistoryEpochWork,
+) -> Result<RuntimeAgentTranscriptContext> {
+    let entries = match work.store.inspect(&work.inputs.conversation_id) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == MezErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error),
+    };
+    Ok(runtime_agent_history_epoch_from_entries(
+        work.inputs,
+        entries,
+    ))
 }
 
 /// Merges durable and actor-captured pending transcript entries, trims the
@@ -663,7 +695,62 @@ pub(crate) fn runtime_peer_message_logged_payload(payload: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{runtime_peer_message_logged_payload, runtime_transcript_tool_context_content};
+    use super::{
+        RuntimeAgentHistoryEpochInputs, RuntimeAgentHistoryEpochWork,
+        execute_runtime_agent_history_epoch_work, runtime_peer_message_logged_payload,
+        runtime_transcript_tool_context_content,
+    };
+    use crate::runtime::{TranscriptEntry, TranscriptRole};
+    use crate::storage::transcript::AgentTranscriptStore;
+
+    /// Verifies worker-owned history preparation reads durable rows and merges
+    /// the actor-captured persistence tail through the canonical projection.
+    #[test]
+    fn history_epoch_work_merges_durable_and_pending_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-history-epoch-work-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let durable = TranscriptEntry {
+            conversation_id: "history-work".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "durable history".to_string(),
+        };
+        store.append(&durable).unwrap();
+        let mut pending = durable.clone();
+        pending.sequence = 2;
+        pending.content = "pending history".to_string();
+
+        let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+            store,
+            inputs: RuntimeAgentHistoryEpochInputs {
+                pane_id: "%1".to_string(),
+                conversation_id: "history-work".to_string(),
+                ephemeral_source_entries: None,
+                active_entries: Some(2),
+                pending_entries: vec![pending],
+            },
+        })
+        .unwrap();
+
+        let content = history
+            .blocks
+            .iter()
+            .map(|block| block.content.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(content, ["durable history", "pending history"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     /// Verifies peer receipt capture truncates UTF-8 payloads by bytes without
     /// splitting a multibyte character, while retaining the shared limit.
