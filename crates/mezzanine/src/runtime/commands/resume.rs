@@ -215,6 +215,7 @@ fn build_direct_resume_projection(
         presentation_settings: work.presentation_settings.clone(),
         history_limit: work.history_limit,
         history_rotate_lines: work.history_rotate_lines,
+        presentation_source_revision: work.presentation_source_revision,
     })
 }
 
@@ -547,7 +548,7 @@ impl RuntimeSessionService {
             subagent_lineage,
             entries,
             presentation_entries,
-            presentation_latest_sequence,
+            presentation_latest_sequence: _,
             prepared_objective,
             restored_model_identity,
             previous_checkpoint_records,
@@ -657,14 +658,17 @@ impl RuntimeSessionService {
                 "direct resume projection is stale; retry the resume command",
             ));
         }
-        if has_projection
-            && store.presentation_latest_sequence(&conversation_id)? != presentation_latest_sequence
+        if let Some(projection) = projection.as_ref()
+            && let Some(presentation_source_revision) = projection.presentation_source_revision
+            && self
+                .presentation
+                .agent_presentation_source_revision(&conversation_id)
+                != presentation_source_revision
         {
             return Err(MezError::invalid_state(
                 "direct resume presentation changed; retry the resume command",
             ));
         }
-
         let resume_result = (|| -> Result<(String, u64, mez_agent::AgentShellVisibility)> {
             let (session_id, transcript_entries, visibility) = {
                 let session = if conversation_kind == mez_agent::AgentConversationKind::Subagent {

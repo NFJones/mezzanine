@@ -361,10 +361,20 @@ fn runtime_agent_prompt_resume_rejects_stale_presentation_projection() {
         })
         .unwrap();
 
-    let error = service
-        .execute_agent_shell_resume_command_with_read("%1", store, *read, true)
-        .unwrap_err();
-    assert!(error.message().contains("presentation changed"), "{error}");
+    let outcome = RuntimeSessionService::project_deferred_agent_command_outcome(
+        &work,
+        crate::runtime::RuntimeAgentCommandAsyncOutcome::DirectResume { store, read },
+    )
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { ref message, .. }
+            if message.contains("presentation changed")
+    ));
+    assert!(
+        service.complete_agent_command_work(&work, outcome).unwrap(),
+        "the current command claim should settle its worker failure"
+    );
     assert_eq!(
         service
             .agent_shell_store()

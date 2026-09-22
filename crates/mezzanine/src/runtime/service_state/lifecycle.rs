@@ -401,6 +401,11 @@ pub(crate) struct RuntimeDirectResumeProjectionWork {
     pub(crate) mezzanine_session_id: String,
     /// Pane directory captured before worker preparation resolves fallback scope.
     pub(crate) working_directory: Option<std::path::PathBuf>,
+    /// Actor-local presentation source revision that authorizes a selected-id candidate.
+    ///
+    /// Latest-session selection resolves only on the worker, so it relies on
+    /// the worker-side durable source recheck instead.
+    pub(crate) presentation_source_revision: Option<u64>,
 }
 
 /// Fully rendered direct-resume terminal candidate built on the command worker.
@@ -418,6 +423,8 @@ pub(crate) struct RuntimeDirectResumeProjection {
     pub(crate) history_limit: usize,
     /// History rotation batch that determined the candidate screen.
     pub(crate) history_rotate_lines: usize,
+    /// Actor-local presentation source revision captured before worker projection.
+    pub(crate) presentation_source_revision: Option<u64>,
 }
 
 /// Immutable durable inputs prepared before a direct saved-session resume.

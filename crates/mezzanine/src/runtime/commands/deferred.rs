@@ -491,6 +491,11 @@ impl RuntimeSessionService {
                     .next()
                     .ok_or_else(|| MezError::invalid_args("resume command requires a session"))?
                     .to_string();
+                let presentation_source_revision =
+                    (!matches!(selector.as_str(), "--latest" | "latest")).then(|| {
+                        self.presentation
+                            .agent_presentation_source_revision(&selector)
+                    });
                 RuntimeAgentCommandPrepared::DirectResume {
                     store,
                     selector,
@@ -506,6 +511,7 @@ impl RuntimeSessionService {
                         agent_session,
                         mezzanine_session_id: self.session.id.as_str().to_string(),
                         working_directory: self.pane_current_working_directory(pane_id),
+                        presentation_source_revision,
                     }),
                 }
             }
@@ -986,8 +992,17 @@ impl RuntimeSessionService {
                 browser,
                 source,
             } => (body, false, Some((command, browser, source))),
-            direct_resume @ RuntimeAgentCommandAsyncOutcome::DirectResume { .. } => {
-                return Ok(direct_resume);
+            RuntimeAgentCommandAsyncOutcome::DirectResume { store, read } => {
+                if store.presentation_latest_sequence(&read.conversation_id)?
+                    != read.presentation_latest_sequence
+                {
+                    return Ok(RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: "direct resume presentation changed; retry the resume command"
+                            .to_string(),
+                        kind: crate::error::MezErrorKind::InvalidState,
+                    });
+                }
+                return Ok(RuntimeAgentCommandAsyncOutcome::DirectResume { store, read });
             }
             projected @ RuntimeAgentCommandAsyncOutcome::Projected { .. } => return Ok(projected),
         };
