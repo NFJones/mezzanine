@@ -367,6 +367,45 @@ fn boot_reconciliation_fences_prior_generation_mutations() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Restart reconciliation must retain an active lease's persisted timestamp
+/// when a regressed wall-clock sample would otherwise invalidate its lifecycle
+/// record during durable database validation.
+#[test]
+fn boot_reconciliation_clamps_regressed_wall_clock_to_lease_timestamp() {
+    let root = test_root("restart-clock-regression");
+    let repository = RemoteSessionLeaseRepository::new(root.clone());
+    let pending = repository
+        .reserve_pending(reservation(
+            "lease-clock-regression",
+            "$1",
+            "device-1",
+            "create-clock-regression",
+            "fingerprint-clock-regression",
+        ))
+        .unwrap()
+        .lease()
+        .clone();
+    let active = repository
+        .activate(
+            &pending.lease_id,
+            pending.boot_generation,
+            pending.lease_generation,
+            11,
+        )
+        .unwrap();
+
+    assert_eq!(repository.advance_boot_generation(5).unwrap(), 1);
+    let recovered = repository.get(&active.lease_id).unwrap().unwrap();
+    assert_eq!(recovered.state, RemoteSessionLeaseState::Recoverable);
+    assert_eq!(
+        recovered.updated_at_unix_seconds,
+        active.updated_at_unix_seconds
+    );
+    assert_eq!(recovered.activated_at_unix_seconds, Some(11));
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Garbage collection must preview exactly the eligible terminal records and
 /// retain active or recoverable leases regardless of age.
 #[test]

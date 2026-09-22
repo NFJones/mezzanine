@@ -539,19 +539,20 @@ impl RemoteSessionLeaseRepository {
         self.mutate_database(|database| {
             database.boot_generation = database.boot_generation.saturating_add(1);
             for lease in &mut database.leases {
+                let updated_at_unix_seconds = now_unix_seconds.max(lease.updated_at_unix_seconds);
                 match lease.state {
                     RemoteSessionLeaseState::Pending => {
                         lease.state = RemoteSessionLeaseState::Failed;
                         lease.failure =
                             Some("lease creation was interrupted by host restart".to_string());
-                        lease.terminal_at_unix_seconds = Some(now_unix_seconds);
+                        lease.terminal_at_unix_seconds = Some(updated_at_unix_seconds);
                     }
                     RemoteSessionLeaseState::Active => {
                         lease.state = RemoteSessionLeaseState::Recoverable;
                     }
                     _ => {}
                 }
-                lease.updated_at_unix_seconds = now_unix_seconds;
+                lease.updated_at_unix_seconds = updated_at_unix_seconds;
                 lease.boot_generation = database.boot_generation;
                 lease.lease_generation = lease.lease_generation.saturating_add(1);
             }
