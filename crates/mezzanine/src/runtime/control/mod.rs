@@ -2520,4 +2520,85 @@ mod tests {
         );
         context.validate_durable().unwrap();
     }
+
+    /// Verifies an ungrouped legacy execution record remains a display
+    /// suppression boundary before a later exact execution group in the same
+    /// turn.
+    #[test]
+    fn runtime_transcript_replay_keeps_display_rows_before_legacy_execution_boundary() {
+        let first_group = mez_agent::ContextExecutionGroupId::new("execution-group-first").unwrap();
+        let later_group = mez_agent::ContextExecutionGroupId::new("execution-group-later").unwrap();
+        let entries = [
+            (
+                TranscriptRole::System,
+                TranscriptContextEvent::execution_block_with_metadata(
+                    mez_agent::ContextSourceKind::TranscriptAssistant,
+                    "first exact assistant",
+                    "first exact assistant content",
+                    first_group,
+                    1,
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content(),
+            ),
+            (
+                TranscriptRole::Assistant,
+                "display assistant before legacy boundary".to_string(),
+            ),
+            (
+                TranscriptRole::Tool,
+                "[action_result display-1 shell_command succeeded]".to_string(),
+            ),
+            (
+                TranscriptRole::System,
+                TranscriptContextEvent::execution_block(
+                    mez_agent::ContextSourceKind::TranscriptAssistant,
+                    "legacy execution boundary",
+                    "legacy execution content",
+                )
+                .unwrap()
+                .to_transcript_content(),
+            ),
+            (
+                TranscriptRole::System,
+                TranscriptContextEvent::execution_block_with_metadata(
+                    mez_agent::ContextSourceKind::TranscriptAssistant,
+                    "later exact assistant",
+                    "later exact assistant content",
+                    later_group,
+                    1,
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content(),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (role, content))| TranscriptEntry {
+            conversation_id: "conv1".to_string(),
+            sequence: u64::try_from(index).unwrap().saturating_add(1),
+            created_at_unix_seconds: 100,
+            role,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            pane_id: "%1".to_string(),
+            content,
+        })
+        .collect::<Vec<_>>();
+
+        let transcript = runtime_agent_transcript_context("%1", &entries);
+        assert!(
+            transcript
+                .blocks
+                .iter()
+                .any(|block| { block.content == "display assistant before legacy boundary" })
+        );
+        assert!(transcript.blocks.iter().any(|block| {
+            block
+                .content
+                .contains("[action_result display-1 shell_command succeeded]")
+        }));
+    }
 }

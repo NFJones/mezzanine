@@ -151,46 +151,40 @@ pub(super) fn runtime_agent_transcript_context(
 ) -> RuntimeAgentTranscriptContext {
     let mut blocks = Vec::new();
     let mut execution_events = Vec::new();
-    let latest_mcp_compaction_epoch = entries.iter().rposition(|entry| {
-        entry.role == TranscriptRole::System
-            && matches!(
-                TranscriptContextEvent::from_transcript_content(&entry.content),
-                Some(TranscriptContextEvent::McpCompactionEpoch)
-            )
-    });
+    let transcript_events = entries
+        .iter()
+        .map(|entry| {
+            (entry.role == TranscriptRole::System)
+                .then(|| TranscriptContextEvent::from_transcript_content(&entry.content))
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    let latest_mcp_compaction_epoch = transcript_events
+        .iter()
+        .rposition(|event| matches!(event, Some(TranscriptContextEvent::McpCompactionEpoch)));
     let mut latest_execution_group_ordinals = BTreeMap::new();
     let mut execution_groups_with_assistant = BTreeSet::new();
     let mut excluded_execution_groups = BTreeSet::new();
     let mut repaired_execution_groups = BTreeSet::new();
-    let execution_turns = entries
-        .iter()
-        .filter_map(|entry| {
-            (entry.role == TranscriptRole::System
-                && matches!(
-                    TranscriptContextEvent::from_transcript_content(&entry.content),
-                    Some(TranscriptContextEvent::ExecutionBlock { .. })
-                ))
-            .then_some(entry.turn_id.as_str())
-        })
-        .collect::<BTreeSet<_>>();
-    for (index, entry) in entries.iter().enumerate() {
-        if entry.role != TranscriptRole::System {
-            continue;
+    let mut execution_turns = BTreeSet::new();
+    for (index, event) in transcript_events.iter().enumerate() {
+        if matches!(event, Some(TranscriptContextEvent::ExecutionBlock { .. })) {
+            execution_turns.insert(entries[index].turn_id.as_str());
         }
         let Some(TranscriptContextEvent::ExecutionBlock {
             source,
             execution_group_id: Some(execution_group_id),
             ordinal: Some(ordinal),
             ..
-        }) = TranscriptContextEvent::from_transcript_content(&entry.content)
+        }) = event
         else {
             continue;
         };
         let previous_ordinal = latest_execution_group_ordinals
-            .insert(execution_group_id.clone(), ordinal)
+            .insert(execution_group_id.clone(), *ordinal)
             .unwrap_or(0_u64);
-        if ordinal != previous_ordinal.saturating_add(1)
-            || source == ContextSourceKind::McpRetrievedManifest
+        if *ordinal != previous_ordinal.saturating_add(1)
+            || *source == ContextSourceKind::McpRetrievedManifest
                 && latest_mcp_compaction_epoch.is_some_and(|epoch| index <= epoch)
             || matches!(
                 source,
@@ -200,65 +194,42 @@ pub(super) fn runtime_agent_transcript_context(
             excluded_execution_groups.insert(execution_group_id.clone());
             repaired_execution_groups.insert(execution_group_id.clone());
         }
-        if source == ContextSourceKind::TranscriptAssistant {
+        if *source == ContextSourceKind::TranscriptAssistant {
             execution_groups_with_assistant.insert(execution_group_id);
         }
     }
-    let exact_execution_groups = entries
+    let exact_execution_groups = transcript_events
         .iter()
-        .filter_map(|entry| {
-            match (
-                entry.role == TranscriptRole::System,
-                TranscriptContextEvent::from_transcript_content(&entry.content),
-            ) {
-                (
-                    true,
-                    Some(TranscriptContextEvent::ExecutionBlock {
-                        execution_group_id: Some(group),
-                        ..
-                    }),
-                ) if !excluded_execution_groups.contains(&group) => Some(group),
-                _ => None,
-            }
+        .filter_map(|event| match event {
+            Some(TranscriptContextEvent::ExecutionBlock {
+                execution_group_id: Some(group),
+                ..
+            }) if !excluded_execution_groups.contains(group) => Some(group),
+            _ => None,
         })
         .collect::<BTreeSet<_>>();
     let mut suppressed_display_entries = BTreeSet::new();
+    let mut seen_execution_groups = BTreeSet::new();
+    let mut last_execution_by_turn = BTreeMap::<&str, usize>::new();
     for (index, entry) in entries.iter().enumerate() {
         let Some(TranscriptContextEvent::ExecutionBlock {
-            execution_group_id: Some(group),
-            ..
-        }) = (entry.role == TranscriptRole::System)
-            .then(|| TranscriptContextEvent::from_transcript_content(&entry.content))
-            .flatten()
+            execution_group_id, ..
+        }) = transcript_events[index].as_ref()
         else {
             continue;
         };
-        if !exact_execution_groups.contains(&group)
-            || entries[..index].iter().any(|previous| {
-                previous.role == TranscriptRole::System
-                    && matches!(
-                        TranscriptContextEvent::from_transcript_content(&previous.content),
-                        Some(TranscriptContextEvent::ExecutionBlock {
-                            execution_group_id: Some(previous_group),
-                            ..
-                        }) if previous_group == group
-                    )
-            })
-        {
-            continue;
+        if execution_group_id.as_ref().is_some_and(|group| {
+            exact_execution_groups.contains(group) && seen_execution_groups.insert(group.clone())
+        }) {
+            let display_start = last_execution_by_turn
+                .get(entry.turn_id.as_str())
+                .map_or(0, |previous| previous.saturating_add(1));
+            suppressed_display_entries.extend(
+                (display_start..index)
+                    .filter(|candidate| entries[*candidate].turn_id == entry.turn_id),
+            );
         }
-        let previous_execution = entries[..index].iter().rposition(|previous| {
-            previous.turn_id == entry.turn_id
-                && previous.role == TranscriptRole::System
-                && matches!(
-                    TranscriptContextEvent::from_transcript_content(&previous.content),
-                    Some(TranscriptContextEvent::ExecutionBlock { .. })
-                )
-        });
-        let display_start = previous_execution.map_or(0, |previous| previous.saturating_add(1));
-        suppressed_display_entries.extend(
-            (display_start..index).filter(|candidate| entries[*candidate].turn_id == entry.turn_id),
-        );
+        last_execution_by_turn.insert(entry.turn_id.as_str(), index);
     }
     for (index, entry) in entries.iter().enumerate() {
         if entry.role == TranscriptRole::System
