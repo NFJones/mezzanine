@@ -66,7 +66,13 @@ pub(crate) struct RuntimeAgentHistoryEpochWork {
 pub(crate) fn execute_runtime_agent_history_epoch_work(
     work: RuntimeAgentHistoryEpochWork,
 ) -> Result<RuntimeAgentTranscriptContext> {
-    let entries = match work.store.inspect(&work.inputs.conversation_id) {
+    let entries = match work.inputs.active_entries {
+        Some(active_entries) => work
+            .store
+            .inspect_latest_entries(&work.inputs.conversation_id, active_entries),
+        None => work.store.inspect(&work.inputs.conversation_id),
+    };
+    let entries = match entries {
         Ok(entries) => entries,
         Err(error) if error.kind() == MezErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error),
@@ -783,6 +789,58 @@ mod tests {
             .map(|block| block.content.as_str())
             .collect::<Vec<_>>();
         assert_eq!(content, ["durable history", "pending history"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Verifies durable prompt-history preparation decodes only the captured
+    /// retained tail, not malformed rows in a compacted transcript prefix.
+    #[test]
+    fn history_epoch_work_ignores_unretained_durable_prefix() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-history-epoch-tail-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        for sequence in 1..=3 {
+            store
+                .append(&TranscriptEntry {
+                    conversation_id: "history-tail".to_string(),
+                    sequence,
+                    created_at_unix_seconds: sequence,
+                    role: TranscriptRole::User,
+                    turn_id: format!("turn-{sequence}"),
+                    agent_id: "agent-%1".to_string(),
+                    pane_id: "%1".to_string(),
+                    content: format!("history {sequence}"),
+                })
+                .unwrap();
+        }
+        let path = root.join("history-tail/history.tsv");
+        let retained = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, format!("invalid compacted prefix\n{retained}")).unwrap();
+
+        let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+            store,
+            inputs: RuntimeAgentHistoryEpochInputs {
+                pane_id: "%1".to_string(),
+                conversation_id: "history-tail".to_string(),
+                ephemeral_source_entries: None,
+                active_entries: Some(2),
+                pending_entries: Vec::new(),
+            },
+        })
+        .unwrap();
+
+        let content = history
+            .blocks
+            .iter()
+            .map(|block| block.content.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(content, ["history 2", "history 3"]);
         let _ = std::fs::remove_dir_all(root);
     }
 

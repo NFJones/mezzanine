@@ -1733,6 +1733,65 @@ impl AgentTranscriptStore {
         Ok(decoded[first..].to_vec())
     }
 
+    /// Reads exactly the latest transcript records without decoding older
+    /// append-only history.
+    ///
+    /// Unlike [`Self::inspect_recent`], this reader keeps seeking backwards
+    /// until it has found `max_entries` complete records. It therefore
+    /// preserves the captured replay count even when retained records exceed a
+    /// fixed byte window, while avoiding any decode work for compacted prefixes.
+    pub fn inspect_latest_entries(
+        &self,
+        conversation_id: &str,
+        max_entries: usize,
+    ) -> Result<Vec<TranscriptEntry>> {
+        if max_entries == 0 {
+            return Ok(Vec::new());
+        }
+        let path = self.existing_transcript_path_for(conversation_id)?;
+        if !path.exists() {
+            return Err(MezError::new(
+                MezErrorKind::NotFound,
+                "conversation transcript not found",
+            ));
+        }
+        const READ_CHUNK_BYTES: usize = 64 * 1024;
+        let mut file = std_fs::File::open(path)?;
+        let mut position = file.metadata()?.len();
+        let mut prefix = Vec::new();
+        let mut lines = Vec::with_capacity(max_entries);
+        while position > 0 && lines.len() < max_entries {
+            let chunk_len = usize::try_from(position.min(READ_CHUNK_BYTES as u64))
+                .expect("transcript chunk length fits usize");
+            position = position.saturating_sub(chunk_len as u64);
+            file.seek(SeekFrom::Start(position))?;
+            let mut chunk = vec![0; chunk_len];
+            file.read_exact(&mut chunk)?;
+            chunk.extend_from_slice(&prefix);
+            let mut segments = chunk.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+            prefix = segments.remove(0).to_vec();
+            for segment in segments.into_iter().rev() {
+                if !segment.is_empty() {
+                    lines.push(segment.to_vec());
+                    if lines.len() == max_entries {
+                        break;
+                    }
+                }
+            }
+        }
+        if position == 0 && lines.len() < max_entries && !prefix.is_empty() {
+            lines.push(prefix);
+        }
+        lines.reverse();
+        lines
+            .into_iter()
+            .map(|line| {
+                let text = String::from_utf8_lossy(&line);
+                decode_transcript_entry(&text)
+            })
+            .collect()
+    }
+
     /// Returns the next append sequence for one conversation without scanning
     /// the full transcript file.
     ///
