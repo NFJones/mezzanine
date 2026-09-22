@@ -2146,7 +2146,7 @@ impl RuntimeSessionService {
                     })
                 })
             {
-                return "idle";
+                return "waiting";
             }
             return if self.agent_turn_has_blocked_approval(&turn.turn_id) {
                 "waiting_approval"

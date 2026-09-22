@@ -2183,14 +2183,14 @@ fn runtime_wait_parks_turn_and_peer_mail_resumes_same_turn() {
             .unwrap()
             .agent_status
             .as_deref(),
-        Some("idle")
+        Some("waiting")
     );
     let parked_agents = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"parked-agents","method":"agent/list","params":{}}"#,
         &primary,
     );
     assert!(
-        parked_agents.contains(r#""status":"idle""#),
+        parked_agents.contains(r#""status":"waiting""#),
         "{parked_agents}"
     );
 

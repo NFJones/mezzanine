@@ -497,7 +497,7 @@ pub(in crate::control) fn agent_state_json_with_shell_session_and_model_profile(
         .is_some_and(|turn_id| {
             peer_wait_turn_ids.is_some_and(|turn_ids| turn_ids.contains(turn_id))
         }) {
-        "idle"
+        "waiting"
     } else if agent_session.running_turn_id.is_some() {
         "running"
     } else {
