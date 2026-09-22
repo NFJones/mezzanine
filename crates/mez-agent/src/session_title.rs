@@ -105,7 +105,9 @@ pub fn session_title_request(
         max_input_tokens: model_profile.max_input_tokens(),
         reasoning_effort: None,
         thinking_enabled: Some(false),
-        latency_preference: model_profile.latency_preference.clone(),
+        // Generated titles are bounded optional display work. They must not
+        // inherit a conversation profile's deliberately slow execution tier.
+        latency_preference: Some("fast".to_string()),
         prompt_cache_retention: None,
         max_output_tokens: Some(SESSION_TITLE_MAX_OUTPUT_TOKENS),
         temperature: None,
@@ -170,6 +172,7 @@ mod tests {
         ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-5".to_string(),
+            latency_preference: Some("slow".to_string()),
             ..Default::default()
         }
     }
@@ -217,6 +220,7 @@ mod tests {
         assert_eq!(request.provider, "openai");
         assert_eq!(request.model, "gpt-5");
         assert_eq!(request.agent_id, "agent-pane-1");
+        assert_eq!(request.latency_preference.as_deref(), Some("fast"));
     }
 
     /// Verifies the request starts no turn and no prompt-cache lineage.
