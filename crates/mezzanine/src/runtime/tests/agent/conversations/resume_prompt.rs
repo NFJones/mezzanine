@@ -291,3 +291,85 @@ fn runtime_agent_prompt_resume_displays_saved_transcript_context() {
     assert!(!pane_text.contains("structured_content"), "{pane_text}");
     assert!(!pane_text.contains("[1 turn=turn-1]"), "{pane_text}");
 }
+
+/// Verifies a direct-resume projection cannot replace the pane after durable
+/// presentation state advanced since the command worker read it.
+#[test]
+fn runtime_agent_prompt_resume_rejects_stale_presentation_projection() {
+    let mut service = test_runtime_service();
+    let transcript_store =
+        AgentTranscriptStore::new(temp_root("runtime-agent-resume-stale-presentation"));
+    let conversation_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-saved".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "saved prompt".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .execute_agent_shell_command(&primary, &format!("/resume {conversation_id}"))
+        .unwrap();
+    let dispatch = service
+        .take_pending_deferred_agent_commands()
+        .pop()
+        .expect("direct resume should dispatch worker preparation");
+    let work = service
+        .claim_agent_command_work(
+            &dispatch.primary_client_id,
+            &dispatch.pane_id,
+            &dispatch.command,
+            &dispatch.input,
+            dispatch.claim_generation,
+            &dispatch.conversation_id,
+        )
+        .unwrap()
+        .expect("direct resume should claim worker preparation");
+    let crate::runtime::RuntimeAgentCommandAsyncOutcome::DirectResume { store, read } =
+        RuntimeSessionService::execute_deferred_agent_command(&work)
+    else {
+        panic!("direct resume worker should return prepared state");
+    };
+    transcript_store
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 2,
+            pane_id: "%9".to_string(),
+            turn_id: None,
+            terminal_width: 80,
+            style_names: vec!["assistant".to_string()],
+            display_lines: vec!["late presentation".to_string()],
+            copy_lines: vec!["late presentation".to_string()],
+            ansi_text: None,
+            source_text: Some("late presentation".to_string()),
+            source_content_type: Some("text/plain; charset=utf-8".to_string()),
+        })
+        .unwrap();
+
+    let error = service
+        .execute_agent_shell_resume_command_with_read("%1", store, *read, true)
+        .unwrap_err();
+    assert!(error.message().contains("presentation changed"), "{error}");
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.as_str()),
+        Some(dispatch.conversation_id.as_str())
+    );
+}

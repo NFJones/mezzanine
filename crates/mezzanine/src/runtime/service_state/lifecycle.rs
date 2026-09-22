@@ -435,8 +435,14 @@ pub(crate) struct RuntimeDirectResumeRead {
     pub(crate) subagent_lineage: Option<mez_agent::SubagentSessionLineage>,
     /// Bounded transcript fallback used only when no presentation log exists.
     pub(crate) entries: Vec<mez_agent::transcript::TranscriptEntry>,
-    /// Complete durable presentation log decoded off actor ownership.
-    pub(crate) presentation_entries: Vec<crate::storage::transcript::AgentPresentationEntry>,
+    /// Complete durable presentation log retained only by the inline fallback.
+    ///
+    /// Deferred worker projection consumes and drops these rows before actor
+    /// settlement, so large decoded logs never tear down on the actor.
+    pub(crate) presentation_entries:
+        Option<Vec<crate::storage::transcript::AgentPresentationEntry>>,
+    /// Durable presentation sequence represented by the worker projection.
+    pub(crate) presentation_latest_sequence: u64,
     /// Durable effective objective restored during actor-owned commit.
     pub(crate) prepared_objective: Option<String>,
     /// Durable model identity restored during actor-owned commit.

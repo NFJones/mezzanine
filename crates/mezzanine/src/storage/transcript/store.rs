@@ -1306,11 +1306,58 @@ impl AgentTranscriptStore {
         catalog::upsert(self, &candidate, entry.created_at_unix_seconds)
     }
 
+    /// Reads all presentation entries and their durable latest sequence under
+    /// the conversation lock.
+    ///
+    /// A caller can retain the returned sequence as a source token and reject
+    /// a projection when another writer appended presentation state later.
+    pub fn inspect_presentation_snapshot(
+        &self,
+        conversation_id: &str,
+    ) -> Result<(Vec<AgentPresentationEntry>, u64)> {
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        let entries = self.inspect_presentation_unlocked(conversation_id)?;
+        let sequence = self
+            .read_presentation_index(conversation_id)?
+            .unwrap_or_else(|| {
+                entries
+                    .iter()
+                    .map(|entry| entry.sequence)
+                    .max()
+                    .unwrap_or_default()
+            });
+        Ok((entries, sequence))
+    }
+
+    /// Returns the durable latest presentation sequence under the conversation
+    /// lock without decoding the complete presentation log.
+    pub fn presentation_latest_sequence(&self, conversation_id: &str) -> Result<u64> {
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        Ok(self.read_presentation_index(conversation_id)?.unwrap_or(
+            self.inspect_recent_presentation(
+                conversation_id,
+                1,
+                DEFAULT_PRESENTATION_TAIL_READ_BYTES,
+            )?
+            .last()
+            .map(|entry| entry.sequence)
+            .unwrap_or_default(),
+        ))
+    }
+
     /// Reads all presentation entries for one conversation.
     ///
     /// Missing presentation logs are treated as empty so older transcript
     /// directories can still use synthesized resume display.
     pub fn inspect_presentation(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<AgentPresentationEntry>> {
+        self.inspect_presentation_unlocked(conversation_id)
+    }
+
+    /// Reads presentation rows while the caller owns any required lock.
+    fn inspect_presentation_unlocked(
         &self,
         conversation_id: &str,
     ) -> Result<Vec<AgentPresentationEntry>> {

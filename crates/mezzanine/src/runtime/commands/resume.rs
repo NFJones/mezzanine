@@ -97,7 +97,8 @@ pub(crate) fn read_direct_resume(
         Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error),
     };
-    let presentation_entries = store.inspect_presentation(&conversation_id)?;
+    let (presentation_entries, presentation_latest_sequence) =
+        store.inspect_presentation_snapshot(&conversation_id)?;
     let resume_directory_available = runtime_resume_directory_from_summary(&saved.summary)
         .or_else(|| runtime_resume_directory_from_entries(&entries))
         .is_some_and(|directory| PathBuf::from(directory).is_dir());
@@ -112,10 +113,12 @@ pub(crate) fn read_direct_resume(
             )
         })
         .transpose()?;
+    let presentation_entries = projection.is_none().then_some(presentation_entries);
     Ok(crate::runtime::RuntimeDirectResumeRead {
         prepared_objective: store.effective_persisted_objective(&conversation_id)?,
         restored_model_identity: store.conversation_model_identity(&conversation_id)?,
         presentation_entries,
+        presentation_latest_sequence,
         conversation_id,
         saved,
         subagent_lineage,
@@ -544,6 +547,7 @@ impl RuntimeSessionService {
             subagent_lineage,
             entries,
             presentation_entries,
+            presentation_latest_sequence,
             prepared_objective,
             restored_model_identity,
             previous_checkpoint_records,
@@ -653,6 +657,13 @@ impl RuntimeSessionService {
                 "direct resume projection is stale; retry the resume command",
             ));
         }
+        if has_projection
+            && store.presentation_latest_sequence(&conversation_id)? != presentation_latest_sequence
+        {
+            return Err(MezError::invalid_state(
+                "direct resume presentation changed; retry the resume command",
+            ));
+        }
 
         let resume_result = (|| -> Result<(String, u64, mez_agent::AgentShellVisibility)> {
             let (session_id, transcript_entries, visibility) = {
@@ -723,7 +734,7 @@ impl RuntimeSessionService {
             if !has_projection
                 && !self.replay_agent_presentation_entries_to_terminal_buffer(
                     pane_id,
-                    &presentation_entries,
+                    presentation_entries.as_deref().unwrap_or_default(),
                 )?
             {
                 self.set_agent_prompt_display_lines(
