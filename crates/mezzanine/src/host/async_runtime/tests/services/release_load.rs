@@ -16,6 +16,12 @@ const RELEASE_LOAD_PANES: usize = 8;
 const RELEASE_LOAD_WINDOWS: usize = 2;
 /// Input records mixed into the PTY output flood.
 const INPUT_RECORDS: usize = 64;
+/// Retained record-browser entries exercised by the large-overlay render sample.
+const LARGE_OVERLAY_RECORDS: usize = 100;
+/// Detail payload retained per large-overlay record without exposing content.
+const LARGE_OVERLAY_BODY_BYTES: usize = 16 * 1024;
+/// Repeated frames recorded after the large overlay is installed.
+const LARGE_OVERLAY_RENDER_SAMPLES: usize = 8;
 /// Maximum workload iterations before the outer timeout reports a failure.
 ///
 /// macOS can split the deterministic output flood into roughly one PTY event
@@ -304,6 +310,36 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
                 .split_pane_with_process(&primary, SplitDirection::Vertical, Some(command))
                 .unwrap();
         }
+        let large_browser = mez_mux::record_browser::RecordBrowser::new(
+            "Release load issues",
+            (0..LARGE_OVERLAY_RECORDS)
+                .map(|index| mez_mux::record_browser::RecordBrowserRecord {
+                    id: format!("issue-{index}"),
+                    open_command: Some(format!("/show-issues issue-{index}")),
+                    title: format!("Release load issue {index}"),
+                    metadata: vec![("kind".to_string(), "task".to_string())],
+                    markdown: "x".repeat(LARGE_OVERLAY_BODY_BYTES),
+                })
+                .collect(),
+            Vec::new(),
+        )
+        .unwrap();
+        service.register_pending_record_browser_overlay("%1", "show-issues", large_browser, None);
+        service
+            .set_agent_prompt_response_display_output_for_tests(
+                "%1",
+                &serde_json::json!({
+                    "pane_id": "%1",
+                    "input": "/show-issues",
+                    "kind": "display",
+                    "command": "show-issues",
+                    "content_type": "text/markdown; charset=utf-8",
+                    "body": "# Release load issues",
+                    "turn": null,
+                })
+                .to_string(),
+            )
+            .unwrap();
         let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
             .build()
             .unwrap();
@@ -337,10 +373,26 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
             let mut input_samples = Vec::new();
             let mut output_samples = Vec::new();
             let mut metadata_samples = Vec::new();
+            let mut large_overlay_render_samples = Vec::new();
             let mut metadata_observations = 0usize;
             let mut output_complete_seen = vec![false; drivers.len()];
             let mut done_sent = false;
             let mut workload_complete = false;
+
+            for _ in 0..LARGE_OVERLAY_RENDER_SAMPLES {
+                let render_started = Instant::now();
+                handle
+                    .render_client_side_effect(
+                        primary.clone(),
+                        RenderInvalidationReason::FullRedraw,
+                        TerminalClientLoopConfig::default(),
+                        None,
+                        0,
+                    )
+                    .await
+                    .unwrap();
+                large_overlay_render_samples.push(elapsed_micros(render_started));
+            }
 
             for iteration in 0..MAX_WORKLOAD_ITERATIONS {
                 let driver_index = iteration % drivers.len();
@@ -471,6 +523,7 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
             assert!(!output_samples.is_empty());
             assert!(!render_samples.is_empty());
             assert!(!metadata_samples.is_empty());
+            assert_eq!(large_overlay_render_samples.len(), LARGE_OVERLAY_RENDER_SAMPLES);
 
             (
                 output_bytes,
@@ -480,6 +533,7 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
                 input_samples,
                 render_samples,
                 metadata_samples,
+                large_overlay_render_samples,
                 metrics,
             )
         };
@@ -496,6 +550,7 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
             input_samples,
             render_samples,
             metadata_samples,
+            large_overlay_render_samples,
             metrics,
         ) = measurements;
         let report = serde_json::json!({
@@ -512,6 +567,8 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
                 "pane_count": RELEASE_LOAD_PANES,
                 "window_count": RELEASE_LOAD_WINDOWS,
                 "input_records": INPUT_RECORDS,
+                "large_overlay_records": LARGE_OVERLAY_RECORDS,
+                "large_overlay_body_bytes": LARGE_OVERLAY_BODY_BYTES,
                 "terminal_columns": 120,
                 "terminal_rows": 40,
             },
@@ -539,6 +596,7 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
                 "pty_output_apply": latency_summary(output_samples),
                 "pane_input_apply": latency_summary(input_samples),
                 "render_frame": latency_summary(render_samples),
+                "large_overlay_render": latency_summary(large_overlay_render_samples),
                 "process_metadata": latency_summary(metadata_samples),
             },
             "actor_diagnostics": actor_latency_summary(&metrics),

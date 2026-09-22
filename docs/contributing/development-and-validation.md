@@ -65,6 +65,13 @@ suite:
 | Iroh compression behavior or performance | `just iroh-compression-bench` |
 | Iroh v3 pushed-render behavior or RTT modeling | `just iroh-render-bench` |
 
+The release-load artifact is content-safe and report-only. Alongside the
+multi-pane PTY/input/render workload, it records the fixture count and body
+size plus p50/p95/p99 render latency for a retained large record-browser
+overlay. The report never serializes record titles, metadata, or bodies. Use
+identical worker counts and fixture sizes when comparing artifacts; the sample
+is a regression signal, not a portable latency budget.
+
 Run platform-specific shell and PTY changes on both Linux and macOS when
 available. To reproduce the macOS CI shape, run the full test suite serially.
 
