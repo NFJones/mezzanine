@@ -11,8 +11,9 @@
 //! per-conversation `prompt-history.tsv` files, and `command-prompt-history.tsv`
 //! are imported exactly once and then never touched.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -28,14 +29,15 @@ use mez_mux::readline::{ReadlineHistoryEntry, ReadlinePasteRange};
 
 use crate::error::{MezError, Result};
 
-/// Serializes history writers inside one process.
+/// Serializes writers for each individual history database inside one process.
 ///
 /// A burst of submissions would otherwise herd on the per-connection pragmas
 /// and the immediate transaction, turning a fast append into a busy timeout.
-/// Cross-process writers still coordinate through SQLite's immediate
-/// transactions and the shared busy timeout; this is a process-local mutex, not
-/// the removed file lock.
-static WRITE_LOCK: Mutex<()> = Mutex::new(());
+/// Weak entries are pruned on later acquisition, so transient stores do not
+/// retain their mutexes after their final writer completes. Cross-process
+/// writers still coordinate through SQLite's immediate transactions and the
+/// shared busy timeout; these locks only prevent same-process herding.
+static WRITE_LOCKS: OnceLock<Mutex<BTreeMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
 
 /// Bounded retries when another process holds the write lock.
 const BUSY_RETRIES: usize = 3;
@@ -85,6 +87,34 @@ impl HistoryScope {
 /// Returns the history database path for one transcript store root.
 pub(super) fn database_path(root: &Path) -> PathBuf {
     root.join(HISTORY_DATABASE_FILE_NAME)
+}
+
+/// Returns the canonical in-process writer identity for one history database.
+///
+/// Existing roots normalize aliases before their database path is used as a
+/// lock key. A not-yet-created root retains its supplied path until the first
+/// write creates it, after which later writers converge on the canonical key.
+fn history_write_lock_key(root: &Path) -> PathBuf {
+    std::fs::canonicalize(root)
+        .map(|canonical_root| canonical_root.join(HISTORY_DATABASE_FILE_NAME))
+        .unwrap_or_else(|_| database_path(root))
+}
+
+/// Returns the shared writer mutex for one history database and prunes expired
+/// mutex entries left by transient stores.
+fn history_write_lock(root: &Path) -> Arc<Mutex<()>> {
+    let key = history_write_lock_key(root);
+    let locks = WRITE_LOCKS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut locks = locks
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
 }
 
 /// Renders both prompt histories in the legacy TSV shape without creating or
@@ -199,7 +229,8 @@ pub(super) fn append(
     scope: HistoryScope,
     entry: &ReadlineHistoryEntry,
 ) -> Result<bool> {
-    let _guard = WRITE_LOCK
+    let write_lock = history_write_lock(root);
+    let _guard = write_lock
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut attempt = 0usize;
@@ -530,6 +561,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    /// Verifies writer coordination follows the history database identity
+    /// rather than serializing independent transcript roots process-wide.
+    #[test]
+    fn history_writer_locks_are_scoped_to_the_database_root() {
+        let first = test_root("writer-lock-first");
+        let second = test_root("writer-lock-second");
+
+        let first_lock = history_write_lock(&first);
+        let first_clone_lock = history_write_lock(&first);
+        let second_lock = history_write_lock(&second);
+
+        assert!(Arc::ptr_eq(&first_lock, &first_clone_lock));
+        assert!(!Arc::ptr_eq(&first_lock, &second_lock));
+
+        drop((first_lock, first_clone_lock, second_lock));
+        let _ = std::fs::remove_dir_all(first);
+        let _ = std::fs::remove_dir_all(second);
     }
 
     /// A stored paste range that no longer decodes fails closed instead of
