@@ -384,6 +384,7 @@ impl RuntimeSideEffectRouter {
             RuntimeSideEffect::DispatchAgentProvider { .. }
                 | RuntimeSideEffect::DispatchApprovedExternalAction { .. }
                 | RuntimeSideEffect::DispatchNativeShellAction { .. }
+                | RuntimeSideEffect::DispatchRecordBrowserRefresh { .. }
                 | RuntimeSideEffect::DispatchAgentCompaction { .. }
                 | RuntimeSideEffect::DispatchAgentRemember { .. }
                 | RuntimeSideEffect::DispatchAgentSessionTitle { .. }

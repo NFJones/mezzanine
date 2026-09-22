@@ -1543,3 +1543,220 @@ async fn async_actor_serves_steps_while_deferred_command_work_is_outstanding() {
 
     assert!(exit.commands_processed >= 2);
 }
+
+/// Verifies an attached-terminal step immediately hands a queued record-browser
+/// refresh to the provider worker route.
+///
+/// Browser filter hotkeys queue their SQLite-backed rebuild while applying the
+/// input. The attached client must drain that queue before replying; otherwise
+/// the page remains stale until unrelated actor activity happens to run a
+/// later drain.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_attached_step_drains_record_browser_refresh_dispatch() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "mez-attached-browser-refresh-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    service.set_config_root(root.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "attached-browser-refresh".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[issues]\nenabled = true\n".to_string(),
+        }])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let project = crate::storage::issues::project_key_for_working_directory(
+        service
+            .pane_current_working_directory("%1")
+            .unwrap_or(root.clone()),
+    );
+    crate::storage::issues::IssueStore::under_config_root(&root)
+        .add_issue(
+            project,
+            mez_agent::issues::IssueKind::Task,
+            "Attached browser refresh".to_string(),
+            None,
+            None,
+            1,
+        )
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"/show-issues\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let command = handle
+            .drain_agent_command_dispatch_side_effects(1)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("the attached command submission must queue /show-issues work");
+        let RuntimeSideEffect::DispatchAgentCommand {
+            pane_id,
+            conversation_id,
+            command,
+            input,
+            claim_generation,
+            ..
+        } = command
+        else {
+            panic!("expected /show-issues command dispatch");
+        };
+        let work = handle
+            .claim_agent_command_work(
+                primary.clone(),
+                pane_id,
+                command,
+                input,
+                claim_generation,
+                conversation_id,
+            )
+            .await
+            .unwrap()
+            .expect("the current browser command must be claimable");
+        let outcome = crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&work);
+        let outcome =
+            crate::runtime::RuntimeSessionService::project_deferred_agent_command_outcome(
+                &work, outcome,
+            )
+            .unwrap();
+        assert!(
+            handle
+                .complete_agent_command_work(work, outcome)
+                .await
+                .unwrap(),
+            "the deferred /show-issues outcome must install the browser"
+        );
+        let view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            view.lines.iter().any(|line| line.contains("Issues")),
+            "the fixture must render its issue browser before the hotkey: {view:?}"
+        );
+        let application = handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"r".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(application.forwarded_bytes, 0);
+
+        let effects = handle
+            .drain_agent_provider_dispatch_side_effects(1)
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [RuntimeSideEffect::DispatchRecordBrowserRefresh {
+                    refresh_key: _,
+                    generation: _,
+                }]
+            ),
+            "unexpected provider dispatches: {effects:?}"
+        );
+        handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"a".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let effects = handle
+            .drain_agent_provider_dispatch_side_effects(1)
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [RuntimeSideEffect::DispatchRecordBrowserRefresh {
+                    refresh_key: _,
+                    generation: _,
+                }]
+            ),
+            "unexpected scope-toggle dispatches: {effects:?}"
+        );
+        handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"\r".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let effects = handle
+            .drain_agent_command_dispatch_side_effects(1)
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [RuntimeSideEffect::DispatchAgentCommand { command, .. }] if command == "show-issues"
+            ),
+            "unexpected detail dispatches: {effects:?}"
+        );
+        handle.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+
+    assert!(exit.commands_processed >= 2);
+}

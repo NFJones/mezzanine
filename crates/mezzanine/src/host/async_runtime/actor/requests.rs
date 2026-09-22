@@ -1123,6 +1123,7 @@ impl AsyncRuntimeSessionActor {
                     self.queue_runtime_side_effects(transition.side_effects)?;
                     self.queue_deferred_pane_io_side_effects_from_service()?;
                     self.queue_pending_provider_dispatch_side_effects()?;
+                    self.queue_pending_deferred_agent_command_side_effects()?;
                     self.queue_shell_lifecycle_timer_side_effects()?;
                     self.ensure_client_render_timers_or_defer_to_pending_render(
                         &primary_client_id,
