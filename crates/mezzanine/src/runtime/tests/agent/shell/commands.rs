@@ -351,6 +351,64 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
     );
 }
 
+/// Verifies the bounded instance token projection remains equivalent to
+/// conversation-owned accounting when restore replaces and then removes a
+/// conversation, avoiding stale provider costs in ordinary status displays.
+#[test]
+fn runtime_agent_status_instance_token_projection_tracks_restored_replacements() {
+    let mut service = test_runtime_service();
+    let model = mez_agent::ModelTokenUsageKey::new("openai", "gpt-status");
+    let first_usage = mez_agent::ModelTokenUsage {
+        input_tokens: 10,
+        output_tokens: 2,
+        reasoning_tokens: 1,
+        cached_input_tokens: None,
+        cache_write_input_tokens: None,
+    };
+    let replacement_usage = mez_agent::ModelTokenUsage {
+        input_tokens: 25,
+        output_tokens: 4,
+        reasoning_tokens: 0,
+        cached_input_tokens: Some(5),
+        cache_write_input_tokens: None,
+    };
+
+    service.replace_restored_agent_token_usage(
+        "status-conversation",
+        "%1",
+        BTreeMap::from([(model.clone(), first_usage)]),
+    );
+    assert_eq!(
+        service.total_agent_token_usage_by_model(),
+        BTreeMap::from([(model.clone(), first_usage)])
+    );
+
+    service.replace_restored_agent_token_usage(
+        "status-conversation",
+        "%1",
+        BTreeMap::from([(model.clone(), replacement_usage)]),
+    );
+    assert_eq!(
+        service.total_agent_token_usage_by_model(),
+        BTreeMap::from([(model.clone(), replacement_usage)])
+    );
+
+    service.replace_restored_agent_token_usage("status-conversation", "%1", BTreeMap::new());
+    assert!(service.total_agent_token_usage_by_model().is_empty());
+
+    service.merge_restored_agent_token_usage(
+        "merged-status-conversation",
+        "%1",
+        BTreeMap::from([(model.clone(), first_usage)]),
+    );
+    assert_eq!(
+        service.total_agent_token_usage_by_model(),
+        BTreeMap::from([(model, first_usage)])
+    );
+    service.merge_restored_agent_token_usage("merged-status-conversation", "%1", BTreeMap::new());
+    assert!(service.total_agent_token_usage_by_model().is_empty());
+}
+
 /// Verifies durable history is queried only for `/status --extended`, uses the
 /// existing accounting columns in deterministic window order, survives a pane
 /// reset, and remains visible after constructing a new runtime on the store.

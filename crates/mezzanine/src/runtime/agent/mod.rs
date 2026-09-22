@@ -508,6 +508,8 @@ pub(crate) struct RuntimeAgentComponent {
     /// Cumulative provider token usage keyed by conversation and model.
     agent_token_usage_by_conversation:
         BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
+    /// Incremental provider token usage across all conversations for status display.
+    agent_instance_token_usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
     /// Cumulative provider token usage keyed by pane and model.
     agent_token_usage_by_pane: BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
     /// Latest concrete execution-model request usage keyed by conversation.
@@ -2240,16 +2242,20 @@ impl RuntimeSessionService {
     pub(crate) fn total_agent_token_usage_by_model(
         &self,
     ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
+        self.agent.agent_instance_token_usage_by_model.clone()
+    }
+
+    /// Rebuilds the instance aggregate after replacing restored conversation state.
+    fn refresh_agent_instance_token_usage_by_model(&mut self) {
         let mut total: BTreeMap<ModelTokenUsageKey, ModelTokenUsage> = BTreeMap::new();
-        for session_usage in self.agent.agent_token_usage_by_conversation.values() {
-            for (key, usage) in session_usage {
-                if usage.is_zero() {
-                    continue;
+        for usage_by_model in self.agent.agent_token_usage_by_conversation.values() {
+            for (key, usage) in usage_by_model {
+                if !usage.is_zero() {
+                    total.entry(key.clone()).or_default().add_assign(*usage);
                 }
-                total.entry(key.clone()).or_default().add_assign(*usage);
             }
         }
-        total
+        self.agent.agent_instance_token_usage_by_model = total;
     }
 
     /// Replaces restored token usage for one conversation and its pane.
@@ -2272,6 +2278,7 @@ impl RuntimeSessionService {
                 .agent_token_usage_by_pane
                 .insert(pane_id.to_string(), usage);
         }
+        self.refresh_agent_instance_token_usage_by_model();
     }
 
     /// Replaces the token aggregate displayed for one pane without changing
@@ -2301,6 +2308,7 @@ impl RuntimeSessionService {
             self.agent
                 .agent_token_usage_by_conversation
                 .remove(conversation_id);
+            self.refresh_agent_instance_token_usage_by_model();
             return;
         }
         self.agent
@@ -2314,6 +2322,7 @@ impl RuntimeSessionService {
         for (key, value) in usage {
             pane_usage.entry(key).or_default().add_assign(value);
         }
+        self.refresh_agent_instance_token_usage_by_model();
     }
 
     /// Restores legacy and structured provider context usage together.

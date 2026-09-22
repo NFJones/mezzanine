@@ -184,12 +184,7 @@ impl RuntimeSessionService {
             .iter()
             .map(|scope| scope.scope.clone())
             .collect::<Vec<_>>();
-        let latest_turn = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .rev()
-            .find(|turn| turn.pane_id == pane_id);
+        let latest_turn = self.agent_turn_ledger().latest_turn_for_pane(pane_id);
         let latest_turn_id = latest_turn
             .map(|turn| turn.turn_id.as_str())
             .unwrap_or("none");
@@ -244,9 +239,9 @@ impl RuntimeSessionService {
         // whether provider work is still queued for it, and whether any turn is
         // waiting on a retry.
         let running_turn_record = session.running_turn_id.as_deref().and_then(|turn_id| {
-            self.agent_turn_ledger().turns().iter().find(|turn| {
-                turn.turn_id == turn_id && turn.state == mez_agent::AgentTurnState::Running
-            })
+            self.agent_turn_ledger()
+                .turn(turn_id)
+                .filter(|turn| turn.state == mez_agent::AgentTurnState::Running)
         });
         let running_turn_elapsed = running_turn_record
             .map(|turn| {
@@ -692,7 +687,7 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Aggregates provider/model token accounting across retained conversations.
+    /// Returns the incremental provider/model token accounting snapshot.
     fn runtime_agent_instance_provider_token_usage_by_model(
         &self,
     ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {

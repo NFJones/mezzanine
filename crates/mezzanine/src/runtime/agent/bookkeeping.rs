@@ -1042,6 +1042,11 @@ impl RuntimeSessionService {
             .or_default()
             .add_assign(usage);
         self.agent
+            .agent_instance_token_usage_by_model
+            .entry(token_usage_key.clone())
+            .or_default()
+            .add_assign(usage);
+        self.agent
             .agent_token_usage_by_pane
             .entry(pane_id.to_string())
             .or_default()
@@ -1137,6 +1142,11 @@ impl RuntimeSessionService {
                 continue;
             }
             conversation_usage
+                .entry(key.clone())
+                .or_default()
+                .add_assign(*usage);
+            self.agent
+                .agent_instance_token_usage_by_model
                 .entry(key.clone())
                 .or_default()
                 .add_assign(*usage);
