@@ -1118,6 +1118,139 @@ fn runtime_issue_browser_fix_hotkey_rejects_busy_agent_without_losing_selection(
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies a failed deferred issue-detail read cannot transfer its parent
+/// browser frame to a later `/show-issues` result.
+///
+/// Detail loading is intentionally deferred so SQLite cannot block overlay
+/// input. If the selected row is deleted before that worker reads it, the
+/// worker fails; reopening the browser afterward must not inherit the stale
+/// parent frame and make Escape resurrect the old list.
+#[test]
+fn runtime_issue_browser_failed_detail_does_not_leak_parent_stack() {
+    let (mut service, primary, pane_id, root, issue_ids) =
+        focused_issue_fix_browser_fixture("runtime-issue-detail-failure-stack");
+    let selected_id = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .and_then(|record_browser| record_browser.browser.active_record_id())
+        .unwrap()
+        .to_string();
+    let project = crate::storage::issues::project_key_for_working_directory(
+        service
+            .pane_current_working_directory(&pane_id)
+            .unwrap_or_else(|| root.join("config")),
+    );
+    let store = crate::storage::issues::IssueStore::under_config_root(root.join("config"));
+
+    apply_record_browser_input(&mut service, &primary, b"\r");
+    assert!(
+        store
+            .delete_issue(project, selected_id.clone())
+            .unwrap()
+            .deleted
+    );
+    let failed = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred deleted-issue read settles its empty detail");
+    assert!(failed.contains("No issues found."), "{failed}");
+
+    service
+        .execute_agent_shell_command(&primary, "/show-issues")
+        .unwrap();
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the reopened issue browser applies");
+    apply_record_browser_input(&mut service, &primary, b"\x1b");
+    assert!(
+        service.primary_display_overlay().is_none(),
+        "the reopened browser must not inherit the failed detail's parent frame"
+    );
+    assert!(issue_ids.iter().any(|id| id != &selected_id));
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a detail command cancelled before its worker claim releases its
+/// retained parent browser frame.
+///
+/// A pane can leave its agent shell after an issue row queues a deferred detail
+/// read but before a worker claims it. That abandoned command must drop the
+/// parent frame immediately rather than retaining the entire browser until the
+/// pane is later torn down.
+#[test]
+fn runtime_issue_browser_preclaim_cancel_releases_parent_stack() {
+    let (mut service, primary, pane_id, root, _) =
+        focused_issue_fix_browser_fixture("runtime-issue-detail-preclaim-cancel");
+
+    apply_record_browser_input(&mut service, &primary, b"\r");
+    assert_eq!(
+        service.pending_record_browser_overlay_claim_stack_count_for_tests(),
+        1,
+        "the deferred detail claim owns its parent browser frame"
+    );
+    let dispatch = service
+        .take_pending_deferred_agent_commands()
+        .into_iter()
+        .next()
+        .expect("the detail command queues one deferred dispatch");
+    service
+        .agent_shell_store_mut()
+        .request_exit(&pane_id)
+        .unwrap();
+
+    assert!(
+        service
+            .claim_agent_command_work(
+                &dispatch.primary_client_id,
+                &dispatch.pane_id,
+                &dispatch.command,
+                &dispatch.input,
+                dispatch.claim_generation,
+                &dispatch.conversation_id,
+            )
+            .unwrap()
+            .is_none(),
+        "a hidden agent shell cannot hand its detail read to a worker"
+    );
+    assert_eq!(
+        service.pending_record_browser_overlay_claim_stack_count_for_tests(),
+        0,
+        "the abandoned detail claim releases its parent browser frame"
+    );
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies pane teardown releases an unclaimed issue-detail parent frame.
+///
+/// A pane can be removed after its issue browser queues a deferred detail read
+/// but before a worker claims the command. Teardown must discard that retained
+/// browser frame with every other pane-owned presentation artifact.
+#[test]
+fn runtime_issue_browser_teardown_releases_parent_stack() {
+    let (mut service, primary, pane_id, root, _) =
+        focused_issue_fix_browser_fixture("runtime-issue-detail-teardown-stack");
+
+    apply_record_browser_input(&mut service, &primary, b"\r");
+    assert_eq!(
+        service.pending_record_browser_overlay_claim_stack_count_for_tests(),
+        1,
+        "the queued detail owns its parent browser frame"
+    );
+    service
+        .cleanup_removed_pane_runtime_state(&pane_id)
+        .unwrap();
+    assert_eq!(
+        service.pending_record_browser_overlay_claim_stack_count_for_tests(),
+        0,
+        "pane teardown releases the unclaimed parent browser frame"
+    );
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies `/show-issues` overlays expose record-browser footer help and keep
 /// Enter routed through the focused Markdown selection.
 ///
@@ -1418,6 +1551,33 @@ enabled = true
             .lines
             .iter()
             .any(|line| line.contains("Cross-project body"))
+    );
+    apply_record_browser_input(&mut service, &primary, b"\x1b");
+    let browser = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("Escape should restore the all-projects issue browser");
+    assert!(!browser.browser.is_detail_view());
+    assert!(
+        browser
+            .browser
+            .records()
+            .iter()
+            .any(|record| record.id == recent_issue.id)
+    );
+    assert!(
+        browser
+            .browser
+            .records()
+            .iter()
+            .any(|record| record.id == older_issue.id)
+    );
+    assert!(
+        browser
+            .browser
+            .records()
+            .iter()
+            .any(|record| record.id == cross_project_issue.id)
     );
     let _ = fs::remove_dir_all(root);
 }

@@ -299,7 +299,19 @@ impl RuntimeSessionService {
             OverlayActionTarget::RecordBrowserPromptSelect { index } => {
                 self.execute_record_browser_prompt_select(primary_client_id, index)
             }
-            OverlayActionTarget::RecordBrowserOpen { .. } => {
+            OverlayActionTarget::RecordBrowserOpen {
+                command_name,
+                record_id,
+            } => {
+                if command_name == "show-issues"
+                    && let Some(command) = self.issue_browser_detail_command(&record_id)?
+                {
+                    return self.execute_overlay_agent_slash_command(primary_client_id, &command);
+                }
+                let target = OverlayActionTarget::RecordBrowserOpen {
+                    command_name,
+                    record_id,
+                };
                 let Some(command) = target.agent_command_line() else {
                     return Ok(true);
                 };
@@ -351,6 +363,11 @@ impl RuntimeSessionService {
                         );
                         Some((target_command, stack))
                     });
+            let deferred_issue_detail_stack = command.starts_with("/show-issues").then(|| {
+                record_browser_stack
+                    .as_ref()
+                    .map(|(_, stack)| stack.clone())
+            });
             let body = self.execute_agent_shell_command(primary_client_id, command)?;
             let display_output = runtime_agent_shell_display_output(
                 &body,
@@ -373,6 +390,13 @@ impl RuntimeSessionService {
                     .pending_record_browser_overlay_stacks
                     .insert((pane_id.clone(), target_command), stack);
             }
+            if !opens_child_overlay && let Some(Some(stack)) = deferred_issue_detail_stack {
+                self.set_pending_record_browser_overlay_claim_stack(
+                    &pane_id,
+                    self.agent.agent_command_claim_generation(&pane_id),
+                    stack,
+                );
+            }
             self.set_agent_prompt_display_output(&pane_id, display_output)?;
             if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
                 self.remove_agent_prompt_input(&pane_id);
@@ -380,6 +404,44 @@ impl RuntimeSessionService {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    /// Builds a deferred detail command for an issue row using its exact project.
+    fn issue_browser_detail_command(&self, record_id: &str) -> Result<Option<String>> {
+        let Some(record_browser) = self
+            .presentation
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+        else {
+            return Ok(None);
+        };
+        if !matches!(
+            record_browser.source,
+            Some(RuntimeRecordBrowserOverlaySource::Issues { .. })
+        ) {
+            return Ok(None);
+        }
+        let Some(project) = record_browser
+            .browser
+            .records()
+            .iter()
+            .find(|record| record.id == record_id)
+            .and_then(|record| {
+                record
+                    .metadata
+                    .iter()
+                    .find(|(key, _)| key == "project")
+                    .map(|(_, project)| project.as_str())
+            })
+        else {
+            return Ok(None);
+        };
+        Ok(Some(format!(
+            "/show-issues --project {} {}",
+            mez_agent::shell_quote(project),
+            mez_agent::shell_quote(record_id)
+        )))
     }
 
     /// Executes one terminal command selected from the primary display overlay.
@@ -1041,28 +1103,11 @@ impl RuntimeSessionService {
             let Some(id) = selected.active_record_id().map(str::to_string) else {
                 return Ok(Some(false));
             };
-            let project = selected
-                .records()
-                .get(active_index)
-                .and_then(|record| {
-                    record
-                        .metadata
-                        .iter()
-                        .find(|(key, _)| key == "project")
-                        .map(|(_, value)| value.as_str())
-                })
-                .ok_or_else(|| {
-                    MezError::invalid_state("selected issue is missing its exact project identity")
-                })?;
+            let Some(command) = self.issue_browser_detail_command(&id)? else {
+                return Ok(Some(false));
+            };
             return self
-                .execute_overlay_agent_slash_command(
-                    primary_client_id,
-                    &format!(
-                        "/show-issues --project {} {}",
-                        mez_agent::shell_quote(project),
-                        mez_agent::shell_quote(&id)
-                    ),
-                )
+                .execute_overlay_agent_slash_command(primary_client_id, &command)
                 .map(Some);
         }
         if matches!(selector_input_action(input), SelectorInputAction::Select)

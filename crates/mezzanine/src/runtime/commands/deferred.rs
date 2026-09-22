@@ -251,6 +251,7 @@ impl RuntimeSessionService {
             .filter(|session| session.visibility == AgentShellVisibility::Visible)
             .map(|session| session.session_id.as_str());
         if current_conversation != Some(conversation_id) {
+            self.take_pending_record_browser_overlay_claim_stack(pane_id, claim_generation);
             self.agent
                 .cancel_matching_agent_command(pane_id, conversation_id, claim_generation);
             return Ok(None);
@@ -594,6 +595,7 @@ impl RuntimeSessionService {
         command_id: u64,
         message: &str,
     ) -> Result<Option<RuntimeAgentCommandAsyncWork>> {
+        self.take_pending_record_browser_overlay_claim_stack(pane_id, command_id);
         if !self
             .agent
             .claim_agent_command(pane_id, conversation_id, command_id)
@@ -1033,6 +1035,10 @@ impl RuntimeSessionService {
             .get(&work.pane_id)
             .map(|session| session.session_id.as_str());
         if current_conversation != Some(work.conversation_id.as_str()) {
+            self.take_pending_record_browser_overlay_claim_stack(
+                &work.pane_id,
+                work.claim_generation,
+            );
             self.agent.cancel_matching_agent_command(
                 &work.pane_id,
                 &work.conversation_id,
@@ -1047,8 +1053,14 @@ impl RuntimeSessionService {
             work.claim_generation,
         );
         if !claimed {
+            self.take_pending_record_browser_overlay_claim_stack(
+                &work.pane_id,
+                work.claim_generation,
+            );
             return Ok(false);
         }
+        let parent_browser_stack = self
+            .take_pending_record_browser_overlay_claim_stack(&work.pane_id, work.claim_generation);
         let body = match outcome {
             RuntimeAgentCommandAsyncOutcome::Response { body } => body,
             RuntimeAgentCommandAsyncOutcome::Failed { message, kind } => {
@@ -1088,11 +1100,12 @@ impl RuntimeSessionService {
                 // The inline lane installed the browser overlay before it returned
                 // the page body, so the deferred lane installs it with the same
                 // call and then applies the body through the same display path.
-                self.register_pending_record_browser_overlay(
+                self.register_pending_record_browser_overlay_with_stack(
                     &work.pane_id,
                     &command,
                     *browser,
                     source,
+                    parent_browser_stack,
                 );
                 body
             }
@@ -1103,11 +1116,12 @@ impl RuntimeSessionService {
                 record_browser,
             } => {
                 if let Some((command, browser, source)) = record_browser {
-                    self.register_pending_record_browser_overlay(
+                    self.register_pending_record_browser_overlay_with_stack(
                         &work.pane_id,
                         &command,
                         *browser,
                         source,
+                        parent_browser_stack,
                     );
                 }
                 if let Err(error) = self.apply_deferred_agent_shell_display_output(

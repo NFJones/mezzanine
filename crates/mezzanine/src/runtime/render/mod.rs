@@ -640,6 +640,10 @@ pub(crate) struct RuntimePresentationComponent {
     /// Parent browser views waiting to accompany pending child views.
     pending_record_browser_overlay_stacks:
         std::collections::BTreeMap<(String, String), Vec<RuntimeRecordBrowserOverlayFrame>>,
+    /// Parent issue-browser frames owned by one deferred command claim until its
+    /// successful browser outcome is ready to install.
+    pending_record_browser_overlay_claim_stacks:
+        std::collections::BTreeMap<(String, u64), Vec<RuntimeRecordBrowserOverlayFrame>>,
     /// Active pane-divider resize gesture.
     mouse_resize_drag_state: Option<MouseResizeDragState>,
     /// Window whose divider geometry is being changed by the active gesture.
@@ -1752,6 +1756,8 @@ impl RuntimePresentationComponent {
         self.pending_agent_presentation_resize_sizes.remove(pane_id);
         self.pending_agent_presentation_resize_dispatches
             .remove(pane_id);
+        self.pending_record_browser_overlay_claim_stacks
+            .retain(|(candidate_pane_id, _), _| candidate_pane_id != pane_id);
         self.agent_presentation_projection_cache.remove(pane_id);
         self.pane_harness_statuses.remove(pane_id);
     }
@@ -2498,6 +2504,9 @@ impl RuntimeSessionService {
         source: Option<RuntimeRecordBrowserOverlaySource>,
     ) {
         let key = (pane_id.to_string(), command.to_string());
+        self.presentation
+            .pending_record_browser_overlay_stacks
+            .remove(&key);
         // A registration owns the key: without a source the previous entry must
         // go, or a later refresh of this overlay would query the old backend and
         // replace the browser the caller just registered.
@@ -2532,6 +2541,55 @@ impl RuntimeSessionService {
         self.presentation
             .pending_record_browser_overlays
             .insert(key, browser);
+    }
+
+    /// Registers a browser and the parent frame owned by its settled deferred
+    /// command claim.
+    pub(crate) fn register_pending_record_browser_overlay_with_stack(
+        &mut self,
+        pane_id: &str,
+        command: &str,
+        browser: mez_mux::record_browser::RecordBrowser,
+        source: Option<RuntimeRecordBrowserOverlaySource>,
+        stack: Option<Vec<RuntimeRecordBrowserOverlayFrame>>,
+    ) {
+        self.register_pending_record_browser_overlay(pane_id, command, browser, source);
+        if let Some(stack) = stack {
+            self.presentation
+                .pending_record_browser_overlay_stacks
+                .insert((pane_id.to_string(), command.to_string()), stack);
+        }
+    }
+
+    /// Retains a parent browser frame until its deferred command claim settles.
+    pub(crate) fn set_pending_record_browser_overlay_claim_stack(
+        &mut self,
+        pane_id: &str,
+        claim_generation: u64,
+        stack: Vec<RuntimeRecordBrowserOverlayFrame>,
+    ) {
+        self.presentation
+            .pending_record_browser_overlay_claim_stacks
+            .insert((pane_id.to_string(), claim_generation), stack);
+    }
+
+    /// Takes the parent browser frame owned by one deferred command claim.
+    pub(crate) fn take_pending_record_browser_overlay_claim_stack(
+        &mut self,
+        pane_id: &str,
+        claim_generation: u64,
+    ) -> Option<Vec<RuntimeRecordBrowserOverlayFrame>> {
+        self.presentation
+            .pending_record_browser_overlay_claim_stacks
+            .remove(&(pane_id.to_string(), claim_generation))
+    }
+
+    /// Reports how many deferred record-browser parent frames remain for tests.
+    #[cfg(test)]
+    pub(crate) fn pending_record_browser_overlay_claim_stack_count_for_tests(&self) -> usize {
+        self.presentation
+            .pending_record_browser_overlay_claim_stacks
+            .len()
     }
 
     /// Reports whether product window frames are enabled.
