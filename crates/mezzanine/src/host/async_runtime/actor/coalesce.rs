@@ -413,6 +413,25 @@ pub(super) fn runtime_side_effect_is_droppable_repaint(effect: &RuntimeSideEffec
     droppable_repaint_effect(effect).is_some()
 }
 
+/// Returns whether one side effect belongs to the durable persistence worker.
+pub(super) fn runtime_side_effect_is_durable_persistence(effect: &RuntimeSideEffect) -> bool {
+    matches!(
+        effect,
+        RuntimeSideEffect::Persist { .. }
+            | RuntimeSideEffect::PersistAuditLog { .. }
+            | RuntimeSideEffect::PersistTranscriptEntries { .. }
+            | RuntimeSideEffect::PersistAgentSessionMetadata { .. }
+            | RuntimeSideEffect::PersistPresentationEntries { .. }
+            | RuntimeSideEffect::PersistSessionArchive { .. }
+            | RuntimeSideEffect::PersistSavedSessionRetention { .. }
+            | RuntimeSideEffect::PersistPromptHistory { .. }
+            | RuntimeSideEffect::PersistCommandPromptHistory { .. }
+            | RuntimeSideEffect::PersistTokenUsage { .. }
+            | RuntimeSideEffect::SettleAgentProviderPersistence { .. }
+            | RuntimeSideEffect::PersistRegistry { .. }
+    )
+}
+
 /// Returns a stable diagnostic family for one queued side effect.
 pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static str {
     match effect {

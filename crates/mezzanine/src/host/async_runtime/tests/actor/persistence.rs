@@ -4,6 +4,55 @@ use super::super::*;
 use crate::runtime::RuntimeRegistryUpdatePlan;
 use crate::security::project::{ProjectTrustStore, TrustDecision};
 
+/// Verifies durable persistence work has independent admission from the
+/// bounded transient side-effect queue. A persistence burst must remain
+/// drainable rather than causing its already-applied producer to fail.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_admits_persistence_backlog_beyond_transient_queue_capacity() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-persistence-backlog-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 2,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+
+    let client = async {
+        let effects = (0..5)
+            .map(|index| RuntimeSideEffect::Persist {
+                target: PersistenceTarget::AuditLog,
+                path: root.join("audit.jsonl"),
+                bytes: format!("{{\"index\":{index}}}\n").into_bytes(),
+                mode: PersistenceWriteMode::Append,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(handle.queue_runtime_side_effects(effects).await.unwrap(), 5);
+
+        let drained = handle.drain_persistence_side_effects(8).await.unwrap();
+        assert_eq!(drained.len(), 5);
+        assert!(drained.iter().all(|effect| matches!(
+            effect,
+            RuntimeSideEffect::Persist {
+                target: PersistenceTarget::AuditLog,
+                ..
+            }
+        )));
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.runtime_side_effects_queued, 5);
+    assert_eq!(exit.metrics.runtime_side_effects_drained, 5);
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that registry persistence side effects are coalesced before queue
 /// capacity is checked. Registry writes describe the latest discoverable
 /// session state, so a burst only needs the newest pending update for that

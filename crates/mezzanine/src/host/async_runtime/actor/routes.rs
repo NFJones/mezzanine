@@ -43,6 +43,15 @@ impl RuntimeSideEffectRouter {
             .saturating_add(self.timers.len())
     }
 
+    /// Returns queued work competing for the shared transient admission bound.
+    ///
+    /// Persistence owns a dedicated worker lane and cannot be dropped or
+    /// replayed after an actor event applies, so it is intentionally excluded
+    /// from the transient dispatch budget.
+    pub(super) fn non_persistence_len(&self) -> usize {
+        self.len().saturating_sub(self.persistence.len())
+    }
+
     /// Returns whether no dedicated worker-owned work remains.
     pub(super) fn is_empty(&self) -> bool {
         self.clipboard.is_empty()

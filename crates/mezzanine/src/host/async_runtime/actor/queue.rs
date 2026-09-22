@@ -4,7 +4,7 @@ use super::coalesce::{
     async_runtime_current_unix_millis, async_runtime_duration_millis,
     coalesce_output_side_effects_for_enqueue, droppable_repaint_effect,
     pane_io_side_effect_targets_pane, runtime_side_effect_is_droppable_repaint,
-    runtime_side_effect_kind_summary,
+    runtime_side_effect_is_durable_persistence, runtime_side_effect_kind_summary,
 };
 use super::{
     AsyncRuntimeSessionActor, ClientId, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL,
@@ -197,8 +197,13 @@ impl AsyncRuntimeSessionActor {
         let mut over_capacity = self
             .side_effects
             .len()
-            .saturating_add(self.side_effect_routes.len())
-            .saturating_add(side_effects.len())
+            .saturating_add(self.side_effect_routes.non_persistence_len())
+            .saturating_add(
+                side_effects
+                    .iter()
+                    .filter(|effect| !runtime_side_effect_is_durable_persistence(effect))
+                    .count(),
+            )
             > self.side_effect_buffer;
         while over_capacity {
             let dropped = match self
@@ -239,8 +244,13 @@ impl AsyncRuntimeSessionActor {
             over_capacity = self
                 .side_effects
                 .len()
-                .saturating_add(self.side_effect_routes.len())
-                .saturating_add(side_effects.len())
+                .saturating_add(self.side_effect_routes.non_persistence_len())
+                .saturating_add(
+                    side_effects
+                        .iter()
+                        .filter(|effect| !runtime_side_effect_is_durable_persistence(effect))
+                        .count(),
+                )
                 > self.side_effect_buffer;
         }
         let evicted_repaint_effects = evicted_render_clients.saturating_add(evicted_flush_outputs);
