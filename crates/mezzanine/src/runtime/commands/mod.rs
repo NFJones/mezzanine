@@ -1420,22 +1420,39 @@ impl RuntimeSessionService {
         &mut self,
         dispatch: &crate::runtime::RuntimeAgentPromptHistoryDispatch,
     ) -> bool {
-        let Some(session) = self.agent_shell_store().get(&dispatch.pane_id) else {
-            return false;
-        };
-        let transcript_entries = if session.ephemeral {
-            session.ephemeral_transcript_source_entries
-        } else {
-            session.transcript_entries
-        };
-        session.session_id == dispatch.conversation_id
-            && transcript_entries == dispatch.transcript_entries
-            && self.session.config_generation == dispatch.config_generation
-            && self.agent.claim_agent_command(
+        let current = self.agent_shell_store().get(&dispatch.pane_id);
+        let transcript_entries = current.map(|session| {
+            if session.ephemeral {
+                session.ephemeral_transcript_source_entries
+            } else {
+                session.transcript_entries
+            }
+        });
+        let current_conversation = current.map(|session| session.session_id.as_str());
+        let current = current_conversation == Some(dispatch.conversation_id.as_str())
+            && transcript_entries == Some(dispatch.transcript_entries)
+            && self.session.config_generation == dispatch.config_generation;
+        if !current {
+            self.agent.cancel_matching_agent_command(
                 &dispatch.pane_id,
                 &dispatch.conversation_id,
                 dispatch.claim_generation,
-            )
+            );
+            return false;
+        }
+        let claimed = self.agent.claim_agent_command(
+            &dispatch.pane_id,
+            &dispatch.conversation_id,
+            dispatch.claim_generation,
+        );
+        if !claimed {
+            self.agent.cancel_matching_agent_command(
+                &dispatch.pane_id,
+                &dispatch.conversation_id,
+                dispatch.claim_generation,
+            );
+        }
+        claimed
     }
 
     /// Commits one worker-prepared prompt history epoch when its admission fence remains current.
@@ -1478,6 +1495,13 @@ impl RuntimeSessionService {
                     dispatch.claim_generation,
                     crate::runtime::RuntimeAgentCommandLifecyclePhase::Failed,
                 );
+                let _ = self.append_agent_error_text_to_terminal_buffer(
+                    &dispatch.pane_id,
+                    &format!(
+                        "agent: failed to prepare conversation history: {}",
+                        error.message()
+                    ),
+                );
                 return Err(error);
             }
         };
@@ -1499,6 +1523,15 @@ impl RuntimeSessionService {
                 crate::runtime::RuntimeAgentCommandLifecyclePhase::Failed
             },
         );
+        if let Err(error) = &result {
+            let _ = self.append_agent_error_text_to_terminal_buffer(
+                &dispatch.pane_id,
+                &format!(
+                    "agent: failed to prepare conversation history: {}",
+                    error.message()
+                ),
+            );
+        }
         result.map(|_| true)
     }
 

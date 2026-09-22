@@ -4204,3 +4204,88 @@ fn runtime_subagent_unavailable_profile_cleans_allocated_child_state() {
     );
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies a prompt-history dispatch invalidated before worker claim releases
+/// its pane command lifecycle instead of leaving later interactive input
+/// permanently blocked after the pane conversation is replaced.
+#[test]
+fn runtime_prompt_history_stale_preclaim_releases_pane_command_lifecycle() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .begin_agent_prompt_history_preparation(primary, "%1", "stale history")
+        .unwrap();
+    let dispatch = service
+        .take_pending_agent_prompt_history()
+        .pop()
+        .expect("prompt submission must queue one history dispatch");
+    assert!(service.agent_command_is_active("%1"));
+
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "replacement-conversation", 0)
+        .unwrap();
+
+    assert!(
+        !service.claim_agent_prompt_history_preparation(&dispatch),
+        "a replaced conversation must reject the stale history dispatch"
+    );
+    assert!(
+        !service.agent_command_is_active("%1"),
+        "rejecting a stale dispatch must release the pane for later input"
+    );
+}
+
+/// Verifies a failed prompt-history worker result settles the accepted prompt
+/// lifecycle and emits an error in the owning terminal, so the user can retry
+/// instead of seeing a permanent preparing state without feedback.
+#[test]
+fn runtime_prompt_history_failure_releases_lifecycle_and_reports_error() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .begin_agent_prompt_history_preparation(primary, "%1", "broken history")
+        .unwrap();
+    let dispatch = service
+        .take_pending_agent_prompt_history()
+        .pop()
+        .expect("prompt submission must queue one history dispatch");
+    assert!(service.claim_agent_prompt_history_preparation(&dispatch));
+
+    let error = service
+        .complete_agent_prompt_history_preparation(
+            &dispatch,
+            Err(crate::error::MezError::invalid_state(
+                "history fixture failed",
+            )),
+        )
+        .expect_err("a failed worker result must remain observable to actor settlement");
+    assert!(
+        error.message().contains("history fixture failed"),
+        "{error}"
+    );
+    assert!(!service.agent_command_is_active("%1"));
+    let pane_text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("agent: failed to prepare conversation history: history fixture failed"),
+        "{pane_text}"
+    );
+}

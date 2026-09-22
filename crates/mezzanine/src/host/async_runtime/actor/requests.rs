@@ -1456,14 +1456,24 @@ impl AsyncRuntimeSessionActor {
                             self.queue_pending_provider_dispatch_side_effects()?;
                             self.queue_runtime_side_effects(vec![
                                 crate::runtime::RuntimeSideEffect::RenderClient {
-                                    client_id: primary_client_id,
+                                    client_id: primary_client_id.clone(),
                                     reason: crate::runtime::RenderInvalidationReason::AgentPrompt,
                                 },
                             ])?;
                         }
                         Ok(applied)
                     });
-                if result.as_ref().is_ok_and(|applied| *applied) {
+                let should_notify =
+                    result.as_ref().is_ok_and(|applied| *applied) || result.is_err();
+                if result.is_err() {
+                    let _ = self.queue_runtime_side_effects(vec![
+                        crate::runtime::RuntimeSideEffect::RenderClient {
+                            client_id: primary_client_id,
+                            reason: crate::runtime::RenderInvalidationReason::AgentPrompt,
+                        },
+                    ]);
+                }
+                if should_notify {
                     self.notify_event_delivery();
                 }
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
