@@ -16,6 +16,8 @@ const IROH_CLIENT_CLIPBOARD_MAX_BYTES: usize = 8 * 1024 * 1024;
 const IROH_CLIENT_CLIPBOARD_MAX_CHUNK_BYTES: usize = 256 * 1024;
 const IROH_CLIENT_CLIPBOARD_MAX_CHUNKS: usize =
     IROH_CLIENT_CLIPBOARD_MAX_BYTES / IROH_CLIENT_CLIPBOARD_MAX_CHUNK_BYTES;
+const IROH_RENDER_FRAGMENT_MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
+const IROH_RENDER_FRAGMENT_MAX_CHUNKS: usize = 16;
 /// One consumer-visible wakeup plus one decoder-local latest wakeup bounds
 /// presentation work without blocking ordered render-revision reconstruction.
 const IROH_RENDER_WAKEUP_CHANNEL_CAPACITY: usize = 1;
@@ -262,6 +264,20 @@ struct IrohRetainedRenderState {
     view: Option<serde_json::Value>,
     /// Role this negotiated stream is authorized to render.
     expected_role: String,
+    /// Bounded v4 render transfer awaiting atomic v3-frame validation.
+    fragment: Option<IrohRenderFragmentTransfer>,
+    /// Only negotiated v4 streams may carry render fragments.
+    allow_render_fragments: bool,
+}
+
+/// One ordered, bounded v4 transfer carrying a complete v3 render frame.
+#[derive(Debug, Clone)]
+struct IrohRenderFragmentTransfer {
+    revision: u64,
+    total_bytes: usize,
+    chunks: usize,
+    next_index: usize,
+    bytes: Vec<u8>,
 }
 
 impl IrohRetainedRenderState {
@@ -271,6 +287,8 @@ impl IrohRetainedRenderState {
             revision: 0,
             view: None,
             expected_role: expected_role.into(),
+            fragment: None,
+            allow_render_fragments: false,
         }
     }
 }
@@ -617,7 +635,7 @@ async fn receive_iroh_runtime_events(
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
     sender: &tokio::sync::mpsc::Sender<Result<IrohAttachRenderWakeup>>,
 ) -> Result<()> {
-    if !matches!(event_stream_version, 1..=3) {
+    if !matches!(event_stream_version, 1..=4) {
         return Err(MezError::invalid_args(
             "unsupported negotiated Iroh event stream version",
         ));
@@ -634,6 +652,7 @@ async fn receive_iroh_runtime_events(
             }
         };
         let expected_preface = match event_stream_version {
+            4 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V4_PREFACE,
             3 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE,
             2 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE,
             _ => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE,
@@ -673,6 +692,7 @@ async fn receive_iroh_runtime_events(
         .then(IrohClipboardAssembler::default);
     let mut render_state =
         IrohRetainedRenderState::new(pushed_render_role.unwrap_or_else(|| "primary".to_string()));
+    render_state.allow_render_fragments = event_stream_version >= 4;
     let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
     let mut pending_delivery: Option<IrohAttachRenderWakeup> = None;
     loop {
@@ -727,6 +747,11 @@ async fn receive_iroh_runtime_events(
             continue;
         };
         if read == 0 {
+            if render_state.fragment.is_some() {
+                return Err(MezError::invalid_state(
+                    "Iroh event stream closed during a render fragment transfer",
+                ));
+            }
             if !pending.is_empty() {
                 return Err(MezError::invalid_state(
                     "Iroh event stream closed with an incomplete frame",
@@ -844,6 +869,14 @@ fn apply_negotiated_iroh_attach_frame(
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_state("Iroh event stream contained invalid JSON"))?;
     let method = value.get("method").and_then(serde_json::Value::as_str);
+    if method == Some("render/chunk") {
+        return parse_iroh_pushed_render_chunk(&value, allow_pushed_render, render_state);
+    }
+    if render_state.fragment.is_some() {
+        return Err(MezError::invalid_state(
+            "Iroh event stream interrupted an incomplete render transfer",
+        ));
+    }
     if method == Some("render/snapshot") {
         if !allow_pushed_render {
             return Err(MezError::invalid_state(
@@ -876,6 +909,117 @@ fn apply_negotiated_iroh_attach_frame(
         return Ok(IrohAttachRenderWakeup::new(AttachRenderAction::None, None));
     }
     strict_iroh_attach_render_action(body)
+}
+
+/// Reassembles one v4 render transfer before delegating atomic validation to
+/// the existing complete v3 snapshot or delta parser.
+fn parse_iroh_pushed_render_chunk(
+    value: &serde_json::Value,
+    allow_pushed_render: bool,
+    render_state: &mut IrohRetainedRenderState,
+) -> Result<IrohAttachRenderWakeup> {
+    if !allow_pushed_render || !render_state.allow_render_fragments {
+        return Err(MezError::invalid_state(
+            "Iroh event stream contained unnegotiated render fragments",
+        ));
+    }
+    if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0") {
+        return Err(MezError::invalid_state(
+            "Iroh render chunk omitted JSON-RPC 2.0",
+        ));
+    }
+    let params = value
+        .get("params")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh render chunk omitted params"))?;
+    let revision = params
+        .get("revision")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|revision| *revision > render_state.revision)
+        .ok_or_else(|| MezError::invalid_state("Iroh render chunk revision is not monotonic"))?;
+    let index = params
+        .get("index")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| MezError::invalid_state("Iroh render chunk index is invalid"))?;
+    let chunks = params
+        .get("chunks")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|chunks| (1..=IROH_RENDER_FRAGMENT_MAX_CHUNKS).contains(chunks))
+        .ok_or_else(|| MezError::invalid_state("Iroh render chunk count is invalid"))?;
+    if index >= chunks {
+        return Err(MezError::invalid_state(
+            "Iroh render chunk index is out of range",
+        ));
+    }
+    let total_bytes = params
+        .get("total_bytes")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|bytes| *bytes > 0 && *bytes <= IROH_RENDER_FRAGMENT_MAX_TOTAL_BYTES)
+        .ok_or_else(|| MezError::invalid_state("Iroh render chunk transfer exceeds limit"))?;
+    let data = params
+        .get("data_base64")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| MezError::invalid_state("Iroh render chunk omitted data"))?;
+    let chunk = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|_| MezError::invalid_state("Iroh render chunk is not base64"))?;
+    if chunk.is_empty() || chunk.len() > total_bytes {
+        return Err(MezError::invalid_state("Iroh render chunk size is invalid"));
+    }
+    if index == 0 {
+        if render_state.fragment.is_some() {
+            return Err(MezError::invalid_state(
+                "Iroh render chunk interrupted an incomplete transfer",
+            ));
+        }
+        render_state.fragment = Some(IrohRenderFragmentTransfer {
+            revision,
+            total_bytes,
+            chunks,
+            next_index: 0,
+            bytes: Vec::with_capacity(total_bytes),
+        });
+    }
+    let transfer = render_state
+        .fragment
+        .as_mut()
+        .filter(|transfer| {
+            transfer.revision == revision
+                && transfer.total_bytes == total_bytes
+                && transfer.chunks == chunks
+                && transfer.next_index == index
+        })
+        .ok_or_else(|| MezError::invalid_state("Iroh render chunk ordering is invalid"))?;
+    if transfer.bytes.len().saturating_add(chunk.len()) > transfer.total_bytes {
+        render_state.fragment = None;
+        return Err(MezError::invalid_state(
+            "Iroh render chunk exceeds declared transfer",
+        ));
+    }
+    transfer.bytes.extend_from_slice(&chunk);
+    transfer.next_index = transfer.next_index.saturating_add(1);
+    if transfer.next_index < transfer.chunks {
+        return Ok(IrohAttachRenderWakeup::new(AttachRenderAction::None, None));
+    }
+    let transfer = render_state.fragment.take().ok_or_else(|| {
+        MezError::invalid_state("Iroh render chunk transfer disappeared before completion")
+    })?;
+    if transfer.bytes.len() != transfer.total_bytes {
+        return Err(MezError::invalid_state(
+            "Iroh render chunk transfer was truncated",
+        ));
+    }
+    let (body, consumed) =
+        decode_control_frame(&transfer.bytes, IROH_RENDER_FRAGMENT_MAX_TOTAL_BYTES)?;
+    if consumed != transfer.bytes.len() {
+        return Err(MezError::invalid_state(
+            "Iroh render chunk transfer contains trailing bytes",
+        ));
+    }
+    apply_negotiated_iroh_attach_frame(body.as_str(), None, None, allow_pushed_render, render_state)
 }
 
 /// Validates one complete authoritative v3 render snapshot atomically.
@@ -1735,6 +1879,106 @@ mod iroh_setup_tests {
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
         assert!(*IROH_LATEST_RENDER_DECODED.lock().unwrap());
+
+        client_connection.close(VarInt::from_u32(0), b"test complete");
+        task.await.unwrap();
+        client.close().await;
+        server.close().await;
+    }
+
+    /// Verifies a v4 stream reassembles an authoritative snapshot larger than
+    /// the per-frame transport bound, then continues to process later events.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_v4_event_receiver_reassembles_oversized_render_without_stalling() {
+        let (server, client, server_connection, client_connection) =
+            connected_iroh_event_pair().await;
+        let (mut receiver, task) = spawn_iroh_runtime_event_receiver(
+            client_connection.clone(),
+            IrohCompressionPolicy::new(
+                RuntimeIrohCompressionCodec::None,
+                1,
+                3,
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+            )
+            .unwrap(),
+            std::time::Duration::from_secs(1),
+            4,
+            true,
+            Some("primary".to_string()),
+            None,
+        );
+        let mut stream = server_connection.open_uni().await.unwrap();
+        stream
+            .write_all(crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V4_PREFACE)
+            .await
+            .unwrap();
+
+        let text = "x".repeat(ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024);
+        let frame = crate::control::encode_control_body(
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "render/snapshot",
+                "params": {
+                    "kind": "snapshot",
+                    "revision": 1,
+                    "event_cutoff": 1,
+                    "invalidate_output": false,
+                    "view": {
+                        "role": "primary",
+                        "lines": [text],
+                        "line_style_spans": [[]],
+                        "cursor": {"row": 0, "column": 0, "visible": false},
+                        "output_modes": {}
+                    }
+                }
+            })
+            .to_string(),
+        );
+        assert!(frame.len() > ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH);
+        let chunks = frame.chunks(512 * 1024).collect::<Vec<_>>();
+        assert!(chunks.len() <= IROH_RENDER_FRAGMENT_MAX_CHUNKS);
+        for (index, chunk) in chunks.iter().enumerate() {
+            let chunk = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "render/chunk",
+                "params": {
+                    "revision": 1,
+                    "index": index,
+                    "chunks": chunks.len(),
+                    "total_bytes": frame.len(),
+                    "data_base64": base64::engine::general_purpose::STANDARD.encode(chunk),
+                }
+            })
+            .to_string();
+            let chunk = crate::control::encode_control_body(&chunk);
+            assert!(chunk.len() <= ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH);
+            stream.write_all(&chunk).await.unwrap();
+        }
+        stream.flush().await.unwrap();
+
+        let snapshot = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .pushed_snapshot
+            .expect("oversized snapshot should be reassembled atomically");
+        assert_eq!(snapshot.revision, 1);
+        assert_eq!(snapshot.frame.lines, [text]);
+
+        stream
+            .write_all(&crate::control::encode_control_body(
+                r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
+            ))
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.action, AttachRenderAction::View);
 
         client_connection.close(VarInt::from_u32(0), b"test complete");
         task.await.unwrap();

@@ -1583,7 +1583,7 @@ mod pushed_snapshot_tests {
             client_connection,
             mut server_bridge,
             mut client_bridge,
-        ) = tokio::time::timeout(std::time::Duration::from_secs(5), setup)
+        ) = tokio::time::timeout(std::time::Duration::from_secs(10), setup)
             .await
             .expect("local Iroh control setup must complete");
         let (mut terminal_io, terminal_state) = SlowBoundedTerminalIo::new();

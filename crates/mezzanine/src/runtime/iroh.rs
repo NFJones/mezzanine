@@ -42,8 +42,60 @@ pub(crate) const MEZZANINE_IROH_ALPN: &[u8] = b"mezzanine/transport/1";
 pub(crate) const MEZZANINE_IROH_EVENT_STREAM_PREFACE: &[u8] = b"mezzanine/events/1\n";
 pub(crate) const MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE: &[u8] = b"mezzanine/events/2\n";
 pub(crate) const MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE: &[u8] = b"mezzanine/events/3\n";
+pub(crate) const MEZZANINE_IROH_EVENT_STREAM_V4_PREFACE: &[u8] = b"mezzanine/events/4\n";
 const IROH_EVENT_BATCH_LIMIT: usize = 64;
 const IROH_CLIPBOARD_CHUNK_BYTES: usize = 256 * 1024;
+/// Keeps each version-4 render-fragment envelope comfortably below the 1 MiB
+/// decoded event-frame limit after base64 expansion and JSON framing.
+const IROH_RENDER_FRAGMENT_BYTES: usize = 512 * 1024;
+/// Bounds one atomically reconstructed rendered view and its fragment count.
+const IROH_RENDER_FRAGMENT_MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
+const IROH_RENDER_FRAGMENT_MAX_CHUNKS: usize =
+    IROH_RENDER_FRAGMENT_MAX_TOTAL_BYTES / IROH_RENDER_FRAGMENT_BYTES;
+
+/// Splits an oversized framed v3 render update into bounded v4 envelopes.
+///
+/// The fragments preserve the original control frame verbatim. The receiver
+/// validates the complete reconstructed frame through the existing atomic v3
+/// snapshot or delta parser before publishing any presentation work.
+fn encode_iroh_render_delivery_frames(
+    frame: Vec<u8>,
+    revision: u64,
+    version: u32,
+) -> Result<Vec<Vec<u8>>> {
+    if version < 4 || frame.len() <= IROH_RENDER_FRAGMENT_BYTES {
+        return Ok(vec![frame]);
+    }
+    if frame.len() > IROH_RENDER_FRAGMENT_MAX_TOTAL_BYTES {
+        return Err(MezError::invalid_state(
+            "Iroh rendered view exceeds the bounded v4 fragment transfer limit",
+        ));
+    }
+    let total_bytes = frame.len();
+    let chunks = frame.chunks(IROH_RENDER_FRAGMENT_BYTES).collect::<Vec<_>>();
+    let chunk_count = chunks.len();
+    debug_assert!(chunk_count <= IROH_RENDER_FRAGMENT_MAX_CHUNKS);
+    Ok(chunks
+        .into_iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            encode_control_body(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "render/chunk",
+                    "params": {
+                        "revision": revision,
+                        "index": index,
+                        "chunks": chunk_count,
+                        "total_bytes": total_bytes,
+                        "data_base64": base64::engine::general_purpose::STANDARD.encode(chunk),
+                    }
+                })
+                .to_string(),
+            )
+        })
+        .collect())
+}
 
 /// Bounded render triggers collected after the previous v3 update completes.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -1701,7 +1753,7 @@ async fn serve_runtime_iroh_event_stream(
     idle_timeout: std::time::Duration,
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<u64> {
-    if !matches!(version, 1..=3) {
+    if !matches!(version, 1..=4) {
         return Err(MezError::invalid_args(
             "unsupported Iroh event stream version",
         ));
@@ -1783,6 +1835,7 @@ async fn serve_registered_runtime_iroh_event_stream(
     tokio::time::timeout(
         idle_timeout,
         send.write_all(match version {
+            4 => MEZZANINE_IROH_EVENT_STREAM_V4_PREFACE,
             3 => MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE,
             2 => MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE,
             _ => MEZZANINE_IROH_EVENT_STREAM_PREFACE,
@@ -1812,21 +1865,33 @@ async fn serve_registered_runtime_iroh_event_stream(
             })?;
         render_revision = 1;
         let view = iroh_render_view_value(&snapshot)?;
-        let frame = encode_iroh_render_snapshot_frame(&snapshot, render_revision, &view);
-        let frame = match stream_encoder.as_mut() {
-            Some(encoder) => encoder.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?,
-            None => compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?,
-        };
-        compression_metrics.record_frame(
-            frame.as_bytes().len(),
-            frame.decoded_bytes(),
-            frame.compressed(),
-        );
+        let frames = encode_iroh_render_delivery_frames(
+            encode_iroh_render_snapshot_frame(&snapshot, render_revision, &view),
+            render_revision,
+            version,
+        )?;
         let write_started = std::time::Instant::now();
-        tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
-            .await
-            .map_err(|_| MezError::invalid_state("Iroh render snapshot write timed out"))?
-            .map_err(|_| MezError::invalid_state("Iroh render snapshot write failed"))?;
+        let mut wire_bytes = 0usize;
+        let mut decoded_bytes = 0usize;
+        for frame in frames {
+            let frame = match stream_encoder.as_mut() {
+                Some(encoder) => {
+                    encoder.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?
+                }
+                None => compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?,
+            };
+            wire_bytes = wire_bytes.saturating_add(frame.as_bytes().len());
+            decoded_bytes = decoded_bytes.saturating_add(frame.decoded_bytes());
+            compression_metrics.record_frame(
+                frame.as_bytes().len(),
+                frame.decoded_bytes(),
+                frame.compressed(),
+            );
+            tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
+                .await
+                .map_err(|_| MezError::invalid_state("Iroh render snapshot write timed out"))?
+                .map_err(|_| MezError::invalid_state("Iroh render snapshot write failed"))?;
+        }
         tokio::time::timeout(idle_timeout, send.flush())
             .await
             .map_err(|_| MezError::invalid_state("Iroh render snapshot flush timed out"))?
@@ -1843,9 +1908,9 @@ async fn serve_registered_runtime_iroh_event_stream(
         compression_metrics.record_render_update(
             false,
             snapshot.view.lines.len(),
-            frame.as_bytes().len(),
-            frame.decoded_bytes(),
-            frame.decoded_bytes(),
+            wire_bytes,
+            decoded_bytes,
+            decoded_bytes,
         );
         compression_metrics.record_render_write_wait(write_started.elapsed());
         sent_render_view = Some(view);
@@ -1951,22 +2016,35 @@ async fn serve_registered_runtime_iroh_event_stream(
                     snapshot_fallback,
                 );
                 if let Some(update) = update {
-                    let frame = match stream_encoder.as_mut() {
-                        Some(encoder) => encoder
-                            .encode_frame(&update.frame, IrohFrameCompressionMode::Eligible)?,
-                        None => compression
-                            .encode_frame(&update.frame, IrohFrameCompressionMode::Eligible)?,
-                    };
-                    compression_metrics.record_frame(
-                        frame.as_bytes().len(),
-                        frame.decoded_bytes(),
-                        frame.compressed(),
-                    );
+                    let frames =
+                        encode_iroh_render_delivery_frames(update.frame, next_revision, version)?;
                     let write_started = std::time::Instant::now();
-                    tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
-                        .await
-                        .map_err(|_| MezError::invalid_state("Iroh render update write timed out"))?
-                        .map_err(|_| MezError::invalid_state("Iroh render update write failed"))?;
+                    let mut wire_bytes = 0usize;
+                    let mut decoded_bytes = 0usize;
+                    for frame in frames {
+                        let frame = match stream_encoder.as_mut() {
+                            Some(encoder) => {
+                                encoder.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?
+                            }
+                            None => compression
+                                .encode_frame(&frame, IrohFrameCompressionMode::Eligible)?,
+                        };
+                        wire_bytes = wire_bytes.saturating_add(frame.as_bytes().len());
+                        decoded_bytes = decoded_bytes.saturating_add(frame.decoded_bytes());
+                        compression_metrics.record_frame(
+                            frame.as_bytes().len(),
+                            frame.decoded_bytes(),
+                            frame.compressed(),
+                        );
+                        tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
+                            .await
+                            .map_err(|_| {
+                                MezError::invalid_state("Iroh render update write timed out")
+                            })?
+                            .map_err(|_| {
+                                MezError::invalid_state("Iroh render update write failed")
+                            })?;
+                    }
                     tokio::time::timeout(idle_timeout, send.flush())
                         .await
                         .map_err(|_| MezError::invalid_state("Iroh render update flush timed out"))?
@@ -1983,8 +2061,8 @@ async fn serve_registered_runtime_iroh_event_stream(
                     compression_metrics.record_render_update(
                         update.kind == IrohRenderUpdateKind::Delta,
                         update.changed_rows,
-                        frame.as_bytes().len(),
-                        frame.decoded_bytes(),
+                        wire_bytes,
+                        decoded_bytes,
                         update.snapshot_candidate_bytes,
                     );
                     compression_metrics.record_render_write_wait(write_started.elapsed());
@@ -2150,6 +2228,42 @@ mod tests {
     // scheduler contention without weakening the shorter behavior deadlines.
     const IROH_ENDPOINT_TEST_SETUP_TIMEOUT: std::time::Duration =
         std::time::Duration::from_secs(10);
+
+    /// Verifies v4 turns an oversized rendered control frame into independently
+    /// bounded chunk notifications, while rejecting a rendered view beyond the
+    /// fixed reassembly budget before any transport write is attempted.
+    #[test]
+    fn iroh_v4_render_delivery_frames_bound_large_render_updates() {
+        let frame = vec![b'x'; IROH_RENDER_FRAGMENT_BYTES + 1];
+        let fragments = encode_iroh_render_delivery_frames(frame.clone(), 7, 4).unwrap();
+        assert_eq!(fragments.len(), 2);
+        for (index, fragment) in fragments.iter().enumerate() {
+            assert!(fragment.len() < 1024 * 1024);
+            let (body, consumed) = crate::control::decode_control_frame(fragment, 1024 * 1024)
+                .expect("fragment must remain a bounded control frame");
+            assert_eq!(consumed, fragment.len());
+            let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(value["method"], "render/chunk");
+            assert_eq!(value["params"]["revision"], 7);
+            assert_eq!(value["params"]["index"], index);
+            assert_eq!(value["params"]["chunks"], 2);
+            assert_eq!(value["params"]["total_bytes"], frame.len());
+        }
+        assert_eq!(
+            encode_iroh_render_delivery_frames(frame, 7, 3)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            encode_iroh_render_delivery_frames(
+                vec![b'x'; IROH_RENDER_FRAGMENT_MAX_TOTAL_BYTES + 1],
+                8,
+                4,
+            )
+            .is_err()
+        );
+    }
 
     /// Verifies logical render triggers retain the terminal output frame while
     /// exact-client resize effects still invalidate its unsafe geometry base.

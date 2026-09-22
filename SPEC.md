@@ -3725,8 +3725,8 @@ traffic or publishes invitation-issued profile authority.
 Interactive Iroh attach MUST retain one initialized bidirectional control
 stream for its lifetime and MUST preserve request/response ordering across
 terminal resize, input, and view operations. New primary clients MUST attempt
-event-stream versions `3`, `2`, then `1`; new observer clients MUST attempt
-versions `3`, then `1`. A client MUST retry initialization only after the
+event-stream versions `4`, `3`, `2`, then `1`; new observer clients MUST attempt
+versions `4`, `3`, then `1`. A client MUST retry initialization only after the
 server returns the structured `unsupported_event_stream_version` result or the
 exact legacy unsupported-version result. Authentication, authorization,
 malformed initialization, transport, and post-initialization stream failures
@@ -3749,6 +3749,18 @@ The view, Iroh status slot, event cutoff, and invalidation requirement MUST be
 captured in one serialized actor turn. Clients MUST validate a complete
 snapshot atomically and MUST reject missing, malformed, wrong-role,
 misaligned, or non-monotonic snapshots.
+
+Event-stream version 4 retains every version-3 pushed-render invariant and
+uses the exact preface `mezzanine/events/4\n`. A v4 server MAY replace a
+complete framed `render/snapshot` or `render/delta` larger than 512 KiB with
+ordered `render/chunk` notifications. Each chunk MUST carry the target
+revision, zero-based contiguous index, total chunk count, total encoded-frame
+bytes, and base64 data. A transfer MUST be at most 8 MiB and 16 chunks. The
+client MUST reject unnegotiated, interrupted, out-of-order, oversized, or
+incomplete transfers; it MUST validate the reassembled original frame through
+the same atomic snapshot or delta rules before changing retained render state.
+The server MUST use a visible bounded-transfer error rather than bypassing the
+limit when a rendered frame exceeds 8 MiB.
 
 Observer push ownership MUST be negotiated in both directions. A new observer
 client MUST opt in through `client.metadata.pushed_render_updates: true`, and
@@ -3775,7 +3787,7 @@ visibly without partially changing retained state; reattachment starts with a
 fresh authoritative snapshot. ANSI encoding and physical-terminal diffing
 remain client-local.
 
-Primary and observer v3 control responses are mutation acknowledgements and
+Primary and observer v3 or v4 control responses are mutation acknowledgements and
 MUST NOT replace the event stream's render state. An observer MAY use
 `terminal/resize` only to update its own retained client terminal dimensions;
 that mutation MUST NOT change primary geometry, another observer's geometry,
@@ -3832,16 +3844,16 @@ Primary-projected prompt and overlay changes MUST wake the owning primary and
 its exact attached observers, not unrelated primaries. Client-local geometry
 and presentation changes remain exact-client.
 
-Each observer v3 stream MUST render with terminal geometry retained for that
+Each observer v3 or v4 stream MUST render with terminal geometry retained for that
 exact authenticated observer. Observer resize and disconnect state MUST be
 isolated from the primary and other observers, and reattachment MUST begin
 with a fresh authoritative snapshot. Version 2 remains limited to an
-authenticated interactive Iroh primary. Primary versions 2 and 3 MUST receive
+authenticated interactive Iroh primary. Primary versions 2 through 4 MUST receive
 explicit `client_clipboard_write` capability confirmation before treating
-client-local clipboard effects as negotiated; observer version 3 MUST NOT
+client-local clipboard effects as negotiated; observer versions 3 and 4 MUST NOT
 receive that authority. Version 1 uses the exact preface
 `mezzanine/events/1\n`; version 2 uses `mezzanine/events/2\n`; version 3 uses
-`mezzanine/events/3\n`. The server MUST NOT open an event stream before the
+`mezzanine/events/3\n`; version 4 uses `mezzanine/events/4\n`. The server MUST NOT open an event stream before the
 successful initialize response is flushed, and then MUST open at most one
 unidirectional stream on that same QUIC connection. Client-opened
 unidirectional streams remain forbidden. The client MUST apply one configured

@@ -2670,8 +2670,8 @@ fn validate_iroh_x11_initialize_response(
 /// Returns the role-limited event-stream versions attempted by Iroh attach.
 fn iroh_event_stream_version_candidates(requested_role: &str) -> Result<Vec<u32>> {
     match requested_role {
-        "primary" => Ok(vec![3, 2, 1]),
-        "observer" => Ok(vec![3, 1]),
+        "primary" => Ok(vec![4, 3, 2, 1]),
+        "observer" => Ok(vec![4, 3, 1]),
         _ => Err(MezError::invalid_args("unsupported Iroh requested role")),
     }
 }
@@ -2725,7 +2725,7 @@ fn iroh_client_clipboard_negotiated(
         .and_then(|features| features.get("client_clipboard_write"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    Ok(matches!(event_stream_version, 2 | 3)
+    Ok(matches!(event_stream_version, 2..=4)
         && requested_role == "primary"
         && granted_role == Some("primary")
         && clipboard_capable)
@@ -2737,7 +2737,7 @@ fn iroh_pushed_render_negotiated(
     requested_role: &str,
     event_stream_version: u32,
 ) -> Result<bool> {
-    if event_stream_version != 3 {
+    if !matches!(event_stream_version, 3 | 4) {
         return Ok(false);
     }
     if requested_role == "primary" {
@@ -3680,11 +3680,11 @@ mod tests {
     fn iroh_initialize_uses_role_specific_event_stream_candidates() {
         assert_eq!(
             iroh_event_stream_version_candidates("primary").unwrap(),
-            [3, 2, 1]
+            [4, 3, 2, 1]
         );
         assert_eq!(
             iroh_event_stream_version_candidates("observer").unwrap(),
-            [3, 1]
+            [4, 3, 1]
         );
         assert!(iroh_event_stream_version_candidates("agent").is_err());
     }
