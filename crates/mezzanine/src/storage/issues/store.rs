@@ -4,9 +4,9 @@
 //! keeps queries bounded. It deliberately uses exact project-key matching so
 //! issue records from different repositories do not bleed across surfaces.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, params_from_iter};
 use sha2::{Digest, Sha256};
 
 #[cfg(test)]
@@ -187,7 +187,7 @@ impl IssueStore {
     pub fn query_issue_browser(&self, query: &IssueBrowserQuery) -> Result<Vec<IssueRecord>> {
         let connection = self.open()?;
         let mut sql = String::from(
-            "SELECT id, project, kind, state, priority, title, body, notes, created_at, updated_at FROM issues WHERE 1 = 1",
+            "SELECT id, project, kind, state, priority, title, NULL, NULL, created_at, updated_at FROM issues WHERE 1 = 1",
         );
         let project_glob = query.project_glob.as_deref().map(project_glob_like_pattern);
         let kind_name = query.kind.map(IssueKind::as_str);
@@ -277,10 +277,7 @@ impl IssueStore {
         let mut records = rows
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(MezError::from)?;
-        for record in &mut records {
-            record.depends_on =
-                issue_dependencies_for_record(&connection, &record.project, &record.id)?;
-        }
+        load_issue_browser_dependencies(&connection, &mut records)?;
         Ok(records)
     }
 
@@ -750,6 +747,55 @@ fn load_issue_dependencies(
     for dependency in dependencies {
         let (issue_id, depends_on_id) = dependency?;
         if let Some(index) = record_indexes.get(issue_id.as_str()).copied() {
+            records[index].depends_on.push(depends_on_id);
+        }
+    }
+    Ok(())
+}
+
+/// Loads dependencies for one browser page without scanning unrelated projects
+/// or issuing one query per visible record.
+fn load_issue_browser_dependencies(
+    connection: &Connection,
+    records: &mut [IssueRecord],
+) -> Result<()> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let mut indexes = BTreeMap::new();
+    let mut ids_by_project = BTreeMap::<String, Vec<String>>::new();
+    for (index, record) in records.iter().enumerate() {
+        indexes.insert((record.project.clone(), record.id.clone()), index);
+        ids_by_project
+            .entry(record.project.clone())
+            .or_default()
+            .push(record.id.clone());
+    }
+    let mut clauses = Vec::new();
+    let mut parameters = Vec::new();
+    for (project, ids) in ids_by_project {
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        clauses.push(format!("(project = ? AND issue_id IN ({placeholders}))"));
+        parameters.push(project);
+        parameters.extend(ids);
+    }
+    let sql = format!(
+        "SELECT project, issue_id, depends_on_id FROM issue_dependencies WHERE {} ORDER BY project ASC, issue_id ASC, depends_on_id ASC",
+        clauses.join(" OR ")
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let dependencies = statement.query_map(params_from_iter(parameters.iter()), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    for dependency in dependencies {
+        let (project, issue_id, depends_on_id) = dependency?;
+        if let Some(index) = indexes.get(&(project, issue_id)).copied() {
             records[index].depends_on.push(depends_on_id);
         }
     }

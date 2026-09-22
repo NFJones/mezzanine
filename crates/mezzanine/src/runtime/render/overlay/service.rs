@@ -1033,6 +1033,41 @@ impl RuntimeSessionService {
         if matches!(selector_input_action(input), SelectorInputAction::Select)
             && matches!(
                 record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::Issues { .. })
+            )
+        {
+            let mut selected = record_browser.browser.clone();
+            selected.set_active_index(active_index);
+            let Some(id) = selected.active_record_id().map(str::to_string) else {
+                return Ok(Some(false));
+            };
+            let project = selected
+                .records()
+                .get(active_index)
+                .and_then(|record| {
+                    record
+                        .metadata
+                        .iter()
+                        .find(|(key, _)| key == "project")
+                        .map(|(_, value)| value.as_str())
+                })
+                .ok_or_else(|| {
+                    MezError::invalid_state("selected issue is missing its exact project identity")
+                })?;
+            return self
+                .execute_overlay_agent_slash_command(
+                    primary_client_id,
+                    &format!(
+                        "/show-issues --project {} {}",
+                        mez_agent::shell_quote(project),
+                        mez_agent::shell_quote(&id)
+                    ),
+                )
+                .map(Some);
+        }
+        if matches!(selector_input_action(input), SelectorInputAction::Select)
+            && matches!(
+                record_browser.source,
                 Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
             )
         {

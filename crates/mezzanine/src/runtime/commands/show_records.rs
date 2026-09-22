@@ -1028,8 +1028,9 @@ pub(crate) fn read_issue_browser(
         limit: args.limit,
     });
     let records = if let Some(id) = args.detail_id.as_ref() {
+        let detail_project = args.project_glob.as_deref().unwrap_or(&current_project);
         store
-            .get_issue(current_project, id.clone())?
+            .get_issue(detail_project.to_string(), id.clone())?
             .into_iter()
             .collect::<Vec<_>>()
     } else {

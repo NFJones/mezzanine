@@ -1030,6 +1030,10 @@ fn runtime_issue_browser_fix_hotkey_dispatches_from_detail_view() {
         .unwrap()
         .to_string();
     apply_record_browser_input(&mut service, &primary, b"\r");
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the selected issue detail settles on the command worker");
     assert_eq!(
         service
             .primary_display_overlay()
@@ -1363,86 +1367,57 @@ enabled = true
             .iter()
             .any(|record| record.id == cross_project_issue.id)
     );
-
-    service
-        .apply_attached_terminal_step_plan(
-            &primary,
-            &AttachedTerminalClientStepPlan {
-                actions: vec![TerminalClientLoopAction::ForwardToPane(b"a".to_vec())],
-                output_lines: Vec::new(),
-                output_line_style_spans: Vec::new(),
-                input_hangup: false,
-                output_hangup: false,
-                error_roles: Vec::new(),
-            },
-        )
-        .unwrap();
-    assert!(
+    for _ in 0..4 {
+        let active_issue_id = service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|record_browser| record_browser.browser.active_record_id())
+            .map(str::to_string);
+        if active_issue_id.as_deref() == Some(cross_project_issue.id.as_str()) {
+            break;
+        }
+        apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+    }
+    assert_eq!(
         service
-            .run_pending_record_browser_refresh_for_tests()
-            .unwrap(),
-        "the project scope toggle claims its page"
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|record_browser| record_browser.browser.active_record_id()),
+        Some(cross_project_issue.id.as_str())
     );
-    let overlay = service.primary_display_overlay().unwrap();
-    assert!(
-        !overlay
-            .record_browser
-            .as_ref()
-            .unwrap()
-            .browser
-            .records()
-            .iter()
-            .any(|record| record.id == cross_project_issue.id)
-    );
-
-    apply_record_browser_input(&mut service, &primary, b"\x1b[B");
-    let overlay = service.primary_display_overlay().unwrap();
-    let older_selection_index = overlay
-        .selections
-        .iter()
-        .position(|selection| selection.logical_id == 1)
-        .unwrap();
-    assert_eq!(overlay.active_selection_index, Some(older_selection_index));
+    apply_record_browser_input(&mut service, &primary, b"\r");
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the cross-project issue detail settles on the command worker");
+    let overlay = service
+        .primary_display_overlay()
+        .expect("Enter should keep the cross-project detail overlay open");
     assert_eq!(
         overlay
             .record_browser
             .as_ref()
             .unwrap()
             .browser
-            .active_record_id(),
-        Some(older_issue.id.as_str())
+            .render_page()
+            .title,
+        "Cross-project issue"
     );
-
-    let report = service
-        .apply_attached_terminal_step_plan(
-            &primary,
-            &AttachedTerminalClientStepPlan {
-                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\r".to_vec())],
-                output_lines: Vec::new(),
-                output_line_style_spans: Vec::new(),
-                input_hangup: false,
-                output_hangup: false,
-                error_roles: Vec::new(),
-            },
-        )
-        .unwrap();
-
-    assert_eq!(report.forwarded_bytes, 0);
-    assert!(report.view_refresh_required);
-    let overlay = service
-        .primary_display_overlay()
-        .expect("Enter should keep the detail overlay open");
-    let record_browser = overlay
-        .record_browser
-        .as_ref()
-        .expect("detail overlay should retain record-browser state");
-    assert_eq!(record_browser.command, "show-issues");
-    assert_eq!(record_browser.browser.render_page().title, "Second issue");
+    assert!(
+        overlay
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .records()
+            .iter()
+            .any(|record| record.title == "Cross-project issue")
+    );
     assert!(
         overlay
             .lines
             .iter()
-            .any(|line| line.contains("Second body"))
+            .any(|line| line.contains("Cross-project body"))
     );
     let _ = fs::remove_dir_all(root);
 }

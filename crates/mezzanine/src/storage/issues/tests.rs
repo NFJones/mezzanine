@@ -468,6 +468,8 @@ fn issue_store_browser_query_matches_text_and_respects_limit() {
         .unwrap();
 
     assert_eq!(results, vec![newer_title_match.clone()]);
+    assert!(results[0].body.is_none());
+    assert!(results[0].notes.is_none());
 
     let expanded = store
         .query_issue_browser(
@@ -481,7 +483,62 @@ fn issue_store_browser_query_matches_text_and_respects_limit() {
             .unwrap(),
         )
         .unwrap();
-    assert_eq!(expanded, vec![newer_title_match, body_match]);
+    assert_eq!(expanded.len(), 2);
+    assert_eq!(expanded[0].id, newer_title_match.id);
+    assert_eq!(expanded[1].id, body_match.id);
+    assert!(expanded.iter().all(|record| record.body.is_none()));
+    assert!(expanded.iter().all(|record| record.notes.is_none()));
+}
+
+/// Verifies browser summaries omit detail payloads while hydrating only the
+/// dependencies belonging to the selected result page.
+#[test]
+fn issue_store_browser_query_loads_page_scoped_dependencies() {
+    let store = temp_store("browser-page-dependencies");
+    let prerequisite = store
+        .add_issue(
+            "/repo/current".to_string(),
+            IssueKind::Task,
+            "Prerequisite".to_string(),
+            Some("large prerequisite body".repeat(128)),
+            Some("private prerequisite notes".repeat(128)),
+            10,
+        )
+        .unwrap();
+    let dependent = store
+        .add_issue_with_dependencies(
+            NewIssueRecord {
+                project: "/repo/current".to_string(),
+                kind: IssueKind::Task,
+                state: None,
+                priority: mez_agent::issues::DEFAULT_ISSUE_PRIORITY,
+                title: "Dependent".to_string(),
+                body: Some("large dependent body".repeat(128)),
+                notes: Some("private dependent notes".repeat(128)),
+                depends_on: vec![prerequisite.id.clone()],
+            },
+            20,
+        )
+        .unwrap();
+
+    let records = store
+        .query_issue_browser(
+            &IssueBrowserQuery::new(
+                Some("/repo/current".to_string()),
+                None,
+                Some(IssueState::Open),
+                None,
+                Some(1),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].id, dependent.id);
+    assert_eq!(records[0].depends_on, vec![prerequisite.id]);
+    assert!(records[0].body.is_none());
+    assert!(records[0].notes.is_none());
 }
 
 /// Verifies active-only browser queries exclude resolved rows before applying
