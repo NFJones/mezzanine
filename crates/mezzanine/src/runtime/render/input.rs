@@ -276,23 +276,6 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Runs the apply attached agent prompt input operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn apply_attached_agent_prompt_input(
-        &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        input: &[u8],
-    ) -> Result<bool> {
-        if input.is_empty() {
-            return Ok(false);
-        }
-        let pane_id = self.active_pane_id()?;
-        self.apply_attached_agent_prompt_input_for_pane(primary_client_id, &pane_id, input)
-    }
-
     /// Applies attached agent prompt input to an explicit pane.
     ///
     /// This is used by the ordinary focused-pane input path and by mouse
@@ -303,6 +286,22 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         input: &[u8],
+    ) -> Result<bool> {
+        self.apply_attached_agent_prompt_input_for_pane_inner(
+            primary_client_id,
+            pane_id,
+            input,
+            false,
+        )
+    }
+
+    /// Applies agent prompt input with the attached-terminal worker handoff policy.
+    pub(super) fn apply_attached_agent_prompt_input_for_pane_inner(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        input: &[u8],
+        queue_external_effects_for_adapter: bool,
     ) -> Result<bool> {
         if input.is_empty() {
             return Ok(false);
@@ -451,7 +450,15 @@ impl RuntimeSessionService {
                             .push(refresh);
                         continue;
                     }
-                    let body = match self.execute_agent_shell_command(primary_client_id, &command) {
+                    let body = match if queue_external_effects_for_adapter {
+                        self.execute_attached_agent_shell_command(
+                            primary_client_id,
+                            pane_id,
+                            &command,
+                        )
+                    } else {
+                        self.execute_agent_shell_command(primary_client_id, &command)
+                    } {
                         Ok(body) => body,
                         Err(error) => {
                             self.show_primary_error_overlay(agent_prompt_error_display_lines(
@@ -488,12 +495,22 @@ impl RuntimeSessionService {
                     if text.trim().is_empty() {
                         continue;
                     }
-                    let body = match self.execute_agent_shell_command_with_display(
-                        primary_client_id,
-                        &text,
-                        &display,
-                        &collapsed_paste_ranges,
-                    ) {
+                    let body = match if queue_external_effects_for_adapter {
+                        self.execute_attached_agent_shell_command_with_display(
+                            primary_client_id,
+                            pane_id,
+                            &text,
+                            &display,
+                            &collapsed_paste_ranges,
+                        )
+                    } else {
+                        self.execute_agent_shell_command_with_display(
+                            primary_client_id,
+                            &text,
+                            &display,
+                            &collapsed_paste_ranges,
+                        )
+                    } {
                         Ok(body) => body,
                         Err(error) => {
                             self.show_primary_error_overlay(agent_prompt_error_display_lines(

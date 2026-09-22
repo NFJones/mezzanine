@@ -400,6 +400,13 @@ impl RuntimeSessionService {
         std::mem::take(&mut self.presentation.pending_deferred_agent_commands)
     }
 
+    /// Drains interactive prompts whose immutable history needs worker preparation.
+    pub(crate) fn take_pending_agent_prompt_history(
+        &mut self,
+    ) -> Vec<crate::runtime::RuntimeAgentPromptHistoryDispatch> {
+        std::mem::take(&mut self.presentation.pending_agent_prompt_history)
+    }
+
     /// Drains deferred record-browser refreshes queued by overlay flows.
     pub(crate) fn take_pending_record_browser_refreshes(
         &mut self,
@@ -673,7 +680,12 @@ impl RuntimeSessionService {
                             .active_window()
                             .and_then(|window| self.pane_process_size_for(window, &pane_id));
                         let overlay_was_open = self.presentation.primary_display_overlay.is_some();
-                        if self.apply_attached_agent_prompt_input(primary_client_id, input)? {
+                        if self.apply_attached_agent_prompt_input_for_pane_inner(
+                            primary_client_id,
+                            &pane_id,
+                            input,
+                            queue_external_effects,
+                        )? {
                             let current_process_size = self
                                 .session
                                 .active_window()

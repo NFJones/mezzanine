@@ -558,6 +558,38 @@ pub(crate) struct RuntimeAgentCommandDispatch {
     pub claim_generation: u64,
 }
 
+/// One interactive prompt whose immutable history epoch is prepared off actor.
+///
+/// The actor performs configuration, trust, and hook admission before creating
+/// this dispatch. The worker reads only the captured history work, and actor
+/// completion revalidates the pane, conversation, configuration, and retained
+/// transcript count before committing the turn.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeAgentPromptHistoryDispatch {
+    /// Primary client whose prompt submission requested this preparation.
+    pub primary_client_id: mez_core::ids::ClientId,
+    /// Pane that owns the submitted prompt.
+    pub pane_id: String,
+    /// Conversation bound to the pane when admission began.
+    pub conversation_id: String,
+    /// Configuration and trust epoch that admitted the prompt.
+    pub config_generation: u64,
+    /// Retained transcript count visible when history work was captured.
+    pub transcript_entries: u64,
+    /// Pane-local claim generation used to discard stale worker completion.
+    pub claim_generation: u64,
+    /// User prompt committed only after history preparation succeeds.
+    pub prompt: String,
+    /// Immutable compact-memory and durable-transcript worker inputs.
+    pub history_work: crate::runtime::control::RuntimeAgentPromptHistoryWork,
+    /// Test-only notification emitted when the worker begins preparation.
+    #[cfg(test)]
+    pub prompt_history_preparation_started: Option<std::sync::Arc<tokio::sync::Notify>>,
+    /// Test-only release paired with `prompt_history_preparation_started`.
+    #[cfg(test)]
+    pub prompt_history_preparation_release: Option<std::sync::Arc<tokio::sync::Notify>>,
+}
+
 /// Actor-owned phase for one accepted deferred command transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeAgentCommandLifecyclePhase {

@@ -258,6 +258,9 @@ pub(crate) use config::{
 /// declaration makes the boundary available to the crate.
 mod control;
 pub(crate) use control::RuntimeControlComponent;
+pub(crate) use control::{
+    RuntimeAgentTranscriptContext, execute_runtime_agent_prompt_history_work,
+};
 /// Exposes deferred runtime side-effect value types.
 ///
 /// The nested module keeps side-effect planning records out of the central
@@ -454,11 +457,12 @@ use service_state::{
 pub(crate) use service_state::{
     RuntimeAgentCommandAsyncOutcome, RuntimeAgentCommandAsyncWork, RuntimeAgentCommandDispatch,
     RuntimeAgentCommandLifecyclePhase, RuntimeAgentCommandPrepared,
-    RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,
-    RuntimeDirectResumeProjection, RuntimeDirectResumeProjectionWork, RuntimeDirectResumeRead,
-    RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess, RuntimePersistentSubagent,
-    RuntimeRecordBrowserRefreshDispatch, RuntimeRecordBrowserRefreshIntent,
-    RuntimeRecordBrowserRefreshOutcome, RuntimeRecordBrowserRefreshWork,
+    RuntimeAgentPromptHistoryDispatch, RuntimeAgentProviderPreparationOutcome,
+    RuntimeAgentProviderPreparationWork, RuntimeDirectResumeProjection,
+    RuntimeDirectResumeProjectionWork, RuntimeDirectResumeRead, RuntimeMcpDiscoveryOutcome,
+    RuntimeMcpDiscoverySuccess, RuntimePersistentSubagent, RuntimeRecordBrowserRefreshDispatch,
+    RuntimeRecordBrowserRefreshIntent, RuntimeRecordBrowserRefreshOutcome,
+    RuntimeRecordBrowserRefreshWork,
 };
 pub(crate) use sockets::hosted_session_socket_path;
 pub use sockets::{

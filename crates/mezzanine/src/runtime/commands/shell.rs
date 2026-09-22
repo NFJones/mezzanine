@@ -10,8 +10,9 @@ use super::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellVisibility, EventKind, MezError,
     Result, RuntimeSessionService, RuntimeSideEffect, agent_shell_visibility_json_name,
     execute_agent_shell_command_with_context, json_escape, parse_slash_command,
-    runtime_agent_shell_command_response_json, runtime_agent_shell_prompt_turn_response_json,
-    runtime_agent_shell_stop_response_json, runtime_mezzanine_error_code,
+    runtime_agent_shell_command_response_json, runtime_agent_shell_deferred_command_response_json,
+    runtime_agent_shell_prompt_turn_response_json, runtime_agent_shell_stop_response_json,
+    runtime_mezzanine_error_code,
 };
 use crate::integrations::agent::slash::AgentShellPresentation;
 use crate::runtime::{PaneReadinessState, runtime_random_marker_token};
@@ -305,6 +306,51 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Executes one attached-terminal prompt command with adapter-owned worker dispatch.
+    pub(crate) fn execute_attached_agent_shell_command(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<String> {
+        self.execute_agent_shell_command_with_origin(
+            primary_client_id,
+            AgentShellCommandIngress {
+                target_pane_id: Some(pane_id),
+                origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
+            },
+            input,
+            input,
+            true,
+            ReadlineHistoryEntry::literal(input),
+        )
+    }
+
+    /// Executes one attached-terminal prompt while retaining collapsed paste display metadata.
+    pub(crate) fn execute_attached_agent_shell_command_with_display(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        input: &str,
+        display_input: &str,
+        collapsed_paste_ranges: &[mez_mux::readline::ReadlinePasteRange],
+    ) -> Result<String> {
+        self.execute_agent_shell_command_with_origin(
+            primary_client_id,
+            AgentShellCommandIngress {
+                target_pane_id: Some(pane_id),
+                origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
+            },
+            input,
+            display_input,
+            true,
+            ReadlineHistoryEntry {
+                text: input.to_string(),
+                collapsed_paste_ranges: collapsed_paste_ranges.to_vec(),
+            },
+        )
+    }
+
     /// Captures an interactive provider refresh for actor-owned asynchronous execution.
     pub(crate) fn prepare_agent_prompt_provider_info_refresh(
         &mut self,
@@ -428,6 +474,22 @@ impl RuntimeSessionService {
         )?;
         if is_prompt {
             self.append_agent_user_prompt_to_terminal_buffer(&pane_id, display_input)?;
+        }
+        if is_prompt
+            && queue_external_effects_for_adapter
+            && origin.is_authenticated_primary_input()
+            && target_pane_id.is_some()
+            && parse_macro_prompt_invocation(input).is_none()
+            && !self.agent_shell_pane_has_active_turn(&pane_id)
+        {
+            self.begin_agent_prompt_history_preparation(
+                primary_client_id.clone(),
+                &pane_id,
+                input,
+            )?;
+            return Ok(runtime_agent_shell_deferred_command_response_json(
+                &pane_id, input, "prompt",
+            ));
         }
         if let Some(invocation) = parse_macro_prompt_invocation(input) {
             let catalog = self.effective_macro_catalog_for_pane(&pane_id);

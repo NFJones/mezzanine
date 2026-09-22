@@ -24,6 +24,7 @@ use super::{
     discover_project_root, execute_agent_shell_command_with_context,
     execute_runtime_command_sequence, execute_runtime_command_sequence_async, json_escape,
     parse_slash_command, runtime_add_command_rule, runtime_agent_shell_command_response_json,
+    runtime_agent_shell_deferred_command_response_json,
     runtime_agent_shell_prompt_turn_response_json, runtime_agent_shell_stop_response_json,
     runtime_agent_turn_state_name, runtime_apply_persisted_config_mutation_batch,
     runtime_approval_command, runtime_approval_policy_name, runtime_bypass_approvals_command,
@@ -1344,6 +1345,161 @@ impl RuntimeSessionService {
             initial_model_selection,
             history,
         )
+    }
+
+    /// Accepts one interactive prompt before its immutable history enters a worker.
+    ///
+    /// Trust and submit hooks stay on the actor. The worker receives only the
+    /// captured history epoch; receipt acknowledgement and provider scheduling
+    /// remain in [`Self::complete_agent_prompt_history_preparation`].
+    pub(crate) fn begin_agent_prompt_history_preparation(
+        &mut self,
+        primary_client_id: mez_core::ids::ClientId,
+        pane_id: &str,
+        prompt: &str,
+    ) -> Result<()> {
+        self.refresh_project_config_layers_for_pane(pane_id)?;
+        if let Some(project_trust_request) = self
+            .pending_project_trust_requests_for_agent_work()
+            .into_iter()
+            .next()
+        {
+            return Err(MezError::conflict(format!(
+                "project trust decision pending for {}",
+                project_trust_request.project_root.display()
+            )));
+        }
+        if let Some(block) = self.run_configured_pre_action_hooks(
+            HookEvent::UserPromptSubmit,
+            &runtime_user_prompt_hook_payload(pane_id, prompt),
+        )? {
+            return Err(MezError::forbidden(format!(
+                "user prompt blocked by hook `{}`: {}",
+                block.hook_id, block.message
+            )));
+        }
+        let session = self
+            .agent_shell_store()
+            .get(pane_id)
+            .ok_or_else(|| MezError::invalid_state("agent prompt session is unavailable"))?;
+        let conversation_id = session.session_id.clone();
+        let transcript_entries = if session.ephemeral {
+            session.ephemeral_transcript_source_entries
+        } else {
+            session.transcript_entries
+        };
+        let claim_generation = self.begin_agent_command_claim(pane_id, &conversation_id)?;
+        let history_work = self.prepare_runtime_agent_prompt_history_work(pane_id);
+        #[cfg(test)]
+        let (prompt_history_preparation_started, prompt_history_preparation_release) =
+            self.integration.prompt_history_preparation_probe();
+        self.presentation.push_pending_agent_prompt_history(
+            crate::runtime::RuntimeAgentPromptHistoryDispatch {
+                primary_client_id,
+                pane_id: pane_id.to_string(),
+                conversation_id,
+                config_generation: self.session.config_generation,
+                transcript_entries,
+                claim_generation,
+                prompt: prompt.to_string(),
+                history_work,
+                #[cfg(test)]
+                prompt_history_preparation_started,
+                #[cfg(test)]
+                prompt_history_preparation_release,
+            },
+        );
+        self.append_agent_status_text_to_terminal_buffer(
+            pane_id,
+            "agent: preparing conversation history",
+        )
+    }
+
+    /// Claims a queued prompt-history preparation while its actor snapshot remains current.
+    pub(crate) fn claim_agent_prompt_history_preparation(
+        &mut self,
+        dispatch: &crate::runtime::RuntimeAgentPromptHistoryDispatch,
+    ) -> bool {
+        let Some(session) = self.agent_shell_store().get(&dispatch.pane_id) else {
+            return false;
+        };
+        let transcript_entries = if session.ephemeral {
+            session.ephemeral_transcript_source_entries
+        } else {
+            session.transcript_entries
+        };
+        session.session_id == dispatch.conversation_id
+            && transcript_entries == dispatch.transcript_entries
+            && self.session.config_generation == dispatch.config_generation
+            && self.agent.claim_agent_command(
+                &dispatch.pane_id,
+                &dispatch.conversation_id,
+                dispatch.claim_generation,
+            )
+    }
+
+    /// Commits one worker-prepared prompt history epoch when its admission fence remains current.
+    pub(crate) fn complete_agent_prompt_history_preparation(
+        &mut self,
+        dispatch: &crate::runtime::RuntimeAgentPromptHistoryDispatch,
+        history: Result<crate::runtime::control::RuntimeAgentTranscriptContext>,
+    ) -> Result<bool> {
+        let current = self.agent_shell_store().get(&dispatch.pane_id);
+        let current_entries = current.map(|session| {
+            if session.ephemeral {
+                session.ephemeral_transcript_source_entries
+            } else {
+                session.transcript_entries
+            }
+        });
+        let current_conversation = current.map(|session| session.session_id.as_str());
+        if current_conversation != Some(dispatch.conversation_id.as_str())
+            || current_entries != Some(dispatch.transcript_entries)
+            || self.session.config_generation != dispatch.config_generation
+            || !self.agent.agent_command_is_claimed(
+                &dispatch.pane_id,
+                &dispatch.conversation_id,
+                dispatch.claim_generation,
+            )
+        {
+            self.agent.cancel_matching_agent_command(
+                &dispatch.pane_id,
+                &dispatch.conversation_id,
+                dispatch.claim_generation,
+            );
+            return Ok(false);
+        }
+        let history = match history {
+            Ok(history) => history,
+            Err(error) => {
+                self.agent.settle_agent_command(
+                    &dispatch.pane_id,
+                    &dispatch.conversation_id,
+                    dispatch.claim_generation,
+                    crate::runtime::RuntimeAgentCommandLifecyclePhase::Failed,
+                );
+                return Err(error);
+            }
+        };
+        let result = self.start_agent_prompt_turn_with_history(
+            &dispatch.pane_id,
+            &dispatch.prompt,
+            None,
+            None,
+            None,
+            history,
+        );
+        self.agent.settle_agent_command(
+            &dispatch.pane_id,
+            &dispatch.conversation_id,
+            dispatch.claim_generation,
+            if result.is_ok() {
+                crate::runtime::RuntimeAgentCommandLifecyclePhase::Completed
+            } else {
+                crate::runtime::RuntimeAgentCommandLifecyclePhase::Failed
+            },
+        );
+        result.map(|_| true)
     }
 
     /// Commits one prompt turn after its immutable transcript epoch is ready.

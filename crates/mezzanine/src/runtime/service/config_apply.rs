@@ -220,6 +220,17 @@ impl RuntimeSessionService {
             .set_deferred_agent_command_probe(started, release);
     }
 
+    /// Injects a deterministic prompt-history worker gate for actor tests.
+    #[cfg(test)]
+    pub(crate) fn set_prompt_history_preparation_probe_for_tests(
+        &mut self,
+        started: std::sync::Arc<tokio::sync::Notify>,
+        release: std::sync::Arc<tokio::sync::Notify>,
+    ) {
+        self.integration
+            .set_prompt_history_preparation_probe(started, release);
+    }
+
     /// Injects a deterministic off-actor frame-composition gate for actor tests.
     #[cfg(test)]
     pub(crate) fn set_client_render_composition_probe_for_tests(

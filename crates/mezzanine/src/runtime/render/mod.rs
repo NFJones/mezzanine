@@ -565,6 +565,8 @@ pub(crate) struct RuntimePresentationComponent {
     pending_agent_prompt_provider_info_refreshes: Vec<RuntimeAgentPromptProviderInfoRefresh>,
     /// Deferred slash commands submitted from agent prompts awaiting dispatch.
     pending_deferred_agent_commands: Vec<crate::runtime::RuntimeAgentCommandDispatch>,
+    /// Prompt history preparations awaiting actor-to-worker handoff.
+    pending_agent_prompt_history: Vec<crate::runtime::RuntimeAgentPromptHistoryDispatch>,
     /// Deferred record-browser refreshes awaiting dispatch, newest per key.
     pending_record_browser_refreshes: Vec<crate::runtime::RuntimeRecordBrowserRefreshDispatch>,
     /// Per-key refresh generations used to drop superseded rebuilt pages.
@@ -1555,6 +1557,14 @@ impl RuntimePresentationComponent {
         dispatch: crate::runtime::RuntimeAgentCommandDispatch,
     ) {
         self.pending_deferred_agent_commands.push(dispatch);
+    }
+
+    /// Queues one admitted prompt for immutable history preparation.
+    pub(crate) fn push_pending_agent_prompt_history(
+        &mut self,
+        dispatch: crate::runtime::RuntimeAgentPromptHistoryDispatch,
+    ) {
+        self.pending_agent_prompt_history.push(dispatch);
     }
 
     /// Bumps one refresh key's generation and returns the new claim value.

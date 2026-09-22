@@ -778,6 +778,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Provider catalog worker outcome.
         outcome: RuntimeProviderInfoRefreshOutcome,
     },
+    /// Commits one interactive prompt after worker-owned transcript preparation.
+    CompleteAgentPromptHistoryPreparation {
+        /// Actor-captured prompt identity and immutable history work.
+        dispatch: crate::runtime::RuntimeAgentPromptHistoryDispatch,
+        /// Canonical history epoch prepared without accessing live actor state.
+        history: Result<crate::runtime::RuntimeAgentTranscriptContext>,
+    },
     /// Represents the Pending Agent Provider Tasks case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1343,6 +1350,7 @@ impl AsyncRuntimeRequest {
             | Self::CompleteAgentShellMcpDiscovery { .. }
             | Self::CompleteAgentShellProviderInfoRefresh { .. }
             | Self::CompleteAgentPromptProviderInfoRefresh { .. }
+            | Self::CompleteAgentPromptHistoryPreparation { .. }
             | Self::PendingAgentProviderTasks { .. }
             | Self::AgentTurnIsRunning { .. }
             | Self::QueueProviderPollTimerIfNeeded { .. }

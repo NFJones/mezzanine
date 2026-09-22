@@ -357,6 +357,128 @@ async fn async_command_worker_keeps_other_panes_responsive_while_command_runs() 
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies worker-held prompt history preparation does not block unrelated
+/// pane input and cannot queue provider work before its actor-side commit.
+#[tokio::test(flavor = "current_thread")]
+async fn async_prompt_history_worker_keeps_other_panes_responsive_before_commit() {
+    let started = StdArc::new(tokio::sync::Notify::new());
+    let release = StdArc::new(tokio::sync::Notify::new());
+    let mut service = test_service();
+    let transcript_root = std::env::temp_dir().join(format!(
+        "mez-async-prompt-history-worker-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&transcript_root).unwrap();
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let second_pane = service
+        .split_pane_with_process(
+            &primary,
+            mez_mux::layout::SplitDirection::Vertical,
+            Some("cat >/dev/null"),
+        )
+        .unwrap()
+        .pane_id;
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(second_pane.as_str())
+        .unwrap();
+    service
+        .session_mut_for_tests()
+        .select_pane(&primary, "%1")
+        .unwrap();
+    service.set_prompt_history_preparation_probe_for_tests(started.clone(), release.clone());
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"prepare the transcript history\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .expect("prompt history worker must reach its deterministic gate");
+        assert!(
+            handle
+                .pending_agent_provider_tasks()
+                .await
+                .unwrap()
+                .is_empty(),
+            "provider work must wait for history commit"
+        );
+
+        handle
+            .execute_terminal_command(primary.clone(), format!("select-pane -t {second_pane}"))
+            .await
+            .unwrap();
+        let other_pane = handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"x".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(other_pane.agent_prompt_inputs_applied, 1);
+
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if !handle
+                    .pending_agent_provider_tasks()
+                    .await
+                    .unwrap()
+                    .is_empty()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("released history worker must commit before shutdown");
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(transcript_root);
+}
+
 /// Verifies that an idle provider service performs a bounded actor-state probe
 /// even when no notification arrives. This protects prompt submission on slow
 /// systems from a missed side-effect notification permit: ordinary prompt work

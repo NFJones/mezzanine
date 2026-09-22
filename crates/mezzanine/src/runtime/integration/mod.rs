@@ -68,6 +68,10 @@ pub(crate) struct RuntimeIntegrationComponent {
     #[cfg(test)]
     deferred_agent_command_release: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
+    prompt_history_preparation_started: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
+    prompt_history_preparation_release: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
     client_render_composition_started: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
     client_render_composition_release: Option<RuntimeClientRenderCompositionGate>,
@@ -101,6 +105,10 @@ impl RuntimeIntegrationComponent {
             deferred_agent_command_started: None,
             #[cfg(test)]
             deferred_agent_command_release: None,
+            #[cfg(test)]
+            prompt_history_preparation_started: None,
+            #[cfg(test)]
+            prompt_history_preparation_release: None,
             #[cfg(test)]
             client_render_composition_started: None,
             #[cfg(test)]
@@ -176,6 +184,31 @@ impl RuntimeIntegrationComponent {
         (
             self.deferred_agent_command_started.clone(),
             self.deferred_agent_command_release.clone(),
+        )
+    }
+
+    /// Installs a deterministic prompt-history preparation gate for actor tests.
+    #[cfg(test)]
+    pub(crate) fn set_prompt_history_preparation_probe(
+        &mut self,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    ) {
+        self.prompt_history_preparation_started = Some(started);
+        self.prompt_history_preparation_release = Some(release);
+    }
+
+    /// Clones the active prompt-history preparation gate for worker handoff.
+    #[cfg(test)]
+    pub(crate) fn prompt_history_preparation_probe(
+        &self,
+    ) -> (
+        Option<Arc<tokio::sync::Notify>>,
+        Option<Arc<tokio::sync::Notify>>,
+    ) {
+        (
+            self.prompt_history_preparation_started.clone(),
+            self.prompt_history_preparation_release.clone(),
         )
     }
 
