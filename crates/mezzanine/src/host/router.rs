@@ -1193,7 +1193,7 @@ impl HostSessionRouter {
             &lease.lease_id,
             lease.boot_generation,
             lease.lease_generation,
-            current_unix_seconds()?,
+            follow_up_instant_unix_seconds(lease.updated_at_unix_seconds),
             Some("remote force-kill".to_string()),
         )?;
         self.notify_authority_change();
@@ -1367,7 +1367,7 @@ impl HostSessionRouter {
                 Some(format!("local checkpoint {}", assignment.session_id)),
             )
             .await?;
-        let now = current_unix_seconds()?;
+        let now = follow_up_instant_unix_seconds(assignment.updated_at_unix_seconds);
         let updated = self.local_assignments.update_checkpoint(
             &assignment.session_id,
             assignment.boot_generation,
@@ -1565,7 +1565,7 @@ impl HostSessionRouter {
                 Some(format!("lease checkpoint {}", lease.lease_id)),
             )
             .await?;
-        let now = current_unix_seconds()?;
+        let now = follow_up_instant_unix_seconds(lease.updated_at_unix_seconds);
         let updated = self.leases.update_checkpoint(
             &lease.lease_id,
             lease.boot_generation,
@@ -1633,7 +1633,7 @@ impl HostSessionRouter {
             &lease.lease_id,
             lease.boot_generation,
             lease.lease_generation,
-            current_unix_seconds()?,
+            follow_up_instant_unix_seconds(lease.updated_at_unix_seconds),
         )?;
         self.notify_authority_change();
         self.stop_terminal_lease_runtime_if_requested(&released, terminate)
@@ -1665,7 +1665,7 @@ impl HostSessionRouter {
             &lease.lease_id,
             lease.boot_generation,
             lease.lease_generation,
-            current_unix_seconds()?,
+            follow_up_instant_unix_seconds(lease.updated_at_unix_seconds),
             reason,
         )?;
         self.notify_authority_change();
@@ -2388,8 +2388,8 @@ fn current_unix_seconds() -> Result<u64> {
 /// Wall-clock unix seconds truncate and can step backward, so a follow-up write
 /// sampled after the record's stored write can still name an earlier second.
 /// Deriving the instant from the record's own `updated_at_unix_seconds` keeps
-/// the write ordered by construction; the repository staleness guard still
-/// rejects any instant that precedes it.
+/// the write non-stale by construction while preserving same-second terminal
+/// transitions for immediate lease garbage-collection previews.
 fn follow_up_instant_unix_seconds(record_updated_at_unix_seconds: u64) -> u64 {
     current_unix_seconds()
         .unwrap_or(record_updated_at_unix_seconds)
