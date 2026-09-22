@@ -1342,7 +1342,9 @@ impl RuntimeSessionService {
             imported_history_events,
             current_environment_snapshot,
             new_environment_snapshot,
-        } = self.agent_context_for_pane_prompt_with_message_delivery(pane_id, prompt, 100, true)?;
+        } = self.agent_context_for_pane_prompt_with_message_delivery(
+            pane_id, prompt, 100, true, false,
+        )?;
         let agent_id = format!("agent-{pane_id}");
         if self.subagent_lineage(&agent_id).is_none() {
             self.presentation.acknowledge_completion_attention(pane_id);

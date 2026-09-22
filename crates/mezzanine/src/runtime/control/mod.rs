@@ -164,6 +164,7 @@ impl RuntimeSessionService {
             prompt,
             max_history_lines,
             false,
+            true,
         )
         .map(|prepared| prepared.context)
     }
@@ -176,11 +177,14 @@ impl RuntimeSessionService {
         prompt: &str,
         _max_history_lines: usize,
         include_unread_messages: bool,
+        refresh_project_config: bool,
     ) -> Result<RuntimeAgentPromptContext> {
         if prompt.trim().is_empty() {
             return Err(MezError::invalid_args("agent prompt must not be empty"));
         }
-        self.refresh_project_config_layers_for_pane(pane_id)?;
+        if refresh_project_config {
+            self.refresh_project_config_layers_for_pane(pane_id)?;
+        }
         self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
         let history = self.runtime_agent_history_epoch_context(pane_id)?;
         if let Some(repair_identity) = history.provider_history_repair_identity.as_deref() {
