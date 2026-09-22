@@ -6,7 +6,7 @@
 //! request defaults. Product code supplies stable turn identity and prompt
 //! assets without exposing runtime records or filesystem access.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
 use crate::ProviderTranscriptEvent;
@@ -92,26 +92,8 @@ fn assemble_model_request_from_context_for_api(
 
     let blocks = context.blocks();
     let is_deepseek = api == Some(ProviderApiCompatibility::DeepSeekChatCompletions);
-    let provider_native_execution_groups = blocks
-        .iter()
-        .enumerate()
-        .filter_map(|(index, _)| context.metadata_for_block(index))
-        .filter(|metadata| {
-            metadata.provider_owner().is_some_and(|owner| {
-                api.is_some_and(|api| owner.matches_provider(api, &profile.provider))
-            })
-        })
-        .filter_map(|metadata| metadata.execution_group_id().cloned())
-        .filter(|group| match api {
-            Some(ProviderApiCompatibility::OpenAiChatCompletions) => {
-                openai_chat_completions_native_group_is_complete(context, group, &profile.provider)
-            }
-            Some(ProviderApiCompatibility::OpenAiResponses) => {
-                openai_responses_native_group_is_complete(context, group, &profile.provider)
-            }
-            _ => true,
-        })
-        .collect::<BTreeSet<_>>();
+    let provider_native_execution_groups =
+        provider_native_execution_groups(context, api, &profile.provider);
     let prompt_profile = AgentPromptProfile::for_model(&profile.model);
     let mut messages = Vec::with_capacity(blocks.len() + 1);
     messages.push(ModelMessage {
@@ -210,6 +192,54 @@ fn assemble_model_request_from_context_for_api(
     Ok(request)
 }
 
+/// Collects provider-native execution groups with one context pass.
+///
+/// Completeness checks must see every event in a candidate group because an
+/// incompatible provider event invalidates native replay. Grouping first keeps
+/// those fail-closed checks while avoiding one complete-context scan per group.
+fn provider_native_execution_groups(
+    context: &AgentContext,
+    api: Option<ProviderApiCompatibility>,
+    provider_id: &str,
+) -> BTreeSet<crate::ContextExecutionGroupId> {
+    let mut grouped = BTreeMap::<
+        crate::ContextExecutionGroupId,
+        Vec<(&ContextBlock, &crate::ContextBlockMetadata)>,
+    >::new();
+    for (index, block) in context.blocks().iter().enumerate() {
+        let Some(metadata) = context.metadata_for_block(index) else {
+            continue;
+        };
+        let Some(group) = metadata.execution_group_id() else {
+            continue;
+        };
+        grouped
+            .entry(group.clone())
+            .or_default()
+            .push((block, metadata));
+    }
+    grouped
+        .into_iter()
+        .filter(|(_, events)| {
+            events.iter().any(|(_, metadata)| {
+                metadata.provider_owner().is_some_and(|owner| {
+                    api.is_some_and(|api| owner.matches_provider(api, provider_id))
+                })
+            })
+        })
+        .filter(|(_, events)| match api {
+            Some(ProviderApiCompatibility::OpenAiChatCompletions) => {
+                openai_chat_completions_native_group_is_complete(events, provider_id)
+            }
+            Some(ProviderApiCompatibility::OpenAiResponses) => {
+                openai_responses_native_group_is_complete(events, provider_id)
+            }
+            _ => true,
+        })
+        .map(|(group, _)| group)
+        .collect()
+}
+
 /// Reports whether one generic Chat Completions execution group contains one
 /// complete assistant-call/result chain in declaration order.
 ///
@@ -217,19 +247,15 @@ fn assemble_model_request_from_context_for_api(
 /// check succeeds. Partial, duplicated, reordered, or foreign native events
 /// therefore fail closed to the provider-neutral projection.
 fn openai_chat_completions_native_group_is_complete(
-    context: &AgentContext,
-    group: &crate::ContextExecutionGroupId,
+    events: &[(&ContextBlock, &crate::ContextBlockMetadata)],
     provider_id: &str,
 ) -> bool {
     let mut expected_ids = None;
     let mut result_ids = Vec::new();
-    for (index, block) in context.blocks().iter().enumerate() {
-        let Some(metadata) = context.metadata_for_block(index) else {
-            return false;
-        };
-        if metadata.execution_group_id() != Some(group) || metadata.provider_owner().is_none() {
+    for (block, metadata) in events {
+        if metadata.provider_owner().is_none() {
             continue;
-        }
+        };
         let Some(event) = crate::ProviderTranscriptEvent::from_transcript_content(&block.content)
         else {
             return false;
@@ -269,19 +295,12 @@ fn openai_chat_completions_native_group_is_complete(
 /// results therefore retain the provider-neutral projection instead of being
 /// replayed as an invalid Responses history.
 fn openai_responses_native_group_is_complete(
-    context: &AgentContext,
-    group: &crate::ContextExecutionGroupId,
+    events: &[(&ContextBlock, &crate::ContextBlockMetadata)],
     provider_id: &str,
 ) -> bool {
     let mut expected_ids = None;
     let mut result_ids = Vec::new();
-    for (index, block) in context.blocks().iter().enumerate() {
-        let Some(metadata) = context.metadata_for_block(index) else {
-            return false;
-        };
-        if metadata.execution_group_id() != Some(group) {
-            continue;
-        }
+    for (block, metadata) in events {
         let Some(owner) = metadata.provider_owner() else {
             continue;
         };

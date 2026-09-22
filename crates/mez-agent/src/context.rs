@@ -658,6 +658,57 @@ pub struct ConversationEvent {
     recoverable_for_compaction: bool,
 }
 
+/// One producer-classified chronological event awaiting atomic commitment.
+///
+/// Batched provider settlement uses this value to retain event order while
+/// rebuilding the adapter projections only once for the complete batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextConversationAppend {
+    block: ContextBlock,
+    semantic_kind: ContextSemanticKind,
+    retention: ContextRetention,
+    execution_group_id: Option<ContextExecutionGroupId>,
+    provider_owner: Option<ProviderContinuityOwner>,
+    recoverable_for_compaction: bool,
+}
+
+impl ContextConversationAppend {
+    /// Builds one assistant event owned by an execution group.
+    pub fn assistant(
+        label: impl Into<String>,
+        content: impl Into<String>,
+        execution_group_id: ContextExecutionGroupId,
+    ) -> Self {
+        Self {
+            block: ContextBlock::assistant_event(label, content),
+            semantic_kind: ContextSemanticKind::AssistantEvent,
+            retention: ContextRetention::ExecutionGroup,
+            execution_group_id: Some(execution_group_id),
+            provider_owner: None,
+            recoverable_for_compaction: true,
+        }
+    }
+
+    /// Builds one execution-group evidence event.
+    pub fn evidence(
+        source: ContextSourceKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+        execution_group_id: ContextExecutionGroupId,
+        provider_owner: Option<ProviderContinuityOwner>,
+        recoverable_for_compaction: bool,
+    ) -> Self {
+        Self {
+            block: ContextBlock::evidence_event(source, label, content),
+            semantic_kind: ContextSemanticKind::EvidenceEvent,
+            retention: ContextRetention::ExecutionGroup,
+            execution_group_id: Some(execution_group_id),
+            provider_owner,
+            recoverable_for_compaction,
+        }
+    }
+}
+
 impl ConversationEvent {
     /// Returns the exact chronological model-context block.
     pub fn block(&self) -> &ContextBlock {
@@ -1935,32 +1986,60 @@ impl AgentContext {
         provider_owner: Option<ProviderContinuityOwner>,
         recoverable_for_compaction: bool,
     ) -> AgentContextResult<ContextEventSequence> {
-        if block.placement != ContextPlacement::ConversationAppend {
-            return Err(AgentContextError::new(
-                "chronological events must use conversation-append placement",
-            ));
-        }
-        let mut candidate = self.clone();
-        let sequence = candidate.allocate_event_sequence()?;
-        let event = ConversationEvent {
+        let mut sequences = self.append_conversation_events([ContextConversationAppend {
             block,
             semantic_kind,
             retention,
-            sequence,
             execution_group_id,
             provider_owner,
             recoverable_for_compaction,
-        };
-        validate_context_block_metadata(
-            candidate.stable_slots.len() + candidate.chronology.len(),
-            &event.block,
-            &event.metadata(),
-        )?;
-        candidate.chronology.push(event);
+        }])?;
+        Ok(sequences
+            .pop()
+            .expect("one appended context event must allocate one sequence"))
+    }
+
+    /// Atomically appends producer-classified chronological events in order.
+    ///
+    /// Every event is validated before commit, and the canonical block and
+    /// metadata projections are rebuilt and validated once for the batch.
+    /// Failure leaves the original context unchanged.
+    pub fn append_conversation_events(
+        &mut self,
+        events: impl IntoIterator<Item = ContextConversationAppend>,
+    ) -> AgentContextResult<Vec<ContextEventSequence>> {
+        let mut candidate = self.clone();
+        let events = events.into_iter().collect::<Vec<_>>();
+        let mut sequences = Vec::with_capacity(events.len());
+        candidate.chronology.reserve(events.len());
+        for event in events {
+            if event.block.placement != ContextPlacement::ConversationAppend {
+                return Err(AgentContextError::new(
+                    "chronological events must use conversation-append placement",
+                ));
+            }
+            let sequence = candidate.allocate_event_sequence()?;
+            let event = ConversationEvent {
+                block: event.block,
+                semantic_kind: event.semantic_kind,
+                retention: event.retention,
+                sequence,
+                execution_group_id: event.execution_group_id,
+                provider_owner: event.provider_owner,
+                recoverable_for_compaction: event.recoverable_for_compaction,
+            };
+            validate_context_block_metadata(
+                candidate.stable_slots.len() + candidate.chronology.len(),
+                &event.block,
+                &event.metadata(),
+            )?;
+            candidate.chronology.push(event);
+            sequences.push(sequence);
+        }
         candidate.rebuild_projections();
         candidate.validate_stored_metadata()?;
         *self = candidate;
-        Ok(sequence)
+        Ok(sequences)
     }
 
     /// Allocates the next non-zero chronological sequence.
@@ -3133,9 +3212,9 @@ pub fn validate_context_required(field: &str, value: &str) -> AgentContextResult
 mod tests {
     use super::{
         AgentContext, AgentContextError, AgentRequestAssemblyError, AgentRequestAssemblyErrorKind,
-        ContextBlock, ContextCachePolicy, ContextExecutionGroupId, ContextPlacement,
-        ContextRetention, ContextSemanticKind, ContextSourceKind, ContextStability,
-        ImportedExecutionEvent, ModelMessage, ModelMessageRole, ModelMessages,
+        ContextBlock, ContextCachePolicy, ContextConversationAppend, ContextExecutionGroupId,
+        ContextPlacement, ContextRetention, ContextSemanticKind, ContextSourceKind,
+        ContextStability, ImportedExecutionEvent, ModelMessage, ModelMessageRole, ModelMessages,
         PreparedModelContext, ProviderContinuityOwner, StableContextBlock, StableContextSlotId,
         StableContextSourceFingerprint, TrustDomain, validate_context_required,
         validate_context_semantics,
@@ -3542,6 +3621,82 @@ mod tests {
             ]
         );
         assert_eq!(prepared.durable(), &durable);
+    }
+
+    /// Verifies atomic chronological appends preserve the same projection and
+    /// sequence order as the existing one-event mutation APIs.
+    #[test]
+    fn agent_context_batch_append_matches_sequential_events() {
+        let group = ContextExecutionGroupId::new("batch-execution").unwrap();
+        let mut sequential = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "inspect the batch context",
+        )])
+        .unwrap();
+        let mut batched = sequential.clone();
+
+        sequential
+            .append_assistant_event("assistant", "inspect files", group.clone())
+            .unwrap();
+        sequential
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result inspect",
+                "files inspected",
+                group.clone(),
+                None,
+                true,
+            )
+            .unwrap();
+
+        let sequences = batched
+            .append_conversation_events([
+                ContextConversationAppend::assistant("assistant", "inspect files", group.clone()),
+                ContextConversationAppend::evidence(
+                    ContextSourceKind::ActionResult,
+                    "action result inspect",
+                    "files inspected",
+                    group,
+                    None,
+                    true,
+                ),
+            ])
+            .unwrap();
+
+        assert_eq!(sequences.len(), 2);
+        assert!(sequences[0] < sequences[1]);
+        assert_eq!(batched, sequential);
+        assert_eq!(batched.event_sequence_high_water_mark(), sequences[1].get());
+    }
+
+    /// Verifies a later invalid event rolls back an entire append batch,
+    /// including its allocated sequence range and prior valid entries.
+    #[test]
+    fn agent_context_batch_append_is_atomic_when_later_event_is_invalid() {
+        let group = ContextExecutionGroupId::new("batch-rollback").unwrap();
+        let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "keep the original context",
+        )])
+        .unwrap();
+        let original = context.clone();
+
+        let error = context
+            .append_conversation_events([
+                ContextConversationAppend::assistant("assistant", "valid first event", group),
+                ContextConversationAppend {
+                    block: ContextBlock::user_event("user prompt", "duplicate active prompt"),
+                    semantic_kind: ContextSemanticKind::UserEvent,
+                    retention: ContextRetention::Exact,
+                    execution_group_id: None,
+                    provider_owner: None,
+                    recoverable_for_compaction: false,
+                },
+            ])
+            .unwrap_err();
+
+        assert!(error.message().contains("only one active user prompt"));
+        assert_eq!(context, original);
     }
 
     /// Verifies duplicate active prompts are rejected atomically instead of

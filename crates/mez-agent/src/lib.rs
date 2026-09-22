@@ -252,9 +252,9 @@ pub use config_change::{
 pub use context::{
     AgentContext, AgentContextError, AgentContextResult, AgentRequestAssemblyError,
     AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextBlock, ContextBlockMetadata,
-    ContextCachePolicy, ContextEpochComponent, ContextEpochIdentity, ContextEpochTransition,
-    ContextEventSequence, ContextExecutionGroupId, ContextPlacement, ContextRetention,
-    ContextSemanticKind, ContextSourceKind, ContextStability, ConversationEvent,
+    ContextCachePolicy, ContextConversationAppend, ContextEpochComponent, ContextEpochIdentity,
+    ContextEpochTransition, ContextEventSequence, ContextExecutionGroupId, ContextPlacement,
+    ContextRetention, ContextSemanticKind, ContextSourceKind, ContextStability, ConversationEvent,
     ImportedExecutionEvent, ModelContextCompactionReport, ModelContextMetadata, ModelMessage,
     ModelMessageRole, ModelMessages, ModelRequest, PreparedModelContext, ProviderContinuityOwner,
     StableContextBlock, StableContextSlotId, StableContextSourceFingerprint, TrustDomain,

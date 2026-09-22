@@ -6,7 +6,9 @@ use super::super::{
     AgentTurnExecution, AgentTurnRecord, ContextSourceKind, MezError, Result,
     RuntimeSessionService, assistant_context_content_for_execution,
 };
-use mez_agent::{ContextExecutionGroupId, ContextPlacement, ModelMessageRole};
+use mez_agent::{
+    ContextConversationAppend, ContextExecutionGroupId, ContextPlacement, ModelMessageRole,
+};
 use sha2::{Digest, Sha256};
 
 const CAPABILITY_DECISION_LABEL: &str = "controller capability decision";
@@ -223,29 +225,6 @@ impl RuntimeSessionService {
                 "provider execution ownership exists without its assistant event",
             ));
         }
-        for (label, decision) in new_decisions {
-            context
-                .append_evidence_event(
-                    ContextSourceKind::CommittedEvidence,
-                    label,
-                    decision,
-                    group_id.clone(),
-                    None,
-                    true,
-                )
-                .map_err(|error| MezError::invalid_state(error.to_string()))?;
-        }
-        context
-            .append_assistant_event(
-                format!(
-                    "assistant response for {} execution {}",
-                    turn.turn_id,
-                    &group_id.as_str()[group_id.as_str().len().saturating_sub(16)..]
-                ),
-                content,
-                group_id.clone(),
-            )
-            .map_err(|error| MezError::invalid_state(error.to_string()))?;
         let provider_owner = if execution.response.provider_transcript_events.is_empty() {
             None
         } else {
@@ -280,6 +259,28 @@ impl RuntimeSessionService {
             }
             Some(owner.clone())
         };
+        let mut appended_events = new_decisions
+            .into_iter()
+            .map(|(label, decision)| {
+                ContextConversationAppend::evidence(
+                    ContextSourceKind::CommittedEvidence,
+                    label,
+                    decision,
+                    group_id.clone(),
+                    None,
+                    true,
+                )
+            })
+            .collect::<Vec<_>>();
+        appended_events.push(ContextConversationAppend::assistant(
+            format!(
+                "assistant response for {} execution {}",
+                turn.turn_id,
+                &group_id.as_str()[group_id.as_str().len().saturating_sub(16)..]
+            ),
+            content,
+            group_id.clone(),
+        ));
         let mut provider_tool_calls = Vec::new();
         for (index, event) in execution
             .response
@@ -307,17 +308,18 @@ impl RuntimeSessionService {
                         .map(|id| (owner.clone(), id)),
                 );
             }
-            context
-                .append_evidence_event(
-                    ContextSourceKind::TranscriptTool,
-                    format!("provider continuity event {}", index.saturating_add(1)),
-                    event.to_transcript_content(),
-                    group_id.clone(),
-                    provider_owner.clone(),
-                    true,
-                )
-                .map_err(|error| MezError::invalid_state(error.to_string()))?;
+            appended_events.push(ContextConversationAppend::evidence(
+                ContextSourceKind::TranscriptTool,
+                format!("provider continuity event {}", index.saturating_add(1)),
+                event.to_transcript_content(),
+                group_id.clone(),
+                provider_owner.clone(),
+                true,
+            ));
         }
+        context
+            .append_conversation_events(appended_events)
+            .map_err(|error| MezError::invalid_state(error.to_string()))?;
         self.agent_turn_contexts_mut()
             .insert(turn.turn_id.clone(), context);
         self.retain_agent_provider_request_chain(turn, execution.request.clone());
