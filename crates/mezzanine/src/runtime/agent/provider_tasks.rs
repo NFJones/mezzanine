@@ -1136,9 +1136,7 @@ impl RuntimeSessionService {
             &model_profile,
             &turn,
             &provider_context,
-            &available_mcp_tools,
-            self.runtime_persistent_memory_enabled(),
-            super::issues::runtime_issues_enabled(self),
+            interaction_kind.unwrap_or(mez_agent::ModelInteractionKind::ActionExecution),
         );
         if self.agent_debug_enabled(&turn.pane_id) {
             match assemble_model_request(&model_profile, api, &turn, &provider_context) {

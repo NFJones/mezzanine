@@ -385,9 +385,7 @@ impl RuntimeSessionService {
             &model_profile,
             &turn,
             &context,
-            &available_mcp_tools,
-            self.runtime_persistent_memory_enabled(),
-            super::super::issues::runtime_issues_enabled(self),
+            interaction_kind.unwrap_or(mez_agent::ModelInteractionKind::ActionExecution),
         );
         if self.agent_debug_enabled(&turn.pane_id) {
             match assemble_model_request(
@@ -757,13 +755,12 @@ impl RuntimeSessionService {
                 context.blocks().len()
             ),
         )?;
+        let (_, interaction_kind) = self.agent_provider_request_control_for_turn(&turn)?;
         self.record_runtime_provider_request_shape_for_context(
             &model_profile,
             &turn,
             &context,
-            &available_mcp_tools,
-            self.runtime_persistent_memory_enabled(),
-            super::super::issues::runtime_issues_enabled(self),
+            interaction_kind.unwrap_or(mez_agent::ModelInteractionKind::ActionExecution),
         );
         let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
         let path_scopes = if subagent_scope.is_some() {

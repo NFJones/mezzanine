@@ -7,15 +7,13 @@
 use super::outcome::runtime_humanize_agent_diagnostic;
 use super::{runtime_action_status_name, runtime_mezzanine_error_code};
 use crate::error::{MezError, Result};
-use crate::integrations::agent::context::assemble_model_request;
 use crate::runtime::{RuntimeSessionService, runtime_agent_turn_state_name};
 use mez_agent::AgentTurnRecord;
 use mez_agent::outcome::action_terminal_preview as runtime_agent_terminal_preview;
 use mez_agent::{
     ActionResult, AgentAction, AgentActionPayload, AgentContext, AgentTurnState, ContextSourceKind,
-    MaapBatch, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
-    OpenAiPromptCacheDiagnostics, apply_default_action_gates,
-    openai_prompt_cache_diagnostics_for_request,
+    MaapBatch, ModelInteractionKind, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse,
+    ModelTokenUsage, OpenAiPromptCacheDiagnostics, openai_prompt_cache_diagnostics_for_request,
 };
 
 impl RuntimeSessionService {
@@ -321,9 +319,7 @@ impl RuntimeSessionService {
         model_profile: &ModelProfile,
         turn: &AgentTurnRecord,
         context: &AgentContext,
-        available_mcp_tools: &[mez_agent::McpPromptTool],
-        memory_actions_enabled: bool,
-        issue_actions_enabled: bool,
+        interaction_kind: ModelInteractionKind,
     ) {
         let conversation_id = self
             .agent_shell_store()
@@ -335,37 +331,13 @@ impl RuntimeSessionService {
             .agent_context_continuity_snapshot_by_conversation
             .get(&conversation_id)
             .cloned();
-        let Some(provider_config) = self.provider_registry().provider(&model_profile.provider)
-        else {
-            return;
-        };
-        let Ok(api) =
-            mez_agent::resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())
-        else {
-            return;
-        };
-        let Ok(mut request) = assemble_model_request(model_profile, api, turn, context) else {
-            return;
-        };
-        let Ok((allowed_actions, interaction_kind)) =
-            self.agent_provider_request_control_for_turn(turn)
-        else {
-            return;
-        };
-        mez_agent::apply_model_request_control(&mut request, allowed_actions, interaction_kind);
-        apply_default_action_gates(
-            &mut request,
-            available_mcp_tools,
-            memory_actions_enabled,
-            issue_actions_enabled,
-        );
         let continuity = mez_agent::context_continuity_diagnostics_for_interaction(
             context,
             &model_profile.provider,
             &model_profile.model,
             &turn.turn_id,
             previous.as_ref(),
-            request.interaction_kind,
+            interaction_kind,
         );
         self.record_agent_context_continuity(&conversation_id, continuity);
     }

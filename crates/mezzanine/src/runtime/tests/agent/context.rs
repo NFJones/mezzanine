@@ -1559,9 +1559,7 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
         &profile,
         &turn,
         &context,
-        &[],
-        false,
-        false,
+        mez_agent::ModelInteractionKind::ActionExecution,
     );
     let initial_status = service.runtime_agent_status_display("%1").unwrap();
     assert!(
@@ -1583,9 +1581,7 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
         &profile,
         &turn,
         &appended,
-        &[],
-        false,
-        false,
+        mez_agent::ModelInteractionKind::ActionExecution,
     );
     let status = service.runtime_agent_status_display("%1").unwrap();
 
