@@ -200,6 +200,7 @@ const HISTORICAL_SAFE_ERROR_CODES: &[&str] = &[
     "memory_disabled",
     "memory_store_unavailable",
     "message_recipient_forbidden",
+    "message_recipient_unavailable",
     "method_not_found",
     "network_action_no_progress",
     "network_http_error",

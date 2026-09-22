@@ -544,6 +544,7 @@ fn historical_tool_replay_retains_producer_error_codes() {
     let producer_codes = [
         "agent_aborted",
         "message_recipient_forbidden",
+        "message_recipient_unavailable",
         "invalid_message_recipient",
         "transport_error",
         "permission_denied",
@@ -724,6 +725,7 @@ fn historical_safe_error_codes_pin_full_producer_set() {
         "memory_disabled",
         "memory_store_unavailable",
         "message_recipient_forbidden",
+        "message_recipient_unavailable",
         "method_not_found",
         "network_action_no_progress",
         "network_http_error",

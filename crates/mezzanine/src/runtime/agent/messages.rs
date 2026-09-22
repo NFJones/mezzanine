@@ -1608,19 +1608,26 @@ impl RuntimeSessionService {
         ) {
             Ok(delivery) => delivery,
             Err(error) => {
+                let error_code = if error.kind() == mez_agent::messaging::MessageErrorKind::NotFound
+                    && error.message() == "message recipient is not registered or available"
+                {
+                    "message_recipient_unavailable"
+                } else {
+                    "transport_error"
+                };
                 let error = MezError::from(error);
                 let mut result = ActionResult::failed(
                     turn,
                     action,
                     ActionStatus::Failed,
-                    "transport_error",
+                    error_code,
                     error.message().to_string(),
                 )?;
                 result.structured_content_json = Some(format!(
                     r#"{{"recipient":"{}","scope":"{}","message_id":null,"delivery_status":"failed","protocol_error":{{"code":"{}","message":"{}"}}}}"#,
                     json_escape(recipient),
                     scope,
-                    runtime_mezzanine_error_code(error.kind()),
+                    error_code,
                     json_escape(error.message())
                 ));
                 return Ok(result);

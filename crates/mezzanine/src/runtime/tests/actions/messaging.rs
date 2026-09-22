@@ -3036,9 +3036,9 @@ fn runtime_send_message_echoes_at_sender_only_after_acceptance() {
         execution.action_results[0]
             .error
             .as_ref()
-            .expect("transport failure")
+            .expect("unavailable recipient failure")
             .code,
-        "transport_error"
+        "message_recipient_unavailable"
     );
     let undeliverable_lines = peer_echo_pane_lines(&undeliverable, "%1");
     assert!(
@@ -5044,6 +5044,79 @@ fn runtime_invalid_message_recipient_queues_correction_without_delivery() {
     let messages = service.message_service().receive_for(&target, u64::MAX);
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].payload, "handoff");
+}
+
+/// An unavailable recipient is model-correctable: the failed action remains
+/// durable context and one corrected recipient choice delivers exactly once.
+#[test]
+fn runtime_unavailable_message_recipient_queues_correction_without_delivery() {
+    let (mut service, execution, target) =
+        execute_runtime_send_message_to("agent:agent-nowhere", "text/plain", "handoff");
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    let result = &execution.action_results[0];
+    assert_eq!(result.status, ActionStatus::Failed);
+    assert_eq!(
+        result.error.as_ref().unwrap().code,
+        "message_recipient_unavailable"
+    );
+    assert!(
+        result
+            .structured_content_json
+            .as_deref()
+            .is_some_and(|content| content.contains(r#""code":"message_recipient_unavailable""#))
+    );
+    assert!(
+        service
+            .message_service()
+            .receive_for(&target, u64::MAX)
+            .is_empty()
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == "turn-1")
+    );
+
+    let mut response = execution.response.clone();
+    let action = &mut response.action_batch.as_mut().unwrap().actions[0];
+    action.id = "msg-corrected".to_string();
+    if let mez_agent::AgentActionPayload::SendMessage { recipient, .. } = &mut action.payload {
+        *recipient = format!("agent:{target}");
+    }
+    let corrected = service
+        .poll_agent_provider_tasks_with_provider(&RuntimeBatchProvider { response }, 1)
+        .unwrap()
+        .remove(0);
+    assert_eq!(corrected.action_results[0].status, ActionStatus::Succeeded);
+    let messages = service.message_service().receive_for(&target, u64::MAX);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].payload, "handoff");
+}
+
+/// Repeating an unavailable recipient consumes the correction budget instead
+/// of retrying delivery to the same absent agent indefinitely.
+#[test]
+fn runtime_unavailable_message_recipient_exhausts_correction_budget() {
+    let (mut service, execution, target) =
+        execute_runtime_send_message_to("agent:agent-nowhere", "text/plain", "handoff");
+    service.set_agent_action_failure_retry_limit(1);
+    let mut response = execution.response.clone();
+    response.action_batch.as_mut().unwrap().actions[0].id = "msg-repeated".to_string();
+
+    let repeated = service
+        .poll_agent_provider_tasks_with_provider(&RuntimeBatchProvider { response }, 1)
+        .unwrap()
+        .remove(0);
+
+    assert_eq!(repeated.terminal_state, AgentTurnState::Failed);
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert!(
+        service
+            .message_service()
+            .receive_for(&target, u64::MAX)
+            .is_empty()
+    );
 }
 
 /// Repeating an invalid recipient consumes the existing correction budget and
