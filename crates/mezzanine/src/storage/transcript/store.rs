@@ -1329,20 +1329,27 @@ impl AgentTranscriptStore {
         Ok((entries, sequence))
     }
 
-    /// Returns the durable latest presentation sequence under the conversation
-    /// lock without decoding the complete presentation log.
-    pub fn presentation_latest_sequence(&self, conversation_id: &str) -> Result<u64> {
-        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
-        Ok(self.read_presentation_index(conversation_id)?.unwrap_or(
-            self.inspect_recent_presentation(
-                conversation_id,
-                1,
-                DEFAULT_PRESENTATION_TAIL_READ_BYTES,
-            )?
-            .last()
-            .map(|entry| entry.sequence)
-            .unwrap_or_default(),
-        ))
+    /// Acquires the presentation mutation lock and returns a coherent snapshot.
+    ///
+    /// The returned lock remains held until its owner drops it. Direct resume
+    /// workers retain it through actor installation so another process cannot
+    /// append a durable presentation row between projection and commit.
+    pub(crate) fn lock_presentation_snapshot(
+        &self,
+        conversation_id: &str,
+    ) -> Result<(std::fs::File, Vec<AgentPresentationEntry>, u64)> {
+        let lock = self.acquire_conversation_lock(conversation_id)?;
+        let entries = self.inspect_presentation_unlocked(conversation_id)?;
+        let sequence = self
+            .read_presentation_index(conversation_id)?
+            .unwrap_or_else(|| {
+                entries
+                    .iter()
+                    .map(|entry| entry.sequence)
+                    .max()
+                    .unwrap_or_default()
+            });
+        Ok((lock, entries, sequence))
     }
 
     /// Reads all presentation entries for one conversation.

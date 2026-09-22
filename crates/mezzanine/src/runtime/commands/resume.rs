@@ -97,8 +97,13 @@ pub(crate) fn read_direct_resume(
         Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error),
     };
-    let (presentation_entries, presentation_latest_sequence) =
-        store.inspect_presentation_snapshot(&conversation_id)?;
+    let (presentation_lock, presentation_entries) = if projection_work.is_some() {
+        let (lock, entries, _sequence) = store.lock_presentation_snapshot(&conversation_id)?;
+        (Some(std::sync::Arc::new(lock)), entries)
+    } else {
+        let (entries, _sequence) = store.inspect_presentation_snapshot(&conversation_id)?;
+        (None, entries)
+    };
     let resume_directory_available = runtime_resume_directory_from_summary(&saved.summary)
         .or_else(|| runtime_resume_directory_from_entries(&entries))
         .is_some_and(|directory| PathBuf::from(directory).is_dir());
@@ -118,7 +123,7 @@ pub(crate) fn read_direct_resume(
         prepared_objective: store.effective_persisted_objective(&conversation_id)?,
         restored_model_identity: store.conversation_model_identity(&conversation_id)?,
         presentation_entries,
-        presentation_latest_sequence,
+        presentation_lock,
         conversation_id,
         saved,
         subagent_lineage,
@@ -548,7 +553,7 @@ impl RuntimeSessionService {
             subagent_lineage,
             entries,
             presentation_entries,
-            presentation_latest_sequence: _,
+            presentation_lock,
             prepared_objective,
             restored_model_identity,
             previous_checkpoint_records,
@@ -716,6 +721,12 @@ impl RuntimeSessionService {
                     projection.screen,
                 );
                 self.set_agent_prompt_history_for_pane(pane_id, projection.prompt_history);
+                // This is the presentation linearization point. The worker
+                // retained the durable conversation lock from its coherent
+                // read through projection, so a concurrent writer cannot
+                // append a row before this candidate becomes visible. Release
+                // it before the remaining actor-owned transaction work.
+                drop(presentation_lock);
             } else {
                 self.reload_agent_prompt_history_for_pane(pane_id)?;
             }

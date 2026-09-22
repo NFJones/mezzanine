@@ -292,10 +292,10 @@ fn runtime_agent_prompt_resume_displays_saved_transcript_context() {
     assert!(!pane_text.contains("[1 turn=turn-1]"), "{pane_text}");
 }
 
-/// Verifies a direct-resume projection cannot replace the pane after durable
-/// presentation state advanced since the command worker read it.
+/// Verifies the direct-resume worker lease keeps a concurrent durable
+/// presentation append behind actor installation of the prepared projection.
 #[test]
-fn runtime_agent_prompt_resume_rejects_stale_presentation_projection() {
+fn runtime_agent_prompt_resume_installs_before_concurrent_presentation_append() {
     let mut service = test_runtime_service();
     let transcript_store =
         AgentTranscriptStore::new(temp_root("runtime-agent-resume-stale-presentation"));
@@ -344,42 +344,63 @@ fn runtime_agent_prompt_resume_rejects_stale_presentation_projection() {
     else {
         panic!("direct resume worker should return prepared state");
     };
-    transcript_store
-        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
-            conversation_id: conversation_id.to_string(),
-            sequence: 1,
-            created_at_unix_seconds: 2,
-            pane_id: "%9".to_string(),
-            turn_id: None,
-            terminal_width: 80,
-            style_names: vec!["assistant".to_string()],
-            display_lines: vec!["late presentation".to_string()],
-            copy_lines: vec!["late presentation".to_string()],
-            ansi_text: None,
-            source_text: Some("late presentation".to_string()),
-            source_content_type: Some("text/plain; charset=utf-8".to_string()),
-        })
-        .unwrap();
-
-    let outcome = RuntimeSessionService::project_deferred_agent_command_outcome(
-        &work,
-        crate::runtime::RuntimeAgentCommandAsyncOutcome::DirectResume { store, read },
-    )
-    .unwrap();
+    let (writer_started, writer_started_rx) = std::sync::mpsc::channel();
+    let (writer_finished, writer_finished_rx) = std::sync::mpsc::channel();
+    let writer_store = transcript_store.clone();
+    let writer_conversation_id = conversation_id.to_string();
+    let writer = std::thread::spawn(move || {
+        writer_started.send(()).unwrap();
+        writer_store
+            .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+                conversation_id: writer_conversation_id,
+                sequence: 1,
+                created_at_unix_seconds: 2,
+                pane_id: "%9".to_string(),
+                turn_id: None,
+                terminal_width: 80,
+                style_names: vec!["assistant".to_string()],
+                display_lines: vec!["late presentation".to_string()],
+                copy_lines: vec!["late presentation".to_string()],
+                ansi_text: None,
+                source_text: Some("late presentation".to_string()),
+                source_content_type: Some("text/plain; charset=utf-8".to_string()),
+            })
+            .unwrap();
+        writer_finished.send(()).unwrap();
+    });
+    writer_started_rx.recv().unwrap();
     assert!(matches!(
-        outcome,
-        crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { ref message, .. }
-            if message.contains("presentation changed")
+        writer_finished_rx.recv_timeout(std::time::Duration::from_millis(20)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
     ));
+
     assert!(
-        service.complete_agent_command_work(&work, outcome).unwrap(),
-        "the current command claim should settle its worker failure"
+        service
+            .complete_agent_command_work(
+                &work,
+                crate::runtime::RuntimeAgentCommandAsyncOutcome::DirectResume { store, read },
+            )
+            .unwrap(),
+        "the current command claim should install its prepared resume"
+    );
+    writer_finished_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("presentation append should proceed after actor installation");
+    writer.join().unwrap();
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !pane_text.contains("late presentation"),
+        "the prepared projection must install before the later durable append: {pane_text}"
     );
     assert_eq!(
         service
             .agent_shell_store()
             .get("%1")
             .map(|session| session.session_id.as_str()),
-        Some(dispatch.conversation_id.as_str())
+        Some(conversation_id)
     );
 }

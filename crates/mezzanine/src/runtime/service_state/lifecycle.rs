@@ -448,8 +448,11 @@ pub(crate) struct RuntimeDirectResumeRead {
     /// settlement, so large decoded logs never tear down on the actor.
     pub(crate) presentation_entries:
         Option<Vec<crate::storage::transcript::AgentPresentationEntry>>,
-    /// Durable presentation sequence represented by the worker projection.
-    pub(crate) presentation_latest_sequence: u64,
+    /// Worker-held durable presentation lock retained through actor installation.
+    ///
+    /// Only deferred projections retain this lease; inline resume remains on
+    /// its historical synchronous path.
+    pub(crate) presentation_lock: Option<std::sync::Arc<std::fs::File>>,
     /// Durable effective objective restored during actor-owned commit.
     pub(crate) prepared_objective: Option<String>,
     /// Durable model identity restored during actor-owned commit.

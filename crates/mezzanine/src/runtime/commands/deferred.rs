@@ -992,17 +992,8 @@ impl RuntimeSessionService {
                 browser,
                 source,
             } => (body, false, Some((command, browser, source))),
-            RuntimeAgentCommandAsyncOutcome::DirectResume { store, read } => {
-                if store.presentation_latest_sequence(&read.conversation_id)?
-                    != read.presentation_latest_sequence
-                {
-                    return Ok(RuntimeAgentCommandAsyncOutcome::Failed {
-                        message: "direct resume presentation changed; retry the resume command"
-                            .to_string(),
-                        kind: crate::error::MezErrorKind::InvalidState,
-                    });
-                }
-                return Ok(RuntimeAgentCommandAsyncOutcome::DirectResume { store, read });
+            direct_resume @ RuntimeAgentCommandAsyncOutcome::DirectResume { .. } => {
+                return Ok(direct_resume);
             }
             projected @ RuntimeAgentCommandAsyncOutcome::Projected { .. } => return Ok(projected),
         };
