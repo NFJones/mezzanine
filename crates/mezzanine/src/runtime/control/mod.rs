@@ -81,8 +81,8 @@ pub(crate) use context::{
     runtime_peer_message_context_content, runtime_peer_message_logged_payload,
 };
 pub(crate) use context::{
-    RuntimeAgentHistoryEpochInputs, RuntimeAgentHistoryEpochWork,
-    execute_runtime_agent_history_epoch_work,
+    RuntimeAgentHistoryEpochInputs, RuntimeAgentHistoryEpochWork, RuntimeAgentPromptHistoryWork,
+    RuntimeAgentTranscriptContext, execute_runtime_agent_prompt_history_work,
 };
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
@@ -648,34 +648,40 @@ impl RuntimeSessionService {
     /// newer raw transcript. Task-local messages, prelude, prompt, steering, and
     /// same-turn execution events are appended by their owning producers after
     /// this epoch.
-    fn runtime_agent_history_epoch_context(
+    pub(crate) fn runtime_agent_history_epoch_context(
         &self,
         pane_id: &str,
-    ) -> Result<context::RuntimeAgentTranscriptContext> {
+    ) -> Result<RuntimeAgentTranscriptContext> {
+        execute_runtime_agent_prompt_history_work(
+            self.prepare_runtime_agent_prompt_history_work(pane_id),
+        )
+    }
+
+    /// Captures immutable prompt history inputs before transcript I/O begins.
+    pub(crate) fn prepare_runtime_agent_prompt_history_work(
+        &self,
+        pane_id: &str,
+    ) -> RuntimeAgentPromptHistoryWork {
         let context_memory_records = self.model_context_memory_records_for_pane(pane_id);
-        let mut blocks = Vec::new();
-        let mut execution_events = Vec::new();
-        blocks.extend(memory_context_blocks(
+        let memory_blocks = memory_context_blocks(
             &context_memory_records
                 .iter()
                 .map(mez_agent::MemoryContextRecord::from)
                 .collect::<Vec<_>>(),
             1,
-        ));
+        );
 
         let Some(session) = self.agent_shell_store().get(pane_id) else {
-            return Ok(context::RuntimeAgentTranscriptContext {
-                blocks,
-                execution_events,
-                provider_history_repair_identity: None,
-            });
+            return RuntimeAgentPromptHistoryWork {
+                memory_blocks,
+                transcript_work: None,
+            };
         };
         let Some(store) = self.persistence.transcript_store() else {
-            return Ok(context::RuntimeAgentTranscriptContext {
-                blocks,
-                execution_events,
-                provider_history_repair_identity: None,
-            });
+            return RuntimeAgentPromptHistoryWork {
+                memory_blocks,
+                transcript_work: None,
+            };
         };
         let transcript_conversation_id = session
             .ephemeral_transcript_source_conversation_id
@@ -687,33 +693,27 @@ impl RuntimeSessionService {
             session.transcript_entries
         };
         if transcript_entries == 0 {
-            return Ok(context::RuntimeAgentTranscriptContext {
-                blocks,
-                execution_events,
-                provider_history_repair_identity: None,
-            });
+            return RuntimeAgentPromptHistoryWork {
+                memory_blocks,
+                transcript_work: None,
+            };
         }
-        let transcript = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
-            store: store.clone(),
-            inputs: RuntimeAgentHistoryEpochInputs {
-                pane_id: pane_id.to_string(),
-                conversation_id: transcript_conversation_id.to_string(),
-                ephemeral_source_entries: session.ephemeral.then_some(transcript_entries),
-                active_entries: (!session.ephemeral)
-                    .then(|| usize::try_from(transcript_entries).unwrap_or(usize::MAX)),
-                pending_entries: self
-                    .persistence
-                    .pending_transcript_entries(transcript_conversation_id),
-            },
-        })?;
-        let provider_history_repair_identity = transcript.provider_history_repair_identity;
-        blocks.extend(transcript.blocks);
-        execution_events = transcript.execution_events;
-        Ok(context::RuntimeAgentTranscriptContext {
-            blocks,
-            execution_events,
-            provider_history_repair_identity,
-        })
+        RuntimeAgentPromptHistoryWork {
+            memory_blocks,
+            transcript_work: Some(RuntimeAgentHistoryEpochWork {
+                store: store.clone(),
+                inputs: RuntimeAgentHistoryEpochInputs {
+                    pane_id: pane_id.to_string(),
+                    conversation_id: transcript_conversation_id.to_string(),
+                    ephemeral_source_entries: session.ephemeral.then_some(transcript_entries),
+                    active_entries: (!session.ephemeral)
+                        .then(|| usize::try_from(transcript_entries).unwrap_or(usize::MAX)),
+                    pending_entries: self
+                        .persistence
+                        .pending_transcript_entries(transcript_conversation_id),
+                },
+            }),
+        }
     }
 
     /// Refreshes transcript and compact-memory context for a running turn.

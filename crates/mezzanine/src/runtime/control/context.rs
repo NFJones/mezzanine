@@ -77,6 +77,40 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
     ))
 }
 
+/// Immutable compact-memory and durable-transcript inputs for one prompt epoch.
+///
+/// The actor captures this complete history projection boundary before a worker
+/// decodes durable transcript storage. Prompt-specific context assembly remains
+/// actor-owned after the worker returns.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeAgentPromptHistoryWork {
+    /// Compact-memory blocks already captured from actor-owned memory state.
+    pub(crate) memory_blocks: Vec<ContextBlock>,
+    /// Durable transcript work, omitted when the pane has no retained rows.
+    pub(crate) transcript_work: Option<RuntimeAgentHistoryEpochWork>,
+}
+
+/// Prepares one complete prompt-history epoch without accessing live runtime state.
+pub(crate) fn execute_runtime_agent_prompt_history_work(
+    work: RuntimeAgentPromptHistoryWork,
+) -> Result<RuntimeAgentTranscriptContext> {
+    let mut blocks = work.memory_blocks;
+    let Some(transcript_work) = work.transcript_work else {
+        return Ok(RuntimeAgentTranscriptContext {
+            blocks,
+            execution_events: Vec::new(),
+            provider_history_repair_identity: None,
+        });
+    };
+    let transcript = execute_runtime_agent_history_epoch_work(transcript_work)?;
+    blocks.extend(transcript.blocks);
+    Ok(RuntimeAgentTranscriptContext {
+        blocks,
+        execution_events: transcript.execution_events,
+        provider_history_repair_identity: transcript.provider_history_repair_identity,
+    })
+}
+
 /// Merges durable and actor-captured pending transcript entries, trims the
 /// result by the captured session policy, then builds the exact canonical
 /// model-context projection.

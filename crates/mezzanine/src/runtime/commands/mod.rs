@@ -1335,6 +1335,31 @@ impl RuntimeSessionService {
                 block.hook_id, block.message
             )));
         }
+        let history = self.runtime_agent_history_epoch_context(pane_id)?;
+        self.start_agent_prompt_turn_with_history(
+            pane_id,
+            prompt,
+            cooperation_mode,
+            initial_capability,
+            initial_model_selection,
+            history,
+        )
+    }
+
+    /// Commits one prompt turn after its immutable transcript epoch is ready.
+    ///
+    /// Configuration, trust, and hooks remain at the admission boundary above.
+    /// The history epoch may later be prepared outside the actor, while receipts,
+    /// scheduling, and provider dispatch remain serialized in this commit path.
+    fn start_agent_prompt_turn_with_history(
+        &mut self,
+        pane_id: &str,
+        prompt: &str,
+        cooperation_mode: Option<String>,
+        initial_capability: Option<mez_agent::AgentCapability>,
+        initial_model_selection: Option<mez_agent::AutoSizingSelection>,
+        history: crate::runtime::control::RuntimeAgentTranscriptContext,
+    ) -> Result<RuntimeAgentPromptTurnStart> {
         let crate::runtime::control::RuntimeAgentPromptContext {
             context,
             delivered_message_sequence,
@@ -1342,9 +1367,7 @@ impl RuntimeSessionService {
             imported_history_events,
             current_environment_snapshot,
             new_environment_snapshot,
-        } = self.agent_context_for_pane_prompt_with_message_delivery(
-            pane_id, prompt, 100, true, false,
-        )?;
+        } = self.agent_context_for_pane_prompt_with_history(pane_id, prompt, true, history)?;
         let agent_id = format!("agent-{pane_id}");
         if self.subagent_lineage(&agent_id).is_none() {
             self.presentation.acknowledge_completion_attention(pane_id);
