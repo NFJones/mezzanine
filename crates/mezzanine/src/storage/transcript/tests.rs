@@ -3187,6 +3187,89 @@ fn transcript_store_catalog_mutation_waits_for_brief_writer_contention() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies ordinary catalog mutations serialize behind the cross-process
+/// writer lock before opening SQLite, rather than racing a second writer.
+#[test]
+fn transcript_store_catalog_mutation_waits_for_advisory_writer_lock() {
+    let root = temp_root("catalog-mutation-waits-for-advisory-writer");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+
+    let lock_path = root.join(".catalog-migration.lock");
+    let writer_ready = Arc::new(Barrier::new(2));
+    let writer_ready_for_thread = writer_ready.clone();
+    let writer = thread::spawn(move || {
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+        writer_ready_for_thread.wait();
+        thread::sleep(std::time::Duration::from_millis(25));
+    });
+    writer_ready.wait();
+
+    store
+        .append(&entry("mutation-waits-for-lock", 1, TranscriptRole::User))
+        .expect("catalog mutation should wait for the active advisory writer");
+    writer.join().unwrap();
+    assert!(
+        store
+            .catalog_saved_session("mutation-waits-for-lock")
+            .unwrap()
+            .is_some()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies ordinary catalog mutations exclude another process holding shared
+/// advisory ownership, rather than treating the lock as reader-compatible.
+#[test]
+fn transcript_store_catalog_mutation_waits_for_advisory_reader_lock() {
+    let root = temp_root("catalog-mutation-waits-for-advisory-reader");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+
+    let lock_path = root.join(".catalog-migration.lock");
+    let reader_ready = Arc::new(Barrier::new(2));
+    let reader_ready_for_thread = reader_ready.clone();
+    let reader = thread::spawn(move || {
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockShared).unwrap();
+        reader_ready_for_thread.wait();
+        thread::sleep(std::time::Duration::from_millis(50));
+    });
+    reader_ready.wait();
+
+    let started_at = std::time::Instant::now();
+    store
+        .append(&entry(
+            "mutation-waits-for-reader-lock",
+            1,
+            TranscriptRole::User,
+        ))
+        .expect("catalog mutation should wait for shared advisory ownership");
+    assert!(
+        started_at.elapsed() >= std::time::Duration::from_millis(25),
+        "catalog mutation unexpectedly bypassed shared advisory ownership"
+    );
+    reader.join().unwrap();
+    assert!(
+        store
+            .catalog_saved_session("mutation-waits-for-reader-lock")
+            .unwrap()
+            .is_some()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies archiving waits for a brief SQLite writer instead of using the
 /// interactive picker-read budget for its catalog record lookup.
 #[test]

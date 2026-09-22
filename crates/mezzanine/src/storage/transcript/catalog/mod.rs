@@ -189,7 +189,7 @@ fn quarantine_unrestorable_legacy_subagents(
 pub(super) fn quarantine_unrestorable_legacy_subagents_at_retention(
     store: &AgentTranscriptStore,
 ) -> Result<usize> {
-    let _lock = acquire_shared_lock(store)?;
+    let _lock = acquire_lock(store)?;
     let connection = schema::open(&catalog_path(store))?;
     quarantine_unrestorable_legacy_subagents(store, &connection)
 }
@@ -356,7 +356,7 @@ pub(super) fn upsert(
     candidate: &CatalogCandidate,
     now_unix_seconds: u64,
 ) -> Result<()> {
-    let _lock = acquire_shared_lock(store)?;
+    let _lock = acquire_lock(store)?;
     let connection = schema::open(&catalog_path(store))?;
     mutation::upsert(&connection, candidate, now_unix_seconds)?;
     set_catalog_permissions(store)
@@ -370,7 +370,7 @@ pub(super) fn mark_archived(
     archive_compressed_bytes: u64,
     archive_sha256: &str,
 ) -> Result<()> {
-    let _lock = acquire_shared_lock(store)?;
+    let _lock = acquire_lock(store)?;
     let connection = schema::open(&catalog_path(store))?;
     mutation::mark_archived(
         &connection,
@@ -390,7 +390,7 @@ pub(super) fn set_name(
     named_at_unix_seconds: u64,
     name_preferred: bool,
 ) -> Result<()> {
-    let _lock = acquire_shared_lock(store)?;
+    let _lock = acquire_lock(store)?;
     let connection = schema::open(&catalog_path(store))?;
     mutation::set_name(
         &connection,
@@ -404,7 +404,7 @@ pub(super) fn set_name(
 
 /// Clears one catalog name after the compatibility sidecar is updated.
 pub(super) fn clear_name(store: &AgentTranscriptStore, conversation_id: &str) -> Result<()> {
-    let _lock = acquire_shared_lock(store)?;
+    let _lock = acquire_lock(store)?;
     let connection = schema::open(&catalog_path(store))?;
     mutation::clear_name(&connection, conversation_id)?;
     set_catalog_permissions(store)
@@ -412,7 +412,7 @@ pub(super) fn clear_name(store: &AgentTranscriptStore, conversation_id: &str) ->
 
 /// Deletes one discovery row after its filesystem payload is removed.
 pub(super) fn delete(store: &AgentTranscriptStore, conversation_id: &str) -> Result<()> {
-    let _lock = acquire_shared_lock(store)?;
+    let _lock = acquire_lock(store)?;
     let connection = schema::open(&catalog_path(store))?;
     mutation::delete(&connection, conversation_id)?;
     set_catalog_permissions(store)
