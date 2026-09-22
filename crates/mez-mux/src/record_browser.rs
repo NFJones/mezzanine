@@ -6,6 +6,7 @@
 //! while the runtime pager can render the returned Markdown without knowing
 //! whether the source is an issue, a memory, or another durable record type.
 use crate::{MuxError, Result};
+use std::sync::Arc;
 
 /// Rendered pager content produced from browser state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,11 +178,18 @@ pub enum RecordBrowserOutcome {
 }
 
 /// Stateful list/detail browser shared by issue and memory pager commands.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RecordBrowser {
     title: String,
     scope_indicator: Option<String>,
-    records: Vec<RecordBrowserRecord>,
+    /// Immutable list payload shared by cloned browser navigation state.
+    ///
+    /// Selection, prompts, and scroll position change frequently while the
+    /// record bodies normally do not. Sharing the collection keeps client
+    /// presentation snapshots proportional to interactive state rather than
+    /// every retained record body. Detail loading detaches only when it
+    /// replaces the active record's Markdown.
+    records: Arc<Vec<RecordBrowserRecord>>,
     kind_filter_choices: Vec<RecordBrowserFilterChoice>,
     selected_kind_filter_value: String,
     scope_toggle_enabled: bool,
@@ -202,6 +210,35 @@ pub struct RecordBrowser {
     prompt: Option<RecordBrowserPrompt>,
     error: Option<String>,
 }
+
+impl PartialEq for RecordBrowser {
+    fn eq(&self, other: &Self) -> bool {
+        (Arc::ptr_eq(&self.records, &other.records) || self.records == other.records)
+            && self.title == other.title
+            && self.scope_indicator == other.scope_indicator
+            && self.kind_filter_choices == other.kind_filter_choices
+            && self.selected_kind_filter_value == other.selected_kind_filter_value
+            && self.scope_toggle_enabled == other.scope_toggle_enabled
+            && self.project_filter_enabled == other.project_filter_enabled
+            && self.text_filter_enabled == other.text_filter_enabled
+            && self.table_id_column == other.table_id_column
+            && self.table_columns == other.table_columns
+            && self.table_column_keys == other.table_column_keys
+            && self.list_help == other.list_help
+            && self.detail_help == other.detail_help
+            && self.empty_message == other.empty_message
+            && self.deletion_enabled == other.deletion_enabled
+            && self.primary_edit_enabled == other.primary_edit_enabled
+            && self.secondary_edit_enabled == other.secondary_edit_enabled
+            && self.active_index == other.active_index
+            && self.scroll_offset == other.scroll_offset
+            && self.detail_index == other.detail_index
+            && self.prompt == other.prompt
+            && self.error == other.error
+    }
+}
+
+impl Eq for RecordBrowser {}
 
 impl RecordBrowser {
     /// Builds a browser from already-filtered records.
@@ -229,7 +266,7 @@ impl RecordBrowser {
         Ok(Self {
             title,
             scope_indicator: None,
-            records,
+            records: Arc::new(records),
             kind_filter_choices,
             selected_kind_filter_value: String::new(),
             scope_toggle_enabled: false,
@@ -389,6 +426,12 @@ impl RecordBrowser {
         &self.records
     }
 
+    /// Reports whether two browser states retain the same immutable record collection.
+    #[cfg(test)]
+    pub(crate) fn shares_record_storage_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.records, &other.records)
+    }
+
     /// Selects one bounded list record by index.
     pub fn set_active_index(&mut self, active_index: usize) {
         self.active_index = active_index.min(self.records.len().saturating_sub(1));
@@ -412,7 +455,7 @@ impl RecordBrowser {
     /// Backends use this to defer expensive detail loading until the user
     /// explicitly opens one row instead of preloading every list record.
     pub fn set_active_record_markdown(&mut self, markdown: String) -> bool {
-        let Some(record) = self.records.get_mut(self.active_index) else {
+        let Some(record) = Arc::make_mut(&mut self.records).get_mut(self.active_index) else {
             return false;
         };
         record.markdown = markdown;
@@ -999,6 +1042,28 @@ mod tests {
             metadata: vec![("project".to_string(), "/repo".to_string())],
             markdown: format!("Body for {title}"),
         }
+    }
+
+    /// Verifies cloned navigation state shares immutable record payloads until
+    /// deferred detail loading replaces one record's Markdown.
+    #[test]
+    fn record_browser_clone_shares_records_until_detail_loading_detaches() {
+        let browser = RecordBrowser::new(
+            "Issues",
+            vec![browser_record("issue-1", "First")],
+            Vec::new(),
+        )
+        .unwrap();
+        let mut navigation = browser.clone();
+
+        assert!(browser.shares_record_storage_with(&navigation));
+        navigation.set_active_index(0);
+        assert!(browser.shares_record_storage_with(&navigation));
+
+        assert!(navigation.set_active_record_markdown("Loaded detail".to_string()));
+        assert!(!browser.shares_record_storage_with(&navigation));
+        assert_eq!(browser.records()[0].markdown, "Body for First");
+        assert_eq!(navigation.records()[0].markdown, "Loaded detail");
     }
 
     /// Verifies the reusable browser can render command-resolved detail state
