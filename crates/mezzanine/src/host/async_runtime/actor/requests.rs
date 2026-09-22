@@ -1362,47 +1362,6 @@ impl AsyncRuntimeSessionActor {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_shell_lifecycle_timer_side_effects()?;
                         self.queue_pending_provider_dispatch_side_effects()?;
-                        for dispatch in self.service.take_pending_agent_prompt_history() {
-                            if !self
-                                .service
-                                .claim_agent_prompt_history_preparation(&dispatch)
-                            {
-                                continue;
-                            }
-                            let sender = self.sender.clone();
-                            let join_handle = tokio::spawn(async move {
-                                #[cfg(test)]
-                                if let (Some(started), Some(release)) = (
-                                    dispatch.prompt_history_preparation_started.as_ref(),
-                                    dispatch.prompt_history_preparation_release.as_ref(),
-                                ) {
-                                    started.notify_one();
-                                    release.notified().await;
-                                }
-                                let history_work = dispatch.history_work.clone();
-                                let history = tokio::task::spawn_blocking(move || {
-                                    crate::runtime::execute_runtime_agent_prompt_history_work(
-                                        history_work,
-                                    )
-                                })
-                                .await
-                                .map_err(|error| {
-                                    crate::error::MezError::invalid_state(format!(
-                                        "prompt history worker failed: {error}"
-                                    ))
-                                })
-                                .and_then(|history| history);
-                                let _ = sender
-                                    .send(AsyncRuntimeRequestEnvelope::new(
-                                        AsyncRuntimeRequest::CompleteAgentPromptHistoryPreparation {
-                                            dispatch,
-                                            history,
-                                        },
-                                    ))
-                                    .await;
-                            });
-                            std::mem::drop(join_handle);
-                        }
                         self.queue_pending_deferred_agent_command_side_effects()?;
                         Ok(output)
                     });

@@ -51,6 +51,7 @@ impl AgentShellCommandOrigin {
 struct AgentShellCommandIngress<'a> {
     target_pane_id: Option<&'a str>,
     origin: AgentShellCommandOrigin,
+    defer_prompt_history_to_worker: bool,
 }
 
 /// Result of applying the live side effects for an agent-shell exit request.
@@ -298,6 +299,7 @@ impl RuntimeSessionService {
             AgentShellCommandIngress {
                 target_pane_id: None,
                 origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
+                defer_prompt_history_to_worker: false,
             },
             input,
             input,
@@ -318,6 +320,7 @@ impl RuntimeSessionService {
             AgentShellCommandIngress {
                 target_pane_id: Some(pane_id),
                 origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
+                defer_prompt_history_to_worker: true,
             },
             input,
             input,
@@ -340,6 +343,7 @@ impl RuntimeSessionService {
             AgentShellCommandIngress {
                 target_pane_id: Some(pane_id),
                 origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
+                defer_prompt_history_to_worker: true,
             },
             input,
             display_input,
@@ -384,6 +388,7 @@ impl RuntimeSessionService {
             AgentShellCommandIngress {
                 target_pane_id: None,
                 origin: AgentShellCommandOrigin::AuthenticatedControlRequest,
+                defer_prompt_history_to_worker: false,
             },
             input,
             input,
@@ -406,6 +411,7 @@ impl RuntimeSessionService {
             AgentShellCommandIngress {
                 target_pane_id: None,
                 origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
+                defer_prompt_history_to_worker: false,
             },
             input,
             display_input,
@@ -431,6 +437,7 @@ impl RuntimeSessionService {
         let AgentShellCommandIngress {
             target_pane_id,
             origin,
+            defer_prompt_history_to_worker,
         } = ingress;
         self.require_live()?;
         if !self.session.is_attached_primary(primary_client_id) {
@@ -476,9 +483,8 @@ impl RuntimeSessionService {
             self.append_agent_user_prompt_to_terminal_buffer(&pane_id, display_input)?;
         }
         if is_prompt
-            && queue_external_effects_for_adapter
+            && defer_prompt_history_to_worker
             && origin.is_authenticated_primary_input()
-            && target_pane_id.is_some()
             && parse_macro_prompt_invocation(input).is_none()
             && !self.agent_shell_pane_has_active_turn(&pane_id)
         {
@@ -1188,6 +1194,7 @@ impl RuntimeSessionService {
             AgentShellCommandIngress {
                 target_pane_id: Some(pane_id),
                 origin: AgentShellCommandOrigin::TrustedPaneStatusAction,
+                defer_prompt_history_to_worker: false,
             },
             input,
             input,
@@ -1209,6 +1216,7 @@ impl RuntimeSessionService {
                 AgentShellCommandIngress {
                     target_pane_id: None,
                     origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
+                    defer_prompt_history_to_worker: false,
                 },
                 input,
                 input,
