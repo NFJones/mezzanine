@@ -193,6 +193,7 @@ pub struct RecordBrowser {
     kind_filter_choices: Vec<RecordBrowserFilterChoice>,
     selected_kind_filter_value: String,
     scope_toggle_enabled: bool,
+    closed_toggle_enabled: bool,
     project_filter_enabled: bool,
     text_filter_enabled: bool,
     table_id_column: String,
@@ -219,6 +220,7 @@ impl PartialEq for RecordBrowser {
             && self.kind_filter_choices == other.kind_filter_choices
             && self.selected_kind_filter_value == other.selected_kind_filter_value
             && self.scope_toggle_enabled == other.scope_toggle_enabled
+            && self.closed_toggle_enabled == other.closed_toggle_enabled
             && self.project_filter_enabled == other.project_filter_enabled
             && self.text_filter_enabled == other.text_filter_enabled
             && self.table_id_column == other.table_id_column
@@ -270,6 +272,7 @@ impl RecordBrowser {
             kind_filter_choices,
             selected_kind_filter_value: String::new(),
             scope_toggle_enabled: false,
+            closed_toggle_enabled: false,
             project_filter_enabled: false,
             text_filter_enabled: false,
             table_id_column: "ID".to_string(),
@@ -358,6 +361,12 @@ impl RecordBrowser {
         self.scope_toggle_enabled = true;
     }
 
+    /// Enables the issue-browser closed-record toggle when its source has no
+    /// explicit state filter.
+    pub fn enable_closed_toggle(&mut self) {
+        self.closed_toggle_enabled = true;
+    }
+
     /// Enables project-path filtering for a browser with a project-aware backend.
     pub fn enable_project_filter(&mut self) {
         self.project_filter_enabled = true;
@@ -371,6 +380,11 @@ impl RecordBrowser {
     /// Reports whether the browser supports toggling between default and all scopes.
     pub fn scope_toggle_enabled(&self) -> bool {
         self.scope_toggle_enabled
+    }
+
+    /// Reports whether the browser supports toggling between active and closed records.
+    pub fn closed_toggle_enabled(&self) -> bool {
+        self.closed_toggle_enabled
     }
 
     /// Reports whether one modal filter has a meaningful backend effect.

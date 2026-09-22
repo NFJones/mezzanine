@@ -967,6 +967,50 @@ fn runtime_agent_shell_show_issues_renders_priority_column() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies explicitly state-filtered issue browsers omit the closed-record
+/// toggle because their source cannot change between active and resolved rows.
+///
+/// The implicit issue browser retains the `r` toggle, but `--state open` has a
+/// fixed backend state and must not advertise an input that the runtime ignores.
+#[test]
+fn runtime_issue_browser_explicit_state_omits_closed_toggle_hint() {
+    let (mut service, primary, _pane_id, root, _) =
+        focused_issue_fix_browser_fixture("runtime-show-issues-explicit-state-footer");
+    apply_record_browser_input(&mut service, &primary, b"\x1b");
+
+    service
+        .execute_agent_shell_command(&primary, "/show-issues --state open")
+        .unwrap();
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the explicit-state issue browser applies");
+
+    let footer = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(120, 12).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap()
+        .lines
+        .last()
+        .cloned()
+        .unwrap_or_default();
+    assert!(!footer.contains("r: closed"), "{footer}");
+    let page = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .unwrap()
+        .browser
+        .render_page();
+    assert!(!page.raw_markdown.contains("`r` closed/active"), "{page:?}");
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies `f` from the issue list dispatches `$fix-issues` for only the
 /// selected issue through the current pane agent.
 #[test]

@@ -588,7 +588,7 @@ impl RuntimeSessionService {
             issue_kind_filter_choices(),
         )?;
         browser.enable_deletion();
-        configure_issue_record_browser(&mut browser);
+        configure_issue_record_browser(&mut browser, state.is_none());
         browser.set_kind_filter_value(kind.map(|kind| kind.as_str().to_string()))?;
         set_record_browser_scope_indicator(&mut browser, source);
         Ok(browser)
@@ -1062,7 +1062,7 @@ pub(crate) fn read_issue_browser(
         issue_kind_filter_choices(),
     )?;
     browser.enable_deletion();
-    configure_issue_record_browser(&mut browser);
+    configure_issue_record_browser(&mut browser, args.state.is_none());
     browser.set_kind_filter_value(args.kind.map(|kind| kind.as_str().to_string()))?;
     if let Some(source) = source.as_ref() {
         set_record_browser_scope_indicator(&mut browser, source);
@@ -1268,8 +1268,11 @@ pub(crate) fn show_memories_args_are_browser_form(input: &str) -> bool {
 }
 
 /// Applies the table presentation shared by issue browser construction paths.
-fn configure_issue_record_browser(browser: &mut RecordBrowser) {
+fn configure_issue_record_browser(browser: &mut RecordBrowser, closed_toggle_enabled: bool) {
     browser.enable_scope_toggle();
+    if closed_toggle_enabled {
+        browser.enable_closed_toggle();
+    }
     browser.enable_project_filter();
     browser.enable_text_filter();
     browser.enable_primary_edit();
@@ -1283,9 +1286,14 @@ fn configure_issue_record_browser(browser: &mut RecordBrowser) {
         ("Priority".to_string(), "priority".to_string()),
         ("Updated".to_string(), "updated_at_unix_seconds".to_string()),
     ]);
+    let closed_toggle_help = if closed_toggle_enabled {
+        " · `r` closed/active"
+    } else {
+        ""
+    };
     browser.set_help(
-        Some("**Keys:** `↑`/`↓` focus issue ID · `Enter` open · `y` copy · `e` body · `E` notes · `f` fix issue · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
-        Some("**Keys:** `Esc` back · `y` copy · `e` body · `E` notes · `f` fix issue · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some(format!("**Keys:** `↑`/`↓` focus issue ID · `Enter` open · `y` copy · `e` body · `E` notes · `f` fix issue · `a` all/default scope{closed_toggle_help} · `k` kind · `p` project · `x` text · `d` delete · `s` save")),
+        Some(format!("**Keys:** `Esc` back · `y` copy · `e` body · `E` notes · `f` fix issue · `a` all/default scope{closed_toggle_help} · `k` kind · `p` project · `x` text · `d` delete · `s` save")),
     );
     browser.set_empty_message(Some("No issues found.".to_string()));
 }

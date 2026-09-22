@@ -236,7 +236,7 @@ pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized, impl Sized>, size: Si
         if browser.scope_toggle_enabled() {
             hints.push("a: all");
         }
-        if record_browser.command == "show-issues" {
+        if browser.closed_toggle_enabled() {
             hints.push("r: closed");
         }
         if browser.supports_filter(crate::record_browser::RecordBrowserFilterField::Kind) {
