@@ -455,6 +455,7 @@ pub(crate) use service_state::{
     RuntimeAgentCommandAsyncOutcome, RuntimeAgentCommandAsyncWork, RuntimeAgentCommandDispatch,
     RuntimeAgentCommandLifecyclePhase, RuntimeAgentCommandPrepared,
     RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,
+    RuntimeDirectResumeProjection, RuntimeDirectResumeProjectionWork, RuntimeDirectResumeRead,
     RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess, RuntimePersistentSubagent,
     RuntimeRecordBrowserRefreshDispatch, RuntimeRecordBrowserRefreshIntent,
     RuntimeRecordBrowserRefreshOutcome, RuntimeRecordBrowserRefreshWork,

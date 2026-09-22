@@ -321,6 +321,18 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Session-title policy captured from live config.
         title_policy: crate::session_title::SessionTitlePolicy,
     },
+    /// Reads one selected saved conversation and its durable presentation log.
+    ///
+    /// The worker returns only immutable durable state. The actor performs the
+    /// conversation bind, authority restoration, and rollback transaction.
+    DirectResume {
+        /// Transcript store containing the selected durable conversation.
+        store: crate::storage::transcript::AgentTranscriptStore,
+        /// Exact direct-resume selector, including the supported latest aliases.
+        selector: String,
+        /// Immutable renderer inputs captured before the blocking worker starts.
+        projection: Box<RuntimeDirectResumeProjectionWork>,
+    },
     /// Renders the pane's tracked modified-file summary.
     ///
     /// `/list-modified-files` formats the pane's retained modification map; the
@@ -364,6 +376,88 @@ pub(crate) enum RuntimeAgentCommandPrepared {
     },
 }
 
+/// Immutable actor snapshot used to project a direct resume outside the actor.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeDirectResumeProjectionWork {
+    /// Pane that owns the resumed conversation.
+    pub(crate) pane_id: String,
+    /// Exact terminal geometry represented by the candidate screen.
+    pub(crate) size: crate::runtime::Size,
+    /// Clone of the mux layout used by the canonical presentation renderer.
+    pub(crate) session: mez_mux::session::Session,
+    /// Runtime socket identity needed to construct an isolated renderer.
+    pub(crate) socket_path: std::path::PathBuf,
+    /// Runtime creation timestamp retained by the isolated renderer.
+    pub(crate) created_at_unix_seconds: u64,
+    /// Immutable presentation settings captured with the command claim.
+    pub(crate) presentation_settings: crate::runtime::RuntimePresentationSettings,
+    /// Maximum history retained by the projected terminal screen.
+    pub(crate) history_limit: usize,
+    /// History rotation batch retained by the projected terminal screen.
+    pub(crate) history_rotate_lines: usize,
+    /// Current pane session used as the target session template.
+    pub(crate) agent_session: mez_agent::AgentShellSession,
+    /// Owning runtime session whose checkpoint records must be read off actor.
+    pub(crate) mezzanine_session_id: String,
+    /// Pane directory captured before worker preparation resolves fallback scope.
+    pub(crate) working_directory: Option<std::path::PathBuf>,
+}
+
+/// Fully rendered direct-resume terminal candidate built on the command worker.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeDirectResumeProjection {
+    /// Candidate screen ready for one actor-owned state replacement.
+    pub(crate) screen: mez_terminal::TerminalScreen,
+    /// Prompt history loaded from the resumed conversation.
+    pub(crate) prompt_history: Vec<mez_mux::readline::ReadlineHistoryEntry>,
+    /// Geometry captured before the worker rendered the candidate.
+    pub(crate) size: crate::runtime::Size,
+    /// Presentation settings that determined the candidate screen.
+    pub(crate) presentation_settings: crate::runtime::RuntimePresentationSettings,
+    /// History limit that determined the candidate screen.
+    pub(crate) history_limit: usize,
+    /// History rotation batch that determined the candidate screen.
+    pub(crate) history_rotate_lines: usize,
+}
+
+/// Immutable durable inputs prepared before a direct saved-session resume.
+///
+/// Store reads and presentation-log decompression may be expensive for large
+/// sessions, while binding and rollback remain actor-owned. The command worker
+/// creates this bundle without accessing live runtime state.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeDirectResumeRead {
+    /// Conversation selected by the direct resume argument.
+    pub(crate) conversation_id: String,
+    /// Saved-session catalog and summary state used by the actor commit.
+    pub(crate) saved: crate::storage::transcript::SavedAgentSession,
+    /// Durable child lineage required before restoring a subagent session.
+    pub(crate) subagent_lineage: Option<mez_agent::SubagentSessionLineage>,
+    /// Bounded transcript fallback used only when no presentation log exists.
+    pub(crate) entries: Vec<mez_agent::transcript::TranscriptEntry>,
+    /// Complete durable presentation log decoded off actor ownership.
+    pub(crate) presentation_entries: Vec<crate::storage::transcript::AgentPresentationEntry>,
+    /// Durable effective objective restored during actor-owned commit.
+    pub(crate) prepared_objective: Option<String>,
+    /// Durable model identity restored during actor-owned commit.
+    pub(crate) restored_model_identity: Option<(
+        String,
+        Option<crate::storage::transcript::AgentModelProfileSelection>,
+    )>,
+    /// Complete current-session metadata retained for rollback without an actor read.
+    pub(crate) previous_checkpoint_records: Vec<mez_agent::transcript::AgentSessionMetadata>,
+    /// Selected persisted pane metadata, including its durable action catalog.
+    pub(crate) resume_metadata: Option<mez_agent::transcript::AgentSessionMetadata>,
+    /// Durable action catalog loaded independently of checkpoint metadata.
+    pub(crate) allowed_actions: Option<mez_agent::AllowedActionSet>,
+    /// Trusted persisted or fallback project membership resolved on the worker.
+    pub(crate) prepared_project_scope: Option<mez_agent::messaging::ProjectMembership>,
+    /// Whether the saved resume directory existed when the worker prepared it.
+    pub(crate) resume_directory_available: bool,
+    /// Worker-built terminal and prompt-history projection when deferred.
+    pub(crate) projection: Option<RuntimeDirectResumeProjection>,
+}
+
 /// Result a worker prepares for the actor to apply.
 ///
 /// Presentation stays byte-identical to the inline path: the actor turns the
@@ -401,6 +495,13 @@ pub(crate) enum RuntimeAgentCommandAsyncOutcome {
         browser: Box<mez_mux::record_browser::RecordBrowser>,
         /// Overlay source retained for refreshes and scope indicators.
         source: Option<super::RuntimeRecordBrowserOverlaySource>,
+    },
+    /// Durable direct-resume state prepared outside actor ownership.
+    DirectResume {
+        /// Store retained for actor-owned metadata rollback after a failed commit.
+        store: crate::storage::transcript::AgentTranscriptStore,
+        /// Immutable durable session, transcript, and presentation data.
+        read: Box<RuntimeDirectResumeRead>,
     },
     /// Immutable command display projection built outside actor ownership.
     Projected {

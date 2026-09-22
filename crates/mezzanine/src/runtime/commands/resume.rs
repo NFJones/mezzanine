@@ -15,16 +15,205 @@ use mez_agent::transcript::ConversationSummary;
 use mez_mux::readline::ReadlineEdit;
 use mez_mux::record_browser::{RecordBrowser, RecordBrowserRecord};
 
+use crate::runtime::RuntimeDirectResumeRead;
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
 use crate::session_title::{SessionTitle, SessionTitlePolicy, resolve_saved_session_title};
 use crate::storage::transcript::{
-    SavedAgentSession, SavedSessionLifecycleFilter, SavedSessionPageAnchor, SavedSessionQuery,
+    AgentTranscriptStore, SavedAgentSession, SavedSessionLifecycleFilter, SavedSessionPageAnchor,
+    SavedSessionQuery,
 };
 
 /// Maximum saved transcript entries to render when `/resume` has no presentation log.
 const AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES: usize = 64;
 /// Maximum transcript bytes to read for `/resume` fallback replay.
 const AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Reads one direct-resume target without accessing runtime-owned state.
+pub(crate) fn read_direct_resume(
+    store: &AgentTranscriptStore,
+    selector: &str,
+    projection_work: Option<&crate::runtime::RuntimeDirectResumeProjectionWork>,
+) -> Result<crate::runtime::RuntimeDirectResumeRead> {
+    let conversation_id = match selector {
+        "--latest" | "latest" => store
+            .latest_root_session()?
+            .map(|session| session.summary.conversation_id)
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "no saved agent sessions are available",
+                )
+            })?,
+        conversation_id => conversation_id.to_string(),
+    };
+    let saved = store.saved_session(&conversation_id)?.ok_or_else(|| {
+        MezError::new(
+            crate::error::MezErrorKind::NotFound,
+            "conversation transcript not found",
+        )
+    })?;
+    if saved.archived_at_unix_seconds.is_some() {
+        return Err(MezError::invalid_state(
+            "archived conversation must be restored before it can be resumed",
+        ));
+    }
+    let subagent_lineage = store.conversation_subagent_lineage(&conversation_id)?;
+    if saved.conversation_kind == mez_agent::AgentConversationKind::Subagent
+        && subagent_lineage.is_none()
+    {
+        return Err(MezError::invalid_state(
+            "subagent conversation cannot resume without durable lineage",
+        ));
+    }
+    let entries = if saved.summary.entries == 0 {
+        Vec::new()
+    } else {
+        store.inspect_recent(
+            &conversation_id,
+            AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES,
+            AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES,
+        )?
+    };
+    let previous_checkpoint_records = projection_work
+        .map(|work| store.load_agent_session_metadata(&work.mezzanine_session_id))
+        .transpose()?
+        .unwrap_or_default();
+    let allowed_actions = store.conversation_allowed_actions(&conversation_id)?;
+    let mut resume_metadata = previous_checkpoint_records
+        .iter()
+        .find(|metadata| metadata.conversation_id == conversation_id)
+        .cloned();
+    if let Some(metadata) = resume_metadata.as_mut()
+        && let Some(allowed_actions) = allowed_actions.clone()
+    {
+        metadata.allowed_actions = Some(allowed_actions);
+    }
+    let prepared_project_scope = projection_work
+        .map(|work| runtime_direct_resume_project_scope(resume_metadata.as_ref(), work))
+        .transpose()?
+        .flatten();
+    let prompt_history = match store.structured_prompt_history(&conversation_id) {
+        Ok(history) => history,
+        Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error),
+    };
+    let presentation_entries = store.inspect_presentation(&conversation_id)?;
+    let resume_directory_available = runtime_resume_directory_from_summary(&saved.summary)
+        .or_else(|| runtime_resume_directory_from_entries(&entries))
+        .is_some_and(|directory| PathBuf::from(directory).is_dir());
+    let projection = projection_work
+        .map(|work| {
+            build_direct_resume_projection(
+                work,
+                &saved,
+                &entries,
+                &presentation_entries,
+                prompt_history.clone(),
+            )
+        })
+        .transpose()?;
+    Ok(crate::runtime::RuntimeDirectResumeRead {
+        prepared_objective: store.effective_persisted_objective(&conversation_id)?,
+        restored_model_identity: store.conversation_model_identity(&conversation_id)?,
+        presentation_entries,
+        conversation_id,
+        saved,
+        subagent_lineage,
+        entries,
+        previous_checkpoint_records,
+        resume_metadata,
+        allowed_actions,
+        prepared_project_scope,
+        resume_directory_available,
+        projection,
+    })
+}
+
+/// Resolves the trusted resume scope without accessing live actor state.
+fn runtime_direct_resume_project_scope(
+    metadata: Option<&mez_agent::transcript::AgentSessionMetadata>,
+    work: &crate::runtime::RuntimeDirectResumeProjectionWork,
+) -> Result<Option<mez_agent::messaging::ProjectMembership>> {
+    if let Some(project_root) = metadata.and_then(|metadata| metadata.project_root.as_deref()) {
+        let canonical_root = std::fs::canonicalize(project_root).map_err(|error| {
+            MezError::invalid_state(format!(
+                "persisted project root cannot be canonicalized: {error}"
+            ))
+        })?;
+        return Ok(Some(
+            mez_agent::messaging::ProjectMembership::from_canonical_root(canonical_root),
+        ));
+    }
+    let Some(working_directory) = work.working_directory.as_ref() else {
+        return Ok(None);
+    };
+    let root = crate::security::project::discover_project_root(working_directory);
+    Ok(std::fs::canonicalize(root)
+        .ok()
+        .map(mez_agent::messaging::ProjectMembership::from_canonical_root))
+}
+
+/// Renders the complete resumed terminal state without accessing live runtime
+/// ownership. The actor later validates the captured renderer inputs before it
+/// installs this single candidate as part of its authority transaction.
+fn build_direct_resume_projection(
+    work: &crate::runtime::RuntimeDirectResumeProjectionWork,
+    saved: &SavedAgentSession,
+    entries: &[TranscriptEntry],
+    presentation_entries: &[crate::storage::transcript::AgentPresentationEntry],
+    prompt_history: Vec<mez_mux::readline::ReadlineHistoryEntry>,
+) -> Result<crate::runtime::RuntimeDirectResumeProjection> {
+    let mut projection = RuntimeSessionService::for_agent_presentation_projection(
+        work.session.clone(),
+        work.socket_path.clone(),
+        work.created_at_unix_seconds,
+        work.presentation_settings.clone(),
+        work.history_limit,
+        work.history_rotate_lines,
+    )?;
+    let mut target_session = work.agent_session.clone();
+    target_session.session_id = saved.summary.conversation_id.clone();
+    target_session.conversation_kind = saved.conversation_kind;
+    target_session.transcript_entries = saved.summary.entries as u64;
+    target_session.running_turn_id = None;
+    target_session.allowed_actions = None;
+    projection
+        .agent_shell_store_mut()
+        .restore_session(&work.pane_id, target_session)?;
+    projection.set_agent_pane_screen(
+        work.pane_id.clone(),
+        saved.summary.conversation_id.clone(),
+        mez_terminal::TerminalScreen::new_with_history_config(
+            work.size,
+            work.history_limit,
+            work.history_rotate_lines,
+        )?,
+    );
+    if !projection
+        .replay_agent_presentation_entries_to_terminal_buffer(&work.pane_id, presentation_entries)?
+    {
+        projection.set_agent_prompt_display_lines(
+            &work.pane_id,
+            RuntimeSessionService::runtime_resume_transcript_display(
+                &saved.summary.conversation_id,
+                saved.summary.entries,
+                entries,
+            ),
+        )?;
+    }
+    let screen = projection
+        .agent_pane_screen(&work.pane_id)
+        .cloned()
+        .ok_or_else(|| MezError::invalid_state("direct resume projection screen disappeared"))?;
+    Ok(crate::runtime::RuntimeDirectResumeProjection {
+        screen,
+        prompt_history,
+        size: work.size,
+        presentation_settings: work.presentation_settings.clone(),
+        history_limit: work.history_limit,
+        history_rotate_lines: work.history_rotate_lines,
+    })
+}
 
 /// Returns the saved working directory from transcript context entries.
 ///
@@ -322,62 +511,66 @@ impl RuntimeSessionService {
                 body: "conversations=0 source=unavailable".to_string(),
             });
         };
-        let conversation_id = match conversation_arg {
-            Some("--latest" | "latest") => {
-                let Some(conversation_id) = store
-                    .latest_root_session()?
-                    .map(|session| session.summary.conversation_id)
-                else {
-                    return Ok(AgentShellCommandOutcome::Display {
-                        command: "resume".to_string(),
-                        body: "conversations=0 source=runtime-resume latest=false reason=no-saved-sessions"
-                            .to_string(),
-                    });
-                };
-                conversation_id
-            }
-            Some(conversation_id) => conversation_id.to_string(),
-            None => unreachable!("bare resume returns through the picker before store lookup"),
-        };
-        let saved = store.saved_session(&conversation_id)?.ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "conversation transcript not found",
-            )
-        })?;
-        if saved.archived_at_unix_seconds.is_some() {
-            return Err(MezError::invalid_state(
-                "archived conversation must be restored before it can be resumed",
-            ));
+        let selector = conversation_arg.expect("direct resume has a selector");
+        if matches!(selector, "--latest" | "latest") && store.latest_root_session()?.is_none() {
+            return Ok(AgentShellCommandOutcome::Display {
+                command: "resume".to_string(),
+                body: "conversations=0 source=runtime-resume latest=false reason=no-saved-sessions"
+                    .to_string(),
+            });
         }
+        let prepared_read = read_direct_resume(&store, selector, None)?;
+        self.execute_agent_shell_resume_command_with_read(pane_id, store, prepared_read, false)
+    }
+
+    /// Applies one worker-prepared direct resume while retaining every live
+    /// binding, authority, and rollback mutation on the serialized actor.
+    ///
+    /// The immutable read bundle is produced from the durable store before this
+    /// method begins. The actor still owns all authority changes, so a failure
+    /// restores the exact prior pane state using the same transaction as an
+    /// inline resume. Deferred command settlement passes `true` to retain its
+    /// own lifecycle until its ordinary completion path settles it.
+    pub(crate) fn execute_agent_shell_resume_command_with_read(
+        &mut self,
+        pane_id: &str,
+        store: AgentTranscriptStore,
+        prepared_read: RuntimeDirectResumeRead,
+        preserve_deferred_command: bool,
+    ) -> Result<AgentShellCommandOutcome> {
+        let RuntimeDirectResumeRead {
+            conversation_id,
+            saved,
+            subagent_lineage,
+            entries,
+            presentation_entries,
+            prepared_objective,
+            restored_model_identity,
+            previous_checkpoint_records,
+            resume_metadata,
+            allowed_actions,
+            prepared_project_scope,
+            resume_directory_available,
+            mut projection,
+        } = prepared_read;
         let summary = saved.summary;
         let conversation_kind = saved.conversation_kind;
-        let subagent_lineage = store.conversation_subagent_lineage(&conversation_id)?;
-        if conversation_kind == mez_agent::AgentConversationKind::Subagent
-            && subagent_lineage.is_none()
-        {
-            return Err(MezError::invalid_state(
-                "subagent conversation cannot resume without durable lineage",
-            ));
-        }
-        let entries = if summary.entries == 0 {
-            Vec::new()
-        } else {
-            store.inspect_recent(
-                &conversation_id,
-                AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES,
-                AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES,
-            )?
-        };
-        let presentation_entries = store.inspect_presentation(&conversation_id)?;
         let resume_directory = runtime_resume_directory_from_summary(&summary)
             .or_else(|| runtime_resume_directory_from_entries(&entries));
-        let prepared_objective = store.effective_persisted_objective(&conversation_id)?;
-        let prepared_resume_state =
-            self.prepare_agent_resume_state_for_conversation(&conversation_id)?;
-        let restored_model_identity = store.conversation_model_identity(&conversation_id)?;
-        let previous_checkpoint_records =
-            store.load_agent_session_metadata(self.session.id.as_str())?;
+        let has_projection = projection.is_some();
+        let prepared_resume_state = if has_projection {
+            self.prepare_agent_resume_state_from_metadata_with_project_scope(
+                resume_metadata,
+                prepared_project_scope.clone(),
+            )?
+        } else {
+            self.prepare_agent_resume_state_for_conversation(&conversation_id)?
+        };
+        let previous_checkpoint_records = if has_projection {
+            previous_checkpoint_records
+        } else {
+            store.load_agent_session_metadata(self.session.id.as_str())?
+        };
         let previous_session = self
             .agent_shell_store()
             .get(pane_id)
@@ -431,15 +624,35 @@ impl RuntimeSessionService {
             .agent_latest_request_usage(&previous_session.session_id)
             .cloned();
         let target_latest_usage = self.agent_latest_request_usage(&conversation_id).cloned();
-        let target_project_scope = prepared_resume_state
-            .as_ref()
-            .and_then(|prepared| prepared.project_scope.clone())
-            .or_else(|| {
-                let working_directory = self.pane_current_working_directory(pane_id)?;
-                let root = crate::security::project::discover_project_root(&working_directory);
-                let root = std::fs::canonicalize(root).ok()?;
-                Some(mez_agent::messaging::ProjectMembership::from_canonical_root(root))
-            });
+        let target_project_scope = if has_projection {
+            prepared_project_scope
+        } else {
+            prepared_resume_state
+                .as_ref()
+                .and_then(|prepared| prepared.project_scope.clone())
+                .or_else(|| {
+                    let working_directory = self.pane_current_working_directory(pane_id)?;
+                    let root = crate::security::project::discover_project_root(&working_directory);
+                    let root = std::fs::canonicalize(root).ok()?;
+                    Some(mez_agent::messaging::ProjectMembership::from_canonical_root(root))
+                })
+        };
+
+        if let Some(projection) = projection.as_ref()
+            && (self
+                .agent_pane_screen(pane_id)
+                .or_else(|| self.process_pane_screen(pane_id))
+                .map(|screen| screen.size())
+                .or_else(|| self.find_pane_descriptor(pane_id).map(|pane| pane.size))
+                != Some(projection.size)
+                || self.presentation.settings != projection.presentation_settings
+                || self.terminal_history_limit() != projection.history_limit
+                || self.terminal_history_rotate_lines() != projection.history_rotate_lines)
+        {
+            return Err(MezError::invalid_state(
+                "direct resume projection is stale; retry the resume command",
+            ));
+        }
 
         let resume_result = (|| -> Result<(String, u64, mez_agent::AgentShellVisibility)> {
             let (session_id, transcript_entries, visibility) = {
@@ -480,11 +693,22 @@ impl RuntimeSessionService {
                     &previous_session.session_id,
                 );
             }
-            self.reload_agent_prompt_history_for_pane(pane_id)?;
-            if let Some(size) = self
-                .agent_pane_screen(pane_id)
-                .or_else(|| self.process_pane_screen(pane_id))
-                .map(|screen| screen.size())
+            if let Some(projection) = projection.take() {
+                self.presentation.remove_agent_presentation_state(pane_id);
+                self.set_agent_pane_screen(
+                    pane_id.to_string(),
+                    session_id.clone(),
+                    projection.screen,
+                );
+                self.set_agent_prompt_history_for_pane(pane_id, projection.prompt_history);
+            } else {
+                self.reload_agent_prompt_history_for_pane(pane_id)?;
+            }
+            if !has_projection
+                && let Some(size) = self
+                    .agent_pane_screen(pane_id)
+                    .or_else(|| self.process_pane_screen(pane_id))
+                    .map(|screen| screen.size())
             {
                 self.set_agent_pane_screen(
                     pane_id.to_string(),
@@ -496,10 +720,12 @@ impl RuntimeSessionService {
                     )?,
                 );
             }
-            if !self.replay_agent_presentation_entries_to_terminal_buffer(
-                pane_id,
-                &presentation_entries,
-            )? {
+            if !has_projection
+                && !self.replay_agent_presentation_entries_to_terminal_buffer(
+                    pane_id,
+                    &presentation_entries,
+                )?
+            {
                 self.set_agent_prompt_display_lines(
                     pane_id,
                     Self::runtime_resume_transcript_display(
@@ -509,7 +735,11 @@ impl RuntimeSessionService {
                     ),
                 )?;
             }
-            self.restore_agent_resume_directory(pane_id, resume_directory.as_deref())?;
+            self.restore_agent_resume_directory(
+                pane_id,
+                resume_directory.as_deref(),
+                has_projection.then_some(resume_directory_available),
+            )?;
             self.record_pane_transcript_ref(pane_id, format!("transcript:{pane_id}:{session_id}"))?;
             self.sync_prepared_runtime_agent_objective_for_conversation(
                 pane_id,
@@ -517,7 +747,12 @@ impl RuntimeSessionService {
                 prepared_objective.as_deref(),
             )?;
             self.commit_prepared_agent_resume_state(pane_id, &session_id, prepared_resume_state)?;
-            self.restore_agent_conversation_allowed_actions(pane_id, &session_id)?;
+            if let Some(allowed_actions) = allowed_actions {
+                self.agent_shell_store_mut()
+                    .restore_allowed_actions(pane_id, allowed_actions)?;
+            } else if !has_projection {
+                self.restore_agent_conversation_allowed_actions(pane_id, &session_id)?;
+            }
             self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
             if let Some(lineage) = subagent_lineage.clone() {
                 if conversation_replaced
@@ -564,7 +799,7 @@ impl RuntimeSessionService {
                 ));
             }
             self.checkpoint_agent_session_metadata()?;
-            if conversation_replaced {
+            if conversation_replaced && !preserve_deferred_command {
                 self.agent.cancel_agent_command(pane_id);
                 // The replacement is durable at this point. A late terminal
                 // cleanup failure cannot undo it, so fences remain the
@@ -689,13 +924,14 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         resume_directory: Option<&str>,
+        prepared_available: Option<bool>,
     ) -> Result<()> {
         let Some(resume_directory) = resume_directory.filter(|value| !value.trim().is_empty())
         else {
             return Ok(());
         };
         let path = PathBuf::from(resume_directory);
-        if !path.is_dir() {
+        if !prepared_available.unwrap_or_else(|| path.is_dir()) {
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
                 &format!(

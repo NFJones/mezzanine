@@ -1267,11 +1267,23 @@ fn runtime_agent_shell_replacement_commands_cancel_queued_deferred_work() {
             .execute_agent_shell_command(&primary, replacement)
             .unwrap();
         assert!(!response.contains("agent command error"), "{response}");
-        assert_eq!(
-            service.agent_command_lifecycle_phase_for_tests("%1"),
-            Some(crate::runtime::RuntimeAgentCommandLifecyclePhase::Cancelled),
-            "{replacement} must cancel the old owner"
-        );
+        if replacement == "/clear" {
+            assert_eq!(
+                service.agent_command_lifecycle_phase_for_tests("%1"),
+                Some(crate::runtime::RuntimeAgentCommandLifecyclePhase::Cancelled),
+                "{replacement} must cancel the old owner"
+            );
+        } else {
+            assert_eq!(
+                service.agent_command_lifecycle_phase_for_tests("%1"),
+                Some(crate::runtime::RuntimeAgentCommandLifecyclePhase::Queued),
+                "{replacement} must replace the old owner with its deferred resume"
+            );
+            service
+                .run_pending_deferred_agent_command_for_tests()
+                .unwrap()
+                .expect("the replacement resume settles before later work is accepted");
+        }
         service
             .execute_agent_shell_command(&primary, "/list-skills")
             .expect("the replacement conversation immediately accepts deferred work");

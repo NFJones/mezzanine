@@ -69,6 +69,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     BuiltinSkillSync,
     /// Saved-session catalog reads for the `/resume` picker.
     SavedSessionsBrowser,
+    /// Direct saved-session resume reads and durable presentation replay input.
+    DirectResume,
     /// Pane-local modified-file summaries.
     ModifiedFiles,
     /// Pending-approval browser reads.
@@ -83,7 +85,10 @@ pub(crate) enum RuntimeAgentCommandFamily {
 /// actor, and the guard test pins every [`RUNTIME_AGENT_OFF_ACTOR_COMMANDS`]
 /// entry to a family, so a name cannot be added to the dispatcher list without
 /// prepared inputs and then be acknowledged and silently dropped at claim time.
-pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentCommandFamily> {
+pub(crate) fn off_actor_command_family(
+    command: &str,
+    input: &str,
+) -> Option<RuntimeAgentCommandFamily> {
     match command {
         "list-skills" | "list-macros" => Some(RuntimeAgentCommandFamily::Catalog),
         "auth-status" => Some(RuntimeAgentCommandFamily::AuthStatus),
@@ -93,7 +98,10 @@ pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentComm
         "show-context" => Some(RuntimeAgentCommandFamily::ContextBrowser),
         "context-doc" => Some(RuntimeAgentCommandFamily::ContextDocument),
         "sync-builtin-skills" => Some(RuntimeAgentCommandFamily::BuiltinSkillSync),
-        "resume" => Some(RuntimeAgentCommandFamily::SavedSessionsBrowser),
+        "resume" if super::resume::runtime_agent_resume_args_are_picker(input) => {
+            Some(RuntimeAgentCommandFamily::SavedSessionsBrowser)
+        }
+        "resume" => Some(RuntimeAgentCommandFamily::DirectResume),
         "list-modified-files" => Some(RuntimeAgentCommandFamily::ModifiedFiles),
         "show-approvals" => Some(RuntimeAgentCommandFamily::ApprovalsBrowser),
         "list-personalities" => Some(RuntimeAgentCommandFamily::PersonalitiesBrowser),
@@ -173,10 +181,7 @@ impl RuntimeSessionService {
                     )
             }
             "sync-builtin-skills" => self.integration.config_root().is_some(),
-            "resume" => {
-                super::resume::runtime_agent_resume_args_are_picker(input)
-                    && self.persistence.transcript_store().is_some()
-            }
+            "resume" => self.persistence.transcript_store().is_some(),
             "list-personalities" => {
                 super::preferences::runtime_agent_list_personalities_args_are_empty(input)
             }
@@ -202,6 +207,13 @@ impl RuntimeSessionService {
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+        // A direct resume replaces the pane conversation when it settles. It
+        // therefore supersedes any queued command owned by the current
+        // conversation before claiming the preparation worker, matching the
+        // established replacement-command behavior for inline resume.
+        if command == "resume" && !super::resume::runtime_agent_resume_args_are_picker(input) {
+            self.agent.cancel_agent_command(pane_id);
+        }
         let claim_generation = self.begin_agent_command_claim(pane_id, &conversation_id)?;
         self.presentation
             .push_pending_deferred_agent_command(RuntimeAgentCommandDispatch {
@@ -253,7 +265,7 @@ impl RuntimeSessionService {
                 "deferred command is no longer available",
             );
         }
-        let Some(family) = off_actor_command_family(command) else {
+        let Some(family) = off_actor_command_family(command, input) else {
             return self.fail_agent_command_before_claim(
                 pane_id,
                 conversation_id,
@@ -441,6 +453,60 @@ impl RuntimeSessionService {
                     limit: self.saved_session_page_limit(),
                     prompt_width: self.saved_session_prompt_width(),
                     title_policy: self.agent_session_title_policy(),
+                }
+            }
+            RuntimeAgentCommandFamily::DirectResume => {
+                let Some(store) = self.persistence.cloned_transcript_store() else {
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "saved-session store is no longer available",
+                    );
+                };
+                let Some(agent_session) = self.agent_shell_store().get(pane_id).cloned() else {
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "agent shell session is no longer available",
+                    );
+                };
+                let size = self
+                    .agent_pane_screen(pane_id)
+                    .or_else(|| self.process_pane_screen(pane_id))
+                    .map(|screen| screen.size())
+                    .or_else(|| self.find_pane_descriptor(pane_id).map(|pane| pane.size))
+                    .ok_or_else(|| MezError::invalid_state("agent resume pane is unavailable"))?;
+                let selector = super::parse_slash_command(input)?
+                    .ok_or_else(|| {
+                        MezError::invalid_args("resume command must be a slash command")
+                    })?
+                    .args
+                    .split_whitespace()
+                    .next()
+                    .ok_or_else(|| MezError::invalid_args("resume command requires a session"))?
+                    .to_string();
+                RuntimeAgentCommandPrepared::DirectResume {
+                    store,
+                    selector,
+                    projection: Box::new(crate::runtime::RuntimeDirectResumeProjectionWork {
+                        pane_id: pane_id.to_string(),
+                        size,
+                        session: self.session().clone(),
+                        socket_path: self.session.socket_path().to_path_buf(),
+                        created_at_unix_seconds: self.session.created_at_unix_seconds,
+                        presentation_settings: self.presentation.settings.clone(),
+                        history_limit: self.terminal_history_limit(),
+                        history_rotate_lines: self.terminal_history_rotate_lines(),
+                        agent_session,
+                        mezzanine_session_id: self.session.id.as_str().to_string(),
+                        working_directory: self.pane_current_working_directory(pane_id),
+                    }),
                 }
             }
             RuntimeAgentCommandFamily::ModifiedFiles => {
@@ -793,6 +859,22 @@ impl RuntimeSessionService {
                     },
                 };
             }
+            RuntimeAgentCommandPrepared::DirectResume {
+                store,
+                selector,
+                projection,
+            } => {
+                return match super::resume::read_direct_resume(store, selector, Some(projection)) {
+                    Ok(read) => RuntimeAgentCommandAsyncOutcome::DirectResume {
+                        store: store.clone(),
+                        read: Box::new(read),
+                    },
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    },
+                };
+            }
             RuntimeAgentCommandPrepared::ModifiedFiles { files } => {
                 super::lists::runtime_agent_modified_files_body(files.as_ref())
             }
@@ -904,6 +986,9 @@ impl RuntimeSessionService {
                 browser,
                 source,
             } => (body, false, Some((command, browser, source))),
+            direct_resume @ RuntimeAgentCommandAsyncOutcome::DirectResume { .. } => {
+                return Ok(direct_resume);
+            }
             projected @ RuntimeAgentCommandAsyncOutcome::Projected { .. } => return Ok(projected),
         };
         let hide_prompt = runtime_agent_shell_visibility(&body).as_deref() == Some("hidden");
@@ -962,6 +1047,31 @@ impl RuntimeSessionService {
             RuntimeAgentCommandAsyncOutcome::Response { body } => body,
             RuntimeAgentCommandAsyncOutcome::Failed { message, kind } => {
                 RuntimeSessionService::deferred_agent_command_failure_body(work, &message, kind)
+            }
+            RuntimeAgentCommandAsyncOutcome::DirectResume { store, read } => {
+                let resume = self.execute_agent_shell_resume_command_with_read(
+                    &work.pane_id,
+                    store,
+                    *read,
+                    true,
+                );
+                let outcome = match resume {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        self.agent.settle_agent_command(
+                            &work.pane_id,
+                            &work.conversation_id,
+                            work.claim_generation,
+                            RuntimeAgentCommandLifecyclePhase::Failed,
+                        );
+                        return Err(error);
+                    }
+                };
+                runtime_agent_shell_command_response_json(
+                    &work.pane_id,
+                    &work.input,
+                    Some(&outcome),
+                )
             }
             RuntimeAgentCommandAsyncOutcome::RecordBrowser {
                 body,
@@ -1087,13 +1197,33 @@ impl RuntimeSessionService {
                 continue;
             };
             let outcome = RuntimeSessionService::execute_deferred_agent_command(&work);
-            let body = match &outcome {
-                RuntimeAgentCommandAsyncOutcome::Response { body } => body.clone(),
-                RuntimeAgentCommandAsyncOutcome::RecordBrowser { body, .. } => body.clone(),
-                RuntimeAgentCommandAsyncOutcome::Failed { message, kind } => {
-                    RuntimeSessionService::deferred_agent_command_failure_body(
-                        &work, message, *kind,
-                    )
+            let body = match outcome {
+                RuntimeAgentCommandAsyncOutcome::DirectResume { store, read } => {
+                    let outcome = self.execute_agent_shell_resume_command_with_read(
+                        &work.pane_id,
+                        store,
+                        *read,
+                        true,
+                    )?;
+                    if !self.agent.settle_agent_command(
+                        &work.pane_id,
+                        &work.conversation_id,
+                        work.claim_generation,
+                        RuntimeAgentCommandLifecyclePhase::Completed,
+                    ) {
+                        continue;
+                    }
+                    last_body = Some(runtime_agent_shell_command_response_json(
+                        &work.pane_id,
+                        &work.input,
+                        Some(&outcome),
+                    ));
+                    continue;
+                }
+                RuntimeAgentCommandAsyncOutcome::Response { ref body } => body.clone(),
+                RuntimeAgentCommandAsyncOutcome::RecordBrowser { ref body, .. } => body.clone(),
+                RuntimeAgentCommandAsyncOutcome::Failed { ref message, kind } => {
+                    RuntimeSessionService::deferred_agent_command_failure_body(&work, message, kind)
                 }
                 RuntimeAgentCommandAsyncOutcome::Projected { .. } => {
                     panic!("the direct executor must return an unprojected command outcome")
@@ -1130,7 +1260,7 @@ mod tests {
     fn runtime_agent_off_actor_commands_are_classified_deferred() {
         for command in RUNTIME_AGENT_OFF_ACTOR_COMMANDS {
             assert!(
-                off_actor_command_family(command).is_some(),
+                off_actor_command_family(command, "/resume").is_some(),
                 "`{command}` is dispatched off actor, so it must have prepared inputs"
             );
             assert_eq!(

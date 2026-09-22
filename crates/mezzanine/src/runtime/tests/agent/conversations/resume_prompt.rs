@@ -257,7 +257,15 @@ fn runtime_agent_prompt_resume_displays_saved_transcript_context() {
         .execute_agent_shell_command(&primary, &format!("/resume {conversation_id}"))
         .unwrap();
 
-    assert!(response.contains("resumed=true"), "{response}");
+    assert!(
+        response.contains(r#""body":null"#),
+        "the direct resume accepts before durable replay: {response}"
+    );
+    let settled = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred direct resume settles");
+    assert!(settled.contains("resumed=true"), "{settled}");
     let pane_text = service
         .pane_screen("%1")
         .unwrap()

@@ -143,6 +143,29 @@ async fn async_command_worker_keeps_other_panes_responsive_while_command_runs() 
     let started = StdArc::new(tokio::sync::Notify::new());
     let release = StdArc::new(tokio::sync::Notify::new());
     let mut service = test_service();
+    let transcript_root = std::env::temp_dir().join(format!(
+        "mez-async-direct-resume-worker-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&transcript_root).unwrap();
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "resume-worker-target".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-resume-worker-target".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "saved resume prompt".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
@@ -194,7 +217,7 @@ async fn async_command_worker_keeps_other_panes_responsive_while_command_runs() 
 
         let submit = AttachedTerminalClientStepPlan {
             actions: vec![TerminalClientLoopAction::ForwardToPane(
-                b"/list-skills\r".to_vec(),
+                b"/resume resume-worker-target\r".to_vec(),
             )],
             output_lines: Vec::new(),
             output_line_style_spans: Vec::new(),

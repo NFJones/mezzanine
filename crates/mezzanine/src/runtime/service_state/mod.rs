@@ -49,6 +49,7 @@ pub(crate) use lifecycle::RuntimeAgentPatchRecord;
 pub(crate) use lifecycle::{
     RuntimeAgentCommandAsyncOutcome, RuntimeAgentCommandAsyncWork, RuntimeAgentCommandDispatch,
     RuntimeAgentCommandLifecycle, RuntimeAgentCommandLifecyclePhase, RuntimeAgentCommandPrepared,
+    RuntimeDirectResumeProjection, RuntimeDirectResumeProjectionWork, RuntimeDirectResumeRead,
 };
 pub use lifecycle::{RuntimeLifecycleState, RuntimeRegistryUpdatePlan};
 pub(crate) use lifecycle::{

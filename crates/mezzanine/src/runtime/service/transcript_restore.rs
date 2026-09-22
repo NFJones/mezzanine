@@ -981,12 +981,44 @@ impl RuntimeSessionService {
             .load_agent_session_metadata(&mezzanine_session_id)?
             .into_iter()
             .find(|metadata| metadata.conversation_id == conversation_id);
-        let Some(mut metadata) = metadata else {
+        let metadata = match metadata {
+            Some(mut metadata) => {
+                if let Some(allowed_actions) =
+                    store.conversation_allowed_actions(conversation_id)?
+                {
+                    metadata.allowed_actions = Some(allowed_actions);
+                }
+                Some(metadata)
+            }
+            None => None,
+        };
+        self.prepare_agent_resume_state_from_metadata(metadata)
+    }
+
+    /// Validates worker-loaded saved-session metadata before actor-owned resume mutations.
+    pub(crate) fn prepare_agent_resume_state_from_metadata(
+        &self,
+        metadata: Option<AgentSessionMetadata>,
+    ) -> Result<Option<PreparedAgentResumeState>> {
+        let project_scope = metadata
+            .as_ref()
+            .map(|metadata| {
+                self.runtime_project_scope_from_persisted_root(metadata.project_root.as_deref())
+            })
+            .transpose()?
+            .flatten();
+        self.prepare_agent_resume_state_from_metadata_with_project_scope(metadata, project_scope)
+    }
+
+    /// Validates worker-loaded metadata with an already resolved trusted project scope.
+    pub(crate) fn prepare_agent_resume_state_from_metadata_with_project_scope(
+        &self,
+        metadata: Option<AgentSessionMetadata>,
+        project_scope: Option<mez_agent::messaging::ProjectMembership>,
+    ) -> Result<Option<PreparedAgentResumeState>> {
+        let Some(metadata) = metadata else {
             return Ok(None);
         };
-        if let Some(allowed_actions) = store.conversation_allowed_actions(conversation_id)? {
-            metadata.allowed_actions = Some(allowed_actions);
-        }
         let root_routing_policy = metadata
             .root_routing_policy
             .as_deref()
@@ -1002,8 +1034,6 @@ impl RuntimeSessionService {
                 metadata.pane_approval_policy_override.as_deref(),
                 metadata.approval_policy.as_deref(),
             )?;
-        let project_scope =
-            self.runtime_project_scope_from_persisted_root(metadata.project_root.as_deref())?;
         Ok(Some(PreparedAgentResumeState {
             metadata,
             project_scope,

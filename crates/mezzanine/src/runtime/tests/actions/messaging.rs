@@ -923,7 +923,12 @@ fn runtime_resume_retires_unrendered_peer_presentation_receipt() {
     let response = service
         .execute_agent_shell_command(&primary, "/resume resume-receipt-target")
         .unwrap();
-    assert!(response.contains("resumed=true"), "{response}");
+    assert!(response.contains(r#""body":null"#), "{response}");
+    let settled = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred direct resume settles");
+    assert!(settled.contains("resumed=true"), "{settled}");
     assert!(
         service
             .snapshot_unsettled_received_peer_message_presentations()

@@ -87,14 +87,20 @@ fn runtime_resume_picker_defers_the_catalog_read_and_keeps_argument_forms_inline
         state.source
     );
 
-    // The argument forms still select, name, or archive one conversation, so they
-    // keep running inline instead of acknowledging the command.
+    // Direct resume now acknowledges before its durable transcript and
+    // presentation reads run on the command worker.
     let direct = service
         .execute_agent_shell_command(&primary, &format!("/resume {session_id}"))
         .unwrap();
     assert!(
-        !direct.contains(r#""body":null"#),
-        "the direct resume form stays inline: {direct}"
+        direct.contains(r#""body":null"#),
+        "the direct resume form acknowledges before durable preparation: {direct}"
+    );
+    assert!(
+        service
+            .run_pending_deferred_agent_command_for_tests()
+            .unwrap()
+            .is_some()
     );
 }
 
@@ -2360,6 +2366,10 @@ fn runtime_resume_browser_enter_resumes_and_i_opens_details() {
     service
         .apply_primary_display_overlay_input(&primary, b"\r")
         .unwrap();
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the selected direct resume settles on the command worker");
     assert_eq!(
         service
             .agent_shell_store()
