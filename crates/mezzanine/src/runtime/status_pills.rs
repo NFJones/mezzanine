@@ -1401,6 +1401,7 @@ impl crate::runtime::RuntimeSessionService {
         let mut requests = Vec::new();
 
         for (pane_id, focus_states) in panes {
+            let mut pane_context = None;
             for name in referenced.keys() {
                 let Some(definition) = pane_status.pills.get(name).cloned() else {
                     continue;
@@ -1416,25 +1417,28 @@ impl crate::runtime::RuntimeSessionService {
                     continue;
                 }
 
-                let cwd = self
-                    .pane_current_working_directory(&pane_id)
-                    .map(|cwd| cwd.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "<unavailable>".to_string());
-                let context_generation = pane_provider_context_generation(
-                    &pane_id,
-                    &cwd,
-                    self.primary_pid_for_live_pane_process(&pane_id),
-                    self.pane_environment_signature(&pane_id)
-                        .map(mez_agent::EnvironmentSignature::stable_hash)
-                        .as_deref(),
-                );
+                let (cwd, context_generation) = pane_context.get_or_insert_with(|| {
+                    let cwd = self
+                        .pane_current_working_directory(&pane_id)
+                        .map(|cwd| cwd.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "<unavailable>".to_string());
+                    let context_generation = pane_provider_context_generation(
+                        &pane_id,
+                        &cwd,
+                        self.primary_pid_for_live_pane_process(&pane_id),
+                        self.pane_environment_signature(&pane_id)
+                            .map(mez_agent::EnvironmentSignature::stable_hash)
+                            .as_deref(),
+                    );
+                    (cwd, context_generation)
+                });
                 let key = RuntimePaneStatusProviderKey {
                     surface: RuntimeStatusPillSurface::Pane,
                     pane_id: pane_id.clone(),
                     name: name.clone(),
-                    cwd,
+                    cwd: cwd.clone(),
                     config_generation: pane_provider_definition_generation(&provider),
-                    context_generation,
+                    context_generation: *context_generation,
                 };
                 requests.push(RuntimePaneStatusProviderRequest {
                     key,
