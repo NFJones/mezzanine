@@ -7,9 +7,9 @@
 
 use super::{
     AgentShellSession, AgentShellVisibility, AgentTurnRecord, AgentTurnState, EventKind, MezError,
-    Result, RuntimeSessionService, TaskState, json_escape, runtime_agent_finished_footer_line,
-    runtime_agent_pane_id, runtime_agent_turn_state_name, runtime_pane_by_id,
-    runtime_unrecovered_failure_reason,
+    Result, RuntimeSessionService, TaskState, current_unix_millis, json_escape,
+    runtime_agent_finished_footer_line, runtime_agent_pane_id, runtime_agent_turn_state_name,
+    runtime_pane_by_id, runtime_unrecovered_failure_reason,
 };
 
 impl RuntimeSessionService {
@@ -214,6 +214,10 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_native_shell_timeout_ms
             .remove(turn_id);
+        self.agent
+            .agent_turn_peer_wait_started_at_ms
+            .remove(turn_id);
+        self.agent.agent_turn_peer_wait_wake_pending.remove(turn_id);
         self.agent
             .agent_turn_imported_history_events
             .remove(turn_id);
@@ -577,6 +581,7 @@ impl RuntimeSessionService {
                     AgentTurnState::Blocked => {
                         self.agent_turn_ledger_mut()
                             .resume_blocked_turn(&running.turn_id)?;
+                        self.resume_agent_turn_deadline(&running.turn_id, current_unix_millis())?;
                         self.reconcile_active_turn_sleep_inhibition();
                         match self
                             .agent_shell_store()

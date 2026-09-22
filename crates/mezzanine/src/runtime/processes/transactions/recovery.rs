@@ -395,6 +395,10 @@ impl RuntimeSessionService {
                     runtime_execution_ready_for_provider_continuation(execution)
                         || self.execution_has_pending_shell_dispatch(turn_id, execution)
                         || self.execution_waiting_for_live_joined_subagents(turn_id, execution)
+                        || execution.action_results.iter().any(|result| {
+                            result.action_type == "wait"
+                                && result.status == mez_agent::ActionStatus::Running
+                        })
                 })
     }
 

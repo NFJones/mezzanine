@@ -2112,14 +2112,14 @@ fn runtime_group_fanout_receipts_are_scoped_to_each_committing_recipient() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies `wait` settles its turn into idle and later model-originated MMP
-/// mail starts one ordinary follow-up turn.
+/// Verifies `wait` parks its turn and model-originated MMP mail resumes that
+/// same turn without creating a new peer-message-triggered follow-up.
 ///
-/// A completed wait must release every scheduler claim without retaining a
-/// deadline-bound peer-wait state. Subsequent peer mail must be committed into
-/// a new message-triggered turn even when pane presentation initially fails.
+/// The parked wait releases provider capacity while preserving the original
+/// turn, context, and scheduler ownership until committed model mail fairly
+/// reacquires capacity for its continuation.
 #[test]
-fn runtime_wait_enters_idle_and_peer_mail_starts_follow_up_turn() {
+fn runtime_wait_parks_turn_and_peer_mail_resumes_same_turn() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -2158,45 +2158,85 @@ fn runtime_wait_enters_idle_and_peer_mail_starts_follow_up_turn() {
             runtime_model_profile("runtime-batch", "test"),
         )
         .unwrap();
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
-    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     assert_eq!(
         service
             .agent_turn_ledger()
             .turn(&started.turn_id)
             .unwrap()
             .state,
-        AgentTurnState::Completed
+        AgentTurnState::Blocked
     );
     let idle = service.agent_scheduler().snapshot();
     assert_eq!(idle.running, 0);
-    assert_eq!(idle.waiting, 0);
+    assert_eq!(idle.waiting, 1);
     assert_eq!(idle.active_capacity_used, 0);
-    let idle_frame = service
+    let parked_frame = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();
     assert_eq!(
-        idle_frame
+        parked_frame
             .frame_context
             .panes
             .get("%1")
             .unwrap()
             .agent_status
             .as_deref(),
-        Some("completed")
+        Some("idle")
     );
-    assert_eq!(idle_frame.frame_context.animation_tick_ms, 0);
-    let idle_agents = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"idle-agents","method":"agent/list","params":{}}"#,
+    let parked_agents = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"parked-agents","method":"agent/list","params":{}}"#,
         &primary,
     );
-    assert!(idle_agents.contains(r#""status":"idle""#), "{idle_agents}");
+    assert!(
+        parked_agents.contains(r#""status":"idle""#),
+        "{parked_agents}"
+    );
 
     let now_ms = current_unix_millis();
     let sender = service
         .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
         .unwrap();
     let recipient = AgentId::opaque(started.agent_id.clone()).unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "wait-bridge-status".to_string(),
+                message_type: "task_status".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(recipient.clone()),
+                correlation_id: Some(started.turn_id.clone()),
+                ttl_ms: None,
+                content_type: "application/json".to_string(),
+                payload: r#"{"task_id":"wait-1","state":"running","summary":"runtime bridge"}"#
+                    .to_string(),
+                extension_fields: crate::runtime::control::runtime_bridge_extension_fields(),
+            },
+            MessageScope::Session,
+            now_ms,
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Blocked
+    );
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
     service
         .control
         .message_service_mut()
@@ -2227,20 +2267,15 @@ fn runtime_wait_enters_idle_and_peer_mail_starts_follow_up_turn() {
             .unwrap(),
         1
     );
-    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count + 1);
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
     assert_eq!(
         service
             .agent_turn_ledger()
             .turn(&started.turn_id)
             .unwrap()
             .state,
-        AgentTurnState::Completed
+        AgentTurnState::Running
     );
-    let follow_up = service.agent_turn_ledger().turns().last().unwrap();
-    assert_ne!(follow_up.turn_id, started.turn_id);
-    assert_eq!(follow_up.trigger, mez_agent::AgentTurnTrigger::LocalMessage);
-    assert_eq!(follow_up.state, AgentTurnState::Running);
-    let follow_up_id = follow_up.turn_id.clone();
     let running = service.agent_scheduler().snapshot();
     assert_eq!(running.waiting, 0);
     assert_eq!(running.running, 1);
@@ -2267,12 +2302,222 @@ fn runtime_wait_enters_idle_and_peer_mail_starts_follow_up_turn() {
         running_agents.contains(r#""status":"running""#),
         "{running_agents}"
     );
-    assert_eq!(service.agent_peer_message_turn_count(&started.agent_id), 1);
+    assert_eq!(service.agent_peer_message_turn_count(&started.agent_id), 0);
     assert!(
         service
             .pending_agent_provider_tasks()
             .iter()
-            .any(|task| task.turn_id == follow_up_id)
+            .any(|task| task.turn_id == started.turn_id)
+    );
+}
+
+/// Verifies a parked peer wait keeps its deadline paused while fair scheduler
+/// reacquisition waits behind occupied provider capacity.
+#[test]
+fn runtime_wait_deadline_remains_paused_until_scheduler_reacquires_capacity() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "wait for a peer reply")
+        .unwrap();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "wait for MMP peer mail".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "the requested MMP reply is still pending".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "wait-capacity".to_string(),
+                    payload: mez_agent::AgentActionPayload::Wait,
+                }],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &started.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let deadline_before_wake = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .deadline_at_unix_millis;
+
+    service.configure_agent_scheduler_limit(1).unwrap();
+    service
+        .agent_scheduler_mut()
+        .enqueue(ScheduledWork {
+            turn_id: "capacity-holder".to_string(),
+            conversation_id: "capacity-holder".to_string(),
+            agent_id: "agent-capacity-holder".to_string(),
+            pane_id: None,
+            kind: mez_agent::ScheduledWorkKind::BackgroundTask,
+        })
+        .unwrap();
+    assert_eq!(
+        service.agent_scheduler_mut().start_ready().unwrap().turn_id,
+        "capacity-holder"
+    );
+
+    let now_ms = current_unix_millis();
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    let recipient = AgentId::opaque(started.agent_id.clone()).unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "capacity-delayed-wait-reply".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(recipient),
+                correlation_id: Some(started.turn_id.clone()),
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "peer reply".to_string(),
+                extension_fields: Vec::new(),
+            },
+            MessageScope::Session,
+            now_ms,
+        )
+        .unwrap();
+    service
+        .deliver_pending_runtime_agent_messages(now_ms)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Blocked
+    );
+    assert_eq!(service.agent_scheduler().snapshot().reacquiring, 1);
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .deadline_at_unix_millis,
+        deadline_before_wake
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    service
+        .agent_scheduler_mut()
+        .complete("capacity-holder")
+        .unwrap();
+    service.start_ready_agent_turns().unwrap();
+    let resumed = service.agent_turn_ledger().turn(&started.turn_id).unwrap();
+    assert_eq!(resumed.state, AgentTurnState::Running);
+    assert!(resumed.deadline_at_unix_millis > deadline_before_wake);
+}
+
+/// Verifies a model-originated reply already queued when `wait` settles wakes
+/// the same turn without waiting for the next delivery timer sweep.
+#[test]
+fn runtime_wait_immediately_resumes_for_already_queued_peer_mail() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "wait for a peer reply already in transit")
+        .unwrap();
+    let now_ms = current_unix_millis();
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    let recipient = AgentId::opaque(started.agent_id.clone()).unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "already-queued-wait-reply".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(recipient),
+                correlation_id: Some(started.turn_id.clone()),
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "reply arrived before the wait parked".to_string(),
+                extension_fields: Vec::new(),
+            },
+            MessageScope::Session,
+            now_ms,
+        )
+        .unwrap();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "wait for MMP peer mail".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "the requested MMP reply is still pending".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "wait-queued-reply".to_string(),
+                    payload: mez_agent::AgentActionPayload::Wait,
+                }],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+
+    service
+        .execute_agent_turn_with_provider(
+            &started.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    let scheduler = service.agent_scheduler().snapshot();
+    assert_eq!(scheduler.waiting, 0);
+    assert_eq!(scheduler.running, 1);
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == started.turn_id)
+    );
+    assert!(
+        service.agent_turn_contexts()[&started.turn_id]
+            .blocks()
+            .iter()
+            .any(|block| block.label.contains("already-queued-wait-reply"))
     );
 }
 

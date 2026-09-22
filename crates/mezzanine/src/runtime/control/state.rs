@@ -746,6 +746,20 @@ impl RuntimeSessionService {
         }
         profiles
     }
+
+    /// Returns blocked turns parked by a running MMP peer-message wait.
+    pub(super) fn runtime_peer_wait_turn_ids(&self) -> std::collections::BTreeSet<String> {
+        self.agent_turn_executions()
+            .iter()
+            .filter(|(_, execution)| {
+                execution.action_results.iter().any(|result| {
+                    result.action_type == "wait"
+                        && result.status == mez_agent::ActionStatus::Running
+                })
+            })
+            .map(|(turn_id, _)| turn_id.clone())
+            .collect()
+    }
 }
 
 #[cfg(test)]

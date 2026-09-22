@@ -362,6 +362,15 @@ pub(crate) struct RuntimeAgentComponent {
     agent_native_shell_timeout_ms: u64,
     /// Native shell deadline snapshots keyed by the turns they govern.
     agent_turn_native_shell_timeout_ms: BTreeMap<String, u64>,
+    /// Monotonic timestamps at which MMP peer waits parked their owning turns.
+    ///
+    /// A parked wait releases provider capacity, so its elapsed duration must
+    /// not reduce the turn's active execution deadline when peer mail resumes
+    /// that same turn.
+    agent_turn_peer_wait_started_at_ms: BTreeMap<String, u64>,
+    /// Parked peer waits with committed model mail that still need fair queue
+    /// reacquisition after a temporary scheduler-capacity refusal.
+    agent_turn_peer_wait_wake_pending: BTreeSet<String>,
     /// Per-failure-signature correction attempts keyed by turn/signature.
     agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
     /// Output-limit recovery attempt currently shaping each active request.
@@ -3078,6 +3087,39 @@ impl RuntimeSessionService {
             .get(turn_id)
             .copied()
             .unwrap_or_else(|| self.agent_native_shell_timeout_ms())
+    }
+
+    /// Starts excluding parked peer-wait time from one active turn's deadline.
+    pub(crate) fn park_agent_turn_deadline(&mut self, turn_id: &str, now_ms: u64) {
+        self.agent
+            .agent_turn_peer_wait_started_at_ms
+            .entry(turn_id.to_string())
+            .or_insert(now_ms);
+    }
+
+    /// Restores a parked turn's active deadline by its elapsed peer-wait time.
+    pub(crate) fn resume_agent_turn_deadline(&mut self, turn_id: &str, now_ms: u64) -> Result<()> {
+        let Some(parked_at_ms) = self
+            .agent
+            .agent_turn_peer_wait_started_at_ms
+            .remove(turn_id)
+        else {
+            return Ok(());
+        };
+        let Some(deadline_at_unix_millis) = self
+            .agent_turn_ledger()
+            .turn(turn_id)
+            .map(|turn| turn.deadline_at_unix_millis)
+        else {
+            return Ok(());
+        };
+        if deadline_at_unix_millis != 0 {
+            self.agent_turn_ledger_mut().set_turn_deadline(
+                turn_id,
+                deadline_at_unix_millis.saturating_add(now_ms.saturating_sub(parked_at_ms)),
+            )?;
+        }
+        Ok(())
     }
 
     /// Returns the configured loop iteration limit.

@@ -1182,7 +1182,8 @@ fn wait_round_trips_with_strict_mmp_only_batch_contract() {
     assert!(schema.contains("\"wait\""));
     assert!(schema.contains("Wait only for a response from another agent"));
     assert!(schema.contains("Never use this action for delays"));
-    assert!(schema.contains("settles the current turn into idle"));
+    assert!(schema.contains("parks the current turn as idle"));
+    assert!(schema.contains("resumes the same turn"));
 }
 
 #[test]

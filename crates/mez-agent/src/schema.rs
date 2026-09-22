@@ -777,7 +777,7 @@ fn maap_wait_action_schema() -> serde_json::Value {
     .map(|mut schema| {
         schema.insert(
             "description".to_string(),
-            serde_json::json!("Wait only for a response from another agent during active MMP inter-agent coordination. Never use this action for delays, retries, polling, user input, approvals, subprocesses, network operations, or any circumstance unrelated to MMP messaging. Send any needed MMP message first in an earlier action batch, then emit wait as the only executable action in this batch. Wait settles the current turn into idle; later model-originated peer mail starts a normal follow-up turn."),
+            serde_json::json!("Wait only for a response from another agent during active MMP inter-agent coordination. Never use this action for delays, retries, polling, user input, approvals, subprocesses, network operations, or any circumstance unrelated to MMP messaging. Send any needed MMP message first in an earlier action batch, then emit wait as the only executable action in this batch. Wait parks the current turn as idle; later model-originated peer mail resumes the same turn."),
         );
         serde_json::Value::Object(schema)
     })

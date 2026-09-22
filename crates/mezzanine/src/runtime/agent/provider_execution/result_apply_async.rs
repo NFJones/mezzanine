@@ -3,10 +3,10 @@
 use super::super::outcome::RuntimeTerminalActionObservations;
 use super::super::{
     AgentTurnExecution, AgentTurnRecord, AgentTurnState, EventKind, ModelProfile,
-    ModelTokenUsageKey, Result, RuntimeSessionService, RuntimeSideEffect, TaskState, json_escape,
-    runtime_agent_execution_failure_error, runtime_agent_execution_prompt_display_lines,
-    runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
-    runtime_execution_ready_for_provider_continuation,
+    ModelTokenUsageKey, Result, RuntimeSessionService, RuntimeSideEffect, TaskState,
+    current_unix_millis, json_escape, runtime_agent_execution_failure_error,
+    runtime_agent_execution_prompt_display_lines, runtime_agent_turn_state_from_action_results,
+    runtime_agent_turn_state_name, runtime_execution_ready_for_provider_continuation,
 };
 use crate::runtime::{RuntimeAgentProviderPersistenceOutcome, RuntimeAgentProviderPersistenceWork};
 
@@ -447,43 +447,70 @@ impl RuntimeSessionService {
                 )?;
             }
         } else {
+            let waiting_for_peer_message = execution.action_results.iter().any(|result| {
+                result.action_type == "wait" && result.status == mez_agent::ActionStatus::Running
+            });
             let waiting_for_joined_subagents =
                 self.execution_waiting_for_live_joined_subagents(turn_id, &execution);
-            if waiting_for_joined_subagents {
+            if waiting_for_peer_message || waiting_for_joined_subagents {
                 self.agent_turn_executions_mut()
                     .insert(turn_id.to_string(), execution.clone());
                 self.agent.agent_scheduler.wait_running(turn_id)?;
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     turn_id,
-                    "scheduler running -> waiting reason=waiting_for_subagents capacity=released",
+                    if waiting_for_peer_message {
+                        "scheduler running -> waiting reason=peer_message_wait capacity=released"
+                    } else {
+                        "scheduler running -> waiting reason=waiting_for_subagents capacity=released"
+                    },
                 )?;
                 self.agent.pending_agent_provider_tasks.remove(turn_id);
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     turn_id,
-                    "provider_task removed reason=waiting_for_subagents",
+                    if waiting_for_peer_message {
+                        "provider_task removed reason=peer_message_wait"
+                    } else {
+                        "provider_task removed reason=waiting_for_subagents"
+                    },
                 )?;
                 self.agent_turn_ledger_mut()
                     .finish_turn(turn_id, AgentTurnState::Blocked)?;
+                if waiting_for_peer_message {
+                    self.park_agent_turn_deadline(turn_id, current_unix_millis());
+                }
                 self.reconcile_active_turn_sleep_inhibition();
                 self.append_agent_trace_turn_transition(
                     turn,
                     turn.state,
                     AgentTurnState::Blocked,
-                    "waiting_for_subagents",
+                    if waiting_for_peer_message {
+                        "peer_message_wait"
+                    } else {
+                        "waiting_for_subagents"
+                    },
                 )?;
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,
-                    "agent: waiting for subagents to finish",
+                    if waiting_for_peer_message {
+                        "agent: waiting for MMP peer message"
+                    } else {
+                        "agent: waiting for subagents to finish"
+                    },
                 )?;
-                self.emit_subagent_task_status(
-                    turn,
-                    TaskState::Blocked,
-                    None,
-                    "subagent task waiting for child subagents",
-                )?;
+                if !waiting_for_peer_message {
+                    self.emit_subagent_task_status(
+                        turn,
+                        TaskState::Blocked,
+                        None,
+                        "subagent task waiting for child subagents",
+                    )?;
+                }
                 self.start_ready_agent_turns()?;
+                if waiting_for_peer_message {
+                    self.deliver_pending_runtime_agent_messages(current_unix_millis())?;
+                }
             } else if runtime_execution_ready_for_provider_continuation(&execution)
                 && !self.defer_agent_provider_for_observed_input_limit(
                     turn,
@@ -500,7 +527,7 @@ impl RuntimeSessionService {
                     "provider_task queued reason=ready_for_provider_continuation",
                 )?;
             }
-            if !waiting_for_joined_subagents {
+            if !waiting_for_peer_message && !waiting_for_joined_subagents {
                 self.agent_turn_executions_mut()
                     .insert(turn_id.to_string(), execution.clone());
             }

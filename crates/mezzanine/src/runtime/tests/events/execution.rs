@@ -147,6 +147,67 @@ fn runtime_agent_loop_goal_unmet_continues_without_apply_patch() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a goal-mode `/loop` keeps its current iteration parked when MAAP
+/// `wait` is awaiting peer mail instead of settling into a fresh iteration.
+#[test]
+fn runtime_agent_loop_peer_wait_does_not_continue_fresh_iteration() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-loop-peer-wait","method":"agent/shell/command","params":{"idempotency_key":"agent-loop-peer-wait","input":"/loop --limit 3 --goal 'peer review received' await peer review"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""kind":"mutated""#), "{start}");
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &RuntimeBatchProvider {
+                response: mez_agent::ModelResponse {
+                    provider: "runtime-batch".to_string(),
+                    model: "test".to_string(),
+                    raw_text: "waiting for peer review".to_string(),
+                    usage: Default::default(),
+                    latest_request_usage: None,
+                    quota_usage: Default::default(),
+                    action_batch: Some(mez_agent::MaapBatch {
+                        rationale: "the peer review is still pending".to_string(),
+                        actions: vec![mez_agent::AgentAction {
+                            id: "wait-for-peer-review".to_string(),
+                            payload: mez_agent::AgentActionPayload::Wait,
+                        }],
+                    }),
+                    provider_transcript_events: Vec::new(),
+                },
+            },
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(service.agent_loop_state("%1").unwrap().iteration, 1);
+    assert_eq!(service.agent_loop_turn("turn-1").unwrap().iteration, 1);
+    assert!(service.agent_loop_turn("turn-2").is_none());
+    assert!(
+        !service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .iter()
+            .any(|line| line.contains("loop: continuing fresh iteration"))
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a goal-mode `/loop` terminates after a patch-free iteration whose
 /// model assessment says the semantic goal is met.
 ///

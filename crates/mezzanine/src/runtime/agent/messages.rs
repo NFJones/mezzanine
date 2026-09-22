@@ -13,6 +13,8 @@ use crate::runtime::{
 };
 use crate::storage::snapshot::MAX_UNSETTLED_PEER_PRESENTATIONS;
 
+use mez_agent::SchedulerErrorKind;
+
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentTurnExecution,
     AgentTurnRecord, AgentTurnState, Envelope, EventKind, MezError, PaneId, Result,
@@ -66,6 +68,15 @@ impl RuntimeSessionService {
         // a parked peer wait from resuming; the retained receipt retries on the
         // next delivery sweep.
         let _ = self.flush_received_peer_message_presentations();
+        let pending_peer_wait_wakes = self
+            .agent
+            .agent_turn_peer_wait_wake_pending
+            .iter()
+            .filter_map(|turn_id| self.agent_turn_ledger().turn(turn_id).cloned())
+            .collect::<Vec<_>>();
+        for turn in pending_peer_wait_wakes {
+            let _ = self.resume_parked_peer_wait(&turn)?;
+        }
         let ready = self
             .control
             .message_service_mut()
@@ -160,6 +171,13 @@ impl RuntimeSessionService {
 
             let _ = self.flush_received_peer_message_presentations();
 
+            if turn.state == AgentTurnState::Blocked && model_message_count > 0 {
+                self.agent
+                    .agent_turn_peer_wait_wake_pending
+                    .insert(turn.turn_id.clone());
+                let _ = self.resume_parked_peer_wait(&turn)?;
+            }
+
             if turn.state == AgentTurnState::Queued && !self.agent_work_is_scheduled(&turn.turn_id)
             {
                 self.enqueue_agent_work(ScheduledWork {
@@ -188,6 +206,85 @@ impl RuntimeSessionService {
             }
         }
         Ok(committed)
+    }
+
+    /// Fairly reacquires capacity and settles one parked peer wait after model
+    /// mail has committed to its existing turn context.
+    ///
+    /// A full scheduler queue is recoverable: the wake marker remains so a
+    /// later delivery sweep retries without losing the committed peer mail.
+    fn resume_parked_peer_wait(&mut self, turn: &AgentTurnRecord) -> Result<bool> {
+        if turn.state != AgentTurnState::Blocked {
+            self.agent
+                .agent_turn_peer_wait_wake_pending
+                .remove(&turn.turn_id);
+            return Ok(false);
+        }
+        let waiting_for_peer_message =
+            self.agent_turn_executions()
+                .get(&turn.turn_id)
+                .is_some_and(|execution| {
+                    execution.action_results.iter().any(|result| {
+                        result.action_type == "wait" && result.status == ActionStatus::Running
+                    })
+                });
+        if !waiting_for_peer_message {
+            self.agent
+                .agent_turn_peer_wait_wake_pending
+                .remove(&turn.turn_id);
+            return Ok(false);
+        }
+        match self.agent.agent_scheduler.requeue_waiting(&turn.turn_id) {
+            Ok(_) => {}
+            Err(error) if error.kind() == SchedulerErrorKind::QueueFull => return Ok(false),
+            Err(error) => return Err(error.into()),
+        }
+        let settled_wait = self
+            .agent_turn_executions_mut()
+            .get_mut(&turn.turn_id)
+            .and_then(|execution| {
+                let mut settled = false;
+                for result in &mut execution.action_results {
+                    if result.action_type == "wait" && result.status == ActionStatus::Running {
+                        result.status = ActionStatus::Succeeded;
+                        result.content = vec![mez_agent::ActionContentBlock::text(
+                            "peer mail received; resuming this turn",
+                        )];
+                        result.structured_content_json =
+                            Some(r#"{"state":"peer_message_received"}"#.to_string());
+                        settled = true;
+                    }
+                }
+                if settled {
+                    execution.final_turn = false;
+                    execution.terminal_state = runtime_agent_turn_state_from_action_results(
+                        &execution.action_results,
+                        execution.final_turn,
+                    );
+                }
+                settled.then(|| {
+                    execution
+                        .action_results
+                        .iter()
+                        .find(|result| result.action_type == "wait")
+                        .cloned()
+                        .expect("settled peer wait result must remain in execution")
+                })
+            });
+        let Some(settled_wait) = settled_wait else {
+            return Ok(false);
+        };
+        self.agent
+            .agent_turn_peer_wait_wake_pending
+            .remove(&turn.turn_id);
+        self.append_action_result_context_if_absent(&turn.turn_id, &settled_wait)?;
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            "scheduler waiting -> queued reason=peer_message_received capacity=reacquire",
+        )?;
+        self.start_ready_agent_turns()?;
+        Ok(true)
     }
 
     /// Re-admits original queued receive turns after a recoverable receive commit fault.
@@ -1214,6 +1311,9 @@ impl RuntimeSessionService {
     /// bridge traffic never starts a turn, so it keeps the ordinary pending
     /// behavior that also drives TTL expiry.
     pub(crate) fn has_pending_peer_messages(&mut self, now_ms: u64) -> bool {
+        if !self.agent.agent_turn_peer_wait_wake_pending.is_empty() {
+            return true;
+        }
         if self
             .agent
             .received_peer_message_presentations

@@ -2136,6 +2136,18 @@ impl RuntimeSessionService {
             return "bootstrapping";
         }
         if turn.state == AgentTurnState::Blocked {
+            if self
+                .agent_turn_executions()
+                .get(&turn.turn_id)
+                .is_some_and(|execution| {
+                    execution.action_results.iter().any(|result| {
+                        result.action_type == "wait"
+                            && result.status == mez_agent::ActionStatus::Running
+                    })
+                })
+            {
+                return "idle";
+            }
             return if self.agent_turn_has_blocked_approval(&turn.turn_id) {
                 "waiting_approval"
             } else {
