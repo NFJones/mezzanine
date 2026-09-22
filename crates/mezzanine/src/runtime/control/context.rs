@@ -26,6 +26,52 @@ pub(super) struct RuntimeAgentTranscriptContext {
     pub(super) provider_history_repair_identity: Option<String>,
 }
 
+/// Immutable inputs required to build one canonical transcript-history epoch.
+///
+/// The actor captures pending persistence entries and the session's retained
+/// range before a blocking worker decodes durable transcript storage. Keeping
+/// the range in this value prevents worker preparation from consulting live
+/// pane state after the claim.
+pub(super) struct RuntimeAgentHistoryEpochInputs {
+    /// Pane identity retained for canonical replay labels.
+    pub(super) pane_id: String,
+    /// Conversation whose durable transcript contributes history.
+    pub(super) conversation_id: String,
+    /// Maximum durable sequence visible to an ephemeral source conversation.
+    pub(super) ephemeral_source_entries: Option<u64>,
+    /// Number of newest entries retained by a durable pane conversation.
+    pub(super) active_entries: Option<usize>,
+    /// Actor-captured persistence entries not yet visible in durable storage.
+    pub(super) pending_entries: Vec<TranscriptEntry>,
+}
+
+/// Merges durable and actor-captured pending transcript entries, trims the
+/// result by the captured session policy, then builds the exact canonical
+/// model-context projection.
+pub(super) fn runtime_agent_history_epoch_from_entries(
+    inputs: RuntimeAgentHistoryEpochInputs,
+    mut entries: Vec<TranscriptEntry>,
+) -> RuntimeAgentTranscriptContext {
+    entries.extend(inputs.pending_entries);
+    entries.retain(|entry| entry.conversation_id == inputs.conversation_id);
+    entries.sort_by_key(|entry| entry.sequence);
+    entries.dedup_by_key(|entry| entry.sequence);
+    if let Some(maximum_sequence) = inputs.ephemeral_source_entries {
+        entries.retain(|entry| entry.sequence <= maximum_sequence);
+    } else if let Some(active_entries) = inputs.active_entries {
+        let first_active = entries.len().saturating_sub(active_entries);
+        entries.drain(..first_active);
+    }
+    if entries.is_empty() {
+        return RuntimeAgentTranscriptContext {
+            blocks: Vec::new(),
+            execution_events: Vec::new(),
+            provider_history_repair_identity: None,
+        };
+    }
+    runtime_agent_transcript_context(&inputs.pane_id, &entries)
+}
+
 /// Builds exact model context and typed execution ownership from transcripts.
 pub(super) fn runtime_agent_transcript_context(
     pane_id: &str,

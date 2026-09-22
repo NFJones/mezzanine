@@ -72,6 +72,7 @@ use crate::control::{
 };
 use crate::integrations::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
 pub(crate) use component::RuntimeControlComponent;
+#[cfg(test)]
 use context::runtime_agent_transcript_context;
 pub(crate) use context::{
     PEER_MESSAGE_TURN_CONTEXT_HINT, PEER_MESSAGE_TURN_CONTEXT_LABEL,
@@ -79,6 +80,7 @@ pub(crate) use context::{
     runtime_owned_bridge_message, runtime_peer_message_block_label,
     runtime_peer_message_context_content, runtime_peer_message_logged_payload,
 };
+use context::{RuntimeAgentHistoryEpochInputs, runtime_agent_history_epoch_from_entries};
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
     parse_skill_prompt_invocation, project_guidance_context_block, skill_context_text,
@@ -668,31 +670,27 @@ impl RuntimeSessionService {
                 provider_history_repair_identity: None,
             });
         }
-        let mut entries = match store.inspect(transcript_conversation_id) {
+        let entries = match store.inspect(transcript_conversation_id) {
             Ok(entries) => entries,
             Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
             Err(error) => return Err(error),
         };
-        entries.extend(
-            self.persistence
-                .pending_transcript_entries(transcript_conversation_id),
+        let transcript = runtime_agent_history_epoch_from_entries(
+            RuntimeAgentHistoryEpochInputs {
+                pane_id: pane_id.to_string(),
+                conversation_id: transcript_conversation_id.to_string(),
+                ephemeral_source_entries: session.ephemeral.then_some(transcript_entries),
+                active_entries: (!session.ephemeral)
+                    .then(|| usize::try_from(transcript_entries).unwrap_or(usize::MAX)),
+                pending_entries: self
+                    .persistence
+                    .pending_transcript_entries(transcript_conversation_id),
+            },
+            entries,
         );
-        entries.sort_by_key(|entry| entry.sequence);
-        entries.dedup_by_key(|entry| entry.sequence);
-        if session.ephemeral {
-            entries.retain(|entry| entry.sequence <= transcript_entries);
-        } else {
-            let active_entries = usize::try_from(transcript_entries).unwrap_or(usize::MAX);
-            let first_active = entries.len().saturating_sub(active_entries);
-            entries.drain(..first_active);
-        }
-        let mut provider_history_repair_identity = None;
-        if !entries.is_empty() {
-            let transcript = runtime_agent_transcript_context(pane_id, &entries);
-            provider_history_repair_identity = transcript.provider_history_repair_identity;
-            blocks.extend(transcript.blocks);
-            execution_events = transcript.execution_events;
-        }
+        let provider_history_repair_identity = transcript.provider_history_repair_identity;
+        blocks.extend(transcript.blocks);
+        execution_events = transcript.execution_events;
         Ok(context::RuntimeAgentTranscriptContext {
             blocks,
             execution_events,
