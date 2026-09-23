@@ -1038,6 +1038,55 @@ fn runtime_turn_settlement_clears_provider_retry_scheduler_state() {
     assert_eq!(service.agent_provider_retry_turn_ids().count(), 0);
 }
 
+/// Verifies a structured quota failure mentioning token volume remains a
+/// transport retry and never dispatches model-backed context compaction.
+#[test]
+fn runtime_quota_failure_does_not_dispatch_context_compaction() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let turn = service
+        .start_agent_prompt_turn("%1", "retry after quota recovery")
+        .unwrap();
+    let error = MezError::invalid_state("provider request failed: too many tokens per minute")
+        .with_provider_failure_json(
+            r#"{"status_code":429,"error":{"type":"rate_limit_error","message":"too many tokens per minute"}}"#,
+        );
+    let retry_class = crate::integrations::agent::provider::provider_error_retry_class(&error);
+    assert_eq!(
+        retry_class,
+        mez_agent::ProviderErrorRetryClass::RetryableTransport
+    );
+
+    let transition = service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            retry_class,
+            &error,
+        )
+        .unwrap()
+        .expect("quota failure should schedule a transport retry");
+    assert!(transition.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::ScheduleTimer { key, .. }
+            if key.kind == crate::runtime::RuntimeTimerKind::ProviderRetry
+    )));
+    assert!(
+        !transition
+            .side_effects
+            .iter()
+            .any(|effect| matches!(effect, RuntimeSideEffect::DispatchAgentCompaction { .. }))
+    );
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_none()
+    );
+}
+
 /// Verifies unlimited provider retry scheduling reports its mode, finite
 /// reference limit, delay, and sanitized error kind, while turn settlement
 /// still cancels the backoff generation before it can dispatch more work.

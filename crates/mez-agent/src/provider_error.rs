@@ -239,8 +239,14 @@ pub fn classify_provider_error_retry(
     if provider_error_is_malformed_maap_output(message) {
         return ProviderErrorRetryClass::NonRetryable;
     }
-    if provider_error_is_context_limit_exceeded(message, provider_failure_json) {
+    if provider_error_has_explicit_retryable_transport(provider_failure_json) {
+        return ProviderErrorRetryClass::RetryableTransport;
+    }
+    if provider_error_has_explicit_context_limit(provider_failure_json) {
         return ProviderErrorRetryClass::ContextLimit;
+    }
+    if provider_error_has_explicit_output_limit(provider_failure_json) {
+        return ProviderErrorRetryClass::OutputLimit;
     }
     if provider_error_is_output_limit_exceeded(message, provider_failure_json) {
         return ProviderErrorRetryClass::OutputLimit;
@@ -248,12 +254,15 @@ pub fn classify_provider_error_retry(
     if provider_error_is_transient_overload_or_unavailable(message, provider_failure_json) {
         return ProviderErrorRetryClass::RetryableTransport;
     }
+    if provider_error_is_context_limit_exceeded(message, provider_failure_json) {
+        return ProviderErrorRetryClass::ContextLimit;
+    }
     if let Some(status_code) = provider_failure_status_code(provider_failure_json) {
-        if status_code == 400 && provider_error_is_unsupported_parameter(provider_failure_json) {
-            return ProviderErrorRetryClass::NonRetryable;
-        }
         if status_code == 429 || (500..=599).contains(&status_code) {
             return ProviderErrorRetryClass::RetryableTransport;
+        }
+        if status_code == 400 && provider_error_is_unsupported_parameter(provider_failure_json) {
+            return ProviderErrorRetryClass::NonRetryable;
         }
         if provider_error_invites_retry(message, provider_failure_json) {
             return ProviderErrorRetryClass::RetryableTransport;
@@ -391,6 +400,8 @@ fn provider_error_is_context_limit_exceeded(
         message,
         provider_failure_json,
         &[
+            "/stop_reason",
+            "/incomplete_details/reason",
             "/error/code",
             "/error/type",
             "/error/message",
@@ -406,6 +417,63 @@ fn provider_error_is_context_limit_exceeded(
         ],
     )
     .any(|text| provider_error_text_is_context_limit_exceeded(&text))
+}
+
+/// Returns whether structured provider metadata explicitly names input-context exhaustion.
+///
+/// Explicit category fields take precedence over incidental provider message text
+/// that may mention output-token controls while describing a context overflow.
+fn provider_error_has_explicit_context_limit(provider_failure_json: Option<&str>) -> bool {
+    provider_error_structured_fields(
+        provider_failure_json,
+        &[
+            "/stop_reason",
+            "/incomplete_details/reason",
+            "/error/code",
+            "/error/type",
+            "/body/error/code",
+            "/body/error/type",
+            "/body/incomplete_details/reason",
+            "/body/response/incomplete_details/reason",
+            "/response/error/code",
+            "/response/error/type",
+            "/response/incomplete_details/reason",
+        ],
+    )
+    .any(|text| provider_error_text_is_context_limit_exceeded(&text))
+}
+
+/// Returns whether structured provider metadata explicitly names a retryable transport class.
+fn provider_error_has_explicit_retryable_transport(provider_failure_json: Option<&str>) -> bool {
+    provider_error_structured_fields(
+        provider_failure_json,
+        &[
+            "/error/code",
+            "/error/type",
+            "/body/error/code",
+            "/body/error/type",
+            "/response/error/code",
+            "/response/error/type",
+        ],
+    )
+    .any(|text| provider_error_text_is_transient_overload_or_unavailable(&text))
+}
+
+/// Returns whether structured provider metadata explicitly names output exhaustion.
+fn provider_error_has_explicit_output_limit(provider_failure_json: Option<&str>) -> bool {
+    provider_error_structured_fields(
+        provider_failure_json,
+        &[
+            "/incomplete_details/reason",
+            "/response/incomplete_details/reason",
+            "/body/incomplete_details/reason",
+            "/body/response/incomplete_details/reason",
+            "/error/code",
+            "/body/error/code",
+            "/response/error/code",
+        ],
+    )
+    .any(|text| provider_error_text_is_output_limit_exceeded(&text))
 }
 
 fn provider_error_is_output_limit_exceeded(
@@ -490,12 +558,10 @@ fn provider_error_text_is_context_limit_exceeded(text: &str) -> bool {
         || lower.contains("exceeds the context window")
         || lower.contains("maximum context length")
         || lower.contains("max context length")
-        || lower.contains("context window")
         || lower.contains("prompt is too long")
         || lower.contains("input is too large")
         || lower.contains("input too large")
         || lower.contains("too many input tokens")
-        || lower.contains("too many tokens")
         || lower.contains("reduce the length of the messages")
         || lower.contains("reduce the length of your input")
         || lower.contains("request too large for the model")
@@ -775,6 +841,67 @@ mod tests {
                 ),
                 expected,
                 "{status} {error_type}"
+            );
+        }
+    }
+
+    /// Verifies quota and output-budget failures take precedence over broad
+    /// context wording, preventing either path from requesting compaction.
+    #[test]
+    fn quota_and_output_budget_text_do_not_classify_as_context_limits() {
+        let cases = [
+            (
+                "quota",
+                "provider request failed: too many tokens per minute",
+                r#"{"status_code":429,"error":{"type":"rate_limit_error","message":"too many tokens per minute"}}"#,
+                ProviderErrorRetryClass::RetryableTransport,
+            ),
+            (
+                "output budget",
+                "max_output_tokens exceeds the allowed maximum for this context window",
+                r#"{"status_code":400,"error":{"type":"invalid_request_error","message":"max_output_tokens exceeds the allowed maximum for this context window"}}"#,
+                ProviderErrorRetryClass::OutputLimit,
+            ),
+            (
+                "explicit context overflow",
+                "context request failed after max_tokens was configured",
+                r#"{"status_code":400,"error":{"code":"context_length_exceeded","message":"max_tokens cannot fit after the input context overflow"}}"#,
+                ProviderErrorRetryClass::ContextLimit,
+            ),
+            (
+                "explicit context overflow despite server status",
+                "provider request failed",
+                r#"{"status_code":500,"error":{"code":"context_length_exceeded"}}"#,
+                ProviderErrorRetryClass::ContextLimit,
+            ),
+            (
+                "nested explicit context overflow despite server status",
+                "provider request failed",
+                r#"{"status_code":500,"body":{"incomplete_details":{"reason":"model_context_window_exceeded"}}}"#,
+                ProviderErrorRetryClass::ContextLimit,
+            ),
+            (
+                "explicit output budget despite server status",
+                "provider request failed",
+                r#"{"status_code":500,"incomplete_details":{"reason":"max_output_tokens"}}"#,
+                ProviderErrorRetryClass::OutputLimit,
+            ),
+            (
+                "explicit quota marker",
+                "provider request failed",
+                r#"{"status_code":429,"error":{"type":"rate_limit_error"}}"#,
+                ProviderErrorRetryClass::RetryableTransport,
+            ),
+        ];
+        for (label, message, failure, expected) in cases {
+            assert_eq!(
+                classify_provider_error_retry(
+                    ProviderErrorKind::InvalidState,
+                    message,
+                    Some(failure)
+                ),
+                expected,
+                "{label}"
             );
         }
     }
