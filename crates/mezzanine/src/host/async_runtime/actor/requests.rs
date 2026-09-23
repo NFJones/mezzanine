@@ -550,6 +550,7 @@ impl AsyncRuntimeSessionActor {
                         self.ensure_client_render_timers(&work.client_id)?;
                         Ok(Some(AsyncIrohRenderSnapshot {
                             view,
+                            render_rate_limit_fps: work.config.config().render_rate_limit_fps,
                             presentation_ids,
                             iroh_status_slot,
                             event_cutoff,

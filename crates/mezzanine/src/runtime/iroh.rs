@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::task::JoinSet;
 
@@ -52,6 +52,58 @@ const IROH_RENDER_FRAGMENT_BYTES: usize = 512 * 1024;
 const IROH_RENDER_FRAGMENT_MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const IROH_RENDER_FRAGMENT_MAX_CHUNKS: usize =
     IROH_RENDER_FRAGMENT_MAX_TOTAL_BYTES / IROH_RENDER_FRAGMENT_BYTES;
+
+/// Coalesces one remote client's pushed render updates behind its configured
+/// terminal frame cadence while retaining the latest state after a burst.
+#[derive(Debug, Clone)]
+struct IrohRenderRateLimiter {
+    /// Minimum time between completed pushed-render flushes.
+    min_interval: Option<Duration>,
+    /// Time at which the most recent pushed render completed its flush.
+    last_flush_at: Option<Instant>,
+}
+
+impl IrohRenderRateLimiter {
+    /// Builds a limiter from the configured maximum frames per second.
+    fn new(rate_limit_fps: u64) -> Self {
+        Self {
+            min_interval: iroh_render_rate_limit_interval(rate_limit_fps),
+            last_flush_at: None,
+        }
+    }
+
+    /// Applies a refreshed pushed-render frame-rate configuration.
+    fn set_rate_limit(&mut self, rate_limit_fps: u64) {
+        self.min_interval = iroh_render_rate_limit_interval(rate_limit_fps);
+    }
+
+    /// Returns the remaining delay before the next pushed render may flush.
+    fn render_delay(&self) -> Option<Duration> {
+        let min_interval = self.min_interval?;
+        let last_flush_at = self.last_flush_at?;
+        Some(
+            last_flush_at
+                .checked_add(min_interval)
+                .unwrap_or_else(Instant::now)
+                .saturating_duration_since(Instant::now()),
+        )
+    }
+
+    /// Records a completed pushed-render flush.
+    fn mark_flushed(&mut self) {
+        self.last_flush_at = Some(Instant::now());
+    }
+}
+
+/// Converts a pushed-render frame-rate limit into its flush interval.
+fn iroh_render_rate_limit_interval(rate_limit_fps: u64) -> Option<Duration> {
+    if rate_limit_fps == 0 {
+        return None;
+    }
+    Some(Duration::from_millis(
+        1_000u64.saturating_add(rate_limit_fps.saturating_sub(1)) / rate_limit_fps,
+    ))
+}
 
 /// Splits an oversized framed v3 render update into bounded v4 envelopes.
 ///
@@ -104,11 +156,28 @@ struct IrohReadyRenderTriggers {
     events: usize,
     render_invalidations: usize,
     render_required: bool,
+    rate_limit_bypass: bool,
     invalidate_output: bool,
     classification_uncertain: bool,
 }
 
 impl IrohReadyRenderTriggers {
+    /// Merges a later ready range into this deferred latest-state render.
+    fn absorb(&mut self, later: Self) {
+        self.last_event_id = match (self.last_event_id, later.last_event_id) {
+            (Some(current), Some(later)) => Some(current.max(later)),
+            (current, later) => current.or(later),
+        };
+        self.events = self.events.saturating_add(later.events);
+        self.render_invalidations = self
+            .render_invalidations
+            .saturating_add(later.render_invalidations);
+        self.render_required |= later.render_required;
+        self.rate_limit_bypass |= later.rate_limit_bypass;
+        self.invalidate_output |= later.invalidate_output;
+        self.classification_uncertain |= later.classification_uncertain;
+    }
+
     /// Merges one authorized event slice without retaining rendered state.
     fn absorb_event_wakeups(&mut self, wakeups: Vec<super::RuntimeEventWakeup>) -> usize {
         let mut batch_events = 0usize;
@@ -117,6 +186,7 @@ impl IrohReadyRenderTriggers {
                 if let Some(invalidate) = iroh_event_render_invalidation(event.kind) {
                     self.render_required = true;
                     self.invalidate_output |= invalidate;
+                    self.rate_limit_bypass |= iroh_event_render_bypasses_rate_limit(&event);
                 }
                 self.last_event_id = Some(
                     self.last_event_id
@@ -135,6 +205,7 @@ impl IrohReadyRenderTriggers {
         if let Some(invalidate_output) = iroh_side_effect_render_invalidation(effects) {
             self.render_required = true;
             self.invalidate_output |= invalidate_output;
+            self.rate_limit_bypass |= iroh_side_effect_render_bypasses_rate_limit(effects);
         }
     }
 
@@ -147,6 +218,7 @@ impl IrohReadyRenderTriggers {
     fn mark_classification_uncertain(&mut self) {
         self.classification_uncertain = true;
         self.render_required = true;
+        self.rate_limit_bypass = true;
         self.invalidate_output = true;
     }
 }
@@ -380,6 +452,11 @@ fn iroh_event_render_invalidation(kind: EventKind) -> Option<bool> {
     }
 }
 
+/// Returns whether one lifecycle event must bypass ordinary output pacing.
+fn iroh_event_render_bypasses_rate_limit(event: &crate::protocol::event::VisibleEvent) -> bool {
+    event.kind != EventKind::PaneChanged || !event.payload.contains(r#""output_bytes":"#)
+}
+
 /// Classifies exact-client render side effects for primary v3 snapshot push.
 ///
 /// Logical recomposition preserves the attached terminal's retained output
@@ -396,6 +473,22 @@ fn iroh_side_effect_render_invalidation(effects: &[super::RuntimeSideEffect]) ->
         invalidate_output |= matches!(reason, super::RenderInvalidationReason::Resize);
     }
     render_required.then_some(invalidate_output)
+}
+
+/// Returns whether drained exact-client work must bypass ordinary output pacing.
+fn iroh_side_effect_render_bypasses_rate_limit(effects: &[super::RuntimeSideEffect]) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            super::RuntimeSideEffect::RenderClient {
+                reason: super::RenderInvalidationReason::ResizeDrag
+                    | super::RenderInvalidationReason::Resize
+                    | super::RenderInvalidationReason::Layout
+                    | super::RenderInvalidationReason::FullRedraw,
+                ..
+            }
+        )
+    })
 }
 
 /// Encodes one bounded clipboard write as transient version-two notifications.
@@ -1856,6 +1949,8 @@ async fn serve_registered_runtime_iroh_event_stream(
     let mut render_revision = 0u64;
     let mut sent_render_view: Option<serde_json::Value> = None;
     let mut sent_presentation_ids = Vec::new();
+    let mut render_limiter = None;
+    let mut deferred_render_triggers = None;
     if push_render {
         let snapshot = handle
             .render_iroh_client_snapshot(caller_client_id.clone(), true)
@@ -1917,6 +2012,9 @@ async fn serve_registered_runtime_iroh_event_stream(
         sent_presentation_ids = snapshot.presentation_ids;
         last_delivered_event_id = snapshot.event_cutoff;
         pending.clear();
+        let mut limiter = IrohRenderRateLimiter::new(snapshot.render_rate_limit_fps);
+        limiter.mark_flushed();
+        render_limiter = Some(limiter);
     }
     loop {
         if *stop.borrow() {
@@ -1962,12 +2060,16 @@ async fn serve_registered_runtime_iroh_event_stream(
             }
         }
         if pending.is_empty() {
+            let replay_from = deferred_render_triggers
+                .as_ref()
+                .and_then(|triggers: &IrohReadyRenderTriggers| triggers.last_event_id)
+                .unwrap_or(last_delivered_event_id);
             let _ = event_delivery.borrow_and_update();
             pending = match handle
                 .event_wakeups_for_client(
                     caller_client_id.clone(),
                     connection_id.clone(),
-                    last_delivered_event_id,
+                    replay_from,
                     IROH_EVENT_BATCH_LIMIT,
                 )
                 .await
@@ -1978,14 +2080,54 @@ async fn serve_registered_runtime_iroh_event_stream(
         }
         if push_render {
             let _ = side_effect_delivery.borrow_and_update();
-            let triggers = collect_ready_iroh_render_triggers(
+            let replay_from = deferred_render_triggers
+                .as_ref()
+                .and_then(|triggers: &IrohReadyRenderTriggers| triggers.last_event_id)
+                .unwrap_or(last_delivered_event_id);
+            let mut triggers = collect_ready_iroh_render_triggers(
                 &handle,
                 &caller_client_id,
                 &connection_id,
-                last_delivered_event_id,
+                replay_from,
                 std::mem::take(&mut pending),
             )
             .await?;
+            if let Some(deferred) = deferred_render_triggers.take() {
+                triggers.absorb(deferred);
+            }
+            if triggers.render_required
+                && !triggers.rate_limit_bypass
+                && let Some(delay) = render_limiter
+                    .as_ref()
+                    .and_then(IrohRenderRateLimiter::render_delay)
+                    .filter(|delay| !delay.is_zero())
+            {
+                let deadline_elapsed = tokio::select! {
+                    _ = tokio::time::sleep(delay) => true,
+                    changed = event_delivery.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        false
+                    }
+                    changed = side_effect_delivery.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        false
+                    }
+                    changed = stop.changed() => {
+                        if changed.is_err() || *stop.borrow() {
+                            break;
+                        }
+                        false
+                    }
+                };
+                if !deadline_elapsed {
+                    deferred_render_triggers = Some(triggers);
+                    continue;
+                }
+            }
             delivered =
                 delivered.saturating_add(u64::try_from(triggers.events).unwrap_or(u64::MAX));
             if triggers.render_required {
@@ -1998,6 +2140,9 @@ async fn serve_registered_runtime_iroh_event_stream(
                     .ok_or_else(|| {
                         MezError::invalid_state("Iroh v3 client stopped being renderable")
                     })?;
+                if let Some(render_limiter) = render_limiter.as_mut() {
+                    render_limiter.set_rate_limit(snapshot.render_rate_limit_fps);
+                }
                 let next_revision = render_revision.saturating_add(1);
                 let update = encode_iroh_render_update_frame(
                     &snapshot,
@@ -2069,6 +2214,10 @@ async fn serve_registered_runtime_iroh_event_stream(
                     render_revision = next_revision;
                     sent_render_view = Some(update.view);
                     sent_presentation_ids = snapshot.presentation_ids.clone();
+                    if let Some(render_limiter) = render_limiter.as_mut() {
+                        render_limiter.set_rate_limit(snapshot.render_rate_limit_fps);
+                        render_limiter.mark_flushed();
+                    }
                 }
                 last_delivered_event_id = snapshot.event_cutoff;
             } else if let Some(batch_last) = triggers.last_event_id {
@@ -2263,6 +2412,49 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// Verifies a remote render stream holds burst updates until its configured
+    /// cadence elapses, while a zero limit immediately disables that delay.
+    #[test]
+    fn iroh_render_rate_limiter_coalesces_bursts_and_honors_disable() {
+        let mut limiter = IrohRenderRateLimiter::new(30);
+        assert_eq!(limiter.render_delay(), None);
+
+        limiter.mark_flushed();
+        assert!(limiter.render_delay().is_some_and(|delay| !delay.is_zero()));
+
+        limiter.set_rate_limit(0);
+        assert_eq!(limiter.render_delay(), None);
+    }
+
+    /// Verifies only pane-output lifecycle work remains behind the remote
+    /// cadence gate while structural lifecycle and side-effect work bypass it.
+    #[test]
+    fn iroh_render_rate_gate_preserves_structural_update_priority() {
+        let output = crate::protocol::event::VisibleEvent {
+            id: 1,
+            time: "event:1".to_string(),
+            kind: EventKind::PaneChanged,
+            session_id: None,
+            payload: r#"{"output_bytes":65536}"#.to_string(),
+        };
+        let resize = crate::protocol::event::VisibleEvent {
+            id: 2,
+            time: "event:2".to_string(),
+            kind: EventKind::PaneChanged,
+            session_id: None,
+            payload: r#"{"layout":"resized"}"#.to_string(),
+        };
+
+        assert!(!iroh_event_render_bypasses_rate_limit(&output));
+        assert!(iroh_event_render_bypasses_rate_limit(&resize));
+        assert!(iroh_side_effect_render_bypasses_rate_limit(&[
+            RuntimeSideEffect::RenderClient {
+                client_id: mez_core::ids::ClientId::new('c', 1),
+                reason: RenderInvalidationReason::Layout,
+            },
+        ]));
     }
 
     /// Verifies logical render triggers retain the terminal output frame while

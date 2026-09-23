@@ -154,6 +154,8 @@ pub struct AsyncRenderedClientFrame {
 pub struct AsyncIrohRenderSnapshot {
     /// Complete logical view for the exact attached primary or observer.
     pub view: RenderedClientView,
+    /// Maximum pushed-render cadence resolved for this attached client.
+    pub(crate) render_rate_limit_fps: u64,
     /// Focus-label presentation IDs actually painted into this snapshot.
     pub(crate) presentation_ids: Vec<u64>,
     /// Optional client-space slot reserved for the locally composed Iroh pill.

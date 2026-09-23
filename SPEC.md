@@ -4014,9 +4014,10 @@ completion-attention title pills MUST use their stable attention color without
 an animation refresh timer.
 
 `terminal.render_rate_limit_fps` MUST default to 30. When nonzero, attached
-foreground clients SHOULD coalesce bursty render invalidations so ordinary
-output rendering is emitted no more frequently than the configured frame rate
-per client, while still delivering one trailing frame after a burst. A value of
+foreground clients and remote pushed-render streams SHOULD coalesce bursty
+render invalidations so ordinary output rendering is emitted no more frequently
+than the configured frame rate per client, while still delivering one trailing
+frame after a burst. A value of
 0 MUST disable render rate limiting. Initial attach frames, terminal cleanup,
 unsuperseded pending partial-output flushes, and user-input handling MUST NOT
 be delayed by this limit. When a newer render is waiting behind the rate gate,
