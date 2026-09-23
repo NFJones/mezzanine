@@ -128,6 +128,13 @@ pub(super) fn sqlite_i64(value: u64, field: &str) -> Result<i64> {
 
 /// Creates schema v3, migrates v1 and v2 in place, or rejects unsupported versions.
 fn initialize_schema(connection: &Connection) -> std::result::Result<(), SchemaFailure> {
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(SchemaFailure::Sqlite)?;
+    if version == SCHEMA_VERSION {
+        return Ok(());
+    }
+
     connection
         .execute_batch("BEGIN IMMEDIATE;")
         .map_err(SchemaFailure::Sqlite)?;

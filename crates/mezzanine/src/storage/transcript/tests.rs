@@ -3097,15 +3097,14 @@ fn transcript_store_catalog_latest_root_skips_subagents_and_stale_rows() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies an interactive catalog read fails fast with a retryable busy
-/// diagnostic while another writer holds the catalog.
+/// Verifies an interactive catalog read remains fast while another writer
+/// holds the catalog in WAL mode.
 ///
 /// Picker reads and prefix completion run inside the serialized runtime actor,
-/// so a contended writer must surface a retryable message within the short
-/// interactive budget instead of parking key handling behind the standard
-/// one-second database wait.
+/// so a contended writer must not park key handling behind a database write
+/// transaction when opening a catalog that already has the current schema.
 #[test]
-fn transcript_store_interactive_catalog_read_fails_fast_when_busy() {
+fn transcript_store_interactive_catalog_read_stays_fast_during_writer() {
     let root = temp_root("interactive-catalog-busy");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root);
@@ -3131,15 +3130,11 @@ fn transcript_store_interactive_catalog_read_fails_fast_when_busy() {
     holder.execute_batch("BEGIN IMMEDIATE;").unwrap();
 
     let started = std::time::Instant::now();
-    let error = store
+    let page = store
         .query_saved_sessions(&query)
-        .expect_err("a contended interactive read must fail");
+        .expect("a WAL reader should coexist with a catalog writer");
     let elapsed = started.elapsed();
-    assert!(
-        error.message().contains("saved-session catalog is busy"),
-        "{}",
-        error.message()
-    );
+    assert!(page.sessions.is_empty());
     assert!(
         elapsed < std::time::Duration::from_millis(900),
         "interactive reads must use the short budget: elapsed={elapsed:?}"
