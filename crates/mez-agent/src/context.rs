@@ -1754,6 +1754,32 @@ impl AgentContext {
         mut owns: impl FnMut(&ContextBlock) -> bool,
         blocks: Vec<ContextBlock>,
     ) -> AgentContextResult<usize> {
+        self.replace_imported_history_prefix_events(|event| owns(event.block()), blocks)
+    }
+
+    /// Replaces all imported historical events through a stable sequence boundary.
+    ///
+    /// The active turn records this boundary when transcript history is first
+    /// assembled. Unlike an event count, it remains valid when compaction
+    /// replaces several historical events with one summary while preserving
+    /// later prompt and same-turn chronology.
+    pub fn replace_imported_history_prefix_through_sequence(
+        &mut self,
+        sequence_high_water: u64,
+        blocks: Vec<ContextBlock>,
+    ) -> AgentContextResult<usize> {
+        self.replace_imported_history_prefix_events(
+            |event| event.sequence().get() <= sequence_high_water,
+            blocks,
+        )
+    }
+
+    /// Replaces a prefix selected from immutable chronology event identities.
+    fn replace_imported_history_prefix_events(
+        &mut self,
+        mut owns: impl FnMut(&ConversationEvent) -> bool,
+        blocks: Vec<ContextBlock>,
+    ) -> AgentContextResult<usize> {
         if blocks
             .iter()
             .any(|block| block.placement != ContextPlacement::ConversationAppend)
@@ -1767,7 +1793,7 @@ impl AgentContext {
             .chronology
             .iter()
             .enumerate()
-            .filter(|(_, event)| owns(&event.block))
+            .filter(|(_, event)| owns(event))
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         if owned_indices.iter().copied().ne(0..owned_indices.len()) {

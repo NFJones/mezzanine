@@ -176,8 +176,8 @@ struct RuntimeInterruptedAgentContinuation {
     conversation_id: String,
     /// Exact durable context assembled when the interrupted turn stopped.
     context: AgentContext,
-    /// Replayed history prefix retained inside the exact interrupted context.
-    imported_history_events: usize,
+    /// Highest chronology sequence owned by replayed history in this context.
+    imported_history_sequence_high_water: u64,
 }
 
 /// Turn-keyed routed metadata retained while a managed child awaits guidance.
@@ -671,11 +671,11 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_contexts: BTreeMap<String, AgentContext>,
     /// Receiver-owned peer presentation receipts awaiting durable pane settlement.
     received_peer_message_presentations: BTreeMap<String, RuntimeReceivedPeerMessagePresentation>,
-    /// Number of replayed history events at the front of each active turn.
+    /// Highest chronology sequence owned by replayed history in each active turn.
     ///
     /// Compaction refresh replaces exactly this prefix so prompt-boundary
     /// environment transitions and other task-local events remain immutable.
-    agent_turn_imported_history_events: BTreeMap<String, usize>,
+    agent_turn_imported_history_sequence_high_water: BTreeMap<String, u64>,
     /// Newly appended environment snapshot content keyed by owning turn id.
     ///
     /// Historical snapshots already present in replay are deliberately absent;
@@ -1735,43 +1735,48 @@ impl RuntimeSessionService {
         let Some(context) = self.agent.agent_turn_contexts.get(&turn.turn_id).cloned() else {
             return;
         };
-        let imported_history_events = self.agent_turn_imported_history_events(&turn.turn_id);
+        let imported_history_sequence_high_water =
+            self.agent_turn_imported_history_sequence_high_water(&turn.turn_id);
         self.agent.interrupted_agent_continuations.insert(
             turn.agent_id.clone(),
             RuntimeInterruptedAgentContinuation {
                 conversation_id: turn.conversation_id.clone(),
                 context,
-                imported_history_events,
+                imported_history_sequence_high_water,
             },
         );
     }
 
     /// Replaces fresh transcript replay with an exact interrupted chronology.
     ///
-    /// `imported_history_events` identifies the historical prefix in the fresh
-    /// context. Only task-local events assembled for the correcting prompt are
-    /// appended after the retained assistant/tool chronology.
+    /// `imported_history_sequence_high_water` identifies the historical prefix
+    /// in the fresh context. Only task-local events assembled for the correcting
+    /// prompt are appended after the retained assistant/tool chronology.
     pub(crate) fn prepare_interrupted_agent_continuation_context(
         &self,
         agent_id: &str,
         conversation_id: &str,
         fresh: AgentContext,
-        imported_history_events: usize,
-    ) -> Result<(AgentContext, bool, usize)> {
+        imported_history_sequence_high_water: u64,
+    ) -> Result<(AgentContext, bool, u64)> {
         let Some(continuation) = self
             .agent
             .interrupted_agent_continuations
             .get(agent_id)
             .filter(|continuation| continuation.conversation_id == conversation_id)
         else {
-            return Ok((fresh, false, imported_history_events));
+            return Ok((fresh, false, imported_history_sequence_high_water));
         };
 
         let mut resumed = continuation.context.clone();
         resumed.archive_active_user_prompt()?;
         resumed.replace_stable_slots(fresh.stable_slots().to_vec())?;
         resumed.set_metadata(fresh.metadata().clone());
-        for event in fresh.chronology().iter().skip(imported_history_events) {
+        for event in fresh
+            .chronology()
+            .iter()
+            .filter(|event| event.sequence().get() > imported_history_sequence_high_water)
+        {
             let block = event.block();
             match event.semantic_kind() {
                 mez_agent::ContextSemanticKind::TaskPrelude => {
@@ -1804,7 +1809,11 @@ impl RuntimeSessionService {
             }
         }
         resumed.validate_durable()?;
-        Ok((resumed, true, continuation.imported_history_events))
+        Ok((
+            resumed,
+            true,
+            continuation.imported_history_sequence_high_water,
+        ))
     }
 
     /// Consumes any prior interruption handoff after a new turn is enqueued.

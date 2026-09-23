@@ -123,8 +123,8 @@ pub(super) struct RuntimeAgentPromptContext {
         mez_agent::messaging::MessageSequence,
         mez_agent::messaging::Envelope,
     )>,
-    /// Number of replayed history events at the front of the context.
-    pub(super) imported_history_events: usize,
+    /// Highest chronology sequence owned by imported replay history.
+    pub(super) imported_history_sequence_high_water: u64,
     /// Environment projection frozen for this prompt, when available.
     pub(super) current_environment_snapshot: Option<String>,
     /// Environment transition newly appended for durable persistence, when any.
@@ -148,8 +148,8 @@ pub(super) struct RuntimePeerMessageTurnContext {
     )>,
     /// Number of unread peer messages included in the context.
     pub(super) delivered_message_count: usize,
-    /// Number of replayed history events at the front of the context.
-    pub(super) imported_history_events: usize,
+    /// Highest chronology sequence owned by imported replay history.
+    pub(super) imported_history_sequence_high_water: u64,
 }
 
 impl RuntimeSessionService {
@@ -231,7 +231,7 @@ impl RuntimeSessionService {
         }
         let mut blocks = history.blocks;
         let imported_execution_events = history.execution_events;
-        let imported_history_events = blocks.len();
+        let imported_history_block_count = blocks.len();
         let mut delivered_message_sequence = None;
         let mut delivered_messages = Vec::new();
         if include_unread_messages {
@@ -445,11 +445,15 @@ impl RuntimeSessionService {
         context
             .restore_imported_execution_events(&imported_execution_events)
             .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        let imported_history_sequence_high_water = imported_history_block_count
+            .checked_sub(1)
+            .and_then(|index| context.chronology().get(index))
+            .map_or(0, |event| event.sequence().get());
         Ok(RuntimeAgentPromptContext {
             context,
             delivered_message_sequence,
             delivered_messages,
-            imported_history_events,
+            imported_history_sequence_high_water,
             current_environment_snapshot,
             new_environment_snapshot,
         })
@@ -472,7 +476,7 @@ impl RuntimeSessionService {
         let history = self.runtime_agent_history_epoch_context(pane_id)?;
         let mut blocks = history.blocks;
         let imported_execution_events = history.execution_events;
-        let imported_history_events = blocks.len();
+        let imported_history_block_count = blocks.len();
         let identity = self.ensure_runtime_message_identity(
             &format!("agent-{pane_id}"),
             PaneId::opaque(pane_id.to_string()),
@@ -536,12 +540,16 @@ impl RuntimeSessionService {
         context
             .restore_imported_execution_events(&imported_execution_events)
             .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        let imported_history_sequence_high_water = imported_history_block_count
+            .checked_sub(1)
+            .and_then(|index| context.chronology().get(index))
+            .map_or(0, |event| event.sequence().get());
         Ok(RuntimePeerMessageTurnContext {
             context,
             delivered_message_sequence,
             delivered_messages,
             delivered_message_count,
-            imported_history_events,
+            imported_history_sequence_high_water,
         })
     }
 
@@ -748,7 +756,8 @@ impl RuntimeSessionService {
         let refreshed_history = self.runtime_agent_history_epoch_context(&turn.pane_id)?;
         let mut refreshed_blocks = refreshed_history.blocks;
         let refreshed_execution_events = refreshed_history.execution_events;
-        let imported_history_events = self.agent_turn_imported_history_events(turn_id);
+        let imported_history_sequence_high_water =
+            self.agent_turn_imported_history_sequence_high_water(turn_id);
 
         if !self.agent_turn_has_new_environment_snapshot(turn_id)
             && let Some(current_environment_snapshot) = self
@@ -774,25 +783,28 @@ impl RuntimeSessionService {
         let Some(mut refreshed_context) = self.agent_turn_contexts().get(turn_id).cloned() else {
             return Ok(false);
         };
-        if imported_history_events == 0 {
+        if imported_history_sequence_high_water == 0 {
             return Ok(false);
         }
-        let mut remaining_imported_events = imported_history_events;
-        let replacement_count = refreshed_context.replace_imported_history_prefix(
-            |_| {
-                let owned = remaining_imported_events > 0;
-                remaining_imported_events = remaining_imported_events.saturating_sub(1);
-                owned
-            },
-            refreshed_blocks,
-        )?;
+        let replacement_count = refreshed_context
+            .replace_imported_history_prefix_through_sequence(
+                imported_history_sequence_high_water,
+                refreshed_blocks,
+            )?;
         refreshed_context
             .restore_imported_execution_events(&refreshed_execution_events)
             .map_err(|error| MezError::invalid_state(error.to_string()))?;
         let refreshed_block_count = refreshed_context.blocks().len();
+        let refreshed_imported_history_sequence_high_water = replacement_count
+            .checked_sub(1)
+            .and_then(|index| refreshed_context.chronology().get(index))
+            .map_or(0, |event| event.sequence().get());
         self.agent_turn_contexts_mut()
             .insert(turn_id.to_string(), refreshed_context);
-        self.set_agent_turn_imported_history_events(turn_id.to_string(), replacement_count);
+        self.set_agent_turn_imported_history_sequence_high_water(
+            turn_id.to_string(),
+            refreshed_imported_history_sequence_high_water,
+        );
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,

@@ -6734,6 +6734,12 @@ tail MUST preserve author roles and exact visible assistant/user text so terse
 follow-up prompts can resolve recent references such as numbered list items.
 Older closed groups outside the raw tail SHOULD be represented by compact
 memory rather than replayed verbatim.
+Observed-input proactive compaction MUST preserve the active raw transcript
+replay boundary when its selected context ranges cannot be represented in the
+durable transcript projection without losing exact user or task barriers. In
+that case, the model-authored summary MAY be added to compact memory while the
+raw replay window remains unchanged; reducing that window requires a durable
+projection that preserves every unsummarized exact barrier and retained event.
 Provider-limit and manual compaction MUST expose at most one model-visible
 compaction block. Later compaction MUST recursively replace prior local or
 compatible legacy compaction blocks with one bounded rolling summary while

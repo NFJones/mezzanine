@@ -688,10 +688,15 @@ impl RuntimeSessionService {
         let Some(context) = self.agent_turn_contexts().get(&turn.turn_id) else {
             return Ok(Vec::new());
         };
-        let imported_history_events = self.agent_turn_imported_history_events(&turn.turn_id);
+        let imported_history_sequence_high_water =
+            self.agent_turn_imported_history_sequence_high_water(&turn.turn_id);
         let mut sequence = first_sequence;
         let mut entries = Vec::new();
-        for event in context.chronology().iter().skip(imported_history_events) {
+        for event in context
+            .chronology()
+            .iter()
+            .filter(|event| event.sequence().get() > imported_history_sequence_high_water)
+        {
             let block = event.block();
             if block.source == ContextSourceKind::UserInstruction && block.label == "user prompt" {
                 break;
@@ -764,13 +769,18 @@ impl RuntimeSessionService {
         let Some(context) = self.agent_turn_contexts().get(&turn.turn_id) else {
             return Ok(());
         };
-        let imported_history_events = self.agent_turn_imported_history_events(&turn.turn_id);
+        let imported_history_sequence_high_water =
+            self.agent_turn_imported_history_sequence_high_water(&turn.turn_id);
         let mut sequence = entries
             .last()
             .map_or(first_sequence, |entry| entry.sequence.saturating_add(1));
         let mut group_ordinals = BTreeMap::<String, u64>::new();
         let mut active_user_seen = false;
-        for event in context.chronology().iter().skip(imported_history_events) {
+        for event in context
+            .chronology()
+            .iter()
+            .filter(|event| event.sequence().get() > imported_history_sequence_high_water)
+        {
             let block = event.block();
             if block.source == ContextSourceKind::UserInstruction {
                 active_user_seen = true;

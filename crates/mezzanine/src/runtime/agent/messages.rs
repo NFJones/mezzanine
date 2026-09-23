@@ -1185,7 +1185,7 @@ impl RuntimeSessionService {
             delivered_message_sequence,
             delivered_messages,
             delivered_message_count,
-            imported_history_events,
+            imported_history_sequence_high_water,
         } = self.peer_message_turn_context(pane_id, now_ms)?;
         let Some(delivered_message_sequence) = delivered_message_sequence else {
             return Ok(0);
@@ -1233,7 +1233,10 @@ impl RuntimeSessionService {
         self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
-        self.set_agent_turn_imported_history_events(turn_id.clone(), imported_history_events);
+        self.set_agent_turn_imported_history_sequence_high_water(
+            turn_id.clone(),
+            imported_history_sequence_high_water,
+        );
         self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
         for (sequence, envelope) in delivered_messages.iter().cloned() {
             self.register_received_peer_message_presentation(

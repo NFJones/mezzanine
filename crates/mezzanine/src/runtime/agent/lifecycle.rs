@@ -219,7 +219,7 @@ impl RuntimeSessionService {
             .remove(turn_id);
         self.agent.agent_turn_peer_wait_wake_pending.remove(turn_id);
         self.agent
-            .agent_turn_imported_history_events
+            .agent_turn_imported_history_sequence_high_water
             .remove(turn_id);
         self.agent.agent_turn_environment_snapshots.remove(turn_id);
         self.agent

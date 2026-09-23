@@ -526,6 +526,233 @@ context_window_tokens = 40000
     );
 }
 
+/// Creates an observed-input compaction task from durable mixed-role history.
+///
+/// The seeded user instructions are exact history barriers and the current
+/// prompt is appended after them. The synthetic response reaches the ordinary
+/// continuation boundary so completion exercises the same active-turn refresh
+/// and replay-retention path as proactive compaction.
+fn queue_observed_input_compaction_with_exact_history() -> (
+    crate::runtime::RuntimeSessionService,
+    AgentTranscriptStore,
+    String,
+) {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "observed-input-exact-history".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "observed-input-exact-history"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.observed-input-exact-history]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+max_input_tokens = 100
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let transcript_store = AgentTranscriptStore::new(temp_root("observed-input-exact-history"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let session = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .clone();
+    let historical = [
+        (
+            mez_agent::transcript::TranscriptRole::User,
+            "EXACT_OLDER_USER_INSTRUCTION Keep the deployment rollback plan available.".to_string(),
+            "historical-turn-1",
+        ),
+        (
+            mez_agent::transcript::TranscriptRole::Assistant,
+            "Historical answer one. ".repeat(80),
+            "historical-turn-1",
+        ),
+        (
+            mez_agent::transcript::TranscriptRole::User,
+            "EXACT_SECOND_USER_INSTRUCTION Preserve the migration ordering.".to_string(),
+            "historical-turn-2",
+        ),
+        (
+            mez_agent::transcript::TranscriptRole::Assistant,
+            "Historical answer two. ".repeat(80),
+            "historical-turn-2",
+        ),
+        (
+            mez_agent::transcript::TranscriptRole::User,
+            "EXACT_THIRD_USER_INSTRUCTION Do not remove the compatibility check.".to_string(),
+            "historical-turn-3",
+        ),
+        (
+            mez_agent::transcript::TranscriptRole::Assistant,
+            "Historical answer three. ".repeat(80),
+            "historical-turn-3",
+        ),
+    ];
+    let historical_count = historical.len();
+    for (index, (role, content, turn_id)) in historical.into_iter().enumerate() {
+        transcript_store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: session.session_id.clone(),
+                sequence: u64::try_from(index + 1).unwrap(),
+                created_at_unix_seconds: 1,
+                role,
+                turn_id: turn_id.to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: content.to_string(),
+            })
+            .unwrap();
+    }
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", historical_count)
+        .unwrap();
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"observed-input-exact-history","method":"agent/shell/command","params":{"idempotency_key":"observed-input-exact-history","input":"CURRENT_USER_PROMPT Continue with the collected evidence."}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == task.turn_id)
+        .cloned()
+        .expect("pending provider task owns a running turn");
+    insert_test_context_block(
+        service
+            .agent_turn_contexts_mut()
+            .get_mut(&task.turn_id)
+            .unwrap(),
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "observed input evidence".to_string(),
+            content: "observed-input-exact-history-evidence ".repeat(500),
+        },
+    );
+    let response = runtime_say_response(&task.turn_id, "continue", false);
+    let action = response
+        .action_batch
+        .as_ref()
+        .and_then(|batch| batch.actions.first())
+        .cloned()
+        .expect("continuation response contains a say action");
+    service
+        .apply_agent_provider_execution(
+            &turn,
+            &task.model_profile,
+            "runtime-batch",
+            mez_agent::AgentTurnExecution {
+                request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
+                response,
+                latest_response_usage: mez_agent::ModelTokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 1,
+                    reasoning_tokens: 0,
+                    cached_input_tokens: Some(20),
+                    cache_write_input_tokens: None,
+                },
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                action_results: vec![mez_agent::ActionResult::succeeded(
+                    &turn,
+                    &action,
+                    vec!["continue".to_string()],
+                    None,
+                )],
+                final_turn: false,
+                terminal_state: AgentTurnState::Running,
+            },
+        )
+        .unwrap();
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some(),
+        "observed input should queue proactive compaction"
+    );
+    complete_runtime_test_compaction(
+        &mut service,
+        "%1",
+        "observed input summary without exact user instructions",
+    );
+    (service, transcript_store, turn.turn_id)
+}
+
+/// Verifies active-turn compaction refresh preserves the exact current prompt
+/// when compaction shrinks the imported durable-history prefix.
+///
+/// The imported event count is captured before compaction. Reusing that count
+/// after selected historical groups collapse to one summary can make the
+/// refresh predicate claim the current prompt as imported history and replace
+/// it with the shortened durable transcript.
+#[test]
+fn runtime_observed_compaction_refresh_preserves_current_user_prompt() {
+    let (service, _transcript_store, turn_id) =
+        queue_observed_input_compaction_with_exact_history();
+    let context = service
+        .agent_turn_contexts()
+        .get(&turn_id)
+        .expect("the running turn retains its refreshed context");
+    assert!(
+        context.blocks().iter().any(|block| {
+            block.label == "user prompt"
+                && block.content == "CURRENT_USER_PROMPT Continue with the collected evidence."
+        }),
+        "the active prompt must remain exact after compaction refresh: {:#?}",
+        context.blocks()
+    );
+}
+
+/// Verifies proactive compaction keeps exact user instructions that were not
+/// included in the model-authored summary available to the next turn.
+///
+/// Durable replay must represent the same selected ranges as the live
+/// compacted context. Retaining only the newest transcript count is not valid
+/// when exact barriers inside the selected history were intentionally omitted
+/// from summary input.
+#[test]
+fn runtime_observed_compaction_retains_unsummarized_exact_history_for_replay() {
+    let (mut service, _transcript_store, _turn_id) =
+        queue_observed_input_compaction_with_exact_history();
+    let next_context = service
+        .agent_context_for_pane_prompt("%1", "NEXT_USER_PROMPT Continue.", 0)
+        .unwrap();
+    assert!(
+        [
+            "EXACT_OLDER_USER_INSTRUCTION",
+            "EXACT_SECOND_USER_INSTRUCTION",
+            "EXACT_THIRD_USER_INSTRUCTION",
+        ]
+        .iter()
+        .all(|marker| {
+            next_context
+                .blocks()
+                .iter()
+                .any(|block| block.content.contains(marker))
+        }),
+        "every exact historical instruction omitted from summary input must remain replayable: {:#?}",
+        next_context.blocks()
+    );
+}
+
 /// Verifies an execution response at the configured input threshold defers its
 /// continuation into model-backed active-turn compaction.
 ///

@@ -103,6 +103,13 @@ and protects active prompts and steering instructions from summarization. A
 summary is intentionally lossy; start `/new` when old context should not affect
 a new task, or use `/resume` to choose a saved conversation.
 
+Observed-input compaction also protects exact historical user instructions that
+the live context planner excludes from summary input. Until durable replay can
+represent the selected compaction ranges without losing those barriers, this
+path may add a compact-memory summary while leaving the raw transcript replay
+boundary unchanged. This is safer than silently discarding exact history, but
+does not reduce replayed transcript size.
+
 Use `/status` for current-pane context and token information. Cache reuse is a
 provider observation, not proof that context is correct: provider/model changes
 and compaction can legitimately create a cold request. Consult operations

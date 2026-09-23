@@ -1553,7 +1553,7 @@ impl RuntimeSessionService {
             context,
             delivered_message_sequence,
             delivered_messages,
-            imported_history_events,
+            imported_history_sequence_high_water,
             current_environment_snapshot,
             new_environment_snapshot,
         } = self.agent_context_for_pane_prompt_with_history(pane_id, prompt, true, history)?;
@@ -1586,12 +1586,12 @@ impl RuntimeSessionService {
             ));
         };
         self.publish_prepared_runtime_agent_objective(&agent_id, objective.as_deref());
-        let (context, continued_interrupted_turn, active_imported_history_events) = self
-            .prepare_interrupted_agent_continuation_context(
+        let (context, continued_interrupted_turn, active_imported_history_sequence_high_water) =
+            self.prepare_interrupted_agent_continuation_context(
                 &agent_id,
                 &conversation_id,
                 fresh_context,
-                imported_history_events,
+                imported_history_sequence_high_water,
             )?;
         context.validate_placement_order()?;
         let turn_id = self.next_agent_turn_id();
@@ -1653,9 +1653,9 @@ impl RuntimeSessionService {
         )?;
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
-        self.set_agent_turn_imported_history_events(
+        self.set_agent_turn_imported_history_sequence_high_water(
             turn_id.clone(),
-            active_imported_history_events,
+            active_imported_history_sequence_high_water,
         );
         if let Some(content) = current_environment_snapshot {
             self.set_agent_turn_current_environment_snapshot(turn_id.clone(), content);

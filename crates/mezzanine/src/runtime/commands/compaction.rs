@@ -356,7 +356,14 @@ impl RuntimeSessionService {
                 RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => 0,
                 RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => transcript_entries,
             },
-            retained_transcript_entries: 0,
+            // The live context planner can omit exact transcript user events
+            // from summary input because they are protected barriers. Until
+            // durable replay can represent the same selected event ranges,
+            // preserve this raw window instead of silently dropping barriers.
+            retained_transcript_entries: match trigger {
+                RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => 0,
+                RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => transcript_entries,
+            },
             summarized_entries: plan.replacement_blocks().len(),
             model_profile_name,
             model_profile,

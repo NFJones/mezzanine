@@ -48,24 +48,24 @@ impl RuntimeSessionService {
         &mut self.agent.agent_turn_contexts
     }
 
-    /// Records the replayed-history prefix length for one active turn.
-    pub(crate) fn set_agent_turn_imported_history_events(
+    /// Records the replayed-history sequence boundary for one active turn.
+    pub(crate) fn set_agent_turn_imported_history_sequence_high_water(
         &mut self,
         turn_id: impl Into<String>,
-        event_count: usize,
+        sequence_high_water: u64,
     ) {
         self.agent
-            .agent_turn_imported_history_events
-            .insert(turn_id.into(), event_count);
+            .agent_turn_imported_history_sequence_high_water
+            .insert(turn_id.into(), sequence_high_water);
     }
 
-    /// Returns the replayed-history prefix length retained for one active turn.
-    pub(crate) fn agent_turn_imported_history_events(&self, turn_id: &str) -> usize {
+    /// Returns the replayed-history sequence boundary retained for one active turn.
+    pub(crate) fn agent_turn_imported_history_sequence_high_water(&self, turn_id: &str) -> u64 {
         self.agent
-            .agent_turn_imported_history_events
+            .agent_turn_imported_history_sequence_high_water
             .get(turn_id)
             .copied()
-            .unwrap_or(0)
+            .unwrap_or_default()
     }
 
     /// Records one newly appended environment snapshot for atomic turn persistence.
