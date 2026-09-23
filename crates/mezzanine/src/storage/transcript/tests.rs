@@ -38,6 +38,92 @@ fn temp_root(name: &str) -> PathBuf {
     ))
 }
 
+/// Holds a catalog advisory lock from a separate process for contention tests.
+#[test]
+#[ignore = "spawned as a child process by catalog lock contention tests"]
+fn catalog_lock_holder_child_process() {
+    let lock_path = std::env::var_os("MEZ_TEST_CATALOG_LOCK_PATH")
+        .expect("catalog lock child path is set by its parent");
+    let ready_path = std::env::var_os("MEZ_TEST_CATALOG_LOCK_READY_PATH")
+        .expect("catalog lock child readiness path is set by its parent");
+    let shared = std::env::var("MEZ_TEST_CATALOG_LOCK_SHARED")
+        .expect("catalog lock mode is set by its parent")
+        == "true";
+    let hold_millis = std::env::var("MEZ_TEST_CATALOG_LOCK_HOLD_MILLIS")
+        .expect("catalog lock duration is set by its parent")
+        .parse::<u64>()
+        .expect("catalog lock duration is an integer");
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .expect("catalog lock file is available");
+    let operation = if shared {
+        rustix::fs::FlockOperation::LockShared
+    } else {
+        rustix::fs::FlockOperation::LockExclusive
+    };
+    rustix::fs::flock(&lock, operation).expect("child should acquire the catalog lock");
+    fs::write(ready_path, b"ready").expect("child should signal lock ownership");
+    thread::sleep(std::time::Duration::from_millis(hold_millis));
+}
+
+/// Starts the ignored lock-holder test and waits until its separate process
+/// confirms that it owns the requested catalog lock.
+fn spawn_catalog_lock_holder(
+    lock_path: &std::path::Path,
+    shared: bool,
+    hold: std::time::Duration,
+) -> std::process::Child {
+    use std::process::{Command, Stdio};
+
+    let ready_path = lock_path.with_extension("lock-holder-ready");
+    let _ = fs::remove_file(&ready_path);
+    let mut child = Command::new(std::env::current_exe().expect("test executable is available"))
+        .args([
+            "--exact",
+            "storage::transcript::tests::catalog_lock_holder_child_process",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("MEZ_TEST_CATALOG_LOCK_PATH", lock_path)
+        .env("MEZ_TEST_CATALOG_LOCK_READY_PATH", &ready_path)
+        .env("MEZ_TEST_CATALOG_LOCK_SHARED", shared.to_string())
+        .env(
+            "MEZ_TEST_CATALOG_LOCK_HOLD_MILLIS",
+            hold.as_millis().to_string(),
+        )
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("catalog lock holder child should start");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !ready_path.exists() {
+        if let Some(status) = child
+            .try_wait()
+            .expect("catalog lock holder child should remain observable")
+        {
+            panic!("catalog lock holder exited before acquiring its lock: {status}");
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("catalog lock holder did not acquire its lock before the deadline");
+        }
+        thread::sleep(std::time::Duration::from_millis(2));
+    }
+    child
+}
+
+/// Waits for a bounded catalog lock-holder process to release its lock.
+fn wait_for_catalog_lock_holder(mut child: std::process::Child) {
+    let status = child
+        .wait()
+        .expect("catalog lock holder child should exit cleanly");
+    assert!(status.success(), "catalog lock holder failed: {status}");
+}
+
 /// Runs the entry operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -3192,24 +3278,17 @@ fn transcript_store_catalog_mutation_waits_for_advisory_writer_lock() {
     store.initialize(100).unwrap();
 
     let lock_path = root.join(".catalog-migration.lock");
-    let writer_ready = Arc::new(Barrier::new(2));
-    let writer_ready_for_thread = writer_ready.clone();
-    let writer = thread::spawn(move || {
-        let lock = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(lock_path)
-            .unwrap();
-        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
-        writer_ready_for_thread.wait();
-        thread::sleep(std::time::Duration::from_millis(25));
-    });
-    writer_ready.wait();
+    let writer = spawn_catalog_lock_holder(&lock_path, false, std::time::Duration::from_millis(75));
 
+    let started_at = std::time::Instant::now();
     store
         .append(&entry("mutation-waits-for-lock", 1, TranscriptRole::User))
         .expect("catalog mutation should wait for the active advisory writer");
-    writer.join().unwrap();
+    assert!(
+        started_at.elapsed() >= std::time::Duration::from_millis(25),
+        "catalog mutation unexpectedly bypassed the cross-process writer lock"
+    );
+    wait_for_catalog_lock_holder(writer);
     assert!(
         store
             .catalog_saved_session("mutation-waits-for-lock")
@@ -3229,19 +3308,7 @@ fn transcript_store_catalog_mutation_waits_for_advisory_reader_lock() {
     store.initialize(100).unwrap();
 
     let lock_path = root.join(".catalog-migration.lock");
-    let reader_ready = Arc::new(Barrier::new(2));
-    let reader_ready_for_thread = reader_ready.clone();
-    let reader = thread::spawn(move || {
-        let lock = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(lock_path)
-            .unwrap();
-        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockShared).unwrap();
-        reader_ready_for_thread.wait();
-        thread::sleep(std::time::Duration::from_millis(50));
-    });
-    reader_ready.wait();
+    let reader = spawn_catalog_lock_holder(&lock_path, true, std::time::Duration::from_millis(75));
 
     let started_at = std::time::Instant::now();
     store
@@ -3255,7 +3322,7 @@ fn transcript_store_catalog_mutation_waits_for_advisory_reader_lock() {
         started_at.elapsed() >= std::time::Duration::from_millis(25),
         "catalog mutation unexpectedly bypassed shared advisory ownership"
     );
-    reader.join().unwrap();
+    wait_for_catalog_lock_holder(reader);
     assert!(
         store
             .catalog_saved_session("mutation-waits-for-reader-lock")
@@ -3370,18 +3437,8 @@ fn transcript_store_interactive_catalog_read_fails_fast_when_lock_held() {
         .parent()
         .expect("catalog lives under the store root")
         .join(".catalog-migration.lock");
-    let lock_file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-        .unwrap();
-    rustix::fs::flock(
-        &lock_file,
-        rustix::fs::FlockOperation::NonBlockingLockExclusive,
-    )
-    .unwrap();
+    let lock_holder =
+        spawn_catalog_lock_holder(&lock_path, false, std::time::Duration::from_millis(300));
 
     let started = std::time::Instant::now();
     let error = store
@@ -3413,7 +3470,7 @@ fn transcript_store_interactive_catalog_read_fails_fast_when_lock_held() {
         detail_elapsed < std::time::Duration::from_millis(900),
         "picker detail reads must use the short lock budget: elapsed={detail_elapsed:?}"
     );
-    drop(lock_file);
+    wait_for_catalog_lock_holder(lock_holder);
 }
 
 /// Verifies completion is bounded and root-only, while picker pages retain
