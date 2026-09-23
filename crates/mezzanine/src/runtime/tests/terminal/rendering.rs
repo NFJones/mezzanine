@@ -1675,6 +1675,110 @@ fn runtime_mouse_focus_targets_content_below_merged_top_pane_frame() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies keyboard and mouse focus can move between normal and alternate-screen
+/// panes without escalating either metadata change to a full terminal redraw.
+#[test]
+fn runtime_focus_between_normal_and_alternate_screen_panes_uses_view_refresh() {
+    let size = Size::new(20, 8).unwrap();
+    let mut service = test_runtime_service_with_size(size);
+    service.set_frame_visibility_for_tests(false, false);
+    let primary = service.attach_primary("primary", true, size, 120).unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneHorizontal)
+            .unwrap()
+    );
+    service.session.select_pane(&primary, "%1").unwrap();
+
+    let normal_size = service.session().windows()[0]
+        .panes()
+        .iter()
+        .find(|pane| pane.id.as_str() == "%1")
+        .unwrap()
+        .size;
+    let alternate_size = service.session().windows()[0]
+        .panes()
+        .iter()
+        .find(|pane| pane.id.as_str() == "%2")
+        .unwrap()
+        .size;
+    let mut normal_screen = TerminalScreen::new(normal_size, 10).unwrap();
+    normal_screen.feed(b"normal pane");
+    service.set_pane_screen("%1", normal_screen);
+    let mut alternate_screen = TerminalScreen::new(alternate_size, 10).unwrap();
+    alternate_screen.feed(b"\x1b[?1049halt pane");
+    assert!(alternate_screen.alternate_screen_active());
+    service.set_pane_screen("%2", alternate_screen);
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let window = service.session().active_window().unwrap();
+    let plan = service.window_presentation_plan_for_tests(window).unwrap();
+    let normal_row = plan.panes[0].content_region.row;
+
+    let alternate_focus = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ExecuteMux(MuxAction::FocusPane(
+                    PaneFocusDirection::Down,
+                ))],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(alternate_focus.view_refresh_required);
+    assert!(!alternate_focus.full_redraw_required);
+    assert_eq!(
+        service.session().windows()[0].active_pane().id.as_str(),
+        "%2"
+    );
+    assert!(
+        service
+            .render_client_view(ClientViewRole::Primary, size, &config)
+            .unwrap()
+            .unwrap()
+            .alternate_screen
+    );
+
+    let normal_focus = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::FocusPaneOnly(CopyPosition {
+                        line: usize::from(normal_row),
+                        column: 0,
+                    }),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(normal_focus.view_refresh_required);
+    assert!(!normal_focus.full_redraw_required);
+    assert_eq!(
+        service.session().windows()[0].active_pane().id.as_str(),
+        "%1"
+    );
+    assert!(
+        !service
+            .render_client_view(ClientViewRole::Primary, size, &config)
+            .unwrap()
+            .unwrap()
+            .alternate_screen
+    );
+}
+
 /// Verifies that the pane agent status latency selector opens, populates with
 /// the three allowed latency values, applies a selection as a pane-local
 /// override, closes after selection, and surfaces the latency value in the

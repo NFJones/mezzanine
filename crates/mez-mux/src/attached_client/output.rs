@@ -79,8 +79,6 @@ pub struct AttachedTerminalOutputFrameState {
     bracketed_paste: bool,
     /// Whether host focus event reporting was enabled for the retained frame.
     focus_events: bool,
-    /// Whether alternate-screen host presentation was enabled for the retained frame.
-    alternate_screen: bool,
     /// Whether host mouse reporting was enabled for the retained frame.
     host_mouse_reporting: bool,
     /// Cursor presentation sequence emitted by the retained frame.
@@ -114,7 +112,6 @@ impl AttachedTerminalOutputFrameState {
             line_style_spans: normalized_style_span_rows(line_style_spans, lines.len()),
             bracketed_paste: modes.bracketed_paste,
             focus_events: modes.focus_events,
-            alternate_screen: modes.alternate_screen,
             host_mouse_reporting: modes.host_mouse_reporting,
             cursor_presentation: cursor_presentation_sequence(lines, modes),
         }
@@ -134,7 +131,6 @@ impl AttachedTerminalOutputFrameState {
             line_style_spans,
             bracketed_paste: modes.bracketed_paste,
             focus_events: modes.focus_events,
-            alternate_screen: modes.alternate_screen,
             host_mouse_reporting: modes.host_mouse_reporting,
             cursor_presentation,
         }
@@ -258,9 +254,7 @@ pub fn encode_attached_terminal_output_update_frame_with_styles_and_transitions(
             transitions,
         );
     };
-    if output_row_count_changed(previous, lines)
-        || previous.alternate_screen != modes.alternate_screen
-    {
+    if output_row_count_changed(previous, lines) {
         return encode_attached_terminal_output_frame_with_styles_and_transitions(
             lines,
             line_style_spans,

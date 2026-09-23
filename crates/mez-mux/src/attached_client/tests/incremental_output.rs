@@ -574,39 +574,68 @@ fn attached_terminal_output_update_omits_unchanged_frame_bytes() {
     assert!(frame.is_empty(), "{:?}", String::from_utf8_lossy(&frame));
 }
 
-/// Verifies alternate-screen exit forces a full attached-terminal redraw even
-/// when the visible row count is unchanged. Exiting a fullscreen pane app can
-/// restore the shell prompt beneath stale host rows unless the diff encoder
-/// clears and repaints the composed normal-screen view in one frame.
+/// Verifies pane-local alternate-screen metadata changes do not invalidate the
+/// attached host's retained frame. Focus can switch between panes with
+/// different buffer modes without changing the host terminal's normal-screen
+/// presentation; unchanged cells need no output and changed/shrinking rows
+/// remain safely differential in both directions.
 #[test]
-fn attached_terminal_output_update_full_redraws_on_alternate_screen_exit() {
-    let lines = vec!["one    ".to_string(), "two    ".to_string()];
-    let previous_modes = AttachedTerminalOutputModes {
-        cursor_visible: true,
-        cursor_blink: false,
-        alternate_screen: true,
-        ..AttachedTerminalOutputModes::default()
-    };
-    let previous = AttachedTerminalOutputFrameState::new_with_modes(&lines, &[], previous_modes);
-    let next_modes = AttachedTerminalOutputModes {
-        alternate_screen: false,
-        ..previous_modes
-    };
+fn attached_terminal_output_update_diffs_across_alternate_screen_metadata_changes() {
+    let prior_lines = vec!["one    ".to_string(), "two    ".to_string()];
+    let next_lines = vec!["one".to_string(), "changed".to_string()];
 
-    let frame = encode_attached_terminal_output_update_frame_with_styles(
-        &lines,
-        &[],
-        None,
-        next_modes,
-        Some(&previous),
-    );
-    let rendered = String::from_utf8(frame).unwrap();
+    for (previous_alternate, next_alternate) in [(true, false), (false, true)] {
+        let previous_modes = AttachedTerminalOutputModes {
+            cursor_visible: true,
+            cursor_blink: false,
+            alternate_screen: previous_alternate,
+            ..AttachedTerminalOutputModes::default()
+        };
+        let previous =
+            AttachedTerminalOutputFrameState::new_with_modes(&prior_lines, &[], previous_modes);
+        let next_modes = AttachedTerminalOutputModes {
+            alternate_screen: next_alternate,
+            ..previous_modes
+        };
 
-    assert!(!rendered.contains("\x1b[?1049h"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[?1049l"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[2J\x1b[H"), "{rendered:?}");
-    assert!(rendered.contains("one    "), "{rendered:?}");
-    assert!(rendered.contains("two    "), "{rendered:?}");
+        let unchanged = encode_attached_terminal_output_update_frame_with_styles(
+            &prior_lines,
+            &[],
+            None,
+            next_modes,
+            Some(&previous),
+        );
+        assert!(
+            unchanged.is_empty(),
+            "{previous_alternate}->{next_alternate}: {:?}",
+            String::from_utf8_lossy(&unchanged)
+        );
+
+        let changed = encode_attached_terminal_output_update_frame_with_styles(
+            &next_lines,
+            &[],
+            None,
+            next_modes,
+            Some(&previous),
+        );
+        let rendered = String::from_utf8(changed).unwrap();
+        assert!(
+            !rendered.contains("\x1b[2J"),
+            "{previous_alternate}->{next_alternate}: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("\x1b[1;1H\x1b[0m\x1b[2Kone"),
+            "{previous_alternate}->{next_alternate}: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("changed"),
+            "{previous_alternate}->{next_alternate}: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("\x1b[?1049h"),
+            "{previous_alternate}->{next_alternate}: {rendered:?}"
+        );
+    }
 }
 
 /// Verifies stable-size attached-terminal updates emit only cursor bytes when
