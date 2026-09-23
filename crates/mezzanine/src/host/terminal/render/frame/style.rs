@@ -596,13 +596,16 @@ pub(in crate::host::terminal::render) fn pane_frame_agent_status_scan_spans(
         return Vec::new();
     }
     let base_pair = ui_theme.colors.agent_status_running;
+    // The running pill's static background is now a quiet container. For the
+    // active wave, restore v0.3.0's primary fill via the active-window color.
+    let wave_base_background = ui_theme.colors.window_active.background;
     let palette = agent_status_running_gradient_palette(ui_theme);
     let mut spans = Vec::with_capacity(width);
     for column in 0..width {
         let (offset, intensity) = agent_status_scan_column(column, width, tick_ms);
         let highlight = gradient_highlight_for_offset(&palette, offset);
         let background = animated_scan_background(
-            base_pair.background,
+            wave_base_background,
             highlight,
             intensity,
             AGENT_STATUS_WAVE_INTENSITY_MAX,
@@ -767,6 +770,33 @@ mod agent_status_wave_tests {
         assert_eq!(
             agent_status_scan_column(4, width, AGENT_STATUS_WAVE_CELL_TRAVEL_MS),
             agent_status_scan_column(3, width, 0),
+        );
+    }
+
+    /// Verifies the active wave falls back to the historical primary fill
+    /// outside its highlight band, while the static running color remains the
+    /// quiet container used by reduced-motion and non-animated rendering.
+    #[test]
+    fn active_status_wave_uses_primary_fill_without_changing_static_color() {
+        let theme = mez_mux::theme::deepforest_ui_theme();
+        assert_ne!(
+            theme.colors.window_active.background,
+            theme.colors.agent_status_running.background
+        );
+
+        let width = 64;
+        let spans = pane_frame_agent_status_scan_spans(0, width, 0, &theme);
+        let trailing_span = spans.last().expect("the scan should cover its status text");
+
+        assert_eq!(trailing_span.start + trailing_span.length, width);
+        assert_eq!(
+            trailing_span.rendition.background,
+            Some(theme.colors.window_active.background)
+        );
+        let static_rendition = pane_frame_agent_status_rendition("running", &theme);
+        assert_eq!(
+            static_rendition.background,
+            Some(theme.colors.agent_status_running.background)
         );
     }
 }
