@@ -213,6 +213,11 @@ pub(crate) struct HostIrohInvitationIssuer {
 }
 
 impl HostIrohInvitationIssuer {
+    /// Returns the configured default lifetime for host pairing invitations.
+    pub(crate) fn invitation_ttl_seconds(&self) -> u64 {
+        self.policy.invitation_ttl.as_secs()
+    }
+
     /// Creates one host-scoped invitation with explicit routing authority.
     pub(crate) fn create_invitation(
         &self,

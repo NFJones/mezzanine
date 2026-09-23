@@ -853,7 +853,7 @@ impl HostServer {
                         })
                     })
                     .transpose()?
-                    .unwrap_or(600);
+                    .unwrap_or_else(|| issuer.invitation_ttl_seconds());
                 let profile_name = params
                     .get("profile_name")
                     .and_then(Value::as_str)
@@ -2570,6 +2570,67 @@ mod tests {
         let replay = exchange_host_request(&restarted, "lease/revoke", params).await;
         assert_eq!(replay["result"], first["result"]);
         drop(restarted);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies persistent-host invitations use the configured Iroh lifetime
+    /// when the request omits an override, while an explicit expiry retains
+    /// precedence over that configured default.
+    #[tokio::test(flavor = "current_thread")]
+    async fn remote_invite_uses_configured_ttl_unless_explicitly_overridden() {
+        let root = test_root("remote-invite-configured-ttl");
+        let reservation = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let bind_port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let policy = crate::runtime::RuntimeIrohTransportPolicy {
+            enabled: true,
+            identity: crate::runtime::RuntimeIrohIdentityPolicy::Host,
+            bind_port,
+            invitation_ttl: Duration::from_secs(120),
+            compression_codecs: vec![crate::runtime::RuntimeIrohCompressionCodec::None],
+            setup_timeout: Duration::from_secs(10),
+            ..crate::runtime::RuntimeIrohTransportPolicy::default()
+        };
+        let iroh = crate::host::iroh::HostIrohRuntime::bind(&root, policy)
+            .await
+            .unwrap()
+            .expect("enabled host Iroh policy binds an invitation issuer");
+        let mut host_config = config(root.clone());
+        host_config.iroh_invitation_issuer = Some(iroh.invitation_issuer());
+        let host = HostServer::bind(host_config).unwrap();
+
+        let now = current_unix_seconds().unwrap();
+        let (default_invitation, _) = host
+            .dispatch_request(&json!({
+                "jsonrpc": "2.0",
+                "id": "configured-ttl",
+                "method": "remote/invite",
+                "params": {}
+            }))
+            .await
+            .unwrap();
+        let (override_invitation, _) = host
+            .dispatch_request(&json!({
+                "jsonrpc": "2.0",
+                "id": "override-ttl",
+                "method": "remote/invite",
+                "params": {"expires_seconds": 180}
+            }))
+            .await
+            .unwrap();
+
+        let default_ttl = default_invitation["expires_at_unix_seconds"]
+            .as_u64()
+            .expect("default invitation includes an expiry")
+            .saturating_sub(now);
+        let override_ttl = override_invitation["expires_at_unix_seconds"]
+            .as_u64()
+            .expect("override invitation includes an expiry")
+            .saturating_sub(now);
+        assert!((120..=121).contains(&default_ttl), "{default_ttl}");
+        assert!((180..=181).contains(&override_ttl), "{override_ttl}");
+        drop(host);
+        drop(iroh);
         let _ = fs::remove_dir_all(root);
     }
 
