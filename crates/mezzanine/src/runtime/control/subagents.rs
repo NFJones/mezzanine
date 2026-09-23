@@ -879,6 +879,13 @@ impl RuntimeSessionService {
                             reasoning_profile: profile.reasoning_profile.clone(),
                             latency_preference: profile.latency_preference.clone(),
                             provider_options: profile.provider_options.clone(),
+                            capabilities: profile
+                                .provider_options
+                                .get("model_capabilities")
+                                .map(|value| value.split(',').map(ToOwned::to_owned).collect()),
+                            model_capabilities: Some(profile.model_capabilities.clone()),
+                            multimodal_required: Some(profile.multimodal_required),
+                            safety_tier: profile.safety_tier.clone(),
                         },
                     )
             } else {

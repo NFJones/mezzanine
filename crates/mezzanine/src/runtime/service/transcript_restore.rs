@@ -735,6 +735,13 @@ impl RuntimeSessionService {
                             reasoning_profile: profile.reasoning_profile.clone(),
                             latency_preference: profile.latency_preference.clone(),
                             provider_options: profile.provider_options.clone(),
+                            capabilities: profile
+                                .provider_options
+                                .get("model_capabilities")
+                                .map(|value| value.split(',').map(ToOwned::to_owned).collect()),
+                            model_capabilities: Some(profile.model_capabilities.clone()),
+                            multimodal_required: Some(profile.multimodal_required),
+                            safety_tier: profile.safety_tier.clone(),
                         }),
                     planning_enabled: self.agent_planning_enabled(&session.pane_id),
                     response_style: self
@@ -830,6 +837,10 @@ impl RuntimeSessionService {
                     reasoning_profile: selection.reasoning_profile.clone(),
                     latency_preference: selection.latency_preference.clone(),
                     provider_options: selection.provider_options.clone(),
+                    capabilities: selection.capabilities.clone(),
+                    model_capabilities: selection.model_capabilities.clone(),
+                    multimodal_required: selection.multimodal_required,
+                    safety_tier: selection.safety_tier.clone(),
                 },
             );
         self.restore_model_profile_identity(pane_id, profile_name, selection.as_ref(), false);
@@ -875,7 +886,19 @@ impl RuntimeSessionService {
             model: selection.model.clone(),
             reasoning_profile: selection.reasoning_profile.clone(),
             latency_preference: selection.latency_preference.clone(),
+            reasoning_levels: selection
+                .model_capabilities
+                .as_ref()
+                .and_then(|capabilities| {
+                    (capabilities.metadata_policy
+                        == mez_agent::ModelCapabilityMetadataPolicy::ModelMetadata
+                        && capabilities.reasoning_efforts_explicit)
+                        .then(|| capabilities.supported_reasoning_efforts.clone())
+                }),
+            capabilities: selection.capabilities.clone(),
             provider_options: selection.provider_options.clone(),
+            multimodal_required: selection.multimodal_required,
+            safety_tier: selection.safety_tier.clone(),
             ..mez_agent::ModelProfileDefinition::default()
         };
         // A captured name that resolves and is not a runtime-generated owner belongs
@@ -1052,6 +1075,21 @@ impl RuntimeSessionService {
         }
         if profile.provider_options != selection.provider_options {
             differing.push("provider_options");
+        }
+        if let Some(capabilities) = selection.model_capabilities.as_ref()
+            && profile.model_capabilities != *capabilities
+        {
+            differing.push("model_capabilities");
+        }
+        if let Some(multimodal_required) = selection.multimodal_required
+            && profile.multimodal_required != multimodal_required
+        {
+            differing.push("multimodal_required");
+        }
+        if let Some(safety_tier) = selection.safety_tier.as_ref()
+            && profile.safety_tier.as_ref() != Some(safety_tier)
+        {
+            differing.push("safety_tier");
         }
         (!differing.is_empty()).then(|| differing.join(","))
     }

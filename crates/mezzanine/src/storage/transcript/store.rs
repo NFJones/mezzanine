@@ -117,6 +117,18 @@ pub(crate) struct AgentModelProfileSelection {
     /// Provider options carried by the generated definition.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) provider_options: BTreeMap<String, String>,
+    /// Raw capability metadata needed to rematerialize model-specific behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) capabilities: Option<Vec<String>>,
+    /// Effective typed capabilities captured for the selected model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) model_capabilities: Option<mez_agent::ModelCapabilities>,
+    /// Whether the profile requires multimodal input, when captured by this format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) multimodal_required: Option<bool>,
+    /// Failover safety tier captured for the selected profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) safety_tier: Option<String>,
 }
 
 /// Rejects incomplete child sidecars while preserving true legacy root

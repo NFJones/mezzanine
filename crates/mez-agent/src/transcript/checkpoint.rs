@@ -82,6 +82,18 @@ pub struct PaneModelProfileSelection {
     pub latency_preference: Option<String>,
     /// Provider options captured for the effective profile.
     pub provider_options: BTreeMap<String, String>,
+    /// Raw capability metadata needed to rematerialize model-specific behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+    /// Effective typed capabilities captured for the selected model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_capabilities: Option<crate::ModelCapabilities>,
+    /// Whether the profile requires multimodal input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multimodal_required: Option<bool>,
+    /// Failover safety tier captured for the selected profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safety_tier: Option<String>,
 }
 
 impl AgentSessionMetadata {

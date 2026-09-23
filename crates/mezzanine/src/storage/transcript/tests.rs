@@ -2112,6 +2112,10 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
                 "service_tier".to_string(),
                 "priority".to_string(),
             )]),
+            capabilities: None,
+            model_capabilities: None,
+            multimodal_required: None,
+            safety_tier: None,
         }),
         planning_enabled: true,
         response_style: Some("concise".to_string()),
@@ -2964,6 +2968,10 @@ fn transcript_store_round_trips_agent_model_profile_identity() {
         reasoning_profile: Some("max".to_string()),
         latency_preference: None,
         provider_options: std::collections::BTreeMap::new(),
+        capabilities: None,
+        model_capabilities: None,
+        multimodal_required: None,
+        safety_tier: None,
     };
     store
         .save_conversation_model_identity("child", "deepseek-flash:max", Some(&selection))

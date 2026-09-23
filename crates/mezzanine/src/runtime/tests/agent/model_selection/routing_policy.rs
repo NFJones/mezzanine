@@ -459,7 +459,25 @@ fn runtime_pane_agent_status_reasoning_preserves_latency_preference() {
 /// latency instead of leaving a pane override that no longer resolves.
 #[test]
 fn runtime_generated_pane_model_identity_survives_checkpoint_restore() {
-    let config = "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\nlatency_preference = \"fast\"\n";
+    let config = r#"[agents]
+default_provider = "deepseek"
+default_model_profile = "default"
+
+[providers.deepseek]
+kind = "deepseek"
+default_model = "deepseek-v4"
+
+[providers.deepseek.models.deepseek-v4]
+id = "deepseek-v4"
+reasoning_levels = ["low", "high"]
+
+[model_profiles.default]
+provider = "deepseek"
+model = "deepseek-v4"
+reasoning_profile = "high"
+multimodal_required = true
+safety_tier = "high"
+"#;
     let transcript_store = crate::storage::transcript::AgentTranscriptStore::new(temp_root(
         "runtime-generated-pane-model-checkpoint",
     ));
@@ -482,30 +500,37 @@ fn runtime_generated_pane_model_identity_survives_checkpoint_restore() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let catalog = vec![mez_agent::ProviderModelInfo {
-        id: "gpt-5.5".to_string(),
-        display_name: None,
-        reasoning_levels: Some(vec!["low".to_string(), "high".to_string()]),
-        context_window_tokens: Some(1_050_000),
-        max_input_tokens: None,
-        max_output_tokens: None,
-        capabilities: None,
-    }];
     service.cache_provider_model_catalog_for_tests(
-        "openai",
-        catalog.clone(),
-        vec!["low".into(), "high".into()],
+        "deepseek",
+        vec![mez_agent::ProviderModelInfo {
+            id: "deepseek-v4".to_string(),
+            display_name: None,
+            reasoning_levels: Some(vec!["low".to_string(), "high".to_string()]),
+            context_window_tokens: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            capabilities: Some(vec![
+                "native_thinking".to_string(),
+                "tool_use".to_string(),
+                "streaming".to_string(),
+                "max_output_tokens".to_string(),
+            ]),
+        }],
+        vec!["low".to_string(), "high".to_string()],
     );
-
     service
-        .apply_pane_reasoning_picker_selection("%1", "high")
+        .execute_agent_shell_thinking_command("%1", "/thinking off")
         .unwrap();
     let (profile_name, selected) = service
         .active_model_profile_for_pane("%1", "agent-%1", None)
         .unwrap();
-    assert_eq!(selected.model, "gpt-5.5");
+    assert_eq!(selected.provider, "deepseek");
+    assert_eq!(selected.model, "deepseek-v4");
     assert_eq!(selected.reasoning_profile.as_deref(), Some("high"));
-    assert_eq!(selected.latency_preference.as_deref(), Some("fast"));
+    assert!(selected.model_capabilities.native_thinking);
+    assert!(selected.multimodal_required);
+    assert_eq!(selected.safety_tier.as_deref(), Some("high"));
+    assert_eq!(selected.thinking_enabled(), Some(false));
     assert!(
         service
             .integration
@@ -532,6 +557,26 @@ fn runtime_generated_pane_model_identity_survives_checkpoint_restore() {
     assert_eq!(selection.reasoning_profile, selected.reasoning_profile);
     assert_eq!(selection.latency_preference, selected.latency_preference);
     assert_eq!(selection.provider_options, selected.provider_options);
+    assert_eq!(
+        selection.capabilities.as_deref(),
+        Some(
+            &[
+                "native_thinking".to_string(),
+                "tool_use".to_string(),
+                "streaming".to_string(),
+                "max_output_tokens".to_string(),
+            ][..]
+        )
+    );
+    assert_eq!(
+        selection.model_capabilities,
+        Some(selected.model_capabilities.clone())
+    );
+    assert_eq!(
+        selection.multimodal_required,
+        Some(selected.multimodal_required)
+    );
+    assert_eq!(selection.safety_tier, selected.safety_tier);
 
     let mut restored = test_runtime_service();
     restored.session.id = service.session().id.clone();
@@ -542,17 +587,14 @@ fn runtime_generated_pane_model_identity_survives_checkpoint_restore() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: config.to_string(),
+            text: config
+                .replace("multimodal_required = true\n", "")
+                .replace("safety_tier = \"high\"\n", ""),
         }])
         .unwrap();
     let restored_primary = restored
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
-    restored.cache_provider_model_catalog_for_tests(
-        "openai",
-        catalog,
-        vec!["low".into(), "high".into()],
-    );
     restored.set_agent_transcript_store(transcript_store);
     assert_eq!(
         restored
@@ -577,9 +619,8 @@ fn runtime_generated_pane_model_identity_survives_checkpoint_restore() {
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();
     let pane_context = restored_context.frame_context.panes.get("%1").unwrap();
-    assert_eq!(pane_context.agent_model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(pane_context.agent_model.as_deref(), Some("deepseek-v4"));
     assert_eq!(pane_context.agent_reasoning.as_deref(), Some("high"));
-    assert_eq!(pane_context.agent_latency.as_deref(), Some("fast"));
 
     let prompt = restored.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"restored-model-prompt","method":"agent/shell/command","params":{"idempotency_key":"restored-model-prompt","input":"use the restored model"}}"#,
@@ -2752,6 +2793,10 @@ fn runtime_agent_model_identity_restore_reinstalls_or_degrades() {
         reasoning_profile: Some("high".to_string()),
         latency_preference: None,
         provider_options: std::collections::BTreeMap::new(),
+        capabilities: None,
+        model_capabilities: None,
+        multimodal_required: None,
+        safety_tier: None,
     };
     service.restore_agent_model_profile_identity(
         "%8",
@@ -2782,6 +2827,10 @@ fn runtime_agent_model_identity_restore_reinstalls_or_degrades() {
         reasoning_profile: Some("low".to_string()),
         latency_preference: None,
         provider_options: std::collections::BTreeMap::new(),
+        capabilities: None,
+        model_capabilities: None,
+        multimodal_required: None,
+        safety_tier: None,
     };
     service.restore_agent_model_profile_identity(
         "%10",
@@ -2869,6 +2918,10 @@ fn runtime_pane_model_identity_restore_preserves_config_and_clears_missing_profi
         reasoning_profile: Some("high".to_string()),
         latency_preference: None,
         provider_options: std::collections::BTreeMap::new(),
+        capabilities: None,
+        model_capabilities: None,
+        multimodal_required: None,
+        safety_tier: None,
     };
 
     service.restore_pane_model_profile_identity(
@@ -2903,6 +2956,10 @@ fn runtime_pane_model_identity_restore_preserves_config_and_clears_missing_profi
         reasoning_profile: Some("high".to_string()),
         latency_preference: None,
         provider_options: std::collections::BTreeMap::new(),
+        capabilities: None,
+        model_capabilities: None,
+        multimodal_required: None,
+        safety_tier: None,
     };
     service.restore_pane_model_profile_identity(
         "%12",
@@ -2916,6 +2973,97 @@ fn runtime_pane_model_identity_restore_preserves_config_and_clears_missing_profi
             .pane_profiles
             .contains_key("%12"),
         "an unreproducible generated profile must clear the previous pane override"
+    );
+}
+
+/// Verifies a conservative-unknown DeepSeek capability policy survives
+/// re-materialization of generated pane and child identities.
+///
+/// Conservative unknown-model behavior is synthesized rather than declared
+/// model metadata. Restoration must not serialize its effective empty
+/// reasoning list as an explicit empty declaration, which would change the
+/// profile back to API-default capabilities.
+#[test]
+fn runtime_generated_conservative_unknown_deepseek_identity_restores_unchanged() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "conservative-unknown-profile-restore".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"deepseek\"\ndefault_model_profile = \"base\"\n\n[providers.deepseek]\nkind = \"deepseek\"\ndefault_model = \"unknown-model\"\n\n[model_profiles.base]\nprovider = \"deepseek\"\nmodel = \"unknown-model\"\n".to_string(),
+        }])
+        .unwrap();
+    let base = service
+        .provider_registry()
+        .profile("base")
+        .expect("the fixture configures a base DeepSeek profile")
+        .clone();
+    assert_eq!(
+        base.model_capabilities.metadata_policy,
+        mez_agent::ModelCapabilityMetadataPolicy::ConservativeUnknown
+    );
+    let selection = mez_agent::transcript::PaneModelProfileSelection {
+        provider: base.provider.clone(),
+        model: base.model.clone(),
+        reasoning_profile: base.reasoning_profile.clone(),
+        latency_preference: base.latency_preference.clone(),
+        provider_options: base.provider_options.clone(),
+        capabilities: None,
+        model_capabilities: Some(base.model_capabilities.clone()),
+        multimodal_required: Some(base.multimodal_required),
+        safety_tier: base.safety_tier.clone(),
+    };
+
+    service.restore_pane_model_profile_identity(
+        "%13",
+        Some("runtime-generated:unknown-model"),
+        Some(&selection),
+    );
+    let pane_name = service
+        .integration
+        .model_profile_overrides()
+        .pane_profiles
+        .get("%13")
+        .expect("a conservative-unknown pane identity should be restored");
+    let pane_profile = service
+        .provider_registry()
+        .profile(pane_name)
+        .expect("the restored pane identity should resolve");
+    assert_eq!(pane_profile, &base);
+
+    let child_selection = crate::storage::transcript::AgentModelProfileSelection {
+        provider: selection.provider.clone(),
+        model: selection.model.clone(),
+        reasoning_profile: selection.reasoning_profile.clone(),
+        latency_preference: selection.latency_preference.clone(),
+        provider_options: selection.provider_options.clone(),
+        capabilities: selection.capabilities.clone(),
+        model_capabilities: selection.model_capabilities.clone(),
+        multimodal_required: selection.multimodal_required,
+        safety_tier: selection.safety_tier.clone(),
+    };
+    service.restore_agent_model_profile_identity(
+        "%14",
+        "runtime-generated:unknown-model",
+        Some(&child_selection),
+    );
+    let child_name = service
+        .integration
+        .model_profile_overrides()
+        .agent_profiles
+        .get("agent-%14")
+        .expect("a conservative-unknown child identity should be restored");
+    let child_profile = service
+        .provider_registry()
+        .profile(child_name)
+        .expect("the restored child identity should resolve");
+    assert_eq!(child_profile, &base);
+    assert_eq!(
+        child_profile.model_capabilities.metadata_policy,
+        mez_agent::ModelCapabilityMetadataPolicy::ConservativeUnknown
     );
 }
 
