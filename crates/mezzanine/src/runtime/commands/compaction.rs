@@ -925,6 +925,16 @@ impl RuntimeSessionService {
             &self.mcp_registry().prompt_summary(),
             self.integration.always_exposed_mcp_servers(),
         );
+        let post_plan_transcript_entries = self
+            .agent_shell_store()
+            .get(pane_id)
+            .filter(|session| session.session_id == task.conversation_id)
+            .map(|session| {
+                session
+                    .transcript_entries
+                    .saturating_sub(task.transcript_entries)
+            })
+            .unwrap_or_default();
         let mcp_epoch_entries = self.persist_mcp_compaction_epoch_transcript(
             pane_id,
             &task.conversation_id,
@@ -935,6 +945,7 @@ impl RuntimeSessionService {
             .retain_recent_transcript_entries(
                 pane_id,
                 task.retained_transcript_entries
+                    .saturating_add(post_plan_transcript_entries)
                     .saturating_add(mcp_epoch_entries as u64),
             )?
             .transcript_entries;

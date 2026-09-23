@@ -688,11 +688,6 @@ max_input_tokens = 100
             .is_some(),
         "observed input should queue proactive compaction"
     );
-    complete_runtime_test_compaction(
-        &mut service,
-        "%1",
-        "observed input summary without exact user instructions",
-    );
     (service, transcript_store, turn.turn_id)
 }
 
@@ -705,8 +700,41 @@ max_input_tokens = 100
 /// it with the shortened durable transcript.
 #[test]
 fn runtime_observed_compaction_refresh_preserves_current_user_prompt() {
-    let (service, _transcript_store, turn_id) =
+    let (mut service, transcript_store, turn_id) =
         queue_observed_input_compaction_with_exact_history();
+    let session = service
+        .agent_shell_store()
+        .get("%1")
+        .expect("active agent shell session");
+    let conversation_id = session.session_id.clone();
+    let next_sequence = transcript_store
+        .inspect(&conversation_id)
+        .unwrap()
+        .last()
+        .expect("seeded and prompt transcript entries")
+        .sequence
+        .saturating_add(1);
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id,
+            sequence: next_sequence,
+            created_at_unix_seconds: 2,
+            role: mez_agent::transcript::TranscriptRole::Assistant,
+            turn_id: "late-active-turn-transcript".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "LATE_ACTIVE_TURN_TRANSCRIPT_ENTRY".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    complete_runtime_test_compaction(
+        &mut service,
+        "%1",
+        "observed input summary without exact user instructions",
+    );
     let context = service
         .agent_turn_contexts()
         .get(&turn_id)
@@ -717,6 +745,14 @@ fn runtime_observed_compaction_refresh_preserves_current_user_prompt() {
                 && block.content == "CURRENT_USER_PROMPT Continue with the collected evidence."
         }),
         "the active prompt must remain exact after compaction refresh: {:#?}",
+        context.blocks()
+    );
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("LATE_ACTIVE_TURN_TRANSCRIPT_ENTRY")),
+        "post-plan transcript entries must remain in the refreshed live context: {:#?}",
         context.blocks()
     );
 }
@@ -732,6 +768,11 @@ fn runtime_observed_compaction_refresh_preserves_current_user_prompt() {
 fn runtime_observed_compaction_retains_unsummarized_exact_history_for_replay() {
     let (mut service, _transcript_store, _turn_id) =
         queue_observed_input_compaction_with_exact_history();
+    complete_runtime_test_compaction(
+        &mut service,
+        "%1",
+        "observed input summary without exact user instructions",
+    );
     let next_context = service
         .agent_context_for_pane_prompt("%1", "NEXT_USER_PROMPT Continue.", 0)
         .unwrap();
@@ -751,6 +792,63 @@ fn runtime_observed_compaction_retains_unsummarized_exact_history_for_replay() {
         "every exact historical instruction omitted from summary input must remain replayable: {:#?}",
         next_context.blocks()
     );
+}
+
+/// Verifies transcript rows appended after compaction planning stay in raw
+/// replay without displacing exact history that the plan deliberately retained.
+#[test]
+fn runtime_observed_compaction_preserves_history_when_transcript_arrives_after_queue() {
+    let (mut service, transcript_store, _) = queue_observed_input_compaction_with_exact_history();
+    let session = service
+        .agent_shell_store()
+        .get("%1")
+        .expect("active agent shell session");
+    let conversation_id = session.session_id.clone();
+    let next_sequence = transcript_store
+        .inspect(&conversation_id)
+        .unwrap()
+        .last()
+        .expect("seeded and prompt transcript entries")
+        .sequence
+        .saturating_add(1);
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id,
+            sequence: next_sequence,
+            created_at_unix_seconds: 2,
+            role: mez_agent::transcript::TranscriptRole::Assistant,
+            turn_id: "late-transcript-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "LATE_POST_PLAN_TRANSCRIPT_ENTRY".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+
+    complete_runtime_test_compaction(
+        &mut service,
+        "%1",
+        "observed input summary without exact user instructions",
+    );
+    let next_context = service
+        .agent_context_for_pane_prompt("%1", "NEXT_USER_PROMPT Continue.", 0)
+        .unwrap();
+    let replay = next_context
+        .blocks()
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        replay.contains("LATE_POST_PLAN_TRANSCRIPT_ENTRY"),
+        "{replay}"
+    );
+    assert!(replay.contains("EXACT_OLDER_USER_INSTRUCTION"), "{replay}");
+    assert!(replay.contains("EXACT_SECOND_USER_INSTRUCTION"), "{replay}");
+    assert!(replay.contains("EXACT_THIRD_USER_INSTRUCTION"), "{replay}");
 }
 
 /// Verifies an execution response at the configured input threshold defers its
@@ -2983,6 +3081,22 @@ context_window_tokens = 5000
 
     assert!(compact.contains("state=queued"), "{compact}");
     assert!(compact.contains("summarized_entries=5"), "{compact}");
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "as-tail".to_string(),
+            sequence: 13,
+            created_at_unix_seconds: 13,
+            role: mez_agent::transcript::TranscriptRole::Assistant,
+            turn_id: "turn-13".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "LATE_POST_PLAN_MANUAL_TRANSCRIPT_ENTRY".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
     complete_runtime_test_compaction(&mut service, "%1", "old raw marker should be summary only");
     let persisted = transcript_store.inspect("as-tail").unwrap();
     assert!(
@@ -3006,7 +3120,7 @@ context_window_tokens = 5000
             .get("%1")
             .unwrap()
             .transcript_entries,
-        9
+        10
     );
 
     let prompt = service.dispatch_runtime_control_body(
@@ -3048,6 +3162,10 @@ context_window_tokens = 5000
 
     assert!(
         transcript_context.contains("1. Preserve raw tail after compaction."),
+        "{transcript_context}"
+    );
+    assert!(
+        transcript_context.contains("LATE_POST_PLAN_MANUAL_TRANSCRIPT_ENTRY"),
         "{transcript_context}"
     );
     assert!(
