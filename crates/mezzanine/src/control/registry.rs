@@ -628,6 +628,11 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         dispatch: ControlDispatchKind::Remote,
         params_schema: ControlParamsSchema::Allowed(&[
             "role",
+            "allow_create",
+            "allow_kill",
+            "max_leases",
+            "max_live_sessions",
+            "lease_lifetime_ceiling_seconds",
             "expires_seconds",
             "idempotency_key",
         ]),

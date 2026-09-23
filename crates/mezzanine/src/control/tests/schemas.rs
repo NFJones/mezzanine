@@ -1,6 +1,7 @@
 //! Control schemas tests.
 
 use super::*;
+use crate::control::validate_control_method_params_schema;
 
 /// Verifies baseline control methods reject unknown params outside extensions.
 ///
@@ -32,6 +33,31 @@ fn baseline_control_methods_reject_unknown_params_outside_extensions() {
         &primary,
     );
     assert!(accepted.contains(r#""window":"#));
+}
+
+/// Verifies remote invitation authority fields emitted by the CLI remain
+/// accepted while unrelated fields are still rejected by the strict schema.
+#[test]
+fn remote_invite_schema_accepts_authority_fields_and_rejects_unknown_fields() {
+    let authority = JsonRpcRequestBuilder::method("remote/invite")
+        .params_json(
+            r#"{"role":"primary","allow_create":true,"allow_kill":true,"max_leases":3,"max_live_sessions":2,"lease_lifetime_ceiling_seconds":3600,"expires_seconds":120,"idempotency_key":"remote-invite"}"#,
+        )
+        .build();
+    let authority = parse_json_rpc_request(&authority).unwrap();
+    assert!(validate_control_method_params_schema(&authority).is_ok());
+
+    let unknown = JsonRpcRequestBuilder::method("remote/invite")
+        .params_json(r#"{"role":"primary","allow_create":true,"surprise":true}"#)
+        .build();
+    let unknown = parse_json_rpc_request(&unknown).unwrap();
+    let error = validate_control_method_params_schema(&unknown).unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("remote/invite params contains unknown field"),
+        "{error}"
+    );
 }
 
 /// Verifies the removed toolchain mutation action is no longer registered or
