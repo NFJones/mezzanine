@@ -47,6 +47,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 transcript_entries: 1,
                 log_level: "normal".to_string(),
                 pane_model_profile: None,
+                pane_model_profile_selection: None,
                 planning_enabled: false,
                 response_style: None,
                 directive: Some("Prefer focused tests.".to_string()),

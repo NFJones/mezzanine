@@ -10,7 +10,7 @@ mod error;
 mod records;
 mod summary;
 
-pub use checkpoint::AgentSessionMetadata;
+pub use checkpoint::{AgentSessionMetadata, PaneModelProfileSelection};
 pub use context_event::{TRANSCRIPT_CONTEXT_EVENT_MARKER, TranscriptContextEvent};
 pub use error::TranscriptContractError;
 pub use records::{TranscriptEntry, TranscriptRole, validate_conversation_id};

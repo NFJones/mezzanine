@@ -434,17 +434,6 @@ impl RuntimeSessionService {
                     &conversation_id,
                     prepared_objective.as_deref(),
                 )?;
-                if let Some(profile) = metadata.pane_model_profile.as_ref() {
-                    self.integration
-                        .model_profile_overrides_mut()
-                        .pane_profiles
-                        .insert(pane_id.clone(), profile.clone());
-                } else {
-                    self.integration
-                        .model_profile_overrides_mut()
-                        .pane_profiles
-                        .remove(&pane_id);
-                }
                 self.set_agent_planning_enabled(&pane_id, metadata.planning_enabled);
                 self.set_agent_response_style(&pane_id, metadata.response_style.clone());
                 self.set_agent_routing_override(&pane_id, metadata.routing_enabled);
@@ -503,6 +492,11 @@ impl RuntimeSessionService {
                 }
                 return Err(error);
             }
+            self.restore_pane_model_profile_identity(
+                &pane_id,
+                metadata.pane_model_profile.as_deref(),
+                metadata.pane_model_profile_selection.as_ref(),
+            );
             // The identity is installed only once every skip decision and
             // validation in this iteration has passed, so a skipped conversation
             // cannot leave its profile override behind for the next conversation
@@ -723,6 +717,25 @@ impl RuntimeSessionService {
                         .pane_profiles
                         .get(&session.pane_id)
                         .cloned(),
+                    pane_model_profile_selection: self
+                        .integration
+                        .model_profile_overrides()
+                        .pane_profiles
+                        .get(&session.pane_id)
+                        .filter(|name| {
+                            self.integration
+                                .model_profile_overrides()
+                                .runtime_generated_profiles
+                                .contains(*name)
+                        })
+                        .and_then(|name| self.provider_registry().profile(name))
+                        .map(|profile| mez_agent::transcript::PaneModelProfileSelection {
+                            provider: profile.provider.clone(),
+                            model: profile.model.clone(),
+                            reasoning_profile: profile.reasoning_profile.clone(),
+                            latency_preference: profile.latency_preference.clone(),
+                            provider_options: profile.provider_options.clone(),
+                        }),
                     planning_enabled: self.agent_planning_enabled(&session.pane_id),
                     response_style: self
                         .agent_response_style(&session.pane_id)
@@ -788,14 +801,67 @@ impl RuntimeSessionService {
         profile_name: &str,
         selection: Option<&crate::storage::transcript::AgentModelProfileSelection>,
     ) {
+        self.restore_model_profile_identity(pane_id, profile_name, selection, true);
+    }
+
+    /// Restores the model profile override owned by the resumed pane.
+    ///
+    /// Generated selections are re-materialized from their captured identity;
+    /// configured profiles remain configuration-owned, and unresolved profiles
+    /// are removed rather than left as dangling pane overrides.
+    pub(crate) fn restore_pane_model_profile_identity(
+        &mut self,
+        pane_id: &str,
+        profile_name: Option<&str>,
+        selection: Option<&mez_agent::transcript::PaneModelProfileSelection>,
+    ) {
+        let Some(profile_name) = profile_name else {
+            self.integration
+                .model_profile_overrides_mut()
+                .pane_profiles
+                .remove(pane_id);
+            return;
+        };
+        let selection =
+            selection.map(
+                |selection| crate::storage::transcript::AgentModelProfileSelection {
+                    provider: selection.provider.clone(),
+                    model: selection.model.clone(),
+                    reasoning_profile: selection.reasoning_profile.clone(),
+                    latency_preference: selection.latency_preference.clone(),
+                    provider_options: selection.provider_options.clone(),
+                },
+            );
+        self.restore_model_profile_identity(pane_id, profile_name, selection.as_ref(), false);
+    }
+
+    fn restore_model_profile_identity(
+        &mut self,
+        pane_id: &str,
+        profile_name: &str,
+        selection: Option<&crate::storage::transcript::AgentModelProfileSelection>,
+        agent_scoped: bool,
+    ) {
         let agent_id = format!("agent-{pane_id}");
         let Some(selection) = selection else {
             if self.provider_registry().profile(profile_name).is_some() {
-                self.integration
-                    .model_profile_overrides_mut()
-                    .agent_profiles
-                    .insert(agent_id, profile_name.to_string());
+                let overrides = self.integration.model_profile_overrides_mut();
+                if agent_scoped {
+                    overrides
+                        .agent_profiles
+                        .insert(agent_id, profile_name.to_string());
+                } else {
+                    overrides
+                        .pane_profiles
+                        .insert(pane_id.to_string(), profile_name.to_string());
+                }
             } else {
+                if !agent_scoped {
+                    self.integration
+                        .model_profile_overrides_mut()
+                        .pane_profiles
+                        .remove(pane_id);
+                }
                 self.report_agent_model_identity_degradation(
                     pane_id,
                     profile_name,
@@ -822,16 +888,28 @@ impl RuntimeSessionService {
             .runtime_generated_profiles
             .contains(profile_name);
         if !generated_owner && self.provider_registry().profile(profile_name).is_some() {
-            self.integration
-                .model_profile_overrides_mut()
-                .agent_profiles
-                .insert(agent_id, profile_name.to_string());
+            let overrides = self.integration.model_profile_overrides_mut();
+            if agent_scoped {
+                overrides
+                    .agent_profiles
+                    .insert(agent_id, profile_name.to_string());
+            } else {
+                overrides
+                    .pane_profiles
+                    .insert(pane_id.to_string(), profile_name.to_string());
+            }
             return;
         }
         let (derived_name, materialized) =
             match self.derive_runtime_generated_model_profile(&selection.provider, &definition) {
                 Ok(restored) => restored,
                 Err(error) => {
+                    if !agent_scoped {
+                        self.integration
+                            .model_profile_overrides_mut()
+                            .pane_profiles
+                            .remove(pane_id);
+                    }
                     self.report_agent_model_identity_degradation(
                         pane_id,
                         profile_name,
@@ -851,6 +929,13 @@ impl RuntimeSessionService {
                 profile_name,
                 &format!("re-materialized identity differs from the capture: {differences}"),
             );
+            if !agent_scoped {
+                self.integration
+                    .model_profile_overrides_mut()
+                    .pane_profiles
+                    .remove(pane_id);
+                return;
+            }
         }
         let installed =
             if self.agent_model_profile_name_describes_selection(profile_name, selection) {
@@ -891,10 +976,35 @@ impl RuntimeSessionService {
                 }
                 derived_name
             };
-        self.integration
-            .model_profile_overrides_mut()
-            .agent_profiles
-            .insert(agent_id, installed.clone());
+        if agent_scoped {
+            self.integration
+                .model_profile_overrides_mut()
+                .agent_profiles
+                .insert(agent_id, installed.clone());
+        } else {
+            if self
+                .provider_registry()
+                .profile(&installed)
+                .is_none_or(|profile| {
+                    Self::agent_model_profile_identity_differences(profile, selection).is_some()
+                })
+            {
+                self.integration
+                    .model_profile_overrides_mut()
+                    .pane_profiles
+                    .remove(pane_id);
+                self.report_agent_model_identity_degradation(
+                    pane_id,
+                    profile_name,
+                    "installed profile does not reproduce the captured identity",
+                );
+                return;
+            }
+            self.integration
+                .model_profile_overrides_mut()
+                .pane_profiles
+                .insert(pane_id.to_string(), installed.clone());
+        }
         // A captured selection identifies a runtime-generated name, so the marker
         // must be restored with it: a later spawn inheriting this identity has to
         // capture the selection again.
@@ -1091,17 +1201,11 @@ impl RuntimeSessionService {
         if metadata.allowed_actions.is_none() {
             self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
         }
-        if let Some(profile) = metadata.pane_model_profile.as_ref() {
-            self.integration
-                .model_profile_overrides_mut()
-                .pane_profiles
-                .insert(pane_id.to_string(), profile.clone());
-        } else {
-            self.integration
-                .model_profile_overrides_mut()
-                .pane_profiles
-                .remove(pane_id);
-        }
+        self.restore_pane_model_profile_identity(
+            pane_id,
+            metadata.pane_model_profile.as_deref(),
+            metadata.pane_model_profile_selection.as_ref(),
+        );
         self.set_agent_planning_enabled(pane_id, metadata.planning_enabled);
         self.set_agent_response_style(pane_id, metadata.response_style.clone());
         self.set_agent_routing_override(pane_id, metadata.routing_enabled);

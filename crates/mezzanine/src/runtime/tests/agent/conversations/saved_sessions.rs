@@ -3381,6 +3381,7 @@ fn runtime_resume_objective_metadata_failure_restores_prior_binding_and_identity
                 transcript_entries: 1,
                 log_level: "normal".to_string(),
                 pane_model_profile: Some("target-profile".to_string()),
+                pane_model_profile_selection: None,
                 planning_enabled: true,
                 response_style: Some("concise".to_string()),
                 directive: Some("Use the target directive.".to_string()),

@@ -12,7 +12,8 @@ use std::{
 };
 
 use super::encoding::{
-    decode_structured_prompt_history_entry, decode_transcript_entry, encode_prompt_history_entry,
+    decode_agent_session_metadata, decode_structured_prompt_history_entry, decode_transcript_entry,
+    encode_agent_session_metadata, encode_prompt_history_entry,
     encode_structured_prompt_history_entry, encode_transcript_entry,
 };
 use super::store::{
@@ -158,6 +159,7 @@ fn agent_session_metadata(
         transcript_entries: 0,
         log_level: "normal".to_string(),
         pane_model_profile: None,
+        pane_model_profile_selection: None,
         planning_enabled: false,
         response_style: None,
         directive: None,
@@ -2065,6 +2067,24 @@ fn transcript_store_exports_prompt_history_without_creating_the_store() {
 
 /// Verifies that active agent-session metadata is replaced per Mezzanine
 /// session while preserving rows for unrelated sessions.
+///
+/// Rows written before the pane model identity extension remain valid: the
+/// decoder treats the appended selection as absent without shifting older
+/// metadata fields.
+#[test]
+fn agent_session_metadata_decoder_accepts_pre_pane_identity_rows() {
+    let metadata = agent_session_metadata("$legacy", "legacy-conversation");
+    let encoded = encode_agent_session_metadata(&metadata).unwrap();
+    let (legacy_row, appended_field) = encoded
+        .rsplit_once('\t')
+        .expect("current metadata rows include the appended selection field");
+    assert!(appended_field.is_empty());
+
+    assert_eq!(decode_agent_session_metadata(legacy_row).unwrap(), metadata);
+}
+
+/// Verifies that active agent-session metadata is replaced per Mezzanine
+/// session while preserving rows for unrelated sessions.
 #[test]
 fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
     let root = temp_root("agent-session-metadata");
@@ -2083,6 +2103,16 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
         transcript_entries: 2,
         log_level: "trace".to_string(),
         pane_model_profile: Some("work".to_string()),
+        pane_model_profile_selection: Some(mez_agent::transcript::PaneModelProfileSelection {
+            provider: "openai".to_string(),
+            model: "gpt-fast".to_string(),
+            reasoning_profile: Some("high".to_string()),
+            latency_preference: Some("priority".to_string()),
+            provider_options: BTreeMap::from([(
+                "service_tier".to_string(),
+                "priority".to_string(),
+            )]),
+        }),
         planning_enabled: true,
         response_style: Some("concise".to_string()),
         directive: Some("Prefer focused regressions.".to_string()),

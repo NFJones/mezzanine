@@ -381,6 +381,17 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
                 ))
             })?
             .unwrap_or_default(),
+        metadata
+            .pane_model_profile_selection
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| {
+                MezError::invalid_state(format!(
+                    "agent session pane model selection JSON encoding failed: {error}"
+                ))
+            })?
+            .unwrap_or_default(),
     ]
     .into_iter()
     .map(|field| escape_field(&field))
@@ -406,7 +417,8 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         || fields.len() == 27
         || fields.len() == 29
         || fields.len() == 30
-        || fields.len() == 31)
+        || fields.len() == 31
+        || fields.len() == 32)
         || fields[0] != AGENT_SESSION_METADATA_VERSION
     {
         return Err(MezError::invalid_args(
@@ -597,6 +609,17 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
                 serde_json::from_str(value).map_err(|error| {
                     MezError::invalid_args(format!(
                         "agent session action catalog JSON is invalid: {error}"
+                    ))
+                })
+            })
+            .transpose()?,
+        pane_model_profile_selection: fields
+            .get(31)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                serde_json::from_str(value).map_err(|error| {
+                    MezError::invalid_args(format!(
+                        "agent session pane model selection JSON is invalid: {error}"
                     ))
                 })
             })

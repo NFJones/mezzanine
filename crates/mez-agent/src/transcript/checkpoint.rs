@@ -33,6 +33,8 @@ pub struct AgentSessionMetadata {
     pub log_level: String,
     /// Pane-scoped model profile override, if one is active.
     pub pane_model_profile: Option<String>,
+    /// Captured identity when the pane profile was generated at runtime.
+    pub pane_model_profile_selection: Option<PaneModelProfileSelection>,
     /// Whether pane-local planning mode is active.
     pub planning_enabled: bool,
     /// Pane-local response style, if one is active.
@@ -67,6 +69,21 @@ pub struct AgentSessionMetadata {
     pub allowed_actions: Option<AllowedActionSet>,
 }
 
+/// Provider/model identity needed to reconstruct a runtime-generated pane profile.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PaneModelProfileSelection {
+    /// Provider that served the generated definition.
+    pub provider: String,
+    /// Model that served the generated definition.
+    pub model: String,
+    /// Reasoning profile captured for the effective profile.
+    pub reasoning_profile: Option<String>,
+    /// Latency preference captured for the effective profile.
+    pub latency_preference: Option<String>,
+    /// Provider options captured for the effective profile.
+    pub provider_options: BTreeMap<String, String>,
+}
+
 impl AgentSessionMetadata {
     /// Validates active agent session metadata before persistence or use.
     pub fn validate(&self) -> Result<(), TranscriptContractError> {
@@ -97,6 +114,15 @@ impl AgentSessionMetadata {
             if let Some(value) = value {
                 validate_required(label, value)?;
             }
+        }
+        if let Some(selection) = self.pane_model_profile_selection.as_ref() {
+            if self.pane_model_profile.is_none() {
+                return Err(TranscriptContractError::new(
+                    "pane model profile selection requires a profile name",
+                ));
+            }
+            validate_required("pane model profile provider", &selection.provider)?;
+            validate_required("pane model profile model", &selection.model)?;
         }
         if let Some(approval_policy) = self.approval_policy.as_deref() {
             validate_agent_approval_policy(approval_policy)?;

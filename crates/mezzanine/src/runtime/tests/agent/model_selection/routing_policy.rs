@@ -451,6 +451,146 @@ fn runtime_pane_agent_status_reasoning_preserves_latency_preference() {
     );
 }
 
+/// Verifies a runtime-generated pane profile survives an active-session
+/// checkpoint and restoration into a fresh runtime service.
+///
+/// Pane model pickers keep their profile identity in runtime memory. Persisting
+/// the generated selection ensures a restart restores model, reasoning, and
+/// latency instead of leaving a pane override that no longer resolves.
+#[test]
+fn runtime_generated_pane_model_identity_survives_checkpoint_restore() {
+    let config = "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\nlatency_preference = \"fast\"\n";
+    let transcript_store = crate::storage::transcript::AgentTranscriptStore::new(temp_root(
+        "runtime-generated-pane-model-checkpoint",
+    ));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "pane-model-checkpoint".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: config.to_string(),
+        }])
+        .unwrap();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let catalog = vec![mez_agent::ProviderModelInfo {
+        id: "gpt-5.5".to_string(),
+        display_name: None,
+        reasoning_levels: Some(vec!["low".to_string(), "high".to_string()]),
+        context_window_tokens: Some(1_050_000),
+        max_input_tokens: None,
+        max_output_tokens: None,
+        capabilities: None,
+    }];
+    service.cache_provider_model_catalog_for_tests(
+        "openai",
+        catalog.clone(),
+        vec!["low".into(), "high".into()],
+    );
+
+    service
+        .apply_pane_reasoning_picker_selection("%1", "high")
+        .unwrap();
+    let (profile_name, selected) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(selected.model, "gpt-5.5");
+    assert_eq!(selected.reasoning_profile.as_deref(), Some("high"));
+    assert_eq!(selected.latency_preference.as_deref(), Some("fast"));
+    assert!(
+        service
+            .integration
+            .model_profile_overrides()
+            .runtime_generated_profiles
+            .contains(&profile_name)
+    );
+
+    service.checkpoint_agent_session_metadata().unwrap();
+    let metadata = transcript_store
+        .load_agent_session_metadata(service.session().id.as_str())
+        .unwrap();
+    assert_eq!(metadata.len(), 1);
+    assert_eq!(
+        metadata[0].pane_model_profile.as_deref(),
+        Some(profile_name.as_str())
+    );
+    let selection = metadata[0]
+        .pane_model_profile_selection
+        .as_ref()
+        .expect("runtime-generated pane profiles must capture their identity");
+    assert_eq!(selection.provider, selected.provider);
+    assert_eq!(selection.model, selected.model);
+    assert_eq!(selection.reasoning_profile, selected.reasoning_profile);
+    assert_eq!(selection.latency_preference, selected.latency_preference);
+    assert_eq!(selection.provider_options, selected.provider_options);
+
+    let mut restored = test_runtime_service();
+    restored.session.id = service.session().id.clone();
+    restored
+        .replace_config_layers(vec![ConfigLayer {
+            name: "pane-model-checkpoint".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: config.to_string(),
+        }])
+        .unwrap();
+    let restored_primary = restored
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    restored.cache_provider_model_catalog_for_tests(
+        "openai",
+        catalog,
+        vec!["low".into(), "high".into()],
+    );
+    restored.set_agent_transcript_store(transcript_store);
+    assert_eq!(
+        restored
+            .restore_agent_sessions_from_transcript_store()
+            .unwrap(),
+        1
+    );
+
+    let (restored_name, restored_profile) = restored
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(restored_name, profile_name);
+    assert_eq!(restored_profile, selected);
+    assert!(
+        restored
+            .integration
+            .model_profile_overrides()
+            .runtime_generated_profiles
+            .contains(&profile_name)
+    );
+    let restored_context = restored
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let pane_context = restored_context.frame_context.panes.get("%1").unwrap();
+    assert_eq!(pane_context.agent_model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(pane_context.agent_reasoning.as_deref(), Some("high"));
+    assert_eq!(pane_context.agent_latency.as_deref(), Some("fast"));
+
+    let prompt = restored.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"restored-model-prompt","method":"agent/shell/command","params":{"idempotency_key":"restored-model-prompt","input":"use the restored model"}}"#,
+        &restored_primary,
+    );
+    assert!(prompt.contains(r#""state":"running""#), "{prompt}");
+    let pending = restored.pending_agent_provider_tasks();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].model_profile, selected);
+}
+
 /// Verifies that `/routing` stores a pane-local override used by
 /// subsequent turns without mutating the global configured default. This covers
 /// the command surface for enabling, toggling, and inspecting automatic model
@@ -2696,6 +2836,86 @@ fn runtime_agent_model_identity_restore_reinstalls_or_degrades() {
             .any(|payload| payload.contains("re-materialized identity differs")),
         "a re-materialization that cannot reproduce the captured name must report the drift: \
          {degraded_payloads:?}"
+    );
+}
+
+/// Verifies pane-profile restoration preserves configuration ownership and
+/// removes stale overrides when a generated profile cannot be reproduced.
+///
+/// A configured profile remains authoritative even if checkpoint data includes
+/// a selection, while a missing generated provider must not leave the pane
+/// pointing at an unresolved profile name.
+#[test]
+fn runtime_pane_model_identity_restore_preserves_config_and_clears_missing_profile() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "pane-model-restore-edge-cases".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    let configured = service
+        .provider_registry()
+        .profile("deepseek-small")
+        .expect("the fixture configures a pane-selectable profile")
+        .clone();
+    let mismatched_selection = mez_agent::transcript::PaneModelProfileSelection {
+        provider: "openai".to_string(),
+        model: "different-model".to_string(),
+        reasoning_profile: Some("high".to_string()),
+        latency_preference: None,
+        provider_options: std::collections::BTreeMap::new(),
+    };
+
+    service.restore_pane_model_profile_identity(
+        "%11",
+        Some("deepseek-small"),
+        Some(&mismatched_selection),
+    );
+    assert_eq!(
+        service
+            .integration
+            .model_profile_overrides()
+            .pane_profiles
+            .get("%11")
+            .map(String::as_str),
+        Some("deepseek-small"),
+        "a resolvable configured profile remains configuration-owned"
+    );
+    assert_eq!(
+        service.provider_registry().profile("deepseek-small"),
+        Some(&configured),
+        "checkpoint selection must not rewrite the configured definition"
+    );
+
+    service
+        .integration
+        .model_profile_overrides_mut()
+        .pane_profiles
+        .insert("%12".to_string(), "stale-pane-profile".to_string());
+    let missing_selection = mez_agent::transcript::PaneModelProfileSelection {
+        provider: "missing-provider".to_string(),
+        model: "missing-model".to_string(),
+        reasoning_profile: Some("high".to_string()),
+        latency_preference: None,
+        provider_options: std::collections::BTreeMap::new(),
+    };
+    service.restore_pane_model_profile_identity(
+        "%12",
+        Some("generated-missing-profile"),
+        Some(&missing_selection),
+    );
+    assert!(
+        !service
+            .integration
+            .model_profile_overrides()
+            .pane_profiles
+            .contains_key("%12"),
+        "an unreproducible generated profile must clear the previous pane override"
     );
 }
 
