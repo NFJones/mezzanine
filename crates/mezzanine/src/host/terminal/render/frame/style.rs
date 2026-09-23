@@ -595,7 +595,6 @@ pub(in crate::host::terminal::render) fn pane_frame_agent_status_scan_spans(
     if width == 0 {
         return Vec::new();
     }
-    let base_pair = ui_theme.colors.agent_status_running;
     // The running pill's static background is now a quiet container. For the
     // active wave, restore v0.3.0's primary fill via the active-window color.
     let wave_base_background = ui_theme.colors.window_active.background;
@@ -616,7 +615,7 @@ pub(in crate::host::terminal::render) fn pane_frame_agent_status_scan_spans(
                 start: start.saturating_add(column),
                 length: 1,
                 rendition: GraphicRendition {
-                    foreground: Some(base_pair.foreground),
+                    foreground: Some(contrasting_binary_foreground(background)),
                     background: Some(background),
                     ..GraphicRendition::default()
                 },
@@ -793,6 +792,16 @@ mod agent_status_wave_tests {
             trailing_span.rendition.background,
             Some(theme.colors.window_active.background)
         );
+        for span in &spans {
+            let background = span
+                .rendition
+                .background
+                .expect("wave span has a background");
+            assert_eq!(
+                span.rendition.foreground,
+                Some(contrasting_binary_foreground(background))
+            );
+        }
         let static_rendition = pane_frame_agent_status_rendition("running", &theme);
         assert_eq!(
             static_rendition.background,
