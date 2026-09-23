@@ -1425,6 +1425,7 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
         attempt: u64,
+        recovery_reason: Option<&str>,
     ) -> Result<bool> {
         let Some(turn) = self
             .agent_turn_ledger()
@@ -1448,20 +1449,38 @@ impl RuntimeSessionService {
         self.agent
             .pending_agent_provider_tasks
             .insert(turn_id.to_string());
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            turn_id,
-            &format!("provider_task queued reason=provider_retry_timer attempt={attempt}"),
-        )?;
-        self.append_lifecycle_event(
-            EventKind::AgentStatus,
-            format!(
-                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"running","provider_retry":"ready","attempt":{}}}"#,
-                json_escape(&turn.pane_id),
-                json_escape(turn_id),
-                attempt
-            ),
-        )?;
+        if let Some(recovery_reason) = recovery_reason {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                turn_id,
+                &format!("provider_task queued reason={recovery_reason} attempt={attempt}"),
+            )?;
+            self.append_lifecycle_event(
+                EventKind::AgentStatus,
+                format!(
+                    r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"running","provider_retry":"ready","attempt":{},"recovery":"{}"}}"#,
+                    json_escape(&turn.pane_id),
+                    json_escape(turn_id),
+                    attempt,
+                    recovery_reason,
+                ),
+            )?;
+        } else {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                turn_id,
+                &format!("provider_task queued reason=provider_retry_timer attempt={attempt}"),
+            )?;
+            self.append_lifecycle_event(
+                EventKind::AgentStatus,
+                format!(
+                    r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"running","provider_retry":"ready","attempt":{}}}"#,
+                    json_escape(&turn.pane_id),
+                    json_escape(turn_id),
+                    attempt
+                ),
+            )?;
+        }
         Ok(true)
     }
 
@@ -1490,7 +1509,7 @@ impl RuntimeSessionService {
                 )),
             };
         };
-        let queued = match self.queue_agent_provider_retry_task(turn_id, attempt) {
+        let queued = match self.queue_agent_provider_retry_task(turn_id, attempt, None) {
             Ok(queued) => queued,
             Err(error) => {
                 self.agent
@@ -1546,15 +1565,15 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Queues a running provider turn after automatic compaction recovery.
+    /// Queues a running provider turn after one named compaction recovery.
     ///
-    /// This is used after an output-limit failure triggers model-backed
-    /// conversation compaction. The turn remains running, but its provider
-    /// context has been refreshed to include compacted memory and the shorter
-    /// raw transcript tail before the next provider request is dispatched.
+    /// The caller supplies the content-free recovery reason so lifecycle and
+    /// trace diagnostics retain the actual trigger rather than assuming an
+    /// output-limit compaction for every resumed turn.
     pub(crate) fn queue_agent_provider_recovery_task_after_compaction(
         &mut self,
         turn_id: &str,
+        recovery_reason: &str,
     ) -> Result<bool> {
         let Some(turn) = self
             .agent_turn_ledger()
@@ -1581,14 +1600,15 @@ impl RuntimeSessionService {
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,
-            "provider_task queued reason=provider_output_limit_compaction_completed",
+            &format!("provider_task queued reason={recovery_reason}"),
         )?;
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"running","provider_retry":"ready","recovery":"output_limit_compaction"}}"#,
+                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"running","provider_retry":"ready","recovery":"{}"}}"#,
                 json_escape(&turn.pane_id),
-                json_escape(turn_id)
+                json_escape(turn_id),
+                recovery_reason,
             ),
         )?;
         Ok(true)
@@ -1602,7 +1622,10 @@ impl RuntimeSessionService {
         attempt: u32,
     ) -> Result<bool> {
         if self.agent.provider_retry_scheduler.attempt(turn_id) == 0 {
-            return self.queue_agent_provider_recovery_task_after_compaction(turn_id);
+            return self.queue_agent_provider_recovery_task_after_compaction(
+                turn_id,
+                "provider_context_limit_compaction",
+            );
         }
         let recovery =
             self.agent
@@ -1635,7 +1658,11 @@ impl RuntimeSessionService {
                 "context compaction retry did not become dispatchable",
             ));
         }
-        let queued = self.queue_agent_provider_retry_task(turn_id, u64::from(attempt))?;
+        let queued = self.queue_agent_provider_retry_task(
+            turn_id,
+            u64::from(attempt),
+            Some("provider_context_limit_compaction"),
+        )?;
         let completion =
             self.agent
                 .provider_retry_scheduler

@@ -495,6 +495,23 @@ context_window_tokens = 40000
     assert!(compacted_context.contains("preserve this post-boundary steering exactly"));
     assert!(service.agent_provider_task_is_pending("turn-1"));
     assert_eq!(service.provider_retry_scheduler_mut().attempt("turn-1"), 1);
+    let events = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::AllPrimaries);
+    assert!(events.iter().any(|event| {
+        event.kind == EventKind::AgentStatus
+            && event
+                .payload
+                .contains(r#""recovery":"provider_context_limit_compaction""#)
+    }));
+    let trace = service.agent_pane_trace_log_text("%1").unwrap_or_default();
+    assert!(
+        trace.contains(
+            "provider request recovery resuming, reason: provider context limit compaction completed",
+        ),
+        "{trace}"
+    );
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -626,6 +643,149 @@ max_input_tokens = 100
     };
     assert_eq!(*observed_input_tokens, 100);
     assert_eq!(*max_input_tokens, 100);
+
+    complete_runtime_test_compaction(&mut service, "%1", "observed input summary");
+    let events = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::AllPrimaries);
+    assert!(events.iter().any(|event| {
+        event.kind == EventKind::AgentStatus
+            && event
+                .payload
+                .contains(r#""recovery":"observed_input_limit_compaction""#)
+    }));
+}
+
+/// Verifies an observed-input recovery failure identifies its actual trigger.
+///
+/// A provider failure while producing the compaction summary must fail the
+/// waiting turn without misreporting an output-limit compaction. The observed
+/// input count remains the last successful usage sample for the display, while
+/// the terminal provider diagnostic names only the content-free trigger.
+#[test]
+fn runtime_observed_input_limit_compaction_failure_keeps_its_trigger() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "observed-input-limit-failure".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "observed-input-limit-failure"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.observed-input-limit-failure]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+max_input_tokens = 100
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"observed-input-limit-failure","method":"agent/shell/command","params":{"idempotency_key":"observed-input-limit-failure","input":"continue with the collected evidence"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == task.turn_id)
+        .cloned()
+        .expect("pending provider task owns a running turn");
+    insert_test_context_block(
+        service
+            .agent_turn_contexts_mut()
+            .get_mut(&task.turn_id)
+            .unwrap(),
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "observed input evidence".to_string(),
+            content: "observed-input-failure-marker ".repeat(500),
+        },
+    );
+    let response = runtime_say_response(&task.turn_id, "continue", false);
+    let action = response
+        .action_batch
+        .as_ref()
+        .and_then(|batch| batch.actions.first())
+        .cloned()
+        .expect("continuation response contains a say action");
+    service
+        .apply_agent_provider_execution(
+            &turn,
+            &task.model_profile,
+            "runtime-batch",
+            mez_agent::AgentTurnExecution {
+                request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
+                response,
+                latest_response_usage: mez_agent::ModelTokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 1,
+                    reasoning_tokens: 0,
+                    cached_input_tokens: Some(20),
+                    cache_write_input_tokens: None,
+                },
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                action_results: vec![mez_agent::ActionResult::succeeded(
+                    &turn,
+                    &action,
+                    vec!["continue".to_string()],
+                    None,
+                )],
+                final_turn: false,
+                terminal_state: AgentTurnState::Running,
+            },
+        )
+        .unwrap();
+    let task = service
+        .take_pending_agent_compaction_task("%1")
+        .expect("observed input queues active-turn compaction");
+    assert_eq!(task.source, "observed-input-limit");
+    service.claim_agent_compaction_task_state("%1", task);
+    assert!(
+        service
+            .apply_agent_compaction_failed_event(
+                "%1",
+                "forbidden",
+                "provider authentication rejected the compaction request",
+                Some(r#"{"status_code":401,"error":{"code":"invalid_api_key"}}"#),
+            )
+            .unwrap()
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let failure = normalized_pane_log_text(&pane_text);
+    assert!(
+        failure.contains("automatic observed-input-limit compaction failed before provider retry"),
+        "{}",
+        pane_text
+    );
+    assert!(
+        !failure.contains("automatic output-limit compaction"),
+        "{}",
+        pane_text
+    );
 }
 
 /// Verifies a high execution sample still defers continuation when an action
@@ -1792,6 +1952,23 @@ context_window_tokens = 40000
             .turns()
             .iter()
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let failure = normalized_pane_log_text(&pane_text);
+    assert!(
+        failure
+            .contains("automatic provider-context-limit compaction failed before provider retry"),
+        "{}",
+        pane_text
+    );
+    assert!(
+        !failure.contains("automatic output-limit compaction"),
+        "{}",
+        pane_text
     );
     assert!(!service.agent_provider_task_is_pending("turn-1"));
     assert_eq!(

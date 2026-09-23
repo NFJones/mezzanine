@@ -322,7 +322,7 @@ impl RuntimeSessionService {
         if !self.queue_agent_context_limit_recovery_compaction(
             turn_id,
             turn.model_profile.clone(),
-            model_profile,
+            model_profile.clone(),
             recovery_attempt,
             plan,
         )? {
@@ -332,7 +332,11 @@ impl RuntimeSessionService {
             &turn.pane_id,
             turn_id,
             &format!(
-                "context_limit_recovery queued attempt={} consumed_event_sequence={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} error_kind={}",
+                "context_limit_recovery queued trigger=provider_context_limit provider={} model={} context_window_tokens={} max_input_tokens={} attempt={} consumed_event_sequence={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} error_kind={}",
+                model_profile.provider,
+                model_profile.model,
+                model_profile.context_window_tokens().unwrap_or(0),
+                model_profile.max_input_tokens().unwrap_or(0),
                 recovery_attempt,
                 consumed_sequence_high_water,
                 profile_budget_words,
@@ -452,8 +456,12 @@ impl RuntimeSessionService {
             &turn.pane_id,
             &turn.turn_id,
             &format!(
-                "observed_input_limit queued observed_input_tokens={} max_input_tokens={max_input_tokens}",
-                observed_usage.input_tokens
+                "observed_input_limit queued trigger=observed_input_limit provider={} model={} observed_input_tokens={} max_input_tokens={} context_window_tokens={} displayed_usage_sample=prior_successful_request",
+                model_profile.provider,
+                model_profile.model,
+                observed_usage.input_tokens,
+                max_input_tokens,
+                model_profile.context_window_tokens().unwrap_or(0),
             ),
         )?;
         Ok(true)

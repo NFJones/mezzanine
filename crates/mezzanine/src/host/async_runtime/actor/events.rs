@@ -1375,9 +1375,11 @@ impl AsyncRuntimeSessionActor {
                         && self.service.recover_agent_provider_output_limit_failure(
                             &agent_id, &turn_id, &error, attempt,
                         )?
-                        && self
-                            .service
-                            .queue_agent_provider_retry_task(&turn_id, u64::from(attempt))?
+                        && self.service.queue_agent_provider_retry_task(
+                            &turn_id,
+                            u64::from(attempt),
+                            None,
+                        )?
                     {
                         let mut side_effects =
                             self.render_side_effects(RenderInvalidationReason::FullRedraw);

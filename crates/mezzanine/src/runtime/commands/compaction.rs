@@ -766,7 +766,10 @@ impl RuntimeSessionService {
                     self.persist_agent_compaction_epoch(pane_id, &task, &final_summary)?;
                     if self.refresh_running_turn_context_after_conversation_compaction(&turn_id)? {
                         self.clear_agent_turn_provider_request_chain(&turn_id);
-                        self.queue_agent_provider_recovery_task_after_compaction(&turn_id)?;
+                        self.queue_agent_provider_recovery_task_after_compaction(
+                            &turn_id,
+                            "observed_input_limit_compaction",
+                        )?;
                         self.append_agent_status_text_to_terminal_buffer(
                             pane_id,
                             &format!(
@@ -800,7 +803,10 @@ impl RuntimeSessionService {
                         )?;
                     }
                     RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => {
-                        self.queue_agent_provider_recovery_task_after_compaction(&turn_id)?;
+                        self.queue_agent_provider_recovery_task_after_compaction(
+                            &turn_id,
+                            "observed_input_limit_compaction",
+                        )?;
                     }
                 }
                 let (status, trace) = match trigger {
@@ -809,7 +815,7 @@ impl RuntimeSessionService {
                             "agent: provider context recovery applied model summary compacted_blocks={}",
                             report.compacted_blocks
                         ),
-                        "provider_request recovery_resuming reason=model_context_compaction_completed",
+                        "provider_request recovery_resuming reason=provider_context_limit_compaction_completed",
                     ),
                     RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
                         observed_input_tokens,
@@ -834,11 +840,22 @@ impl RuntimeSessionService {
                 let refreshed = self
                     .refresh_running_turn_context_after_conversation_compaction(resume_turn_id)?;
                 if refreshed {
-                    self.queue_agent_provider_recovery_task_after_compaction(resume_turn_id)?;
+                    let recovery_reason = match task.source.as_str() {
+                        "provider-output-limit" => "output_limit_compaction",
+                        "observed-input-limit" => "observed_input_limit_compaction",
+                        "provider-context-limit" => "provider_context_limit_compaction",
+                        _ => "conversation_compaction",
+                    };
+                    self.queue_agent_provider_recovery_task_after_compaction(
+                        resume_turn_id,
+                        recovery_reason,
+                    )?;
                     self.append_agent_trace_turn_event(
                         pane_id,
                         resume_turn_id,
-                        "provider_request recovery_resuming reason=provider_output_limit_compaction_completed",
+                        &format!(
+                            "provider_request recovery_resuming reason={recovery_reason}_completed"
+                        ),
                     )?;
                 }
             }
@@ -856,8 +873,9 @@ impl RuntimeSessionService {
                 ),
             )?;
             if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
-                self.fail_running_turn_after_output_limit_compaction_failure(
+                self.fail_running_turn_after_compaction_failure(
                     resume_turn_id,
+                    &task.source,
                     error.message(),
                 )?;
             }
@@ -944,9 +962,10 @@ impl RuntimeSessionService {
                     &format!("agent: compact failed during provider request: {diagnostic}"),
                 )?;
             }
-            if let Some(resume_turn_id) = failed.take_resume_turn_id() {
-                self.fail_running_turn_after_output_limit_compaction_failure(
+            if let Some((resume_turn_id, source)) = failed.take_resume_turn_and_source() {
+                self.fail_running_turn_after_compaction_failure(
                     &resume_turn_id,
+                    &source,
                     &diagnostic,
                 )?;
             }
@@ -1043,8 +1062,9 @@ impl RuntimeSessionService {
                 &format!("agent: compact failed during provider request: {message}"),
             )?;
             if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
-                self.fail_running_turn_after_output_limit_compaction_failure(
+                self.fail_running_turn_after_compaction_failure(
                     resume_turn_id,
+                    &task.source,
                     message,
                 )?;
             }
@@ -1057,16 +1077,17 @@ impl RuntimeSessionService {
                 &format!("agent: compact failed during provider request: {message}"),
             )?;
         }
-        if let Some(resume_turn_id) = failed.take_resume_turn_id() {
-            self.fail_running_turn_after_output_limit_compaction_failure(&resume_turn_id, message)?;
+        if let Some((resume_turn_id, source)) = failed.take_resume_turn_and_source() {
+            self.fail_running_turn_after_compaction_failure(&resume_turn_id, &source, message)?;
         }
         Ok(failed.had_task())
     }
 
-    /// Fails a turn whose automatic output-limit compaction could not finish.
-    fn fail_running_turn_after_output_limit_compaction_failure(
+    /// Fails a turn whose automatic recovery compaction could not finish.
+    fn fail_running_turn_after_compaction_failure(
         &mut self,
         turn_id: &str,
+        source: &str,
         message: &str,
     ) -> Result<()> {
         let Some(turn) = self
@@ -1085,7 +1106,8 @@ impl RuntimeSessionService {
             return Ok(());
         };
         let error = MezError::invalid_state(format!(
-            "automatic output-limit compaction failed before provider retry: {message}"
+            "automatic {} compaction failed before provider retry: {message}",
+            runtime_compaction_failure_source_label(source),
         ));
         if let Err(application_error) = self.fail_agent_turn_for_provider_error(
             &turn,
@@ -1194,6 +1216,16 @@ pub(super) fn runtime_model_compaction_request(
             },
         ].into(),
     })
+}
+
+/// Returns the content-free label for one recorded compaction trigger.
+fn runtime_compaction_failure_source_label(source: &str) -> &'static str {
+    match source {
+        "provider-output-limit" => "output-limit",
+        "provider-context-limit" => "provider-context-limit",
+        "observed-input-limit" => "observed-input-limit",
+        _ => "conversation",
+    }
 }
 
 /// Returns the complete serialized OpenAI Responses size for one compactor request.

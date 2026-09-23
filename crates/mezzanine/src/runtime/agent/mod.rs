@@ -750,6 +750,8 @@ pub(crate) struct RuntimeAgentCompactionFailureState {
     had_task: bool,
     /// Running provider turn that must fail when recovery compaction failed.
     resume_turn_id: Option<String>,
+    /// Content-free trigger recorded when the recovery compaction was queued.
+    source: Option<String>,
 }
 
 impl RuntimeAgentCompactionFailureState {
@@ -758,9 +760,9 @@ impl RuntimeAgentCompactionFailureState {
         self.had_task
     }
 
-    /// Takes the running turn awaiting failed recovery compaction.
-    pub(crate) fn take_resume_turn_id(&mut self) -> Option<String> {
-        self.resume_turn_id.take()
+    /// Takes the running turn and trigger awaiting failed recovery compaction.
+    pub(crate) fn take_resume_turn_and_source(&mut self) -> Option<(String, String)> {
+        self.resume_turn_id.take().zip(self.source.take())
     }
 }
 
@@ -2498,12 +2500,17 @@ impl RuntimeSessionService {
             .as_ref()
             .or(pending.as_ref())
             .and_then(|task| task.resume_turn_id.clone());
+        let source = claimed
+            .as_ref()
+            .or(pending.as_ref())
+            .map(|task| task.source.clone());
         let had_task = pending.is_some()
             || claimed.is_some()
             || self.agent.agent_compacting_panes.remove(pane_id).is_some();
         RuntimeAgentCompactionFailureState {
             had_task,
             resume_turn_id,
+            source,
         }
     }
 
