@@ -95,6 +95,52 @@ impl IrohRenderRateLimiter {
     }
 }
 
+/// Retries stale-render conflicts without terminating an Iroh event stream.
+///
+/// Actor identity checks remain authoritative: only Conflict is retried, with a
+/// bounded delay, and cancellation remains responsive while the stream waits.
+async fn retry_iroh_snapshot_after_conflict<T, F, Fut>(
+    mut capture: F,
+    stop: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<Option<T>>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<Option<T>>>,
+{
+    loop {
+        if *stop.borrow() {
+            return Ok(None);
+        }
+        match capture().await {
+            Err(error) if error.kind() == crate::error::MezErrorKind::Conflict => {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                    changed = stop.changed() => {
+                        if changed.is_err() || *stop.borrow() {
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Captures an exact-client snapshot, retrying only transient stale conflicts.
+async fn render_iroh_snapshot_with_conflict_retry(
+    handle: &AsyncRuntimeSessionHandle,
+    client_id: ClientId,
+    invalidate_output: bool,
+    stop: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<Option<crate::host::async_runtime::AsyncIrohRenderSnapshot>> {
+    retry_iroh_snapshot_after_conflict(
+        || handle.render_iroh_client_snapshot(client_id.clone(), invalidate_output),
+        stop,
+    )
+    .await
+}
+
 /// Converts a pushed-render frame-rate limit into its flush interval.
 fn iroh_render_rate_limit_interval(rate_limit_fps: u64) -> Option<Duration> {
     if rate_limit_fps == 0 {
@@ -1952,12 +1998,22 @@ async fn serve_registered_runtime_iroh_event_stream(
     let mut render_limiter = None;
     let mut deferred_render_triggers = None;
     if push_render {
-        let snapshot = handle
-            .render_iroh_client_snapshot(caller_client_id.clone(), true)
-            .await?
-            .ok_or_else(|| {
-                MezError::invalid_state("Iroh v3 client was not renderable after initialization")
-            })?;
+        let snapshot = match render_iroh_snapshot_with_conflict_retry(
+            &handle,
+            caller_client_id.clone(),
+            true,
+            stop,
+        )
+        .await?
+        {
+            Some(snapshot) => snapshot,
+            None if *stop.borrow() => return Ok(0),
+            None => {
+                return Err(MezError::invalid_state(
+                    "Iroh v3 client was not renderable after initialization",
+                ));
+            }
+        };
         render_revision = 1;
         let view = iroh_render_view_value(&snapshot)?;
         let frames = encode_iroh_render_delivery_frames(
@@ -2128,18 +2184,25 @@ async fn serve_registered_runtime_iroh_event_stream(
                     continue;
                 }
             }
-            delivered =
-                delivered.saturating_add(u64::try_from(triggers.events).unwrap_or(u64::MAX));
             if triggers.render_required {
-                let snapshot = handle
-                    .render_iroh_client_snapshot(
-                        caller_client_id.clone(),
-                        triggers.invalidate_output,
-                    )
-                    .await?
-                    .ok_or_else(|| {
-                        MezError::invalid_state("Iroh v3 client stopped being renderable")
-                    })?;
+                let snapshot = match render_iroh_snapshot_with_conflict_retry(
+                    &handle,
+                    caller_client_id.clone(),
+                    triggers.invalidate_output,
+                    stop,
+                )
+                .await?
+                {
+                    Some(snapshot) => snapshot,
+                    None if *stop.borrow() => break,
+                    None => {
+                        return Err(MezError::invalid_state(
+                            "Iroh v3 client stopped being renderable",
+                        ));
+                    }
+                };
+                delivered =
+                    delivered.saturating_add(u64::try_from(triggers.events).unwrap_or(u64::MAX));
                 if let Some(render_limiter) = render_limiter.as_mut() {
                     render_limiter.set_rate_limit(snapshot.render_rate_limit_fps);
                 }
@@ -2221,7 +2284,12 @@ async fn serve_registered_runtime_iroh_event_stream(
                 }
                 last_delivered_event_id = snapshot.event_cutoff;
             } else if let Some(batch_last) = triggers.last_event_id {
+                delivered =
+                    delivered.saturating_add(u64::try_from(triggers.events).unwrap_or(u64::MAX));
                 last_delivered_event_id = batch_last;
+            } else {
+                delivered =
+                    delivered.saturating_add(u64::try_from(triggers.events).unwrap_or(u64::MAX));
             }
             if triggers.events > 0 || triggers.render_required {
                 continue;
@@ -2377,6 +2445,44 @@ mod tests {
     // scheduler contention without weakening the shorter behavior deadlines.
     const IROH_ENDPOINT_TEST_SETUP_TIMEOUT: std::time::Duration =
         std::time::Duration::from_secs(10);
+
+    /// Verifies repeated stale snapshot conflicts are retried until a stable
+    /// frame is available, while retaining normal propagation for other errors.
+    #[tokio::test]
+    async fn iroh_snapshot_retry_recovers_after_repeated_stale_conflicts() {
+        let (_stop_tx, mut stop) = tokio::sync::watch::channel(false);
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let snapshot = retry_iroh_snapshot_after_conflict(
+            || {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    if attempt < 4 {
+                        Err(MezError::conflict("stale render snapshot"))
+                    } else {
+                        Ok(Some("latest snapshot"))
+                    }
+                }
+            },
+            &mut stop,
+        )
+        .await
+        .unwrap();
+        assert_eq!(snapshot, Some("latest snapshot"));
+        assert_eq!(attempts.load(Ordering::Relaxed), 5);
+
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let error = retry_iroh_snapshot_after_conflict(
+            || {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                async { Err::<Option<&str>, _>(MezError::invalid_state("detached client")) }
+            },
+            &mut stop,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
 
     /// Verifies v4 turns an oversized rendered control frame into independently
     /// bounded chunk notifications, while rejecting a rendered view beyond the
