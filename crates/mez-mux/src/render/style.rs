@@ -9,19 +9,41 @@ use mez_terminal::{TerminalColor, TerminalStyleSpan};
 
 use crate::theme::UiTheme;
 
-/// Returns a restrained primary-tinted ramp for active status animation.
+/// Returns a vibrant, foreground-derived ramp for active status animation.
 ///
-/// Running status pills use the same quiet container as other ordinary agent
-/// states. Blending progressively small amounts of the running foreground into
-/// that container adds motion and theme identity without restoring a saturated
-/// full-pill background.
+/// The scan compositor retains the quiet running-pill background outside its
+/// highlight band. Deriving the band from the semantic foreground keeps active
+/// motion vivid without changing static pill rendering.
 pub fn agent_status_running_gradient_palette(ui_theme: &UiTheme) -> [TerminalColor; 3] {
     let base = ui_theme.colors.agent_status_running.background;
     let accent = ui_theme.colors.agent_status_running.foreground;
+    let Some((red, green, blue)) = terminal_color_rgb(accent) else {
+        return [
+            base,
+            ui_theme.colors.agent_model.background,
+            ui_theme.colors.agent_reasoning.background,
+        ];
+    };
+    let hsl = rgb_to_hsl(red, green, blue);
+    let saturation = (hsl.saturation * 1.12 + 0.04).clamp(0.0, 1.0);
+    let lightness_offset = if hsl.lightness > 0.62 { -0.08 } else { 0.08 };
+    let lightness = (hsl.lightness + lightness_offset).clamp(0.18, 0.82);
     [
-        blend_terminal_color(base, accent, 1, 8),
-        blend_terminal_color(base, accent, 2, 8),
-        blend_terminal_color(base, accent, 3, 8),
+        hsl_to_terminal_color(HslColor {
+            hue: hsl.hue - 30.0,
+            saturation,
+            lightness,
+        }),
+        hsl_to_terminal_color(HslColor {
+            hue: hsl.hue,
+            saturation: (saturation * 0.92).clamp(0.0, 1.0),
+            lightness: (lightness + lightness_offset / 2.0).clamp(0.18, 0.82),
+        }),
+        hsl_to_terminal_color(HslColor {
+            hue: hsl.hue + 30.0,
+            saturation,
+            lightness,
+        }),
     ]
 }
 
@@ -46,6 +68,79 @@ pub fn animated_scan_background(
     let numerator = intensity.min(max_intensity) as u16;
     let denominator = max_intensity.max(1) as u16;
     blend_terminal_color(base, highlight, numerator, denominator)
+}
+
+/// HSL representation used for theme-derived active-status harmonies.
+#[derive(Debug, Clone, Copy)]
+struct HslColor {
+    hue: f32,
+    saturation: f32,
+    lightness: f32,
+}
+
+/// Converts RGB components to HSL so the scan wave can shift neighboring hues.
+fn rgb_to_hsl(red: u8, green: u8, blue: u8) -> HslColor {
+    let red = f32::from(red) / 255.0;
+    let green = f32::from(green) / 255.0;
+    let blue = f32::from(blue) / 255.0;
+    let max = red.max(green).max(blue);
+    let min = red.min(green).min(blue);
+    let chroma = max - min;
+    let lightness = (max + min) / 2.0;
+    if chroma <= f32::EPSILON {
+        return HslColor {
+            hue: 0.0,
+            saturation: 0.0,
+            lightness,
+        };
+    }
+    let saturation = chroma / (1.0 - (2.0 * lightness - 1.0).abs());
+    let hue = if red >= green && red >= blue {
+        60.0 * ((green - blue) / chroma).rem_euclid(6.0)
+    } else if green >= blue {
+        60.0 * ((blue - red) / chroma + 2.0)
+    } else {
+        60.0 * ((red - green) / chroma + 4.0)
+    };
+    HslColor {
+        hue,
+        saturation,
+        lightness,
+    }
+}
+
+/// Converts an HSL scan color into a true-color terminal value.
+fn hsl_to_terminal_color(color: HslColor) -> TerminalColor {
+    let hue = color.hue.rem_euclid(360.0);
+    let saturation = color.saturation.clamp(0.0, 1.0);
+    let lightness = color.lightness.clamp(0.0, 1.0);
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let hue_prime = hue / 60.0;
+    let second = chroma * (1.0 - (hue_prime.rem_euclid(2.0) - 1.0).abs());
+    let (red, green, blue) = if hue_prime < 1.0 {
+        (chroma, second, 0.0)
+    } else if hue_prime < 2.0 {
+        (second, chroma, 0.0)
+    } else if hue_prime < 3.0 {
+        (0.0, chroma, second)
+    } else if hue_prime < 4.0 {
+        (0.0, second, chroma)
+    } else if hue_prime < 5.0 {
+        (second, 0.0, chroma)
+    } else {
+        (chroma, 0.0, second)
+    };
+    let offset = lightness - chroma / 2.0;
+    TerminalColor::Rgb(
+        unit_float_to_u8(red + offset),
+        unit_float_to_u8(green + offset),
+        unit_float_to_u8(blue + offset),
+    )
+}
+
+/// Converts a normalized color channel into its terminal byte representation.
+fn unit_float_to_u8(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 /// Returns RGB components for a true-color value.
@@ -174,25 +269,41 @@ mod tests {
 
     use super::*;
 
-    /// Verifies active-status animation remains a restrained wash of the
-    /// semantic running accent over the quiet status container. The strongest
-    /// stop must remain short of the raw accent so animation does not recreate
-    /// a saturated persistent pill.
+    /// Verifies active-status animation derives three distinct hue-shifted
+    /// highlights from the running foreground without changing the quiet
+    /// background used by static status pills.
     #[test]
-    fn running_gradient_blends_primary_foreground_into_quiet_container() {
+    fn running_gradient_uses_distinct_hues_from_running_foreground() {
         let theme = crate::theme::default_ui_theme();
+        let palette = agent_status_running_gradient_palette(&theme);
+        let mut alternate = theme.clone();
+        alternate.colors.agent_status_running.foreground = TerminalColor::Rgb(0xd9, 0x45, 0x86);
+
+        assert_ne!(palette[0], palette[1]);
+        assert_ne!(palette[1], palette[2]);
+        assert_ne!(palette, agent_status_running_gradient_palette(&alternate));
+        assert_eq!(
+            theme.colors.agent_status_running.background,
+            alternate.colors.agent_status_running.background
+        );
+    }
+
+    /// Verifies indexed running accents retain a theme-relative palette when
+    /// a custom terminal cannot represent hue-shifted true colors.
+    #[test]
+    fn running_gradient_uses_theme_relative_fallback_for_indexed_foreground() {
+        let mut theme = crate::theme::default_ui_theme();
         let base = theme.colors.agent_status_running.background;
-        let accent = theme.colors.agent_status_running.foreground;
+        theme.colors.agent_status_running.foreground = TerminalColor::Indexed(212);
 
         assert_eq!(
             agent_status_running_gradient_palette(&theme),
             [
-                blend_terminal_color(base, accent, 1, 8),
-                blend_terminal_color(base, accent, 2, 8),
-                blend_terminal_color(base, accent, 3, 8),
+                base,
+                theme.colors.agent_model.background,
+                theme.colors.agent_reasoning.background
             ]
         );
-        assert_ne!(agent_status_running_gradient_palette(&theme)[2], accent);
     }
 
     /// Verifies true-color blending and indexed-color fallback remain stable
