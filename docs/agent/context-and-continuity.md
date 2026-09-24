@@ -103,6 +103,27 @@ and protects active prompts and steering instructions from summarization. A
 summary is intentionally lossy; start `/new` when old context should not affect
 a new task, or use `/resume` to choose a saved conversation.
 
+If the manual compactor request is too large for its configured input cap or
+is rejected for context length, Mez splits only temporary, redacted source
+input into bounded chunks and asks the model to synthesize one final summary.
+Until that synthesis succeeds, neither the committed summary nor the exact
+transcript replay boundary changes. An irreducible request or exhausted retry
+budget reports a failure instead of discarding source history.
+
+Active-context recovery selects a contiguous recent suffix of complete groups
+within an eligible segment, not a best-fit collection of older small groups.
+When the newest closed group cannot fit the raw-tail budget, it is summarized
+instead of retaining an older group in its place; exact user and task barriers
+and incomplete or unconsumed groups remain raw.
+
+A completed conversation compaction writes a versioned summary and the last
+summarized transcript sequence together to a private conversation-owned epoch
+file. The original transcript remains append-only. On restart or resume, Mez
+loads this committed epoch before replaying the exact subsequent transcript
+entries, including later appends; optional pane memory is not needed to recover
+the summary. Corrupt epoch data or unreadable required history stops context
+construction rather than silently dropping older context.
+
 Observed-input compaction also protects exact historical user instructions that
 the live context planner excludes from summary input. Until durable replay can
 represent the selected compaction ranges without losing those barriers, this
@@ -114,6 +135,9 @@ Use `/status` for current-pane context and token information. Cache reuse is a
 provider observation, not proof that context is correct: provider/model changes
 and compaction can legitimately create a cold request. Consult operations
 diagnostics for cache and continuity interpretation.
+Reported usage from an output-cutoff attempt counts toward cumulative token
+totals even when its response is incomplete and a later attempt succeeds.
+The latest successful execution-input sample remains separate from that cost.
 
 The pane environment summary is sampled once before each user prompt. Mez
 stores it as an immutable chronological snapshot only when its exact bounded

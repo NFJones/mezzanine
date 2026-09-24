@@ -2,6 +2,56 @@
 
 use super::*;
 
+/// The borrowed semantic document and public diagnostics agree across all
+/// supported formats, including several independent errors in one layer.
+#[test]
+fn shared_semantic_document_preserves_cross_format_diagnostics() {
+    for (format, valid, invalid) in [
+        (
+            ConfigFormat::Toml,
+            "[agents]\nturn_timeout_ms = 1000\nprovider_error_retry_limit = 2\n",
+            "[agents]\nturn_timeout_ms = 0\nprovider_error_retry_limit = -1\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"agents":{"turn_timeout_ms":1000,"provider_error_retry_limit":2}}"#,
+            r#"{"agents":{"turn_timeout_ms":0,"provider_error_retry_limit":-1}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "agents:\n  turn_timeout_ms: 1000\n  provider_error_retry_limit: 2\n",
+            "agents:\n  turn_timeout_ms: 0\n  provider_error_retry_limit: -1\n",
+        ),
+    ] {
+        let (validation, document) =
+            super::super::validate_config_text_with_document(format, valid, ConfigScope::Primary);
+        assert!(validation.valid, "{format:?}: {:?}", validation.diagnostics);
+        assert_eq!(
+            document.unwrap().unwrap()["agents"]["turn_timeout_ms"],
+            1000
+        );
+        let (validation, document) =
+            super::super::validate_config_text_with_document(format, invalid, ConfigScope::Primary);
+        assert_eq!(
+            validation,
+            validate_config_text(format, invalid, ConfigScope::Primary)
+        );
+        assert!(document.is_some());
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|d| d.path == "agents.turn_timeout_ms")
+        );
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|d| d.path == "agents.provider_error_retry_limit")
+        );
+    }
+}
+
 /// Duration validation preserves scalar types, including quoted-number rejection,
 /// while accepting both the disable value and the maximum supported lifetime.
 #[test]

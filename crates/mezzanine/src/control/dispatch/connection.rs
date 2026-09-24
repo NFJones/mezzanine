@@ -592,7 +592,7 @@ pub(super) fn initialize_control_connection(
         require_session_target_matches_value(session, &session_target)?;
     }
     if let Some(version) = init.event_stream_version {
-        if !matches!(version, 1..=4) {
+        if !matches!(version, 1..=5) {
             return Err(MezError::invalid_args("unsupported event stream version"));
         }
         if !matches!(
@@ -613,14 +613,14 @@ pub(super) fn initialize_control_connection(
                 "event stream version 2 requires an authenticated Iroh primary",
             ));
         }
-        if matches!(version, 3 | 4)
+        if matches!(version, 3..=5)
             && !matches!(
                 connection.authenticated_peer(),
                 Some(AuthenticatedPeer::IrohEndpoint { .. })
             )
         {
             return Err(MezError::forbidden(
-                "event stream versions 3 and 4 require an authenticated Iroh client",
+                "event stream versions 3 through 5 require an authenticated Iroh client",
             ));
         }
     }
@@ -662,9 +662,9 @@ pub(super) fn initialize_control_connection(
                 .ok_or_else(|| MezError::invalid_state("attached primary client is missing"))?;
             let mut capabilities = Capabilities::primary();
             capabilities.features.client_clipboard_write =
-                matches!(init.event_stream_version, Some(2..=4));
+                matches!(init.event_stream_version, Some(2..=5));
             capabilities.features.pushed_render_updates =
-                matches!(init.event_stream_version, Some(3 | 4));
+                matches!(init.event_stream_version, Some(3..=5));
             let x11_forwarding = if let Some(offer) = init.x11_forwarding {
                 match connection.reserve_x11_route(&client_id, offer) {
                     Ok(result) => {
@@ -685,7 +685,7 @@ pub(super) fn initialize_control_connection(
             connection.event_stream_version = init.event_stream_version;
             connection.event_stream_client_clipboard_write =
                 capabilities.features.client_clipboard_write;
-            connection.event_stream_push_render = matches!(init.event_stream_version, Some(3 | 4));
+            connection.event_stream_push_render = matches!(init.event_stream_version, Some(3..=5));
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
@@ -725,7 +725,7 @@ pub(super) fn initialize_control_connection(
             connection.event_stream_version = init.event_stream_version;
             connection.event_stream_client_clipboard_write = false;
             connection.event_stream_push_render =
-                matches!(init.event_stream_version, Some(3 | 4)) && pushed_render_opt_in;
+                matches!(init.event_stream_version, Some(3..=5)) && pushed_render_opt_in;
             let mut capabilities = Capabilities::observer();
             capabilities.features.pushed_render_updates = connection.event_stream_push_render;
             Ok(InitializeResult {

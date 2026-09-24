@@ -17,6 +17,9 @@ use crate::security::project::{
 };
 use mez_agent::permissions::{exact_command_sha256, normalize_exact_command_text};
 
+/// Shares typed action-name classification while callers retain shape and
+/// diagnostic policies.
+pub(crate) mod action_lists;
 /// Exposes the defaults module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -130,6 +133,7 @@ use schema::{
     PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, PROVIDER_MODEL_KEYS, RUNTIME_KEYS, SESSION_KEYS,
     SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
 };
+pub(crate) use validation::validate_config_text_with_document;
 
 /// Reads the Tokio worker count from the migrated primary user configuration.
 ///

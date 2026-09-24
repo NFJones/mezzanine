@@ -8,11 +8,8 @@
 //! renders the outcome, and the actor applies it through the same display path
 //! the inline lane used, so presentation stays byte-identical.
 //!
-//! Families move here one at a time. A command that is not listed in
-//! [`RUNTIME_AGENT_OFF_ACTOR_COMMANDS`] keeps executing inline even when the
-//! disposition classifier calls it deferred, so the classification stays the
-//! contract this executor consumes instead of a switch for every deferred name
-//! at once.
+//! Families move here one at a time. Static metadata permits only commands
+//! with prepared inputs; live policy further restricts their admission.
 
 use super::{
     AgentShellCommandOutcome, AgentShellVisibility, MezError, Result, RuntimeSessionService,
@@ -26,27 +23,6 @@ use crate::runtime::{
     runtime_agent_shell_deferred_command_response_json, runtime_agent_shell_display_output,
     runtime_agent_shell_visibility,
 };
-
-/// Slash commands whose store or filesystem reads already run off the actor.
-///
-/// Every entry must also be classified
-/// [`super::disposition::RuntimeAgentSlashCommandDisposition::Deferred`], which
-/// the guard test below pins.
-pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] = &[
-    "list-skills",
-    "list-macros",
-    "auth-status",
-    "issue",
-    "show-issues",
-    "show-memories",
-    "show-context",
-    "context-doc",
-    "sync-builtin-skills",
-    "resume",
-    "list-modified-files",
-    "show-approvals",
-    "list-personalities",
-];
 
 /// Prepared-input family one moved slash command consumes off the actor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,9 +57,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
 
 /// Returns the prepared-input family for one moved command.
 ///
-/// The claim uses this as the single authority for which commands may run off the
-/// actor, and the guard test pins every [`RUNTIME_AGENT_OFF_ACTOR_COMMANDS`]
-/// entry to a family, so a name cannot be added to the dispatcher list without
+/// The claim uses this as the prepared-input authority, and the guard test pins
+/// every metadata-marked off-actor command to a family, so a name cannot be added without
 /// prepared inputs and then be acknowledged and silently dropped at claim time.
 pub(crate) fn off_actor_command_family(
     command: &str,
@@ -138,15 +113,11 @@ impl RuntimeSessionService {
     /// inline path, so the user still receives a synchronous body instead of an
     /// acknowledgement that nothing ever settles.
     pub(crate) fn should_defer_agent_shell_command(&self, command: &str, input: &str) -> bool {
-        if !RUNTIME_AGENT_OFF_ACTOR_COMMANDS.contains(&command) {
-            return false;
-        }
-        // The disposition classifier is the contract this executor consumes, so a
-        // moved command must be a known deferred command: membership rejects an
-        // unclassified name the classifier would default to deferred, and the
-        // classifier check rejects a name a later edit also pinned inline. Either
-        // disagreement would silently change where a read runs.
-        if !super::disposition::RUNTIME_AGENT_DEFERRED_SLASH_COMMANDS.contains(&command) {
+        // An unknown name defaults to Deferred for classification but must
+        // never gain off-actor admission without explicit prepared inputs.
+        if !super::disposition::command_execution_metadata(command)
+            .is_some_and(|entry| entry.off_actor)
+        {
             return false;
         }
         if super::disposition::runtime_agent_slash_command_disposition(command)
@@ -1278,7 +1249,11 @@ mod tests {
     /// deferred, so the two lists cannot drift apart.
     #[test]
     fn runtime_agent_off_actor_commands_are_classified_deferred() {
-        for command in RUNTIME_AGENT_OFF_ACTOR_COMMANDS {
+        for command in crate::runtime::commands::disposition::COMMAND_EXECUTION_METADATA
+            .iter()
+            .filter(|entry| entry.off_actor)
+            .map(|entry| entry.name)
+        {
             assert!(
                 off_actor_command_family(command, "/resume").is_some(),
                 "`{command}` is dispatched off actor, so it must have prepared inputs"

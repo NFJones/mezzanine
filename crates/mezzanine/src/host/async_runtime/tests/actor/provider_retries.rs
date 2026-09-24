@@ -805,13 +805,22 @@ context_window_tokens = 128000
                     "safe partial response",
                     0,
                     1,
-                    mez_agent::ModelTokenUsage::default(),
+                    mez_agent::ModelTokenUsage {
+                        input_tokens: 100,
+                        output_tokens: 20,
+                        reasoning_tokens: 5,
+                        cached_input_tokens: Some(10),
+                        cache_write_input_tokens: None,
+                    },
                     mez_agent::ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall,
                 ))),
             }));
+            let duplicate = failure.clone();
             let failure_report = handle.submit_runtime_events(failure).await.unwrap();
             assert_eq!(failure_report.accepted, 1);
             assert_eq!(failure_report.applied, 1);
+            let duplicate_report = handle.submit_runtime_events(duplicate).await.unwrap();
+            assert_eq!(duplicate_report.applied, 0);
 
             assert!(handle.drain_timer_side_effects(8).await.unwrap().is_empty());
 
@@ -849,7 +858,13 @@ context_window_tokens = 128000
                 "safe partial response",
                 0,
                 1,
-                mez_agent::ModelTokenUsage::default(),
+                mez_agent::ModelTokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 20,
+                    reasoning_tokens: 5,
+                    cached_input_tokens: Some(10),
+                    cache_write_input_tokens: None,
+                },
                 mez_agent::ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall,
             ))),
         }));
@@ -895,6 +910,21 @@ context_window_tokens = 128000
         "{pane_text}"
     );
     assert!(pane_text.contains("agent: turn turn-"), "{pane_text}");
+    let spent = exit
+        .service
+        .agent_token_usage_for_conversation("async-output-limit-auto");
+    let usage = spent
+        .get(&mez_agent::ModelTokenUsageKey::new("openai", "gpt-test"))
+        .expect("three accepted cutoffs must be charged");
+    assert_eq!(usage.input_tokens, 300);
+    assert_eq!(usage.output_tokens, 60);
+    assert_eq!(usage.reasoning_tokens, 15);
+    assert_eq!(usage.cached_input_tokens, Some(30));
+    let metrics = exit.service.runtime_metrics();
+    assert_eq!(metrics.last_provider_input_tokens, None);
+    assert_eq!(metrics.provider_input_tokens_per_response.observations, 0);
+    assert_eq!(metrics.provider_output_tokens_per_response.observations, 0);
+    assert_eq!(metrics.provider_input_tokens, 300);
     exit.service.terminate_all_pane_processes().unwrap();
 }
 

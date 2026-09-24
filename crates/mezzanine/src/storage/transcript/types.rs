@@ -267,6 +267,22 @@ pub struct AgentPresentationEntry {
     pub source_content_type: Option<String>,
 }
 
+/// Versioned durable summary and replay boundary for one compacted conversation.
+///
+/// The summary and sequence boundary are stored in one atomically replaced
+/// sidecar so restart replay cannot observe one without the other.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentCompactionEpoch {
+    /// Sidecar format version.
+    pub version: u64,
+    /// Conversation whose transcript prefix the summary replaces.
+    pub conversation_id: String,
+    /// Highest transcript sequence represented by the summary.
+    pub through_sequence: u64,
+    /// Complete model-visible summary block, including its explanatory framing.
+    pub summary: String,
+}
+
 /// Filesystem-backed transcript store.
 #[derive(Debug, Clone)]
 pub struct AgentTranscriptStore {
@@ -312,6 +328,8 @@ pub struct AgentTranscriptStore {
     /// Test-only one-shot failure immediately before replacing session metadata.
     #[cfg(test)]
     pub(super) fail_agent_session_metadata_write: Arc<AtomicBool>,
+    #[cfg(test)]
+    pub(super) fail_compaction_epoch_write: Arc<AtomicBool>,
     /// Test-only one-shot failure after a child contract sidecar commits.
     #[cfg(test)]
     pub(super) fail_subagent_contract_catalog_upsert: Arc<AtomicBool>,

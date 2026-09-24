@@ -297,11 +297,21 @@ pub fn validate_config_text(
     text: &str,
     scope: ConfigScope,
 ) -> ConfigValidation {
+    validate_config_text_with_document(format, text, scope).0
+}
+
+/// Validates a layer and retains its normalized document for runtime merging.
+/// Syntax and semantic diagnostics keep the same precedence as text validation.
+pub(crate) fn validate_config_text_with_document(
+    format: ConfigFormat,
+    text: &str,
+    scope: ConfigScope,
+) -> (ConfigValidation, Option<Result<serde_json::Value>>) {
     let mut diagnostics = validate_config_syntax(format, text);
     if !diagnostics.is_empty() {
         diagnostics.sort_by(|left, right| left.path.cmp(&right.path));
         diagnostics.dedup();
-        return ConfigValidation::from_diagnostics(diagnostics);
+        return (ConfigValidation::from_diagnostics(diagnostics), None);
     }
 
     let paths = match format {
@@ -310,21 +320,24 @@ pub fn validate_config_text(
         ConfigFormat::Json => extract_json_paths(text),
     };
     let values = extract_config_values(format, text);
-    diagnostics.extend(validate_agent_timeout_config(format, text));
-    diagnostics.extend(validate_provider_retry_config(format, text));
-    diagnostics.extend(validate_host_config(format, text));
-    diagnostics.extend(validate_iroh_transport_config(format, text));
-    diagnostics.extend(validate_external_editor_config(format, text));
-    diagnostics.extend(validate_provider_models_config(format, text));
-    diagnostics.extend(validate_model_profile_reasoning_config(format, text));
-    diagnostics.extend(validate_session_title_model_profile_config(format, text));
-    diagnostics.extend(validate_group_whitelist_config(format, text));
-    diagnostics.extend(validate_env_whitelist_config(format, text));
-    diagnostics.extend(validate_agent_enabled_actions_config(format, text));
-    diagnostics.extend(validate_subagent_allowed_actions_config(format, text));
-    diagnostics.extend(validate_pane_status_config(format, text));
+    // Syntax was checked above. Share one normalized document across semantic
+    // validators; raw text remains available for format-native path diagnostics.
+    let document = parse_config_json_value(format, text);
+    if let Ok(root) = document.as_ref() {
+        diagnostics.extend(validate_agent_timeout_config(root));
+        diagnostics.extend(validate_provider_retry_config(root));
+        diagnostics.extend(validate_host_config(root));
+        diagnostics.extend(validate_iroh_transport_config(root));
+        diagnostics.extend(validate_external_editor_config(root));
+        diagnostics.extend(validate_provider_models_config(root));
+        diagnostics.extend(validate_model_profile_reasoning_config(root));
+        diagnostics.extend(validate_session_title_model_profile_config(root));
+        diagnostics.extend(validate_group_whitelist_config(root));
+        diagnostics.extend(validate_env_whitelist_config(root));
+        diagnostics.extend(validate_agent_enabled_actions_config(root));
+        diagnostics.extend(validate_subagent_allowed_actions_config(root));
+        diagnostics.extend(validate_pane_status_config(root));
 
-    if let Ok(root) = parse_config_json_value(format, text) {
         if let Some(value) = root.pointer("/terminal/zen_focus_label_duration_ms")
             && !value.as_u64().is_some_and(|duration| duration <= 60000)
         {
@@ -611,16 +624,16 @@ pub fn validate_config_text(
 
     diagnostics.sort_by(|left, right| left.path.cmp(&right.path));
     diagnostics.dedup();
-    ConfigValidation::from_diagnostics(diagnostics)
+    (
+        ConfigValidation::from_diagnostics(diagnostics),
+        Some(document),
+    )
 }
 
 /// Validates typed pane-status rails and named built-in definitions as one
 /// atomic runtime configuration value.
-fn validate_pane_status_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
-    crate::runtime::runtime_pane_status_config_from_config(&root)
+fn validate_pane_status_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
+    crate::runtime::runtime_pane_status_config_from_config(root)
         .err()
         .map(|error| {
             vec![ConfigDiagnostic {
@@ -632,13 +645,7 @@ fn validate_pane_status_config(format: ConfigFormat, text: &str) -> Vec<ConfigDi
 }
 
 /// Validates the static provider action allowlist and rejects controller-only actions.
-fn validate_agent_enabled_actions_config(
-    format: ConfigFormat,
-    text: &str,
-) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_agent_enabled_actions_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let Some(value) = root
         .get("agents")
         .and_then(serde_json::Value::as_object)
@@ -658,55 +665,43 @@ fn validate_agent_enabled_actions_config(
             message: "agents.enabled_actions must contain at least one action".to_string(),
         }];
     }
-    let configurable = mez_agent::AllowedActionSet::all_enabled();
-    let mut seen = std::collections::BTreeSet::new();
-    let mut diagnostics = Vec::new();
-    for value in values {
-        let Some(name) = value.as_str() else {
-            diagnostics.push(ConfigDiagnostic {
+    let (_, issues) = super::action_lists::classify_action_list(
+        values.iter().map(serde_json::Value::as_str),
+        true,
+    );
+    issues
+        .into_iter()
+        .map(|issue| {
+            use super::action_lists::ActionListIssue;
+            let message = match issue {
+                ActionListIssue::NonString => {
+                    "agents.enabled_actions must contain only action names".to_string()
+                }
+                ActionListIssue::Unknown(name) => {
+                    format!("agents.enabled_actions contains unknown action `{name}`")
+                }
+                ActionListIssue::ControllerOnly(name) => {
+                    format!("agents.enabled_actions cannot enable controller-only action `{name}`")
+                }
+                ActionListIssue::Duplicate(name) => {
+                    format!("agents.enabled_actions contains duplicate action `{name}`")
+                }
+            };
+            ConfigDiagnostic {
                 path: "agents.enabled_actions".to_string(),
-                message: "agents.enabled_actions must contain only action names".to_string(),
-            });
-            continue;
-        };
-        let Some(action) = mez_agent::AllowedAction::from_action_type(name) else {
-            diagnostics.push(ConfigDiagnostic {
-                path: "agents.enabled_actions".to_string(),
-                message: format!("agents.enabled_actions contains unknown action `{name}`"),
-            });
-            continue;
-        };
-        if !configurable.contains(action) {
-            diagnostics.push(ConfigDiagnostic {
-                path: "agents.enabled_actions".to_string(),
-                message: format!(
-                    "agents.enabled_actions cannot enable controller-only action `{name}`"
-                ),
-            });
-        } else if !seen.insert(action) {
-            diagnostics.push(ConfigDiagnostic {
-                path: "agents.enabled_actions".to_string(),
-                message: format!("agents.enabled_actions contains duplicate action `{name}`"),
-            });
-        }
-    }
-    diagnostics
+                message,
+            }
+        })
+        .collect()
 }
 
 /// Validates optional per-profile child action restrictions before runtime
 /// profile materialization. A profile restriction may only narrow the normal
 /// provider-visible action catalog and must retain at least one action.
-fn validate_subagent_allowed_actions_config(
-    format: ConfigFormat,
-    text: &str,
-) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_subagent_allowed_actions_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let Some(profiles) = root.get("subagents").and_then(serde_json::Value::as_object) else {
         return Vec::new();
     };
-    let configurable = mez_agent::AllowedActionSet::all_enabled();
     let mut diagnostics = Vec::new();
     for (profile_id, profile) in profiles {
         let Some(value) = profile
@@ -730,35 +725,30 @@ fn validate_subagent_allowed_actions_config(
             });
             continue;
         }
-        let mut seen = std::collections::BTreeSet::new();
-        for value in values {
-            let Some(name) = value.as_str() else {
-                diagnostics.push(ConfigDiagnostic {
-                    path: path.clone(),
-                    message: "subagent allowed_actions must contain only action names".to_string(),
-                });
-                continue;
+        let (_, issues) = super::action_lists::classify_action_list(
+            values.iter().map(serde_json::Value::as_str),
+            true,
+        );
+        for issue in issues {
+            use super::action_lists::ActionListIssue;
+            let message = match issue {
+                ActionListIssue::NonString => {
+                    "subagent allowed_actions must contain only action names".to_string()
+                }
+                ActionListIssue::Unknown(name) => {
+                    format!("subagent allowed_actions contains unknown action `{name}`")
+                }
+                ActionListIssue::ControllerOnly(name) => format!(
+                    "subagent allowed_actions cannot enable controller-only action `{name}`"
+                ),
+                ActionListIssue::Duplicate(name) => {
+                    format!("subagent allowed_actions contains duplicate action `{name}`")
+                }
             };
-            let Some(action) = mez_agent::AllowedAction::from_action_type(name) else {
-                diagnostics.push(ConfigDiagnostic {
-                    path: path.clone(),
-                    message: format!("subagent allowed_actions contains unknown action `{name}`"),
-                });
-                continue;
-            };
-            if !configurable.contains(action) {
-                diagnostics.push(ConfigDiagnostic {
-                    path: path.clone(),
-                    message: format!(
-                        "subagent allowed_actions cannot enable controller-only action `{name}`"
-                    ),
-                });
-            } else if !seen.insert(action) {
-                diagnostics.push(ConfigDiagnostic {
-                    path: path.clone(),
-                    message: format!("subagent allowed_actions contains duplicate action `{name}`"),
-                });
-            }
+            diagnostics.push(ConfigDiagnostic {
+                path: path.clone(),
+                message,
+            });
         }
     }
     diagnostics
@@ -766,10 +756,7 @@ fn validate_subagent_allowed_actions_config(
 
 /// Validates structured external-editor argv candidates without interpreting
 /// any value as shell syntax.
-fn validate_external_editor_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_external_editor_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let Some(editor) = root
         .get("external_editor")
         .and_then(serde_json::Value::as_object)
@@ -876,10 +863,7 @@ fn validate_external_editor_argv(
 
 /// Validates schema-v77 reusable provider-model metadata with value types and
 /// provider-local identity relationships intact.
-fn validate_provider_models_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_provider_models_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let schema_version = root
         .get("version")
         .and_then(serde_json::Value::as_u64)
@@ -1199,13 +1183,7 @@ fn is_supported_capability_tag(tag: &str) -> bool {
 /// model. An unknown profile name is a configuration error rather than a
 /// silent fallback to the conversation profile, because silently ignoring the
 /// override would spend the profile the operator explicitly redirected.
-fn validate_session_title_model_profile_config(
-    format: ConfigFormat,
-    text: &str,
-) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_session_title_model_profile_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let Some(profile_name) = root
         .pointer("/agents/session_title_model_profile")
         .and_then(serde_json::Value::as_str)
@@ -1232,13 +1210,7 @@ fn validate_session_title_model_profile_config(
 /// DeepSeek profiles with a reasoning selection and no declared metadata are
 /// flagged because conservative unknown-model policy would reject them at
 /// materialization.
-fn validate_model_profile_reasoning_config(
-    format: ConfigFormat,
-    text: &str,
-) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_model_profile_reasoning_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let Some(providers) = root.get("providers").and_then(serde_json::Value::as_object) else {
         return Vec::new();
     };
@@ -1406,10 +1378,7 @@ fn validate_provider_model_string_list(
 }
 
 /// Validates schema-v73 persistent-host policy with structured value types.
-fn validate_host_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_host_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let Some(host) = root.get("host").and_then(serde_json::Value::as_object) else {
         return Vec::new();
     };
@@ -1492,10 +1461,7 @@ fn validate_host_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnosti
 }
 
 /// Validates schema-v73 Iroh transport policy with structured value types.
-fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_iroh_transport_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let Some(iroh) = root
         .get("transport")
         .and_then(serde_json::Value::as_object)
@@ -1759,10 +1725,7 @@ fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<Confi
 }
 
 /// Validates agent timeout settings with their structured scalar types intact.
-fn validate_agent_timeout_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_agent_timeout_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let Some(agents) = root.get("agents").and_then(serde_json::Value::as_object) else {
         return Vec::new();
     };
@@ -1790,10 +1753,7 @@ fn validate_agent_timeout_config(format: ConfigFormat, text: &str) -> Vec<Config
 }
 
 /// Validates provider retry count and unlimited mode with scalar types intact.
-fn validate_provider_retry_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_provider_retry_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let Some(agents) = root.get("agents").and_then(serde_json::Value::as_object) else {
         return Vec::new();
     };
@@ -1822,10 +1782,7 @@ fn validate_provider_retry_config(format: ConfigFormat, text: &str) -> Vec<Confi
 }
 
 /// Validates schema-v49 group whitelist names without consulting NSS.
-fn validate_group_whitelist_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_group_whitelist_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let Some(value) = root
         .get("permissions")
         .and_then(serde_json::Value::as_object)
@@ -1887,10 +1844,7 @@ fn validate_group_whitelist_config(format: ConfigFormat, text: &str) -> Vec<Conf
 }
 
 /// Validates schema-v50 environment whitelist names without reading any environment.
-fn validate_env_whitelist_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
-    let Ok(root) = parse_config_json_value(format, text) else {
-        return Vec::new();
-    };
+fn validate_env_whitelist_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
     let Some(permissions) = root
         .get("permissions")
         .and_then(serde_json::Value::as_object)

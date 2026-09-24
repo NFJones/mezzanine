@@ -143,6 +143,122 @@ fn entry(conversation_id: &str, sequence: u64, role: TranscriptRole) -> Transcri
     }
 }
 
+/// A failed epoch replacement must leave the previous summary and boundary
+/// together, while the append-only archive and later exact suffix remain intact.
+#[test]
+fn compaction_epoch_replacement_is_atomic_and_suffix_is_exact() {
+    let root = temp_root("compaction-epoch-atomic");
+    let store = AgentTranscriptStore::new(root.clone());
+    for sequence in 1..=4 {
+        store
+            .append(&entry("epoch", sequence, TranscriptRole::User))
+            .unwrap();
+    }
+    store
+        .save_compaction_epoch("epoch", 1, "first summary")
+        .unwrap();
+    let previous = store.compaction_epoch("epoch").unwrap().unwrap();
+    store.fail_next_compaction_epoch_write();
+    assert!(
+        store
+            .save_compaction_epoch("epoch", 2, "failed summary")
+            .is_err()
+    );
+    assert_eq!(store.compaction_epoch("epoch").unwrap(), Some(previous));
+    assert!(!root.join("epoch/.compaction-epoch.json.tmp").exists());
+    store
+        .save_compaction_epoch("epoch", 2, "second summary")
+        .unwrap();
+    store
+        .append(&entry("epoch", 5, TranscriptRole::Assistant))
+        .unwrap();
+    assert_eq!(
+        store
+            .inspect_after_sequence("epoch", 2)
+            .unwrap()
+            .iter()
+            .map(|row| row.sequence)
+            .collect::<Vec<_>>(),
+        [3, 4, 5]
+    );
+    assert_eq!(store.inspect("epoch").unwrap().len(), 5);
+    assert_eq!(
+        store.compaction_epoch("epoch").unwrap().unwrap().summary,
+        "second summary"
+    );
+    fs::write(root.join("epoch/compaction-epoch.json"), b"invalid json").unwrap();
+    assert!(store.compaction_epoch("epoch").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A missing committed sidecar or syntactically valid boundary beyond the
+/// transcript must fail visibly rather than replay a shortened raw suffix.
+#[test]
+fn compaction_epoch_missing_or_corrupt_boundary_fails_closed() {
+    let root = temp_root("compaction-epoch-corrupt");
+    let store = AgentTranscriptStore::new(root.clone());
+    for sequence in 1..=3 {
+        store
+            .append(&entry("epoch", sequence, TranscriptRole::User))
+            .unwrap();
+    }
+    store.save_compaction_epoch("epoch", 1, "summary").unwrap();
+    let path = root.join("epoch/compaction-epoch.json");
+    let previous = fs::read(&path).unwrap();
+    fs::remove_file(&path).unwrap();
+    assert!(
+        store
+            .compaction_epoch("epoch")
+            .unwrap_err()
+            .message()
+            .contains("missing")
+    );
+    fs::write(
+        &path,
+        r#"{"version":1,"conversation_id":"epoch","through_sequence":99,"summary":"summary"}"#,
+    )
+    .unwrap();
+    assert!(
+        store
+            .compaction_epoch("epoch")
+            .unwrap_err()
+            .message()
+            .contains("boundary")
+    );
+    fs::write(&path, previous).unwrap();
+    assert_eq!(
+        store
+            .compaction_epoch("epoch")
+            .unwrap()
+            .unwrap()
+            .through_sequence,
+        1
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// An accepted publication must be readable under the encoded sidecar size
+/// limit, including JSON escapes and framing bytes.
+#[test]
+fn compaction_epoch_rejects_oversized_encoded_summary_before_publication() {
+    let root = temp_root("compaction-epoch-size");
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("epoch", 1, TranscriptRole::User))
+        .unwrap();
+    let escaped = "\\".repeat(600_000);
+    assert!(store.save_compaction_epoch("epoch", 1, &escaped).is_err());
+    assert_eq!(store.compaction_epoch("epoch").unwrap(), None);
+    store
+        .save_compaction_epoch("epoch", 1, "short summary")
+        .unwrap();
+    assert_eq!(
+        store.compaction_epoch("epoch").unwrap().unwrap().summary,
+        "short summary"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Builds minimal valid active-session metadata for persistence and migration tests.
 fn agent_session_metadata(
     mezzanine_session_id: &str,

@@ -227,6 +227,8 @@ pub(in crate::cli) enum AttachRenderAction {
     None,
     /// Request a fresh `terminal/view` while preserving the diff-render base.
     View,
+    /// Refresh the logical view immediately without discarding the physical diff base.
+    ImmediateView,
     /// Invalidate the diff-render base before requesting a fresh view.
     InvalidateAndView,
     /// The auxiliary event stream disconnected.
@@ -268,6 +270,8 @@ struct IrohRetainedRenderState {
     fragment: Option<IrohRenderFragmentTransfer>,
     /// Only negotiated v4 streams may carry render fragments.
     allow_render_fragments: bool,
+    /// Only negotiated v5 streams may carry sparse metadata and row replacements.
+    allow_sparse_render: bool,
 }
 
 /// One ordered, bounded v4 transfer carrying a complete v3 render frame.
@@ -289,6 +293,7 @@ impl IrohRetainedRenderState {
             expected_role: expected_role.into(),
             fragment: None,
             allow_render_fragments: false,
+            allow_sparse_render: false,
         }
     }
 }
@@ -301,7 +306,7 @@ impl Default for IrohRetainedRenderState {
 
 impl IrohAttachRenderWakeup {
     /// Builds a wakeup from one decoded event notification.
-    const fn new(action: AttachRenderAction, event_id: Option<u64>) -> Self {
+    pub(super) const fn new(action: AttachRenderAction, event_id: Option<u64>) -> Self {
         Self {
             action,
             event_id,
@@ -369,8 +374,9 @@ impl AttachRenderAction {
         match self {
             Self::None => 0,
             Self::View => 1,
-            Self::InvalidateAndView => 2,
-            Self::Disconnect => 3,
+            Self::ImmediateView => 2,
+            Self::InvalidateAndView => 3,
+            Self::Disconnect => 4,
         }
     }
 }
@@ -434,10 +440,13 @@ pub(super) async fn read_attached_client_input_or_runtime_event<I: AsyncAttached
     max_bytes: usize,
     animation_deadline: Option<tokio::time::Instant>,
     size_refresh_deadline: tokio::time::Instant,
+    pending_render_deadline: Option<tokio::time::Instant>,
 ) -> Result<AttachedClientInputPoll> {
     let wake_deadline = animation_deadline
         .filter(|deadline| *deadline <= size_refresh_deadline)
         .unwrap_or(size_refresh_deadline);
+    let wake_deadline =
+        pending_render_deadline.map_or(wake_deadline, |deadline| deadline.min(wake_deadline));
     let input = read_attached_client_input_or_deadline(
         terminal_io,
         max_bytes,
@@ -635,7 +644,7 @@ async fn receive_iroh_runtime_events(
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
     sender: &tokio::sync::mpsc::Sender<Result<IrohAttachRenderWakeup>>,
 ) -> Result<()> {
-    if !matches!(event_stream_version, 1..=4) {
+    if !matches!(event_stream_version, 1..=5) {
         return Err(MezError::invalid_args(
             "unsupported negotiated Iroh event stream version",
         ));
@@ -652,6 +661,7 @@ async fn receive_iroh_runtime_events(
             }
         };
         let expected_preface = match event_stream_version {
+            5 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V5_PREFACE,
             4 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V4_PREFACE,
             3 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE,
             2 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE,
@@ -693,6 +703,7 @@ async fn receive_iroh_runtime_events(
     let mut render_state =
         IrohRetainedRenderState::new(pushed_render_role.unwrap_or_else(|| "primary".to_string()));
     render_state.allow_render_fragments = event_stream_version >= 4;
+    render_state.allow_sparse_render = event_stream_version >= 5;
     let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
     let mut pending_delivery: Option<IrohAttachRenderWakeup> = None;
     loop {
@@ -892,6 +903,14 @@ fn apply_negotiated_iroh_attach_frame(
             ));
         }
         return parse_iroh_pushed_render_delta(&value, render_state);
+    }
+    if method == Some("render/sparse") {
+        if !allow_pushed_render || !render_state.allow_sparse_render {
+            return Err(MezError::invalid_state(
+                "Iroh event stream contained unnegotiated sparse render",
+            ));
+        }
+        return parse_iroh_pushed_render_sparse(&value, render_state);
     }
     if method.is_some_and(|method| method.starts_with("client/clipboard.")) {
         let Some(assembler) = clipboard_assembler else {
@@ -1254,6 +1273,137 @@ fn parse_iroh_pushed_render_delta(
     ))
 }
 
+/// Expands a v5 sparse patch against the exact retained base, then delegates
+/// complete-view validation and atomic commitment to the v3 delta parser.
+fn parse_iroh_pushed_render_sparse(
+    value: &serde_json::Value,
+    render_state: &mut IrohRetainedRenderState,
+) -> Result<IrohAttachRenderWakeup> {
+    let params = value
+        .get("params")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh sparse render omitted params"))?;
+    if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+        || params.get("kind").and_then(serde_json::Value::as_str) != Some("sparse")
+    {
+        return Err(MezError::invalid_state(
+            "Iroh sparse render has invalid envelope",
+        ));
+    }
+    // Do not inspect or expand patches from a stale revision, even transiently.
+    if params
+        .get("base_revision")
+        .and_then(serde_json::Value::as_u64)
+        != Some(render_state.revision)
+    {
+        return Err(MezError::invalid_state(
+            "Iroh sparse render base revision does not match retained state",
+        ));
+    }
+    let base = render_state
+        .view
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh sparse render has no retained base"))?;
+    let mut metadata = base.clone();
+    metadata.remove("lines");
+    metadata.remove("line_style_spans");
+    let changes = params
+        .get("view")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh sparse render omitted view changes"))?;
+    for (key, replacement) in changes {
+        if key == "lines"
+            || key == "line_style_spans"
+            || key == "role"
+            || key == "authoritative_size"
+            || key == "client_size"
+            || (!metadata.contains_key(key)
+                && !matches!(key.as_str(), "agent_prompt_region" | "iroh_status_slot"))
+        {
+            return Err(MezError::invalid_state(
+                "Iroh sparse render contains invalid metadata key",
+            ));
+        }
+        metadata.insert(key.clone(), replacement.clone());
+    }
+    let removed = params
+        .get("remove")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| MezError::invalid_state("Iroh sparse render omitted removals"))?;
+    let mut removed_keys = std::collections::BTreeSet::new();
+    for key in removed {
+        let key = key
+            .as_str()
+            .ok_or_else(|| MezError::invalid_state("Iroh sparse render removal is invalid"))?;
+        if !matches!(key, "agent_prompt_region" | "iroh_status_slot")
+            || changes.contains_key(key)
+            || !removed_keys.insert(key)
+            || metadata.remove(key).is_none()
+        {
+            return Err(MezError::invalid_state(
+                "Iroh sparse render contains invalid removal",
+            ));
+        }
+    }
+    let rows = params
+        .get("rows")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| MezError::invalid_state("Iroh sparse render omitted rows"))?;
+    let base_lines = base
+        .get("lines")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| MezError::invalid_state("Iroh sparse render base lines are missing"))?;
+    let base_styles = base
+        .get("line_style_spans")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| MezError::invalid_state("Iroh sparse render base styles are missing"))?;
+    if base_lines.len() != base_styles.len() || rows.len() > base_lines.len() {
+        return Err(MezError::invalid_state(
+            "Iroh sparse render row count is invalid",
+        ));
+    }
+    let mut expanded = Vec::with_capacity(rows.len());
+    let mut seen = std::collections::BTreeSet::new();
+    for row in rows {
+        let row = row
+            .as_object()
+            .ok_or_else(|| MezError::invalid_state("Iroh sparse render row is invalid"))?;
+        let index = row
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|index| usize::try_from(index).ok())
+            .filter(|index| *index < base_lines.len() && seen.insert(*index))
+            .ok_or_else(|| {
+                MezError::invalid_state("Iroh sparse render row index is invalid or duplicate")
+            })?;
+        if row
+            .keys()
+            .any(|key| !matches!(key.as_str(), "index" | "line" | "style_spans"))
+            || (!row.contains_key("line") && !row.contains_key("style_spans"))
+        {
+            return Err(MezError::invalid_state(
+                "Iroh sparse render row has invalid fields",
+            ));
+        }
+        expanded.push(serde_json::json!({
+            "index": index,
+            "line": row.get("line").unwrap_or(&base_lines[index]),
+            "style_spans": row.get("style_spans").unwrap_or(&base_styles[index]),
+        }));
+    }
+    let full = serde_json::json!({
+        "jsonrpc": "2.0", "method": "render/delta",
+        "params": {
+            "kind": "delta", "base_revision": params.get("base_revision"),
+            "revision": params.get("revision"), "event_cutoff": params.get("event_cutoff"),
+            "invalidate_output": params.get("invalidate_output"),
+            "line_count": params.get("line_count"), "view": metadata, "rows": expanded,
+        }
+    });
+    parse_iroh_pushed_render_delta(&full, render_state)
+}
+
 fn strict_iroh_attach_render_action(body: &str) -> Result<IrohAttachRenderWakeup> {
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_state("Iroh event stream contained invalid JSON"))?;
@@ -1497,9 +1647,8 @@ pub(super) fn event_type_from_notification(value: &serde_json::Value) -> Option<
 pub(super) fn attach_render_action_for_event_type(event_type: &str) -> AttachRenderAction {
     match event_type {
         "diagnostic" | "snapshot_changed" => AttachRenderAction::None,
-        "client_attached" | "client_detached" | "config_changed" | "window_changed" => {
-            AttachRenderAction::InvalidateAndView
-        }
+        "config_changed" => AttachRenderAction::ImmediateView,
+        "client_attached" | "client_detached" | "window_changed" => AttachRenderAction::View,
         "agent_status" | "approval_changed" | "hook_failed" | "mcp_server_changed" | "message"
         | "pane_changed" => AttachRenderAction::View,
         _ => AttachRenderAction::View,
@@ -2304,6 +2453,156 @@ mod iroh_tests {
         assert_eq!(render_state.view, retained_before_error.view);
     }
 
+    /// Verifies v5 sparse metadata, independent text/style replacements and
+    /// explicit removal reconstruct a complete view; malformed patches never
+    /// advance the retained revision or alter its base.
+    #[test]
+    fn pushed_render_sparse_reconstructs_and_rejects_atomically() {
+        let snapshot = serde_json::json!({
+            "jsonrpc": "2.0", "method": "render/snapshot",
+            "params": {
+                "kind": "snapshot", "revision": 1, "event_cutoff": 4,
+                "invalidate_output": true,
+                "view": {
+                    "role": "primary", "lines": ["old", "keep"],
+                    "line_style_spans": [[], []],
+                    "cursor": {"row": 0, "column": 0, "visible": true},
+                    "output_modes": {}, "agent_prompt_region": {"row": 0}
+                }
+            }
+        });
+        let mut state = IrohRetainedRenderState::default();
+        parse_iroh_pushed_render_snapshot(&snapshot, &mut state).unwrap();
+        let sparse = serde_json::json!({
+            "jsonrpc": "2.0", "method": "render/sparse",
+            "params": {
+                "kind": "sparse", "base_revision": 1, "revision": 2,
+                "event_cutoff": 5, "invalidate_output": false,
+                "line_count": 2,
+                "view": {"cursor": {"row": 0, "column": 1, "visible": true},
+                         "agent_prompt_region": null},
+                "remove": [],
+                "rows": [{"index": 0, "line": "new"},
+                         {"index": 1, "style_spans": []}]
+            }
+        });
+        let body = sparse.to_string();
+        assert!(apply_negotiated_iroh_attach_frame(&body, None, None, true, &mut state).is_err());
+        state.allow_sparse_render = true;
+        let mut observer = IrohRetainedRenderState::new("observer");
+        observer.allow_sparse_render = true;
+        assert!(
+            apply_negotiated_iroh_attach_frame(&body, None, None, true, &mut observer).is_err()
+        );
+        for (field, bad) in [
+            ("stale", serde_json::json!(0)),
+            ("invalid", serde_json::json!("old")),
+        ] {
+            let mut invalid = sparse.clone();
+            if field == "stale" {
+                invalid["params"]["base_revision"] = bad;
+            } else {
+                invalid["params"]["rows"][0]["style_spans"] = bad;
+            }
+            assert!(parse_iroh_pushed_render_sparse(&invalid, &mut state).is_err());
+            assert_eq!(state.revision, 1);
+            assert_eq!(state.view, Some(snapshot["params"]["view"].clone()));
+        }
+        for invalid in [
+            serde_json::json!({"rows": [{"index": 0, "line": "new"}, {"index": 0, "line": "duplicate"}]}),
+            serde_json::json!({"rows": [{"index": 2, "line": "outside"}]}),
+            serde_json::json!({"view": {"role": "observer"}}),
+            serde_json::json!({"view": {"lines": ["replacement"]}}),
+            serde_json::json!({"view": {"unknown_metadata": true}}),
+            serde_json::json!({"view": {"client_size": {"columns": 81, "rows": 24}}}),
+            serde_json::json!({"remove": ["role"]}),
+            serde_json::json!({"remove": ["authoritative_size"]}),
+            serde_json::json!({"remove": ["cursor", "cursor"]}),
+        ] {
+            let mut broken = sparse.clone();
+            for (key, value) in invalid.as_object().unwrap() {
+                broken["params"][key] = value.clone();
+            }
+            assert!(
+                parse_iroh_pushed_render_sparse(&broken, &mut state).is_err(),
+                "{broken}"
+            );
+            assert_eq!(state.revision, 1);
+            assert_eq!(state.view, Some(snapshot["params"]["view"].clone()));
+        }
+        let pushed = parse_iroh_pushed_render_sparse(&sparse, &mut state)
+            .unwrap()
+            .pushed_snapshot
+            .unwrap();
+        assert_eq!(pushed.frame.lines, ["new", "keep"]);
+        assert_eq!(
+            state.view.as_ref().unwrap()["agent_prompt_region"],
+            serde_json::Value::Null
+        );
+        assert_eq!(state.revision, 2);
+
+        let mut removal = sparse.clone();
+        removal["params"]["base_revision"] = 2.into();
+        removal["params"]["revision"] = 3.into();
+        removal["params"]["view"] = serde_json::json!({});
+        removal["params"]["remove"] = serde_json::json!(["agent_prompt_region"]);
+        removal["params"]["rows"] = serde_json::json!([]);
+        parse_iroh_pushed_render_sparse(&removal, &mut state).unwrap();
+        assert!(
+            state
+                .view
+                .as_ref()
+                .unwrap()
+                .get("agent_prompt_region")
+                .is_none()
+        );
+        assert_eq!(state.revision, 3);
+
+        let mut restored = removal.clone();
+        restored["params"]["base_revision"] = 3.into();
+        restored["params"]["revision"] = 4.into();
+        restored["params"]["remove"] = serde_json::json!([]);
+        restored["params"]["view"] = serde_json::json!({"agent_prompt_region": {"row": 0}});
+        parse_iroh_pushed_render_sparse(&restored, &mut state).unwrap();
+        assert_eq!(
+            state.view.as_ref().unwrap()["agent_prompt_region"]["row"],
+            0
+        );
+        assert_eq!(state.revision, 4);
+
+        let mut add_slot = restored.clone();
+        add_slot["params"]["base_revision"] = 4.into();
+        add_slot["params"]["revision"] = 5.into();
+        add_slot["params"]["view"] = serde_json::json!({"iroh_status_slot": null});
+        parse_iroh_pushed_render_sparse(&add_slot, &mut state).unwrap();
+        assert!(
+            state
+                .view
+                .as_ref()
+                .unwrap()
+                .get("iroh_status_slot")
+                .unwrap()
+                .is_null()
+        );
+        assert_eq!(state.revision, 5);
+
+        let mut remove_slot = add_slot;
+        remove_slot["params"]["base_revision"] = 5.into();
+        remove_slot["params"]["revision"] = 6.into();
+        remove_slot["params"]["view"] = serde_json::json!({});
+        remove_slot["params"]["remove"] = serde_json::json!(["iroh_status_slot"]);
+        parse_iroh_pushed_render_sparse(&remove_slot, &mut state).unwrap();
+        assert!(
+            state
+                .view
+                .as_ref()
+                .unwrap()
+                .get("iroh_status_slot")
+                .is_none()
+        );
+        assert_eq!(state.revision, 6);
+    }
+
     /// Verifies identity, Zstandard, and LZ4 envelopes each carry one
     /// independently decodable pushed snapshot, while legacy ownership rejects
     /// the same frame rather than silently treating it as a redraw wakeup.
@@ -2411,6 +2710,45 @@ mod iroh_tests {
             let delta = decoded.pushed_snapshot.expect("delta should decode");
             assert_eq!(delta.frame.lines, ["delta through codec"]);
             assert_eq!(render_state.revision, 2);
+            assert!(pending.is_empty());
+
+            render_state.allow_sparse_render = true;
+            let sparse = encode_control_body(
+                &serde_json::json!({
+                    "jsonrpc": "2.0", "method": "render/sparse",
+                    "params": {
+                        "kind": "sparse", "base_revision": 2, "revision": 3,
+                        "event_cutoff": 6, "invalidate_output": false,
+                        "line_count": 1, "view": {"cursor": {"row": 0, "column": 8, "visible": true}},
+                        "remove": [], "rows": [{"index": 0, "line": "sparse through codec"}]
+                    }
+                })
+                .to_string(),
+            );
+            let mut pending = if codec == RuntimeIrohCompressionCodec::None {
+                sparse
+            } else {
+                compression
+                    .encode_frame(&sparse, crate::runtime::IrohFrameCompressionMode::Eligible)
+                    .unwrap()
+                    .as_bytes()
+                    .to_vec()
+            };
+            let decoded = drain_negotiated_iroh_event_frames(
+                &mut pending,
+                compression,
+                None,
+                None,
+                None,
+                true,
+                &mut render_state,
+            )
+            .unwrap();
+            let sparse = decoded
+                .pushed_snapshot
+                .expect("sparse update should decode");
+            assert_eq!(sparse.frame.lines, ["sparse through codec"]);
+            assert_eq!(render_state.revision, 3);
             assert!(pending.is_empty());
         }
 

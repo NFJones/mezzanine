@@ -1122,6 +1122,25 @@ impl RuntimeSessionService {
         pane_id: &str,
         usage_by_model: &BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
     ) {
+        let conversation_id = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+            .unwrap_or_else(|| format!("pane:{pane_id}"));
+        self.record_agent_provider_token_usage_for_conversation(
+            pane_id,
+            &conversation_id,
+            usage_by_model,
+        );
+    }
+
+    /// Stores provider token usage against its originating conversation.
+    pub(crate) fn record_agent_provider_token_usage_for_conversation(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        usage_by_model: &BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    ) {
         if usage_by_model.is_empty() {
             return;
         }
@@ -1131,16 +1150,11 @@ impl RuntimeSessionService {
                 self.record_durable_token_usage(key, *usage, observed_at_unix_seconds);
             }
         }
-        let conversation_id = self
-            .agent_shell_store()
-            .get(pane_id)
-            .map(|session| session.session_id.clone())
-            .unwrap_or_else(|| format!("pane:{pane_id}"));
         let mut changed = false;
         let conversation_usage = self
             .agent
             .agent_token_usage_by_conversation
-            .entry(conversation_id)
+            .entry(conversation_id.to_string())
             .or_default();
         let pane_usage = self
             .agent
@@ -1169,6 +1183,34 @@ impl RuntimeSessionService {
         if changed {
             let _ = self.checkpoint_agent_session_metadata();
         }
+    }
+
+    /// Charges one accepted output-cutoff attempt without replacing the latest
+    /// successful ordinary-execution input sample used for context display.
+    pub(crate) fn record_agent_output_cutoff_usage(
+        &mut self,
+        turn: &AgentTurnRecord,
+        error: &MezError,
+    ) {
+        let Some(state) = error.provider_output_limit_state() else {
+            return;
+        };
+        let Some(profile) = self.agent_turn_model_profile(&turn.turn_id) else {
+            return;
+        };
+        let key = ModelTokenUsageKey::new(&profile.provider, &profile.model);
+        let usage = state.usage;
+        if usage.is_zero() {
+            return;
+        }
+        self.integration
+            .runtime_metrics_mut()
+            .record_provider_cumulative_token_usage(usage, &key);
+        self.record_agent_provider_token_usage_for_conversation(
+            &turn.pane_id,
+            &turn.conversation_id,
+            &BTreeMap::from([(key, usage)]),
+        );
     }
 
     /// Best-effort records one settled provider usage delta without affecting
@@ -1207,17 +1249,31 @@ impl RuntimeSessionService {
         pane_id: &str,
         quota_usage: &[ProviderQuotaUsage],
     ) {
-        if quota_usage.is_empty() {
-            return;
-        }
         let conversation_id = self
             .agent_shell_store()
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .unwrap_or_else(|| format!("pane:{pane_id}"));
+        self.record_agent_provider_quota_usage_for_conversation(
+            pane_id,
+            &conversation_id,
+            quota_usage,
+        );
+    }
+
+    /// Stores provider quota usage against its originating conversation.
+    pub(crate) fn record_agent_provider_quota_usage_for_conversation(
+        &mut self,
+        _pane_id: &str,
+        conversation_id: &str,
+        quota_usage: &[ProviderQuotaUsage],
+    ) {
+        if quota_usage.is_empty() {
+            return;
+        }
         self.agent
             .agent_quota_usage_by_conversation
-            .insert(conversation_id, quota_usage.to_vec());
+            .insert(conversation_id.to_string(), quota_usage.to_vec());
         let _ = self.checkpoint_agent_session_metadata();
     }
 }

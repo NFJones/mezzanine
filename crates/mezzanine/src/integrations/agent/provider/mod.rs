@@ -21,6 +21,41 @@ fn validate_non_empty(field: &str, value: &str) -> Result<()> {
     }
 }
 
+/// Wraps an already encoded provider body in the shared JSON POST envelope.
+///
+/// Adapters validate their own endpoint, timeout, credentials and body first.
+/// Explicit headers are applied last so adapter routing headers can override
+/// the defaults without changing provider-specific authorization policy.
+fn provider_json_post_request(
+    endpoint: &str,
+    body: String,
+    stream: bool,
+    timeout_ms: u64,
+    headers: BTreeMap<String, String>,
+) -> ProviderHttpRequest {
+    let mut common_headers = BTreeMap::from([
+        (
+            "Accept".to_string(),
+            if stream {
+                "text/event-stream"
+            } else {
+                "application/json"
+            }
+            .to_string(),
+        ),
+        ("Content-Type".to_string(), "application/json".to_string()),
+    ]);
+    common_headers.extend(headers);
+    ProviderHttpRequest {
+        method: "POST".to_string(),
+        url: endpoint.to_string(),
+        headers: common_headers,
+        body,
+        timeouts: mez_agent::ProviderHttpTimeouts::from_total(timeout_ms),
+        max_response_bytes: None,
+    }
+}
+
 /// Reports whether the provider explicitly identified its response body as JSON.
 fn openai_response_is_json(headers: &BTreeMap<String, String>) -> bool {
     headers
@@ -1065,6 +1100,55 @@ fn bounded_streaming_say_events(
     bounded
 }
 
+/// Latches the first dialect decoder error while forwarding only the source
+/// event's MAAP fragments in order. The event that fails decoding can still
+/// contain a usable fragment; subsequent events are ignored. Decoder state,
+/// completion, HTTP errors and retries remain owned by each adapter.
+struct SseProgressForwarder<E> {
+    error: Option<E>,
+    extractor: mez_agent::StreamingSayExtractor,
+}
+
+impl<E> Default for SseProgressForwarder<E> {
+    fn default() -> Self {
+        Self {
+            error: None,
+            extractor: mez_agent::StreamingSayExtractor::default(),
+        }
+    }
+}
+
+impl<E> SseProgressForwarder<E> {
+    /// Applies one dialect event and returns its ordered, bounded progress
+    /// delivery future without holding a decoder borrow across the send.
+    fn on_event(
+        &mut self,
+        event: &mez_agent::SseEvent,
+        decode: impl FnOnce(&mez_agent::SseEvent) -> std::result::Result<Option<String>, E>,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        let mut events = Vec::new();
+        if self.error.is_none() {
+            if let Err(error) = decode(event) {
+                self.error = Some(error);
+            }
+            if let Some(fragment) = provider_maap_stream_fragment(event) {
+                events = bounded_streaming_say_events(self.extractor.push_delta(&fragment));
+            }
+        }
+        Box::pin(async move {
+            let Some(progress) = progress else {
+                return;
+            };
+            for event in events {
+                if progress.send(event).await.is_err() {
+                    break;
+                }
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod streaming_say_progress_tests {
     use super::*;
@@ -1104,6 +1188,45 @@ mod streaming_say_progress_tests {
             })
             .collect::<String>();
         assert_eq!(reconstructed, source);
+    }
+
+    /// The first decoder failure still forwards its own parseable fragment,
+    /// while later events cannot mutate the decoder or emit more progress.
+    #[tokio::test]
+    async fn sse_forwarder_latches_first_error_after_forwarding_its_event() {
+        let mut forwarder = SseProgressForwarder::<&str>::default();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+        let event = mez_agent::SseEvent {
+            name: None,
+            data: serde_json::json!({"delta": "{\"rationale\":\"first\",\"actions\":[]}"})
+                .to_string(),
+        };
+        forwarder
+            .on_event(&event, |_| Err("first failure"), Some(sender.clone()))
+            .await;
+        let first_events = std::iter::from_fn(|| receiver.try_recv().ok()).collect::<Vec<_>>();
+        assert!(
+            !first_events.is_empty(),
+            "failing event still forwards progress"
+        );
+        let mut decoded_later = false;
+        forwarder
+            .on_event(
+                &event,
+                |_| {
+                    decoded_later = true;
+                    Err("later failure")
+                },
+                Some(sender.clone()),
+            )
+            .await;
+        assert!(!decoded_later);
+        assert_eq!(forwarder.error, Some("first failure"));
+        assert!(receiver.try_recv().is_err());
+        drop(receiver);
+        let mut fresh = SseProgressForwarder::<&str>::default();
+        fresh.on_event(&event, |_| Ok(None), Some(sender)).await;
+        assert!(fresh.error.is_none());
     }
 }
 /// OpenAI organization routing header for multi-organization API keys.
@@ -2301,34 +2424,14 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                 cache_namespace.as_deref(),
             );
             let mut stream_decoder = OpenAiResponsesStreamDecoder::default();
-            let mut streaming_say_extractor = mez_agent::StreamingSayExtractor::default();
-            let mut stream_error = None;
+            let mut forwarding = SseProgressForwarder::default();
             let response = if self.stream {
                 let mut on_event = |event| {
-                    let mut progress_events = Vec::new();
-                    if stream_error.is_none() {
-                        match stream_decoder.push_event(&event) {
-                            Ok(Some(_)) => {}
-                            Ok(None) => {}
-                            Err(error) => stream_error = Some(error),
-                        }
-                        if let Some(fragment) = provider_maap_stream_fragment(&event) {
-                            progress_events = bounded_streaming_say_events(
-                                streaming_say_extractor.push_delta(&fragment),
-                            );
-                        }
-                    }
-                    let progress = progress.clone();
-                    Box::pin(async move {
-                        let Some(progress) = progress else {
-                            return;
-                        };
-                        for event in progress_events {
-                            if progress.send(event).await.is_err() {
-                                break;
-                            }
-                        }
-                    }) as Pin<Box<dyn Future<Output = ()> + Send>>
+                    forwarding.on_event(
+                        &event,
+                        |event| stream_decoder.push_event(event),
+                        progress.clone(),
+                    )
                 };
                 self.transport
                     .send_async_with_sse_events(&http_request, &mut on_event)
@@ -2353,7 +2456,7 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
             }
             self.capture_chatgpt_turn_state(request, &response.headers);
             let result = (|| -> Result<ModelResponse> {
-                if let Some(error) = stream_error {
+                if let Some(error) = forwarding.error {
                     return Err(error.into());
                 }
                 let (model, raw_text, usage, provider_transcript_events) =
@@ -2697,15 +2800,6 @@ fn build_openai_responses_http_request_with_headers_and_cache_comparison(
         MezError::invalid_state(format!("OpenAI Responses request encoding failed: {error}"))
     })?;
     let mut headers = BTreeMap::new();
-    headers.insert(
-        "Accept".to_string(),
-        if stream {
-            "text/event-stream".to_string()
-        } else {
-            "application/json".to_string()
-        },
-    );
-    headers.insert("Content-Type".to_string(), "application/json".to_string());
     if let Some(api_key) = api_key {
         headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
     }
@@ -2714,14 +2808,9 @@ fn build_openai_responses_http_request_with_headers_and_cache_comparison(
             .iter()
             .map(|(name, value)| (name.clone(), value.clone())),
     );
-    Ok(ProviderHttpRequest {
-        method: "POST".to_string(),
-        url: endpoint.to_string(),
-        headers,
-        body,
-        timeouts: mez_agent::ProviderHttpTimeouts::from_total(timeout_ms),
-        max_response_bytes: None,
-    })
+    Ok(provider_json_post_request(
+        endpoint, body, stream, timeout_ms, headers,
+    ))
 }
 
 /// Runs the build openai models http request operation for this subsystem.
@@ -2812,5 +2901,59 @@ fn parse_provider_native_maap_action_batch(
             .map_err(|error| provider_maap_parse_error(error, raw_text))
     } else {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod json_post_envelope_tests {
+    use super::*;
+
+    /// An already encoded body and explicit provider headers survive the
+    /// shared envelope unchanged, including a deliberate Accept override.
+    #[test]
+    fn json_post_envelope_preserves_complete_request_fields() {
+        for stream in [false, true] {
+            let headers = BTreeMap::from([
+                ("Authorization".to_string(), "Bearer synthetic".to_string()),
+                (
+                    "Accept".to_string(),
+                    "application/vnd.synthetic+json".to_string(),
+                ),
+            ]);
+            let request = provider_json_post_request(
+                "https://example.test/messages",
+                "{\"synthetic\":true}".to_string(),
+                stream,
+                700,
+                headers.clone(),
+            );
+            let expected = ProviderHttpRequest {
+                method: "POST".to_string(),
+                url: "https://example.test/messages".to_string(),
+                headers: headers
+                    .into_iter()
+                    .chain([("Content-Type".to_string(), "application/json".to_string())])
+                    .collect(),
+                body: "{\"synthetic\":true}".to_string(),
+                timeouts: mez_agent::ProviderHttpTimeouts::from_total(700),
+                max_response_bytes: None,
+            };
+            assert_eq!(request, expected);
+            let defaults = provider_json_post_request(
+                "https://example.test/messages",
+                "{}".to_string(),
+                stream,
+                700,
+                BTreeMap::new(),
+            );
+            assert_eq!(
+                defaults.headers["Accept"],
+                if stream {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                }
+            );
+        }
     }
 }

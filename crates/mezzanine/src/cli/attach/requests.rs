@@ -170,23 +170,56 @@ pub(super) async fn write_styled_output_or_disconnected_async<I: AsyncAttachedTe
     }
 }
 
-/// Requests an explicit terminal view and writes the rendered frame locally.
-pub(super) async fn request_and_render_primary_view_async<I, S>(
+/// Publishes a complete view only after its local write and receipt succeed;
+/// an unchanged reply retains the committed base without another terminal write.
+pub(super) async fn request_and_render_conditional_primary_view_async<I, S>(
     stream: &mut S,
     terminal_io: &mut I,
     client_id: &ClientId,
     client_size: Size,
     iteration: u64,
     cursor_blink_epoch: std::time::Instant,
+    baseline: &mut Option<super::AttachClientFrame>,
 ) -> Result<PrimaryViewRenderOutcome>
 where
     I: AsyncAttachedTerminalIo,
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let Some(frame) = request_primary_view_frame_async(stream, client_size, iteration).await?
-    else {
-        return Ok(PrimaryViewRenderOutcome::disconnected());
-    };
+    let frame =
+        match request_conditional_view_async(stream, client_size, iteration, baseline.as_ref())
+            .await?
+        {
+            Some(super::AttachConditionalView::Modified(frame)) => *frame,
+            Some(super::AttachConditionalView::NotModified {
+                render_rate_limit_fps,
+                event_cutoff,
+            }) => {
+                if let Some(frame) = baseline.as_mut() {
+                    frame.event_cutoff = event_cutoff.or(frame.event_cutoff);
+                    let outcome =
+                        render_attach_client_frame_async(terminal_io, frame, cursor_blink_epoch)
+                            .await?;
+                    if !outcome.connected {
+                        return Ok(outcome);
+                    }
+                }
+                return Ok(PrimaryViewRenderOutcome {
+                    connected: true,
+                    animation_refresh_interval_ms: baseline
+                        .as_ref()
+                        .map_or(0, |frame| frame.modes.animation_refresh_interval_ms),
+                    render_rate_limit_fps: render_rate_limit_fps.or_else(|| {
+                        baseline
+                            .as_ref()
+                            .and_then(|frame| frame.render_rate_limit_fps)
+                    }),
+                });
+            }
+            Some(super::AttachConditionalView::Missing) | None => {
+                *baseline = None;
+                return Ok(PrimaryViewRenderOutcome::disconnected());
+            }
+        };
     let outcome = render_attach_client_frame_async(terminal_io, &frame, cursor_blink_epoch).await?;
     if outcome.connected
         && !frame.presentation_ids.is_empty()
@@ -199,6 +232,9 @@ where
         .await?
     {
         return Ok(PrimaryViewRenderOutcome::disconnected());
+    }
+    if outcome.connected {
+        *baseline = Some(frame);
     }
     Ok(outcome)
 }
@@ -234,16 +270,21 @@ where
     Ok(true)
 }
 
-/// Requests and decodes one terminal view without presenting it locally.
-pub(super) async fn request_primary_view_frame_async<S>(
+/// Requests a complete view or an explicitly unchanged committed baseline.
+pub(super) async fn request_conditional_view_async<S>(
     stream: &mut S,
     client_size: Size,
     iteration: u64,
-) -> Result<Option<super::AttachClientFrame>>
+    baseline: Option<&super::AttachClientFrame>,
+) -> Result<Option<super::AttachConditionalView>>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let request = terminal_view_control_request(iteration, client_size);
+    let request = terminal_view_control_request_with_identity(
+        iteration,
+        client_size,
+        baseline.and_then(|frame| frame.view_identity.as_deref()),
+    );
     if !write_async_control_body_or_disconnected(stream, &request).await? {
         return Ok(None);
     }
@@ -256,7 +297,7 @@ where
     if control_response_forbidden(body.as_str())? {
         return Ok(None);
     }
-    super::responses::terminal_step_response_client_frame(body.as_str())
+    super::responses::conditional_view_response(body.as_str(), baseline).map(Some)
 }
 
 /// Notifies the runtime that the attached primary terminal size changed.
@@ -324,6 +365,7 @@ pub(super) async fn render_attach_client_frame_async<I: AsyncAttachedTerminalIo>
         return Ok(PrimaryViewRenderOutcome {
             connected: true,
             animation_refresh_interval_ms,
+            render_rate_limit_fps: frame.render_rate_limit_fps,
         });
     }
     let modes = control_socket_cursor_blink_elapsed(frame.modes, cursor_blink_epoch);
@@ -341,6 +383,7 @@ pub(super) async fn render_attach_client_frame_async<I: AsyncAttachedTerminalIo>
         } else {
             0
         },
+        render_rate_limit_fps: frame.render_rate_limit_fps,
     })
 }
 
@@ -365,6 +408,7 @@ pub(super) async fn render_iroh_attach_client_frame_async<I: AsyncAttachedTermin
         } else {
             0
         },
+        render_rate_limit_fps: frame.render_rate_limit_fps,
     })
 }
 
@@ -405,6 +449,7 @@ pub(super) async fn render_iroh_attach_client_frame_bounded_async<I: AsyncAttach
         PrimaryViewRenderOutcome {
             connected: true,
             animation_refresh_interval_ms,
+            render_rate_limit_fps: frame.render_rate_limit_fps,
         },
         report,
     ))
@@ -533,23 +578,22 @@ pub(super) fn count_complete_async_control_frames(
     count
 }
 
-/// Runs the terminal view control request operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn terminal_view_control_request(iteration: u64, client_size: Size) -> String {
+/// Includes the exact committed presentation identity only when available.
+fn terminal_view_control_request_with_identity(
+    iteration: u64,
+    client_size: Size,
+    identity: Option<&str>,
+) -> String {
+    let identity = identity.map_or(String::new(), |value| {
+        format!(r#", "if_view_identity":"{value}""#)
+    });
     format!(
-        r#"{{"jsonrpc":"2.0","id":"cli-terminal-view-{iteration}","method":"terminal/view","params":{{"client_size":{{"columns":{},"rows":{}}}}}}}"#,
-        client_size.columns, client_size.rows
+        r#"{{"jsonrpc":"2.0","id":"cli-terminal-view-{iteration}","method":"terminal/view","params":{{"client_size":{{"columns":{},"rows":{}}}{identity}}}}}"#,
+        client_size.columns, client_size.rows,
     )
 }
 
-/// Runs the control socket cursor blink elapsed operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Computes elapsed cursor blink phase for a retained local presentation.
 pub(super) fn control_socket_cursor_blink_elapsed(
     mut modes: AttachedTerminalOutputModes,
     cursor_blink_epoch: std::time::Instant,
@@ -557,4 +601,197 @@ pub(super) fn control_socket_cursor_blink_elapsed(
     modes.cursor_blink_elapsed_ms =
         u64::try_from(cursor_blink_epoch.elapsed().as_millis()).unwrap_or(u64::MAX);
     modes
+}
+
+#[cfg(test)]
+mod conditional_view_tests {
+    use super::*;
+
+    /// A committed view identity is sent on the next request, whose short
+    /// unchanged response retains the base and advances its event cutoff.
+    #[tokio::test]
+    async fn conditional_view_request_reuses_committed_identity() {
+        let (mut client, mut server) = tokio::io::duplex(16 * 1024);
+        let identity = "a".repeat(64);
+        let server_task = async {
+            for iteration in 0..2 {
+                let request = read_async_control_response_frames(&mut server, 1024 * 1024, 1)
+                    .await
+                    .unwrap();
+                let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+                let request: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(request["method"], "terminal/view");
+                assert_eq!(
+                    request["params"]["if_view_identity"].as_str(),
+                    (iteration == 1).then_some(identity.as_str())
+                );
+                let result = if iteration == 0 {
+                    serde_json::json!({"view": {"lines": ["stable"],
+                        "line_style_spans": [[]], "cursor": {"row": 0, "column": 0, "visible": false},
+                        "output_modes": {}}, "view_identity": identity, "event_cutoff": 1})
+                } else {
+                    serde_json::json!({"not_modified": true, "view_identity": identity,
+                        "event_cutoff": 2, "render_rate_limit_fps": 30})
+                };
+                let reply =
+                    serde_json::json!({"jsonrpc": "2.0", "id": request["id"], "result": result});
+                server
+                    .write_all(&encode_control_body(&reply.to_string()))
+                    .await
+                    .unwrap();
+            }
+        };
+        let client_task = async {
+            let size = Size::new(80, 24).unwrap();
+            let mut baseline = match request_conditional_view_async(&mut client, size, 0, None)
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                super::super::AttachConditionalView::Modified(frame) => frame,
+                _ => panic!("initial view must be complete"),
+            };
+            let reply = request_conditional_view_async(&mut client, size, 1, Some(&baseline))
+                .await
+                .unwrap()
+                .unwrap();
+            match reply {
+                super::super::AttachConditionalView::NotModified { event_cutoff, .. } => {
+                    baseline.event_cutoff = event_cutoff;
+                }
+                _ => panic!("second response must be short"),
+            }
+            assert_eq!(baseline.lines, ["stable"]);
+            assert_eq!(baseline.event_cutoff, Some(2));
+        };
+        let ((), ()) = tokio::join!(client_task, server_task);
+    }
+
+    /// A complete local presentation establishes the conditional base; a
+    /// matching short response retains it without transferring another view.
+    #[tokio::test]
+    async fn conditional_view_render_commits_before_reusing_identity() {
+        let (mut client, mut server) = tokio::io::duplex(16 * 1024);
+        let identity = "a".repeat(64);
+        let server_task = async {
+            for iteration in 0..2 {
+                let request = read_async_control_response_frames(&mut server, 1024 * 1024, 1)
+                    .await
+                    .unwrap();
+                let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+                let request: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(
+                    request["params"]["if_view_identity"].as_str(),
+                    (iteration == 1).then_some(identity.as_str())
+                );
+                let result = if iteration == 0 {
+                    serde_json::json!({"view": {"lines": ["stable"],
+                        "line_style_spans": [[]], "cursor": {"row": 0, "column": 0, "visible": false},
+                        "output_modes": {}}, "view_identity": identity, "event_cutoff": 1})
+                } else {
+                    serde_json::json!({"not_modified": true, "view_identity": identity,
+                        "event_cutoff": 2})
+                };
+                let reply =
+                    serde_json::json!({"jsonrpc": "2.0", "id": request["id"], "result": result});
+                server
+                    .write_all(&encode_control_body(&reply.to_string()))
+                    .await
+                    .unwrap();
+            }
+        };
+        let client_task = async {
+            let mut terminal_io =
+                crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+            let mut baseline = None;
+            for iteration in 0..2 {
+                let outcome = request_and_render_conditional_primary_view_async(
+                    &mut client,
+                    &mut terminal_io,
+                    &ClientId::opaque("c1".to_string()).unwrap(),
+                    Size::new(80, 24).unwrap(),
+                    iteration,
+                    std::time::Instant::now(),
+                    &mut baseline,
+                )
+                .await
+                .unwrap();
+                assert!(outcome.connected);
+            }
+            assert_eq!(baseline.as_ref().unwrap().event_cutoff, Some(2));
+            assert_eq!(baseline.as_ref().unwrap().lines, ["stable"]);
+        };
+        let ((), ()) = tokio::join!(client_task, server_task);
+    }
+
+    /// Unchanged server views still repaint local animation and rearm its
+    /// deadline, including when ordinary-output pacing is disabled.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn conditional_view_rearms_local_animation_without_ordinary_pacing() {
+        let (mut client, mut server) = tokio::io::duplex(16 * 1024);
+        let identity = "a".repeat(64);
+        let server_task = async {
+            for iteration in 0..3 {
+                let request = read_async_control_response_frames(&mut server, 1024 * 1024, 1)
+                    .await
+                    .unwrap();
+                let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+                let request: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(
+                    request["params"]["if_view_identity"].as_str(),
+                    (iteration != 0).then_some(identity.as_str())
+                );
+                let result = if iteration == 0 {
+                    serde_json::json!({"view": {"lines": ["stable"], "line_style_spans": [[]],
+                        "cursor": {"row": 0, "column": 0, "visible": false},
+                        "output_modes": {"animation_refresh_interval_ms": 25}},
+                        "view_identity": identity, "render_rate_limit_fps": 0})
+                } else {
+                    serde_json::json!({"not_modified": true, "view_identity": identity,
+                        "render_rate_limit_fps": 0, "event_cutoff": iteration})
+                };
+                let reply =
+                    serde_json::json!({"jsonrpc": "2.0", "id": request["id"], "result": result});
+                server
+                    .write_all(&encode_control_body(&reply.to_string()))
+                    .await
+                    .unwrap();
+            }
+        };
+        let client_task = async {
+            let mut terminal_io =
+                crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+            let mut baseline = None;
+            let mut animation = super::super::AttachAnimationRefresh::default();
+            let mut rate = super::super::AttachOrdinaryRenderRate::default();
+            for iteration in 0..3 {
+                if iteration != 0 {
+                    let deadline = animation.deadline().unwrap();
+                    tokio::time::sleep_until(deadline).await;
+                    assert!(deadline <= tokio::time::Instant::now());
+                }
+                let outcome = request_and_render_conditional_primary_view_async(
+                    &mut client,
+                    &mut terminal_io,
+                    &ClientId::opaque("c1".to_string()).unwrap(),
+                    Size::new(80, 24).unwrap(),
+                    iteration,
+                    std::time::Instant::now(),
+                    &mut baseline,
+                )
+                .await
+                .unwrap();
+                assert!(outcome.connected);
+                animation.update_from_rendered_view(outcome.animation_refresh_interval_ms);
+                rate.update_from_rendered_view(outcome.render_rate_limit_fps);
+                assert!(rate.ready());
+                assert_eq!(
+                    animation.deadline().unwrap() - tokio::time::Instant::now(),
+                    std::time::Duration::from_millis(25)
+                );
+            }
+            assert_eq!(terminal_io.written_frames.len(), 3);
+        };
+        let ((), ()) = tokio::join!(client_task, server_task);
+    }
 }

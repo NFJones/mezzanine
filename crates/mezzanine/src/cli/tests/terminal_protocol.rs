@@ -168,7 +168,7 @@ async fn control_socket_primary_attach_loop_uses_async_terminal_io() {
     server.join().unwrap();
 
     assert_eq!(io.presentation_entries, 1);
-    assert_eq!(io.invalidated_output_frames, 1);
+    assert_eq!(io.invalidated_output_frames, 0);
     assert_eq!(io.written_frames.len(), 1);
     assert_eq!(io.written_frames[0].lines, vec!["detached async"]);
     assert_eq!(io.written_frames[0].modes.cursor_column, 14);
@@ -178,10 +178,8 @@ async fn control_socket_primary_attach_loop_uses_async_terminal_io() {
 /// Verifies terminal-step response parsing keeps the full-redraw signal
 /// separate from the basic view-refresh signal.
 ///
-/// Full redraws must invalidate the attached client's retained output frame
-/// before rendering. This regression protects the control-socket attach path
-/// from collapsing the two runtime signals into a single boolean and then
-/// redrawing against stale frame state.
+/// A logical full redraw requests an authoritative view without declaring the
+/// physical output frame invalid; the attach client can diff that fresh view.
 #[test]
 fn terminal_step_response_refresh_requirement_preserves_full_redraw() {
     let refresh = terminal_step_response_refresh_requirement(
@@ -291,7 +289,7 @@ async fn control_socket_primary_attach_loop_refreshes_without_invalidating_for_l
         );
         server_stream
             .write_all(&encode_control_body(
-                r#"{"jsonrpc":"2.0","id":"cli-terminal-step-1","result":{"input_bytes":1,"application":{"forwarded_bytes":0,"mux_actions_applied":1,"mouse_actions_reported":0,"agent_prompt_inputs_applied":0,"view_refresh_required":true,"full_redraw_required":false,"unsupported_actions":[]},"view":null,"ui_theme":null}}"#,
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-step-1","result":{"input_bytes":1,"application":{"forwarded_bytes":0,"mux_actions_applied":1,"mouse_actions_reported":0,"agent_prompt_inputs_applied":0,"view_refresh_required":true,"full_redraw_required":true,"unsupported_actions":[]},"view":null,"ui_theme":null}}"#,
             ))
             .unwrap();
         server_stream.flush().unwrap();
@@ -1073,7 +1071,7 @@ async fn control_socket_primary_attach_loop_prefers_ready_input_over_runtime_eve
 }
 
 #[tokio::test(start_paused = true, flavor = "current_thread")]
-async fn control_socket_primary_attach_loop_structural_runtime_event_invalidates_once() {
+async fn control_socket_primary_attach_loop_structural_runtime_event_preserves_output_frame() {
     let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
     client_stream.set_nonblocking(true).unwrap();
     let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
@@ -1128,7 +1126,7 @@ async fn control_socket_primary_attach_loop_structural_runtime_event_invalidates
     }
     server.join().unwrap();
     assert_eq!(io.presentation_entries, 1);
-    assert_eq!(io.invalidated_output_frames, 1);
+    assert_eq!(io.invalidated_output_frames, 0);
     assert_eq!(io.written_frames.len(), 2);
     assert_eq!(io.written_frames[0].lines, vec!["initial"]);
     assert_eq!(io.written_frames[1].lines, vec!["window changed"]);
@@ -1179,7 +1177,25 @@ async fn attached_runtime_event_stream_coalesces_event_burst() {
     event_server_stream.flush().unwrap();
     assert_eq!(
         event_stream.read_render_action().await.unwrap(),
-        AttachRenderAction::InvalidateAndView
+        AttachRenderAction::View
+    );
+}
+
+/// A configuration update refreshes the advertised cadence immediately but
+/// must not discard the retained physical output frame.
+#[tokio::test(flavor = "current_thread")]
+async fn attached_runtime_config_change_refreshes_view_without_invalidation() {
+    let (event_client_stream, mut event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let mut event_stream = AttachedRuntimeEventStream::new(event_client_stream);
+    let mut burst = event_notification_frame("pane_changed");
+    burst.extend_from_slice(&event_notification_frame("config_changed"));
+    event_server_stream.write_all(&burst).unwrap();
+    event_server_stream.flush().unwrap();
+    assert_eq!(
+        event_stream.read_render_action().await.unwrap(),
+        AttachRenderAction::ImmediateView
     );
 }
 
@@ -1203,6 +1219,27 @@ async fn attached_runtime_event_stream_preserves_differential_render_wakeup() {
     assert_eq!(
         event_stream.read_render_action().await.unwrap(),
         AttachRenderAction::View
+    );
+}
+
+/// Explicit physical uncertainty must retain its stronger invalidation even
+/// when ordinary structural notifications in the same burst request a view.
+#[tokio::test(flavor = "current_thread")]
+async fn attached_runtime_event_stream_preserves_explicit_invalidation() {
+    let (event_client_stream, mut event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let mut event_stream = AttachedRuntimeEventStream::new(event_client_stream);
+    let mut burst = event_notification_frame("window_changed");
+    burst.extend_from_slice(&encode_control_body(
+        r#"{"jsonrpc":"2.0","method":"render/wakeup","params":{"invalidate_output":true}}"#,
+    ));
+    event_server_stream.write_all(&burst).unwrap();
+    event_server_stream.flush().unwrap();
+
+    assert_eq!(
+        event_stream.read_render_action().await.unwrap(),
+        AttachRenderAction::InvalidateAndView
     );
 }
 

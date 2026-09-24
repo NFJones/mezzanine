@@ -23,6 +23,7 @@ use super::{
     source_pane_target_checked_resolved, window_target_checked_resolved,
 };
 use crate::runtime::{MouseAction, RenderInvalidationReason};
+use sha2::{Digest as _, Sha256};
 
 /// Parses the bounded positive receipt identities accepted from one committed frame.
 fn runtime_focus_label_presentation_ids(params: &str) -> Result<Vec<u64>> {
@@ -874,17 +875,55 @@ impl RuntimeSessionService {
             .as_ref()
             .map(|view| rendered_client_view_json(view, iroh_status_slot.as_ref()))
             .unwrap_or_else(|| "null".to_string());
+        let prior_identity = params
+            .and_then(|params| serde_json::from_str::<serde_json::Value>(params).ok())
+            .and_then(|params| params.get("if_view_identity").cloned())
+            .map(|identity| {
+                identity
+                    .as_str()
+                    .filter(|value| {
+                        value.len() == 64
+                            && value
+                                .bytes()
+                                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                    })
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        MezError::invalid_args(
+                            "terminal/view if_view_identity must be a lowercase SHA-256 digest",
+                        )
+                    })
+            })
+            .transpose()?;
+        let receipts = presentation_ids
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let identity: String = Sha256::digest(
+            format!(
+                "{}\n{view_json}\n{receipts}\n{}",
+                caller_client_id.as_str(),
+                terminal_config.render_rate_limit_fps
+            )
+            .as_bytes(),
+        )
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
         let event_cutoff = self
             .event_log()
             .map(|event_log| event_log.latest_event_id())
             .unwrap_or(0);
+        if view.is_some() && prior_identity.as_deref() == Some(identity.as_str()) {
+            return Ok(format!(
+                r#"{{"not_modified":true,"view_identity":"{identity}","event_cutoff":{event_cutoff},"render_rate_limit_fps":{}}}"#,
+                terminal_config.render_rate_limit_fps,
+            ));
+        }
         Ok(format!(
-            r#"{{"view":{view_json},"presentation_ids":[{}],"event_cutoff":{event_cutoff}}}"#,
-            presentation_ids
-                .iter()
-                .map(u64::to_string)
-                .collect::<Vec<_>>()
-                .join(",")
+            r#"{{"view":{view_json},"presentation_ids":[{receipts}],"view_identity":"{identity}","event_cutoff":{event_cutoff},"render_rate_limit_fps":{}}}"#,
+            terminal_config.render_rate_limit_fps,
         ))
     }
 

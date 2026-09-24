@@ -564,30 +564,8 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: &AgentContext,
     ) -> Result<AgentTurnExecution> {
-        self.run_turn_async_ref_with_allowed_actions_and_progress(
-            ledger, turn, context, None, None, None,
-        )
-        .await
-    }
-
-    /// Executes a borrowed-context turn while forwarding ordered streaming say events.
-    pub async fn run_turn_async_ref_with_allowed_actions_and_progress(
-        &self,
-        ledger: &mut AgentTurnLedger,
-        turn: AgentTurnRecord,
-        context: &AgentContext,
-        allowed_actions: Option<AllowedActionSet>,
-        interaction_kind: Option<mez_agent::ModelInteractionKind>,
-        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
-    ) -> Result<AgentTurnExecution> {
         self.run_turn_async_ref_with_previous_request_and_progress(
-            ledger,
-            turn,
-            context,
-            allowed_actions,
-            interaction_kind,
-            None,
-            progress,
+            ledger, turn, context, None, None, None, None,
         )
         .await
     }

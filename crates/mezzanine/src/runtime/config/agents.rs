@@ -19,7 +19,7 @@ use super::{
     runtime_json_string_map,
 };
 use mez_agent::{
-    AllowedAction, AllowedActionSet, AutoSizingRoutingPolicy, DEFAULT_AGENT_TURN_TIMEOUT_MS,
+    AllowedActionSet, AutoSizingRoutingPolicy, DEFAULT_AGENT_TURN_TIMEOUT_MS,
     DEFAULT_PROVIDER_RETRY_POLICY, ProviderRetryPolicy,
 };
 
@@ -38,19 +38,24 @@ pub(crate) fn runtime_agent_enabled_actions_from_config(root: &Value) -> Result<
             "agents.enabled_actions must contain at least one action",
         ));
     }
-    let mut actions = Vec::with_capacity(values.len());
-    for value in values {
-        let action = AllowedAction::from_action_type(&value).ok_or_else(|| {
-            MezError::config(format!(
-                "agents.enabled_actions contains unknown action `{value}`"
-            ))
-        })?;
-        if !AllowedActionSet::all_enabled().contains(action) {
-            return Err(MezError::config(format!(
-                "agents.enabled_actions cannot enable controller-only action `{value}`"
-            )));
-        }
-        actions.push(action);
+    let (actions, issues) = crate::config::action_lists::classify_action_list(
+        values.iter().map(|name| Some(name.as_str())),
+        false,
+    );
+    if let Some(issue) = issues.first() {
+        use crate::config::action_lists::ActionListIssue;
+        let message = match issue {
+            ActionListIssue::Unknown(name) => {
+                format!("agents.enabled_actions contains unknown action `{name}`")
+            }
+            ActionListIssue::ControllerOnly(name) => {
+                format!("agents.enabled_actions cannot enable controller-only action `{name}`")
+            }
+            ActionListIssue::NonString | ActionListIssue::Duplicate(_) => {
+                unreachable!("runtime string-array reader excludes these issues")
+            }
+        };
+        return Err(MezError::config(message));
     }
     Ok(AllowedActionSet::from_actions(actions))
 }
@@ -669,22 +674,26 @@ pub(crate) fn runtime_subagent_profiles_from_config(
                         "subagent allowed_actions must contain at least one action",
                     ));
                 }
-                values
-                    .into_iter()
-                    .map(|value| {
-                        let action = AllowedAction::from_action_type(&value).ok_or_else(|| {
-                            MezError::config(format!(
-                                "subagent allowed_actions contains unknown action `{value}`"
-                            ))
-                        })?;
-                        if !AllowedActionSet::all_enabled().contains(action) {
-                            return Err(MezError::config(format!(
-                                "subagent allowed_actions cannot enable controller-only action `{value}`"
-                            )));
+                let (actions, issues) = crate::config::action_lists::classify_action_list(
+                    values.iter().map(|name| Some(name.as_str())),
+                    false,
+                );
+                if let Some(issue) = issues.first() {
+                    use crate::config::action_lists::ActionListIssue;
+                    let message = match issue {
+                        ActionListIssue::Unknown(name) => {
+                            format!("subagent allowed_actions contains unknown action `{name}`")
                         }
-                        Ok(action)
-                    })
-                    .collect::<Result<Vec<_>>>()
+                        ActionListIssue::ControllerOnly(name) => format!(
+                            "subagent allowed_actions cannot enable controller-only action `{name}`"
+                        ),
+                        ActionListIssue::NonString | ActionListIssue::Duplicate(_) => {
+                            unreachable!("runtime string-array reader excludes these issues")
+                        }
+                    };
+                    return Err(MezError::config(message));
+                }
+                Ok(actions)
             })
             .transpose()?;
         let developer_instructions = runtime_json_string(object.get("developer_instructions"))
@@ -793,4 +802,63 @@ fn validate_subagent_profile_id(profile_id: &str) -> Result<()> {
         return Err(MezError::config("subagent profile name is invalid"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod action_list_reader_tests {
+    use super::*;
+
+    /// Root omission keeps the default catalog, repeated valid names remain
+    /// accepted, and the first invalid name determines the runtime error.
+    #[test]
+    fn root_action_reader_preserves_defaults_duplicates_and_error_order() {
+        assert_eq!(
+            runtime_agent_enabled_actions_from_config(&serde_json::json!({})).unwrap(),
+            AllowedActionSet::all_enabled()
+        );
+        let repeated = serde_json::json!({"agents": {"enabled_actions": ["say", "say"]}});
+        assert_eq!(
+            runtime_agent_enabled_actions_from_config(&repeated).unwrap(),
+            AllowedActionSet::say_only()
+        );
+        let invalid = serde_json::json!({"agents": {
+            "enabled_actions": ["say", "unknown", "request_capability"]
+        }});
+        assert_eq!(
+            runtime_agent_enabled_actions_from_config(&invalid)
+                .unwrap_err()
+                .message(),
+            "agents.enabled_actions contains unknown action `unknown`"
+        );
+    }
+
+    /// Child omission inherits its restriction, while duplicate names remain
+    /// accepted and the first invalid action retains its original diagnostic.
+    #[test]
+    fn child_action_reader_preserves_optional_and_error_order() {
+        let absent = serde_json::json!({"subagents": {"reviewer": {}}});
+        assert!(
+            runtime_subagent_profiles_from_config(&absent).unwrap()["reviewer"]
+                .allowed_actions
+                .is_none()
+        );
+        let repeated = serde_json::json!({"subagents": {"reviewer": {
+            "allowed_actions": ["say", "say"]
+        }}});
+        assert_eq!(
+            runtime_subagent_profiles_from_config(&repeated).unwrap()["reviewer"]
+                .allowed_actions
+                .as_deref(),
+            Some(&[mez_agent::AllowedAction::Say, mez_agent::AllowedAction::Say][..])
+        );
+        let invalid = serde_json::json!({"subagents": {"reviewer": {
+            "allowed_actions": ["request_capability", "unknown"]
+        }}});
+        assert_eq!(
+            runtime_subagent_profiles_from_config(&invalid)
+                .unwrap_err()
+                .message(),
+            "subagent allowed_actions cannot enable controller-only action `request_capability`"
+        );
+    }
 }

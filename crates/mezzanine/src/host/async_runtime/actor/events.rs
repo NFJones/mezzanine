@@ -566,8 +566,15 @@ impl AsyncRuntimeSessionActor {
                     return Ok(RuntimeTransition::default());
                 }
                 self.timers.cursor_blink.remove(timer.key.owner_id.as_str());
-                let mut application =
-                    self.apply_render_timer_event(RenderInvalidationReason::CursorBlink);
+                let mut application = ClientId::opaque(timer.key.owner_id.clone()).map_or_else(
+                    RuntimeTransition::default,
+                    |client_id| {
+                        self.apply_runtime_client_render_signal_event(
+                            client_id,
+                            RenderInvalidationReason::CursorBlink,
+                        )
+                    },
+                );
                 application
                     .side_effects
                     .extend(self.cursor_blink_timer_side_effects_for_client(
@@ -759,22 +766,6 @@ impl AsyncRuntimeSessionActor {
             self.metrics.runtime_timer_events_ignored.saturating_add(1);
     }
 
-    /// Runs the apply render timer event operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn apply_render_timer_event(
-        &self,
-        reason: RenderInvalidationReason,
-    ) -> RuntimeTransition {
-        let side_effects = self.render_side_effects(reason);
-        RuntimeTransition {
-            applied: !side_effects.is_empty(),
-            side_effects,
-        }
-    }
-
     /// Runs the apply provider poll timer event operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -883,10 +874,19 @@ impl AsyncRuntimeSessionActor {
             side_effects.push(RuntimeSideEffect::DispatchNativeShellAction { turn_id, action_id });
         }
         for pane_id in self.service.pending_agent_compaction_tasks() {
-            if self.compaction_dispatch_is_already_queued(&pane_id) {
+            let Some(task_generation) = self
+                .service
+                .pending_agent_compaction_task_generation(&pane_id)
+            else {
+                continue;
+            };
+            if self.compaction_dispatch_is_already_queued(&pane_id, task_generation) {
                 continue;
             }
-            side_effects.push(RuntimeSideEffect::DispatchAgentCompaction { pane_id });
+            side_effects.push(RuntimeSideEffect::DispatchAgentCompaction {
+                pane_id,
+                task_generation,
+            });
         }
         for pane_id in self.service.pending_agent_remember_tasks() {
             if self.remember_dispatch_is_already_queued(&pane_id) {
@@ -904,12 +904,16 @@ impl AsyncRuntimeSessionActor {
     }
 
     /// Returns true when a queued compaction dispatch already exists for a pane.
-    pub(super) fn compaction_dispatch_is_already_queued(&self, target_pane_id: &str) -> bool {
+    pub(super) fn compaction_dispatch_is_already_queued(
+        &self,
+        target_pane_id: &str,
+        target_generation: u64,
+    ) -> bool {
         self.side_effect_routes.any_provider(|effect| {
             matches!(
                 effect,
-                RuntimeSideEffect::DispatchAgentCompaction { pane_id }
-                    if pane_id == target_pane_id
+                RuntimeSideEffect::DispatchAgentCompaction { pane_id, task_generation }
+                    if pane_id == target_pane_id && *task_generation == target_generation
             )
         })
     }
@@ -1350,6 +1354,9 @@ impl AsyncRuntimeSessionActor {
                 );
                 if let Some(state) = provider_output_limit_state {
                     error = error.with_provider_output_limit_state(*state);
+                }
+                if let Some(turn) = self.service.agent_turn_ledger().turn(&turn_id).cloned() {
+                    self.service.record_agent_output_cutoff_usage(&turn, &error);
                 }
                 if maap_provider_error_is_repairable(&error)
                     && let Some(mut application) = self

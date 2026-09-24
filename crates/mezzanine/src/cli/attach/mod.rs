@@ -61,6 +61,20 @@ struct AttachClientFrame {
     iroh_status_slot: Option<crate::host::terminal::TerminalIrohStatusSlot>,
     /// Latest server event whose applied state is represented by this view.
     event_cutoff: Option<u64>,
+    /// Resolved server-side ordinary render cadence; absent for older peers.
+    render_rate_limit_fps: Option<u64>,
+    /// Complete logical presentation identity supplied by a compatible server.
+    view_identity: Option<String>,
+}
+
+/// One conditional view result; not-modified is distinct from a missing view.
+enum AttachConditionalView {
+    Modified(Box<AttachClientFrame>),
+    NotModified {
+        render_rate_limit_fps: Option<u64>,
+        event_cutoff: Option<u64>,
+    },
+    Missing,
 }
 
 impl AttachClientFrame {
@@ -220,6 +234,8 @@ struct PrimaryViewRenderOutcome {
     connected: bool,
     /// Milliseconds until the next animation-only view refresh.
     animation_refresh_interval_ms: u64,
+    /// Server-resolved ordinary render cadence, absent on older peers.
+    render_rate_limit_fps: Option<u64>,
 }
 
 impl PrimaryViewRenderOutcome {
@@ -228,6 +244,7 @@ impl PrimaryViewRenderOutcome {
         Self {
             connected: false,
             animation_refresh_interval_ms: 0,
+            render_rate_limit_fps: None,
         }
     }
 }
@@ -270,6 +287,77 @@ impl AttachAnimationRefresh {
         self.deadline = Some(
             tokio::time::Instant::now() + std::time::Duration::from_millis(refresh_interval_ms),
         );
+    }
+}
+/// Paces only ordinary legacy view fetches; the pending request represents the
+/// latest server state, not a queue of frames captured at event arrival.
+#[derive(Debug, Default)]
+struct AttachOrdinaryRenderRate {
+    min_interval: Option<std::time::Duration>,
+    last_rendered_at: Option<tokio::time::Instant>,
+}
+
+impl AttachOrdinaryRenderRate {
+    /// Applies the policy returned by the most recent exact-client view.
+    /// Missing policy on an older server means no inferred rate ceiling.
+    fn update_from_rendered_view(&mut self, fps: Option<u64>) {
+        self.min_interval = fps.filter(|fps| *fps != 0).map(|fps| {
+            std::time::Duration::from_millis(1_000u64.saturating_add(fps.saturating_sub(1)) / fps)
+        });
+        self.last_rendered_at = Some(tokio::time::Instant::now());
+    }
+
+    /// Records an inline input repaint without replacing the last advertised policy.
+    fn mark_inline_rendered(&mut self) {
+        self.last_rendered_at = Some(tokio::time::Instant::now());
+    }
+
+    /// Returns the earliest permitted pending ordinary render, if gated.
+    fn deadline(&self) -> Option<tokio::time::Instant> {
+        Some(self.last_rendered_at? + self.min_interval?)
+    }
+
+    /// Reports whether an ordinary render may fetch the current server view.
+    fn ready(&self) -> bool {
+        self.deadline()
+            .is_none_or(|deadline| deadline <= tokio::time::Instant::now())
+    }
+}
+
+#[cfg(test)]
+mod ordinary_render_rate_tests {
+    use super::AttachOrdinaryRenderRate;
+
+    /// Verifies the first render is immediate, the configured cadence bounds
+    /// subsequent ordinary renders, and a disabled or absent policy never
+    /// imposes a guessed delay on an older or reconfigured server.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn ordinary_render_rate_tracks_live_policy() {
+        let mut rate = AttachOrdinaryRenderRate::default();
+        assert!(rate.ready());
+        rate.update_from_rendered_view(Some(10));
+        assert!(!rate.ready());
+        assert_eq!(
+            rate.deadline().unwrap() - tokio::time::Instant::now(),
+            std::time::Duration::from_millis(100)
+        );
+        tokio::time::advance(std::time::Duration::from_millis(99)).await;
+        assert!(!rate.ready());
+        tokio::time::advance(std::time::Duration::from_millis(1)).await;
+        assert!(rate.ready());
+        rate.update_from_rendered_view(Some(0));
+        assert!(rate.ready());
+        assert!(rate.deadline().is_none());
+        rate.update_from_rendered_view(Some(30));
+        assert!(!rate.ready());
+        tokio::time::advance(std::time::Duration::from_millis(10)).await;
+        rate.mark_inline_rendered();
+        assert_eq!(
+            rate.deadline().unwrap() - tokio::time::Instant::now(),
+            std::time::Duration::from_millis(34)
+        );
+        rate.update_from_rendered_view(None);
+        assert!(rate.ready());
     }
 }
 /// Tracks the next local wake deadline for idle terminal-size refresh probes.

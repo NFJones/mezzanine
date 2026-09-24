@@ -327,18 +327,33 @@ Interactive remote attach requires a terminal and keeps one initialized Iroh
 control stream open for its lifetime. A `primary` profile may attach as primary
 or observer; an `observer` profile cannot attach as primary. The client also
 negotiates one server-opened event stream. Primaries attempt versions
-`3 → 2 → 1`; observers attempt `3 → 1`. Only a structured unsupported-version
+`5 → 4 → 3 → 2 → 1`; observers attempt `5 → 4 → 3 → 1`. Only a structured unsupported-version
 initialization result advances to the next candidate; authentication,
 authorization, malformed data, transport, and later stream failures remain
 visible. Client-local clipboard writes are enabled only when a primary on v2
-or v3 receives explicit `client_clipboard_write` capability confirmation;
-observer v3 does not receive that authority.
+through v5 receives explicit `client_clipboard_write` capability confirmation;
+observers do not receive that authority.
 Legacy authorized events wake a fresh `terminal/view`; observers receive only
 session-view events at or after their atomic attachment cutoff, and detach or
 event-stream failure ends the attach visibly.
+After a complete local presentation, compatible clients send that exact
+client's view identity on the next fetch. The server returns a small
+`not_modified` result when the complete view, pending receipts, and render
+cadence are unchanged; older servers still return the full view. Resizes and
+uncertain output discard the conditional baseline.
+The view response includes the effective `terminal.render_rate_limit_fps` for
+that client. Legacy primary and observer attach coalesce ordinary event wakeups
+behind that cadence and fetch current state at the trailing deadline; input,
+resize, and explicit output invalidation bypass the gate. An older server that
+omits the field leaves the gate disabled rather than assuming a fixed rate.
 For a negotiated primary or observer v3 stream, the event stream instead sends
 an initial authoritative exact-client snapshot and then uses revisioned
 whole-row deltas when they are safe and smaller than a replacement snapshot.
+Version 4 also supports bounded atomic render fragments. Version 5 may select
+a smaller sparse update with changed metadata and independent text/style row
+replacements; omitted fields retain their prior values, while explicit null
+replaces and explicit removal deletes optional metadata. The complete view is
+reconstructed and validated against its exact revision before commitment.
 Stale, wrong-role, or malformed deltas fail without partially changing the
 retained frame; reattachment starts from a fresh snapshot. V3 control responses
 remain mutation acknowledgements, so steady-state rendering does not issue

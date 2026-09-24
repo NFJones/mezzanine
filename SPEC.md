@@ -1417,6 +1417,22 @@ clients MUST NOT clear and redraw the entire viewport on every stable-size
 frame. They SHOULD update stable-size frames with row or cell diffs. A full clear
 or full redraw remains valid after attach, detach, terminal resize,
 frame-size change, or another invalidation that makes differential output unsafe.
+For a stable-width row, damage SHOULD follow effective rendered glyphs and
+renditions, not equivalent style-span partitioning. A narrow changed span MAY
+be repainted independently of an unchanged full-width background style when
+its clipped rendition is reapplied and neighboring cells remain intact.
+For multiple changed rows, the attached-terminal encoder SHOULD choose each
+safe row update by encoded cost rather than imposing a global row-count cutoff.
+It MAY use bounded independent changed runs when cheaper than their enclosing
+span or a full-row rewrite; unsafe glyph-width changes MUST retain the safe
+full-row fallback.
+The encoder MAY reuse exact shifted full-width rows with bounded line-insert
+or line-delete operations only when the output owner has verified the physical
+terminal width and height. It MUST scope the edit to the changed row region,
+preserve unchanged surrounding rows and normal-screen scrollback, restore
+absolute cursor placement and default scrolling margins, and choose the line
+edit only when its encoded size is smaller than the ordinary row update.
+Missing or mismatched geometry MUST retain the ordinary row-diff fallback.
 Readable foreground input that can be routed from current interaction state
 MUST be classified and applied before composing a presentation frame. Ordinary
 pane input MUST NOT require a full client view merely to forward bytes to the
@@ -3725,8 +3741,8 @@ traffic or publishes invitation-issued profile authority.
 Interactive Iroh attach MUST retain one initialized bidirectional control
 stream for its lifetime and MUST preserve request/response ordering across
 terminal resize, input, and view operations. New primary clients MUST attempt
-event-stream versions `4`, `3`, `2`, then `1`; new observer clients MUST attempt
-versions `4`, `3`, then `1`. A client MUST retry initialization only after the
+event-stream versions `5`, `4`, `3`, `2`, then `1`; new observer clients MUST attempt
+versions `5`, `4`, `3`, then `1`. A client MUST retry initialization only after the
 server returns the structured `unsupported_event_stream_version` result or the
 exact legacy unsupported-version result. Authentication, authorization,
 malformed initialization, transport, and post-initialization stream failures
@@ -3762,6 +3778,24 @@ the same atomic snapshot or delta rules before changing retained render state.
 The server MUST use a visible bounded-transfer error rather than bypassing the
 limit when a rendered frame exceeds 8 MiB.
 
+Event-stream version 5 uses the exact preface `mezzanine/events/5\n` and
+retains the v4 snapshot, whole-row delta and bounded-fragment rules. It MAY
+send `render/sparse` instead when that complete framed candidate is strictly
+smaller than both a whole-row delta and a snapshot. A sparse frame carries
+`kind: "sparse"`, exact `base_revision`, greater `revision`, `event_cutoff`,
+`invalidate_output: false`, unchanged `line_count`, a `view` map of changed
+non-row metadata, a `remove` array of deleted metadata keys, and unique
+in-range `rows`. Each row MUST carry an index and at least one of `line` or
+`style_spans`; absent row fields retain their base values. Absent metadata
+retains its base value, explicit null replaces it, and `remove` deletes it.
+Role and row arrays MUST NOT be changed through metadata or removal. A client
+MUST reject stale bases, invalid keys, duplicate or out-of-range rows,
+malformed text or styles, and invalid reconstructed views without changing
+its retained revision or view. Sparse frames MUST NOT be sent on v3/v4 streams;
+fragmented sparse frames retain the v4 atomic transfer bounds. Selection is
+by decoded framed bytes, not a claim about codec-compressed wire savings;
+stateful codec history MUST NOT be advanced by speculative candidates.
+
 Observer push ownership MUST be negotiated in both directions. A new observer
 client MUST opt in through `client.metadata.pushed_render_updates: true`, and
 the server MUST confirm `capabilities.features.pushed_render_updates: true`.
@@ -3787,7 +3821,7 @@ visibly without partially changing retained state; reattachment starts with a
 fresh authoritative snapshot. ANSI encoding and physical-terminal diffing
 remain client-local.
 
-Primary and observer v3 or v4 control responses are mutation acknowledgements and
+Primary and observer v3 through v5 control responses are mutation acknowledgements and
 MUST NOT replace the event stream's render state. An observer MAY use
 `terminal/resize` only to update its own retained client terminal dimensions;
 that mutation MUST NOT change primary geometry, another observer's geometry,
@@ -3832,6 +3866,9 @@ independent. A complete wire snapshot selected because a delta is larger, and
 ordinary pane, window, configuration, overlay, layout, or presentation changes
 MUST preserve the client’s retained terminal output frame. The client MUST
 continue to apply the normal ANSI differential renderer to that frame.
+Unix and legacy notification-plus-fetch attach clients MUST also treat structural
+event notifications and `terminal/step` `full_redraw_required` as requests for
+a fresh logical view, not as physical output invalidation.
 `invalidate_output` is reserved for physical uncertainty, including initial
 presentation, the exact client’s geometry change, decoder recovery, or an
 uncertain partially committed terminal write.
@@ -3842,18 +3879,21 @@ contains that pane and observers whose exact source primary is among those
 primaries; unrelated primary windows and their observers MUST remain idle.
 Primary-projected prompt and overlay changes MUST wake the owning primary and
 its exact attached observers, not unrelated primaries. Client-local geometry
-and presentation changes remain exact-client.
+and presentation changes remain exact-client. A cursor-blink timer owned by one
+client MUST wake only that attached client; it MUST NOT broadcast to other
+primaries or source-bound observers. Stale timer generations MUST NOT render.
 
-Each observer v3 or v4 stream MUST render with terminal geometry retained for that
+Each observer v3 through v5 stream MUST render with terminal geometry retained for that
 exact authenticated observer. Observer resize and disconnect state MUST be
 isolated from the primary and other observers, and reattachment MUST begin
 with a fresh authoritative snapshot. Version 2 remains limited to an
-authenticated interactive Iroh primary. Primary versions 2 through 4 MUST receive
+authenticated interactive Iroh primary. Primary versions 2 through 5 MUST receive
 explicit `client_clipboard_write` capability confirmation before treating
-client-local clipboard effects as negotiated; observer versions 3 and 4 MUST NOT
+client-local clipboard effects as negotiated; observer versions 3 through 5 MUST NOT
 receive that authority. Version 1 uses the exact preface
 `mezzanine/events/1\n`; version 2 uses `mezzanine/events/2\n`; version 3 uses
-`mezzanine/events/3\n`; version 4 uses `mezzanine/events/4\n`. The server MUST NOT open an event stream before the
+`mezzanine/events/3\n`; version 4 uses `mezzanine/events/4\n`; version 5 uses
+`mezzanine/events/5\n`. The server MUST NOT open an event stream before the
 successful initialize response is flushed, and then MUST open at most one
 unidirectional stream on that same QUIC connection. Client-opened
 unidirectional streams remain forbidden. The client MUST apply one configured
@@ -4017,8 +4057,13 @@ an animation refresh timer.
 foreground clients and remote pushed-render streams SHOULD coalesce bursty
 render invalidations so ordinary output rendering is emitted no more frequently
 than the configured frame rate per client, while still delivering one trailing
-frame after a burst. A value of
-0 MUST disable render rate limiting. Initial attach frames, terminal cleanup,
+frame after a burst. A value of 0 MUST disable render rate limiting.
+Legacy notification-plus-fetch attach MUST use the exact client's effective
+rate advertised with `terminal/view`; absent policy on an older server MUST
+leave ordinary views ungated. The client MUST retain only the latest pending
+view demand while waiting, fetch current state when due, and keep input,
+physical-output invalidation, and geometry recovery immediate.
+Initial attach frames, terminal cleanup,
 unsuperseded pending partial-output flushes, and user-input handling MUST NOT
 be delayed by this limit. When a newer render is waiting behind the rate gate,
 stale pending bytes from an older incomplete frame SHOULD be superseded by the
@@ -6723,6 +6768,13 @@ assistant and user text rather than silently dropping it before retry. Visible
 assistant and user transcript entries SHOULD NOT be byte-sliced before
 compaction; oversized entries SHOULD use the same compact summary path as other
 oversized context blocks.
+The latest completed compaction summary and the transcript sequence through
+which it replaces older raw history MUST be persisted together as one versioned,
+conversation-owned atomic epoch. Prompt replay MUST prefer that committed epoch
+over pane-local replay counts or optional memory records and include every exact
+subsequent transcript entry. Epoch publication MUST NOT truncate the append-only
+transcript. A corrupt required epoch or failed publication MUST be reported
+visibly rather than presenting a shortened raw suffix without its summary.
 When conversation compaction runs, Mezzanine MUST summarize only a closed
 prefix of complete execution groups. It MUST NOT split request messages,
 provider-native events, assistant output, or terminal tool/action results that
@@ -8172,6 +8224,12 @@ attributable to their selected source range.
 Within each barrier-delimited segment, compaction MUST retain a bounded recent
 raw suffix of complete execution groups so exact recent references remain
 available after context reduction.
+Selection MUST stop at the first non-fitting or ineligible older group rather
+than filling a budget gap with still-older groups. If the newest eligible
+closed group alone exceeds the raw-tail budget, no older closed group may be
+retained in its place; that group MUST enter validated summary input when it
+is safely recoverable. Exact and unconsumed groups remain raw and cannot be
+split to fit the budget.
 The raw tail size MUST follow `agents.compaction_raw_retention_percent`, which
 defaults to retaining approximately the newest 10% of the active model context
 budget by estimated replay word count.
@@ -9048,7 +9106,8 @@ The baseline command capabilities are:
 - `/clear`: Clear the terminal view and start a fresh visible conversation.
 - `/compact`: Ask the active model to summarize older conversation content
   outside the retained raw tail when model-backed command execution is
-  available, store the model-generated summary as pane-scoped memory, and
+  available, commit the summary with its replay boundary in conversation
+  storage, optionally project it as pane-scoped memory, and
   retain only a bounded raw recent transcript tail plus the compacted summary
   for model context. The raw tail MUST cover approximately
   `agents.compaction_raw_retention_percent` of the active model context budget
@@ -9057,13 +9116,27 @@ The baseline command capabilities are:
   user `/compact` MUST attempt real transcript compaction whenever active
   durable transcript entries exist, regardless of retained-tail budget. It MUST
   no-op only when there are no closed transcript execution groups to compact or
-  no durable transcript entries are available. Terminal transcript persistence
+  no durable transcript entries are available.
+  If the manual compactor's complete request exceeds a configured input cap or
+  the provider rejects it for context length, it MUST split redacted temporary
+  source at UTF-8 boundaries, summarize bounded chunks in source order, and
+  synthesize one final model-authored summary before committing the durable
+  epoch. An irreducible request, non-context failure, or exhausted bound MUST
+  leave the previous summary and raw replay boundary unchanged.
+  Terminal transcript persistence
   MUST be idempotent by conversation and turn so duplicate lifecycle
   finalization cannot append the same execution group or advance the active raw
   replay high-water mark twice. When
   persistent memory is enabled and a config root is available, `/compact`
   SHOULD opportunistically prune expired persistent-memory records before it
   builds compaction context or queues model-backed work.
+  Each queued model-backed compaction MUST have a unique task generation scoped
+  to its pane. Dispatch and worker-result events MUST carry that generation,
+  and settlement MUST match both the generation and originating conversation
+  before changing transcript, context, task ownership, status, or resume state.
+  Stale completion and failure events MUST NOT clear or otherwise affect newer
+  compaction work for the same pane. Provider usage from a completed stale task
+  MUST remain attributed to its originating conversation.
 - `/copy`: Copy the latest non-empty model-authored `say.text` emitted for
   the active pane. The command MUST accept `pane`, `buffer [name]`, and
   `clipboard` targets using the same target semantics as `/copy-trace-log` and
@@ -9223,7 +9296,12 @@ The baseline command capabilities are:
   cached-token accounting, the status display SHOULD show that counter as
   unknown rather than as zero. Provider token counters MUST include auxiliary
   routing/model-sizing provider requests as separate provider/model rows when
-  token usage is reported. `/status` MUST accept the optional `--extended`
+  token usage is reported. Token-bearing output-cutoff attempts MUST contribute
+  once each to cumulative pane, conversation, session, and durable provider/model
+  totals, including attempts that precede a successful retry or terminal failure.
+  A cutoff sample MUST NOT replace the latest successful ordinary-execution
+  input/cache sample or independently trigger observed-input compaction.
+  `/status` MUST accept the optional `--extended`
   argument and MUST reject other arguments. Only `/status --extended` may query
   durable token-accounting storage or render rolling-history sections. It MUST
   append `7-Day Token Usage`, `30-Day Token Usage`, `60-Day Token Usage`, and
@@ -9948,7 +10026,7 @@ The baseline control methods are:
 | `buffer/read` | `{ "name": string }` | `{ "name": string, "content": string, "bytes": integer }` | Primary-only read of one internal paste buffer. |
 | `buffer/delete` | `{ "name": string, "idempotency_key": string }` | `{ "name": string, "deleted": true }` | Primary-only mutation; unknown names return `not_found`. |
 | `frame/read` | `{ "target": WindowTarget \| PaneTarget }` | `{ "fields": object, "rendered": string }` | Read-only and naturally idempotent. |
-| `terminal/view` | `{ "client_size": { "columns": integer, "rows": integer } \| null, "view_offset": { "row": integer, "column": integer } \| null }` | `{ "view": RenderedClientView \| null, "presentation_ids": [integer], "event_cutoff": integer }` | Read-only for an attached primary or observer. `event_cutoff` identifies the latest ordered event whose applied state is represented when the view is rendered, so clients MAY discard queued ordinary redraw wakeups at or below that cutoff without delaying newer or invalidating events. `presentation_ids` identifies pending zen focus labels painted into this exact view. Observer output begins at its atomic attachment cutoff. `viewport` MAY be accepted as a compatibility alias for `view_offset`. |
+| `terminal/view` | `{ "client_size": { "columns": integer, "rows": integer } \| null, "view_offset": { "row": integer, "column": integer } \| null, "if_view_identity": string \| null }` | `{ "view": RenderedClientView \| null, "presentation_ids": [integer], "view_identity": string, "event_cutoff": integer, "render_rate_limit_fps": integer }` or `{ "not_modified": true, "view_identity": string, "event_cutoff": integer, "render_rate_limit_fps": integer }` | Read-only for an attached primary or observer. A compatible client MAY send the lowercase SHA-256 identity of its last completely committed exact-client view; the server MAY omit the view only when the complete rendered view, pending receipt IDs, and effective render cadence match that identity. The identity is bound to the authenticated client. Absent identity retains the complete-view response, and a null view is never a not-modified result. The client MUST reject a not-modified response without a matching committed base and MUST retain its local frame while advancing the event cutoff. `event_cutoff` identifies the latest ordered event whose applied state is represented when the view is rendered, so clients MAY discard queued ordinary redraw wakeups at or below that cutoff without delaying newer or invalidating events. `presentation_ids` identifies pending zen focus labels painted into this exact view. Observer output begins at its atomic attachment cutoff. `viewport` MAY be accepted as a compatibility alias for `view_offset`. |
 | `terminal/presentation/acknowledge` | `{ "idempotency_key": string, "presentation_ids": [integer] }` | `{ "acknowledged": boolean }` | Primary- or observer-client acknowledgement that one receipt-bearing control-rendered frame committed completely to its local terminal. The array MUST contain one through three positive integer IDs. Matching pending labels arm exactly once at acknowledgement time; malformed IDs MUST be rejected, and stale, duplicate, or already armed IDs MUST NOT renew a lifetime. Pushed Iroh frames use their existing successful stream-flush delivery approximation and MUST NOT additionally invoke this method. |
 | `terminal/resize` | `{ "idempotency_key": string, "client_size": { "columns": integer, "rows": integer } }` | `{ "resized": true, "client_size": { "columns": integer, "rows": integer } }` | Observer-only mutation of the exact authenticated caller's retained terminal geometry. It MUST NOT change primary geometry, another observer, or canonical pane layout. Negotiated observer v3 uses the resulting exact-client pushed render instead of fetching `terminal/view`. |
 | `terminal/step` | `{ "idempotency_key": string, "client_size": { "columns": integer, "rows": integer } \| null, "render": boolean \| null, "input_bytes": [integer], "extensions": { "render_mode": "if_changed" } \| null }` | `{ "input_bytes": integer, "application": object, "view": RenderedClientView \| null, "presentation_ids": [integer], "event_cutoff": integer \| null, "ui_theme": object \| null, "client_detached": boolean, "session_terminated": boolean }` | Primary-only mutating input and resize step. Every input byte MUST be in `0..255`; `render` defaults to true. `extensions.render_mode = "if_changed"` requests an inline view only when the applied step requires a presentation refresh; it augments rather than overrides `render`, and unsupported values MUST be rejected. When a view is returned, `event_cutoff` and `presentation_ids` identify the latest ordered event and pending zen labels represented at that render boundary; otherwise the cutoff is null and the ID array is empty. `client_detached` reports that this acknowledged step detached the invoking client while leaving the session available for reattachment. |

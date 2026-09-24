@@ -495,10 +495,15 @@ pub(crate) struct RuntimeAgentComponent {
     sandbox_fallback_audits: BTreeMap<(String, String), RuntimeSandboxFallbackAudit>,
     /// Panes currently running model-backed context compaction.
     agent_compacting_panes: BTreeMap<String, u64>,
+    /// Monotonic identity source for queued and claimed compaction tasks.
+    next_agent_compaction_task_generation: u64,
+    /// Current compaction task generation and originating conversation by pane.
+    agent_compaction_task_owners: BTreeMap<String, (u64, String)>,
     /// Model-backed compaction tasks waiting for provider dispatch.
     pending_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
-    /// Model-backed compaction tasks claimed by provider workers.
-    claimed_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
+    /// In-flight compaction tasks retained by pane and generation until each
+    /// worker settles, including tasks superseded by a newer pane generation.
+    claimed_agent_compaction_tasks: BTreeMap<(String, u64), RuntimeAgentCompactionTask>,
     /// Panes currently running model-backed durable-memory generation.
     agent_remembering_panes: BTreeMap<String, u64>,
     /// Durable-memory generation tasks waiting for provider dispatch.
@@ -2207,6 +2212,19 @@ impl RuntimeSessionService {
             .unwrap_or_default()
     }
 
+    /// Returns the latest provider quota usage for one conversation.
+    #[cfg(test)]
+    pub(crate) fn agent_quota_usage_for_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> &[ProviderQuotaUsage] {
+        self.agent
+            .agent_quota_usage_by_conversation
+            .get(conversation_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
     /// Returns the latest concrete execution-model request sample.
     pub(crate) fn agent_latest_request_usage(
         &self,
@@ -2433,8 +2451,18 @@ impl RuntimeSessionService {
     }
 
     /// Queues one compaction task and marks its pane active.
-    pub(crate) fn queue_agent_compaction_task(&mut self, task: RuntimeAgentCompactionTask) {
+    pub(crate) fn queue_agent_compaction_task(&mut self, mut task: RuntimeAgentCompactionTask) {
+        self.agent.next_agent_compaction_task_generation = self
+            .agent
+            .next_agent_compaction_task_generation
+            .saturating_add(1)
+            .max(1);
+        task.task_generation = self.agent.next_agent_compaction_task_generation;
         let pane_id = task.pane_id.clone();
+        self.agent.agent_compaction_task_owners.insert(
+            pane_id.clone(),
+            (task.task_generation, task.conversation_id.clone()),
+        );
         self.agent
             .agent_compacting_panes
             .insert(pane_id.clone(), current_unix_seconds().max(1));
@@ -2470,24 +2498,94 @@ impl RuntimeSessionService {
         self.agent.pending_agent_compaction_tasks.remove(pane_id)
     }
 
+    /// Returns the generation of one pending compaction task.
+    pub(crate) fn pending_agent_compaction_task_generation(&self, pane_id: &str) -> Option<u64> {
+        self.agent
+            .pending_agent_compaction_tasks
+            .get(pane_id)
+            .map(|task| task.task_generation)
+    }
+
+    /// Reports whether a generation still owns the pane’s current conversation.
+    pub(crate) fn agent_compaction_task_is_current(
+        &self,
+        pane_id: &str,
+        task_generation: u64,
+    ) -> bool {
+        let Some((generation, conversation_id)) =
+            self.agent.agent_compaction_task_owners.get(pane_id)
+        else {
+            return false;
+        };
+        *generation == task_generation
+            && self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_none_or(|session| session.session_id == *conversation_id)
+    }
+
+    /// Returns the generation currently claimed by a provider worker.
+    #[cfg(test)]
+    pub(crate) fn claimed_agent_compaction_task_generation(&self, pane_id: &str) -> Option<u64> {
+        self.agent
+            .claimed_agent_compaction_tasks
+            .keys()
+            .filter(|(claimed_pane_id, _)| claimed_pane_id == pane_id)
+            .map(|(_, generation)| *generation)
+            .max()
+    }
+
     /// Records that a provider worker owns one compaction task.
     pub(crate) fn claim_agent_compaction_task_state(
         &mut self,
         pane_id: impl Into<String>,
-        task: RuntimeAgentCompactionTask,
+        mut task: RuntimeAgentCompactionTask,
     ) {
+        if task.task_generation == 0 {
+            self.agent.next_agent_compaction_task_generation = self
+                .agent
+                .next_agent_compaction_task_generation
+                .saturating_add(1)
+                .max(1);
+            task.task_generation = self.agent.next_agent_compaction_task_generation;
+        }
+        let pane_id = pane_id.into();
+        let owner_is_not_newer = self
+            .agent
+            .agent_compaction_task_owners
+            .get(&pane_id)
+            .is_none_or(|(generation, _)| *generation <= task.task_generation);
+        if owner_is_not_newer {
+            self.agent.agent_compaction_task_owners.insert(
+                pane_id.clone(),
+                (task.task_generation, task.conversation_id.clone()),
+            );
+        }
         self.agent
             .claimed_agent_compaction_tasks
-            .insert(pane_id.into(), task);
+            .insert((task.pane_id.clone(), task.task_generation), task);
     }
 
     /// Finishes claimed compaction state and clears its pane activity marker.
     pub(crate) fn finish_agent_compaction_task(
         &mut self,
         pane_id: &str,
+        task_generation: u64,
     ) -> Option<RuntimeAgentCompactionTask> {
-        let task = self.agent.claimed_agent_compaction_tasks.remove(pane_id);
-        self.agent.agent_compacting_panes.remove(pane_id);
+        let task = self
+            .agent
+            .claimed_agent_compaction_tasks
+            .remove(&(pane_id.to_string(), task_generation));
+        task.as_ref()?;
+        if self
+            .agent
+            .agent_compaction_task_owners
+            .get(pane_id)
+            .is_some_and(|(generation, _)| *generation == task_generation)
+        {
+            self.agent.agent_compaction_task_owners.remove(pane_id);
+            self.agent.agent_compacting_panes.remove(pane_id);
+        }
         task
     }
 
@@ -2502,9 +2600,19 @@ impl RuntimeSessionService {
     pub(crate) fn fail_agent_compaction_task(
         &mut self,
         pane_id: &str,
+        task_generation: u64,
     ) -> RuntimeAgentCompactionFailureState {
-        let pending = self.agent.pending_agent_compaction_tasks.remove(pane_id);
-        let claimed = self.agent.claimed_agent_compaction_tasks.remove(pane_id);
+        let pending = self
+            .agent
+            .pending_agent_compaction_tasks
+            .get(pane_id)
+            .is_some_and(|task| task.task_generation == task_generation)
+            .then(|| self.agent.pending_agent_compaction_tasks.remove(pane_id))
+            .flatten();
+        let claimed = self
+            .agent
+            .claimed_agent_compaction_tasks
+            .remove(&(pane_id.to_string(), task_generation));
         let resume_turn_id = claimed
             .as_ref()
             .or(pending.as_ref())
@@ -2513,13 +2621,44 @@ impl RuntimeSessionService {
             .as_ref()
             .or(pending.as_ref())
             .map(|task| task.source.clone());
-        let had_task = pending.is_some()
-            || claimed.is_some()
-            || self.agent.agent_compacting_panes.remove(pane_id).is_some();
+        let marker_matches = self
+            .agent
+            .agent_compaction_task_owners
+            .get(pane_id)
+            .is_some_and(|(generation, _)| *generation == task_generation);
+        if marker_matches {
+            self.agent.agent_compaction_task_owners.remove(pane_id);
+            self.agent.agent_compacting_panes.remove(pane_id);
+        }
+        let had_task = pending.is_some() || claimed.is_some() || marker_matches;
         RuntimeAgentCompactionFailureState {
             had_task,
             resume_turn_id,
             source,
+        }
+    }
+
+    /// Fails the current compaction task for crate-local synchronous callers.
+    #[cfg(test)]
+    pub(crate) fn fail_current_agent_compaction_task(
+        &mut self,
+        pane_id: &str,
+    ) -> RuntimeAgentCompactionFailureState {
+        let generation = self
+            .claimed_agent_compaction_task_generation(pane_id)
+            .or_else(|| self.pending_agent_compaction_task_generation(pane_id))
+            .or_else(|| {
+                self.agent
+                    .agent_compaction_task_owners
+                    .get(pane_id)
+                    .map(|(generation, _)| *generation)
+            });
+        if let Some(generation) = generation {
+            return self.fail_agent_compaction_task(pane_id, generation);
+        }
+        RuntimeAgentCompactionFailureState {
+            had_task: self.agent.agent_compacting_panes.remove(pane_id).is_some(),
+            ..Default::default()
         }
     }
 

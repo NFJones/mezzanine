@@ -138,6 +138,26 @@ pub(super) fn terminal_step_response_client_frame(
         .map(parse_focus_label_presentation_ids)
         .transpose()?
         .unwrap_or_default();
+    let render_rate_limit_fps = parsed
+        .get("result")
+        .and_then(|result| result.get("render_rate_limit_fps"))
+        .map(|value| {
+            value.as_u64().ok_or_else(|| {
+                MezError::invalid_state("terminal view render_rate_limit_fps is invalid")
+            })
+        })
+        .transpose()?;
+    let view_identity = parsed
+        .get("result")
+        .and_then(|result| result.get("view_identity"))
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| valid_view_identity(value))
+                .map(str::to_string)
+                .ok_or_else(|| MezError::invalid_state("terminal view identity is invalid"))
+        })
+        .transpose()?;
     Ok(Some(super::AttachClientFrame {
         lines: terminal_step_response_lines(body)?,
         line_style_spans: terminal_step_response_line_style_spans(body)?,
@@ -145,7 +165,125 @@ pub(super) fn terminal_step_response_client_frame(
         presentation_ids,
         iroh_status_slot,
         event_cutoff,
+        render_rate_limit_fps,
+        view_identity,
     }))
+}
+
+/// Accepts the distinct conditional response only against a committed matching base.
+pub(super) fn conditional_view_response(
+    body: &str,
+    baseline: Option<&super::AttachClientFrame>,
+) -> Result<super::AttachConditionalView> {
+    let parsed: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_state("terminal view response is not valid JSON"))?;
+    if let Some(error) = parsed.get("error") {
+        return Err(MezError::invalid_state(format!(
+            "terminal step failed: {}",
+            json_escape(&error.to_string())
+        )));
+    }
+    let result = parsed.get("result");
+    if result
+        .and_then(|result| result.get("not_modified"))
+        .is_some()
+    {
+        let identity = result
+            .and_then(|result| result.get("view_identity"))
+            .and_then(serde_json::Value::as_str);
+        if result
+            .and_then(|result| result.get("not_modified"))
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+            || result.and_then(|result| result.get("view")).is_some()
+            || !identity.is_some_and(valid_view_identity)
+            || baseline.and_then(|frame| frame.view_identity.as_deref()) != identity
+        {
+            return Err(MezError::invalid_state(
+                "terminal view not-modified base is invalid",
+            ));
+        }
+        let fps = result
+            .and_then(|result| result.get("render_rate_limit_fps"))
+            .map(|value| {
+                value.as_u64().ok_or_else(|| {
+                    MezError::invalid_state("terminal view render_rate_limit_fps is invalid")
+                })
+            })
+            .transpose()?;
+        let event_cutoff = result
+            .and_then(|result| result.get("event_cutoff"))
+            .map(|value| {
+                value
+                    .as_u64()
+                    .ok_or_else(|| MezError::invalid_state("terminal view event cutoff is invalid"))
+            })
+            .transpose()?;
+        return Ok(super::AttachConditionalView::NotModified {
+            render_rate_limit_fps: fps,
+            event_cutoff,
+        });
+    }
+    Ok(match terminal_step_response_client_frame(body)? {
+        Some(frame) => super::AttachConditionalView::Modified(Box::new(frame)),
+        None => super::AttachConditionalView::Missing,
+    })
+}
+
+/// Restricts client-supplied identities to the exact wire digest shape.
+fn valid_view_identity(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(test)]
+mod conditional_view_tests {
+    use super::*;
+
+    /// An unchanged response requires an exact committed identity; null views
+    /// and malformed unchanged responses cannot impersonate a valid base.
+    #[test]
+    fn conditional_view_requires_matching_committed_base() {
+        let identity = "a".repeat(64);
+        let initial = serde_json::json!({"result": {"view": {
+            "lines": ["stable"], "line_style_spans": [[]],
+            "cursor": {"row": 0, "column": 0, "visible": false},
+            "output_modes": {}
+        }, "view_identity": identity}})
+        .to_string();
+        let super::super::AttachConditionalView::Modified(frame) =
+            conditional_view_response(&initial, None).unwrap()
+        else {
+            panic!("initial view must be complete")
+        };
+        let unchanged = serde_json::json!({"result": {
+            "not_modified": true, "view_identity": identity,
+            "render_rate_limit_fps": 30
+        }})
+        .to_string();
+        assert!(matches!(
+            conditional_view_response(&unchanged, Some(&frame)).unwrap(),
+            super::super::AttachConditionalView::NotModified {
+                render_rate_limit_fps: Some(30),
+                ..
+            }
+        ));
+        assert!(conditional_view_response(&unchanged, None).is_err());
+        let wrong = unchanged.replace(&identity, &"b".repeat(64));
+        assert!(conditional_view_response(&wrong, Some(&frame)).is_err());
+        let mixed = serde_json::json!({
+            "error": {"code": -32000, "message": "failed"},
+            "result": {"not_modified": true, "view_identity": identity}
+        })
+        .to_string();
+        assert!(conditional_view_response(&mixed, Some(&frame)).is_err());
+        assert!(matches!(
+            conditional_view_response(r#"{"result":{"view":null}}"#, Some(&frame)).unwrap(),
+            super::super::AttachConditionalView::Missing
+        ));
+    }
 }
 
 /// Decodes bounded positive focus-label presentation identities.
@@ -540,6 +678,27 @@ mod tests {
             .expect("view should decode");
 
         assert_eq!(frame.event_cutoff, Some(42));
+    }
+
+    /// Verifies the legacy view carries the resolved live ordinary-output
+    /// cadence and older servers omit it without imposing a guessed limit.
+    #[test]
+    fn terminal_view_decodes_optional_render_rate() {
+        let response = r#"{"result":{"view":{"lines":["plain"],"line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{}},"render_rate_limit_fps":30}}"#;
+        let frame = terminal_step_response_client_frame(response)
+            .unwrap()
+            .unwrap();
+        assert_eq!(frame.render_rate_limit_fps, Some(30));
+        let legacy = r#"{"result":{"view":{"lines":["plain"],"line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{}}}}"#;
+        assert_eq!(
+            terminal_step_response_client_frame(legacy)
+                .unwrap()
+                .unwrap()
+                .render_rate_limit_fps,
+            None
+        );
+        let invalid = response.replace(":30}", ":-1}");
+        assert!(terminal_step_response_client_frame(&invalid).is_err());
     }
 
     /// Verifies control attach frames retain bounded positive focus receipts

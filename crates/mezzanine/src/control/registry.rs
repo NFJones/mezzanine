@@ -474,7 +474,12 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
     ControlMethodSpec {
         method: "terminal/view",
         dispatch: ControlDispatchKind::TerminalView,
-        params_schema: ControlParamsSchema::Allowed(&["client_size", "view_offset", "viewport"]),
+        params_schema: ControlParamsSchema::Allowed(&[
+            "client_size",
+            "view_offset",
+            "viewport",
+            "if_view_identity",
+        ]),
     },
     ControlMethodSpec {
         method: "terminal/presentation/acknowledge",

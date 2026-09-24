@@ -277,7 +277,7 @@ context_window_tokens = 128000
         assert!(
             dispatches.iter().any(|effect| matches!(
                 effect,
-                RuntimeSideEffect::DispatchAgentCompaction { pane_id } if pane_id == "%1"
+                RuntimeSideEffect::DispatchAgentCompaction { pane_id, .. } if pane_id == "%1"
             )),
             "{dispatches:?}"
         );

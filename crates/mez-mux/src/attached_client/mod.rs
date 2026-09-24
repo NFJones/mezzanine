@@ -22,6 +22,7 @@ pub use output::{
     encode_attached_terminal_output_frame_with_styles_and_transitions,
     encode_attached_terminal_output_update_frame_with_styles,
     encode_attached_terminal_output_update_frame_with_styles_and_transitions,
+    encode_attached_terminal_output_update_frame_with_verified_size,
 };
 
 #[cfg(test)]

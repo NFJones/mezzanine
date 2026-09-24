@@ -24,7 +24,7 @@ use super::super::shared_sqlite::{
 };
 use super::repository::{LocalAssignmentDatabase, validate_database};
 use super::{LocalSessionAssignment, LocalSessionAssignmentState, MezError, Result};
-use std::collections::{HashMap, HashSet};
+use crate::storage::row_diff;
 
 /// Database file owned by the local session assignment repository.
 pub(super) const ASSIGNMENT_DATABASE_FILE_NAME: &str = "assignments.sqlite";
@@ -277,17 +277,8 @@ fn read_database(connection: &Connection) -> Result<LocalAssignmentDatabase> {
     Ok(database)
 }
 
-/// One stored assignment row's required write to turn one in-memory state
-/// into another.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum AssignmentRowWrite<'a> {
-    /// The row is new and must be inserted.
-    Insert(&'a LocalSessionAssignment),
-    /// The row exists and its validated record changed.
-    Update(&'a LocalSessionAssignment),
-    /// The row is gone and must be removed.
-    Delete(&'a str),
-}
+/// One stored assignment row's required write.
+pub(super) type AssignmentRowWrite<'a> = row_diff::RowWrite<'a, LocalSessionAssignment>;
 
 /// Returns the row-level writes that turn `before` into `after`.
 ///
@@ -300,32 +291,9 @@ pub(super) fn pending_writes<'a>(
     before: &'a LocalAssignmentDatabase,
     after: &'a LocalAssignmentDatabase,
 ) -> Vec<AssignmentRowWrite<'a>> {
-    let before_by_id: HashMap<&str, &LocalSessionAssignment> = before
-        .assignments
-        .iter()
-        .map(|assignment| (assignment.session_id.as_str(), assignment))
-        .collect();
-    let after_ids: HashSet<&str> = after
-        .assignments
-        .iter()
-        .map(|assignment| assignment.session_id.as_str())
-        .collect();
-    let mut writes = Vec::new();
-    // Removals come first so a mutation that changed a session id can never
-    // collide its insert with the row this plan deletes.
-    for assignment in &before.assignments {
-        if !after_ids.contains(assignment.session_id.as_str()) {
-            writes.push(AssignmentRowWrite::Delete(assignment.session_id.as_str()));
-        }
-    }
-    for assignment in &after.assignments {
-        match before_by_id.get(assignment.session_id.as_str()) {
-            Some(existing) if *existing == assignment => {}
-            Some(_) => writes.push(AssignmentRowWrite::Update(assignment)),
-            None => writes.push(AssignmentRowWrite::Insert(assignment)),
-        }
-    }
-    writes
+    row_diff::pending_writes(&before.assignments, &after.assignments, |assignment| {
+        &assignment.session_id
+    })
 }
 
 /// Persists one assignment row, inserting a new one or updating a changed one.

@@ -74,6 +74,12 @@ event socket is missing or refuses the connection, attachment remains usable,
 but an idle client can wait until keyboard, mouse, focus, or resize activity
 causes another control step.
 
+Window, configuration, attachment, and overlay changes request a fresh view
+without discarding the terminal's known output frame. A `full_redraw_required`
+step response describes logical view damage, not physical uncertainty. An
+actual terminal resize, explicit invalidating render wakeup, or uncertain
+partial output still resets the physical frame before the next presentation.
+
 For `mez serve`, keep the default auxiliary sockets enabled when using the
 built-in attach client. `--no-aux-sockets` intentionally disables this wakeup,
 and a custom `--event-socket` path is not discovered by `mez attach`. Verify

@@ -477,6 +477,7 @@ impl RuntimeSessionService {
             ) {
                 Ok(execution) => break execution,
                 Err(error) => {
+                    self.record_agent_output_cutoff_usage(&turn, &error);
                     self.append_agent_trace_provider_error(
                         &turn,
                         provider.provider_id(),
@@ -809,6 +810,7 @@ impl RuntimeSessionService {
             ) {
                 Ok(execution) => break execution,
                 Err(error) => {
+                    self.record_agent_output_cutoff_usage(&turn, &error);
                     self.append_agent_trace_provider_error(
                         &turn,
                         provider.provider_id(),

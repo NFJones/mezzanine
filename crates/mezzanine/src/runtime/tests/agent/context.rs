@@ -2131,7 +2131,7 @@ context_window_tokens = 40000
         .expect("context-window recovery transition");
     assert!(transition.side_effects.iter().any(|effect| matches!(
         effect,
-        RuntimeSideEffect::DispatchAgentCompaction { pane_id } if pane_id == "%1"
+        RuntimeSideEffect::DispatchAgentCompaction { pane_id, .. } if pane_id == "%1"
     )));
     assert_eq!(
         service

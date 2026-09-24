@@ -14,7 +14,7 @@ use super::{
     run_async_client_output_flush_service,
 };
 use crate::host::terminal::TerminalClientLoopAction;
-use mez_mux::presentation::compose_client_presentation_with_styles;
+use mez_mux::presentation::{RenderedClientView, compose_client_presentation_with_styles};
 use std::future::Future;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -195,23 +195,12 @@ where
         return Ok(());
     };
     let (lines, spans) = compose_client_presentation_with_styles(view, None);
-    let output_modes = AttachedTerminalOutputModes {
-        application_keypad: refreshed.config.mouse_policy.pane_application_keypad_mode,
-        enhanced_keyboard_reporting: view
-            .enhanced_keyboard_reporting_active(refreshed.config.enhanced_keyboard_reporting),
-        bracketed_paste: refreshed.config.pane_bracketed_paste_mode,
-        focus_events: view.focus_events,
-        alternate_screen: view.alternate_screen,
-        host_mouse_reporting: refreshed.config.mouse_policy.enabled,
-        cursor_style: refreshed.config.cursor_style,
-        cursor_blink: false,
-        cursor_blink_interval_ms: refreshed.config.cursor_blink_interval_ms,
-        cursor_blink_elapsed_ms: cursor_blink_elapsed_ms(recovery.cursor_blink_epoch),
-        animation_refresh_interval_ms: view.animation_refresh_interval_ms,
-        cursor_visible: view.cursor_visible,
-        cursor_row: view.cursor_row,
-        cursor_column: view.cursor_column,
-    };
+    let output_modes = local_output_modes(
+        &refreshed.config,
+        Some(view),
+        cursor_blink_elapsed_ms(recovery.cursor_blink_epoch),
+        false,
+    );
     let flush = queue_and_flush_async_attached_terminal_output(
         handle,
         io,
@@ -236,6 +225,35 @@ where
 /// on duplicated control-flow logic.
 fn cursor_blink_elapsed_ms(epoch: std::time::Instant) -> u64 {
     u64::try_from(epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Projects actor-resolved configuration and an optional view into local host
+/// output modes. `allow_blink` is false for error recovery; remote transport
+/// metadata and physical-write commitment are owned by separate boundaries.
+fn local_output_modes(
+    config: &TerminalClientLoopConfig,
+    view: Option<&RenderedClientView>,
+    blink_elapsed_ms: u64,
+    allow_blink: bool,
+) -> AttachedTerminalOutputModes {
+    AttachedTerminalOutputModes {
+        application_keypad: config.mouse_policy.pane_application_keypad_mode,
+        enhanced_keyboard_reporting: view.is_some_and(|view| {
+            view.enhanced_keyboard_reporting_active(config.enhanced_keyboard_reporting)
+        }),
+        bracketed_paste: config.pane_bracketed_paste_mode,
+        focus_events: view.is_some_and(|view| view.focus_events),
+        alternate_screen: view.is_some_and(|view| view.alternate_screen),
+        host_mouse_reporting: config.mouse_policy.enabled,
+        cursor_style: config.cursor_style,
+        cursor_blink: allow_blink && config.cursor_blink,
+        cursor_blink_interval_ms: config.cursor_blink_interval_ms,
+        cursor_blink_elapsed_ms: blink_elapsed_ms,
+        animation_refresh_interval_ms: view.map_or(0, |view| view.animation_refresh_interval_ms),
+        cursor_visible: view.is_some_and(|view| view.cursor_visible),
+        cursor_row: view.map_or(0, |view| view.cursor_row),
+        cursor_column: view.map_or(0, |view| view.cursor_column),
+    }
 }
 
 /// Runs the queue and flush async attached terminal output operation for this subsystem.
@@ -603,37 +621,12 @@ where
                 });
         if !step.output_lines.is_empty() && !agent_prompt_input_action && !pre_action_frame_is_stale
         {
-            let output_modes = AttachedTerminalOutputModes {
-                application_keypad: frame.config.mouse_policy.pane_application_keypad_mode,
-                enhanced_keyboard_reporting: frame.view.as_ref().is_some_and(|view| {
-                    view.enhanced_keyboard_reporting_active(
-                        frame.config.enhanced_keyboard_reporting,
-                    )
-                }),
-                bracketed_paste: frame.config.pane_bracketed_paste_mode,
-                focus_events: frame.view.as_ref().is_some_and(|view| view.focus_events),
-                alternate_screen: frame
-                    .view
-                    .as_ref()
-                    .is_some_and(|view| view.alternate_screen),
-                host_mouse_reporting: frame.config.mouse_policy.enabled,
-                cursor_style: frame.config.cursor_style,
-                cursor_blink: frame.config.cursor_blink,
-                cursor_blink_interval_ms: frame.config.cursor_blink_interval_ms,
-                cursor_blink_elapsed_ms: cursor_blink_elapsed_ms(cursor_blink_epoch),
-                animation_refresh_interval_ms: frame
-                    .view
-                    .as_ref()
-                    .map(|view| view.animation_refresh_interval_ms)
-                    .unwrap_or(0),
-                cursor_visible: frame.view.as_ref().is_some_and(|view| view.cursor_visible),
-                cursor_row: frame.view.as_ref().map(|view| view.cursor_row).unwrap_or(0),
-                cursor_column: frame
-                    .view
-                    .as_ref()
-                    .map(|view| view.cursor_column)
-                    .unwrap_or(0),
-            };
+            let output_modes = local_output_modes(
+                &frame.config,
+                frame.view.as_ref(),
+                cursor_blink_elapsed_ms(cursor_blink_epoch),
+                true,
+            );
             let flush = await_attached_terminal_step(
                 "output flush",
                 queue_and_flush_async_attached_terminal_output(
@@ -718,27 +711,12 @@ where
                 if let Some(view) = refreshed.view.as_ref() {
                     let (lines, spans) =
                         compose_client_presentation_with_styles(view, status.as_ref());
-                    let output_modes = AttachedTerminalOutputModes {
-                        application_keypad: refreshed
-                            .config
-                            .mouse_policy
-                            .pane_application_keypad_mode,
-                        enhanced_keyboard_reporting: view.enhanced_keyboard_reporting_active(
-                            refreshed.config.enhanced_keyboard_reporting,
-                        ),
-                        bracketed_paste: refreshed.config.pane_bracketed_paste_mode,
-                        focus_events: view.focus_events,
-                        alternate_screen: view.alternate_screen,
-                        host_mouse_reporting: refreshed.config.mouse_policy.enabled,
-                        cursor_style: refreshed.config.cursor_style,
-                        cursor_blink: refreshed.config.cursor_blink,
-                        cursor_blink_interval_ms: refreshed.config.cursor_blink_interval_ms,
-                        cursor_blink_elapsed_ms: cursor_blink_elapsed_ms(cursor_blink_epoch),
-                        animation_refresh_interval_ms: view.animation_refresh_interval_ms,
-                        cursor_visible: view.cursor_visible,
-                        cursor_row: view.cursor_row,
-                        cursor_column: view.cursor_column,
-                    };
+                    let output_modes = local_output_modes(
+                        &refreshed.config,
+                        Some(view),
+                        cursor_blink_elapsed_ms(cursor_blink_epoch),
+                        true,
+                    );
                     let flush = await_attached_terminal_step(
                         "refreshed output flush",
                         queue_and_flush_async_attached_terminal_output(
@@ -784,3 +762,7 @@ where
     report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
     Ok(report)
 }
+
+#[cfg(test)]
+#[path = "terminal/output_mode_projection_tests.rs"]
+mod output_mode_projection_tests;

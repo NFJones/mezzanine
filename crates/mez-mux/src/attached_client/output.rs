@@ -10,8 +10,8 @@ use mez_terminal::{
     GraphicRendition, TerminalColor, TerminalStyleSpan, terminal_emoji_width, terminal_graphemes,
 };
 use std::collections::BTreeSet;
+use std::ops::Range;
 
-#[cfg(test)]
 use crate::layout::Size;
 use crate::presentation::AttachedTerminalOutputModes;
 #[cfg(test)]
@@ -245,6 +245,28 @@ pub fn encode_attached_terminal_output_update_frame_with_styles_and_transitions(
     previous: Option<&AttachedTerminalOutputFrameState>,
     transitions: AttachedTerminalModeTransitions,
 ) -> Vec<u8> {
+    encode_attached_terminal_output_update_frame_with_verified_size(
+        lines,
+        line_style_spans,
+        keypad_transition,
+        modes,
+        previous,
+        transitions,
+        None,
+    )
+}
+
+/// Encodes a differential frame with line edits only when the TTY owner has
+/// verified that every presented row fills the current physical terminal.
+pub fn encode_attached_terminal_output_update_frame_with_verified_size(
+    lines: &[String],
+    line_style_spans: &[Vec<TerminalStyleSpan>],
+    keypad_transition: Option<bool>,
+    modes: AttachedTerminalOutputModes,
+    previous: Option<&AttachedTerminalOutputFrameState>,
+    transitions: AttachedTerminalModeTransitions,
+    verified_size: Option<Size>,
+) -> Vec<u8> {
     let Some(previous) = previous else {
         return encode_attached_terminal_output_frame_with_styles_and_transitions(
             lines,
@@ -275,14 +297,6 @@ pub fn encode_attached_terminal_output_update_frame_with_styles_and_transitions(
             modes.bracketed_paste,
         ));
     }
-    if previous.focus_events != modes.focus_events {
-        frame.extend_from_slice(attached_terminal_focus_events_frame(modes.focus_events));
-    }
-    if previous.host_mouse_reporting != modes.host_mouse_reporting {
-        frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
-            modes.host_mouse_reporting,
-        ));
-    }
     let changed_rows = lines
         .iter()
         .enumerate()
@@ -297,16 +311,25 @@ pub fn encode_attached_terminal_output_update_frame_with_styles_and_transitions(
                 .get(index)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            (line.as_str() != previous_line || spans != previous_spans).then_some((
-                index,
-                line.as_str(),
-                spans,
-                previous_line,
-                previous_spans,
-            ))
+            (line.as_str() != previous_line
+                || (spans != previous_spans
+                    && !terminal_row_cells_match_all(previous_line, previous_spans, line, spans)))
+            .then_some((index, line.as_str(), spans, previous_line, previous_spans))
         })
         .collect::<Vec<_>>();
-    let allow_segment_updates = changed_rows.len() <= 3;
+    let cursor_presentation = cursor_presentation_sequence(lines, modes);
+    // A repaint reasserts these modes after its mandatory coordinate reset.
+    // Mode-only frames have no reset, so they still need their own assignments.
+    if changed_rows.is_empty() && cursor_presentation == previous.cursor_presentation {
+        if previous.focus_events != modes.focus_events {
+            frame.extend_from_slice(attached_terminal_focus_events_frame(modes.focus_events));
+        }
+        if previous.host_mouse_reporting != modes.host_mouse_reporting {
+            frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
+                modes.host_mouse_reporting,
+            ));
+        }
+    }
     let mut presentation_reset_emitted = false;
     for (index, line, spans, previous_line, previous_spans) in &changed_rows {
         if !presentation_reset_emitted {
@@ -320,9 +343,8 @@ pub fn encode_attached_terminal_output_update_frame_with_styles_and_transitions(
             presentation_reset_emitted = true;
         }
         let row = index.saturating_add(1);
-        if allow_segment_updates
-            && let Some(span_update) =
-                encode_safe_changed_row_span_update(row, previous_line, line, previous_spans, spans)
+        if let Some(span_update) =
+            encode_safe_changed_row_span_update(row, previous_line, line, previous_spans, spans)
         {
             frame.extend_from_slice(&span_update);
         } else {
@@ -334,7 +356,6 @@ pub fn encode_attached_terminal_output_update_frame_with_styles_and_transitions(
             frame.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
         }
     }
-    let cursor_presentation = cursor_presentation_sequence(lines, modes);
     if !changed_rows.is_empty() || cursor_presentation != previous.cursor_presentation {
         if !presentation_reset_emitted {
             frame.extend_from_slice(attached_terminal_enter_presentation_frame());
@@ -347,7 +368,116 @@ pub fn encode_attached_terminal_output_update_frame_with_styles_and_transitions(
         }
         frame.extend_from_slice(cursor_presentation.as_bytes());
     }
+    if let Some(shifted) = encode_exact_row_shift_candidate(
+        lines,
+        line_style_spans,
+        previous,
+        modes,
+        keypad_transition,
+        transitions,
+        verified_size,
+    ) && shifted.len() < frame.len()
+    {
+        return shifted;
+    }
     frame
+}
+
+/// Reuses only strictly equal complete rows inside an explicit bounded region.
+/// Unchanged outer rows and terminal rows below the presentation are untouched.
+fn encode_exact_row_shift_candidate(
+    lines: &[String],
+    spans: &[Vec<TerminalStyleSpan>],
+    previous: &AttachedTerminalOutputFrameState,
+    modes: AttachedTerminalOutputModes,
+    keypad_transition: Option<bool>,
+    transitions: AttachedTerminalModeTransitions,
+    verified_size: Option<Size>,
+) -> Option<Vec<u8>> {
+    let size = verified_size?;
+    let count = lines.len();
+    if count < 3 || count > usize::from(size.rows) {
+        return None;
+    }
+    let columns = usize::from(size.columns);
+    if previous
+        .lines
+        .iter()
+        .chain(lines)
+        .any(|line| terminal_line_width(line) != columns)
+    {
+        return None;
+    }
+    let equal = |old: usize, new: usize| {
+        previous.lines[old] == lines[new]
+            && previous.line_style_spans[old] == spans.get(new).map(Vec::as_slice).unwrap_or(&[])
+    };
+    let start = (0..count).take_while(|&row| equal(row, row)).count();
+    let end = (0..count)
+        .rev()
+        .take_while(|&row| row >= start && equal(row, row))
+        .count();
+    let end = count - end;
+    if end.saturating_sub(start) < 3 {
+        return None;
+    }
+    // Only exact complete rows qualify: no speculative partial-width or
+    // grapheme-coordinate edits. A small bounded sweep caps planning work.
+    let (up, shift) = (1..(end - start).min(9)).find_map(|shift| {
+        (start..end - shift)
+            .all(|row| equal(row + shift, row))
+            .then_some((true, shift))
+            .or_else(|| {
+                (start + shift..end)
+                    .all(|row| equal(row - shift, row))
+                    .then_some((false, shift))
+            })
+    })?;
+    let mut frame = Vec::new();
+    transitions.encode_into(&mut frame);
+    match keypad_transition {
+        Some(true) => frame.extend_from_slice(b"\x1b="),
+        Some(false) => frame.extend_from_slice(b"\x1b>"),
+        None => {}
+    }
+    if previous.bracketed_paste != modes.bracketed_paste {
+        frame.extend_from_slice(attached_terminal_bracketed_paste_frame(
+            modes.bracketed_paste,
+        ));
+    }
+    frame.extend_from_slice(attached_terminal_enter_presentation_frame());
+    frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
+        modes.host_mouse_reporting,
+    ));
+    if previous.focus_events || modes.focus_events {
+        frame.extend_from_slice(attached_terminal_focus_events_frame(modes.focus_events));
+    }
+    frame.extend_from_slice(
+        format!(
+            "\x1b[{};{end}r\x1b[{};1H\x1b[{shift}{}\x1b[r",
+            start + 1,
+            start + 1,
+            if up { 'M' } else { 'L' }
+        )
+        .as_bytes(),
+    );
+    let replacement = if up {
+        end - shift..end
+    } else {
+        start..start + shift
+    };
+    for row in replacement {
+        frame.extend_from_slice(format!("\x1b[{};1H\x1b[0m\x1b[2K", row + 1).as_bytes());
+        frame.extend_from_slice(
+            encode_styled_terminal_line(
+                &lines[row],
+                spans.get(row).map(Vec::as_slice).unwrap_or(&[]),
+            )
+            .as_bytes(),
+        );
+    }
+    frame.extend_from_slice(cursor_presentation_sequence(lines, modes).as_bytes());
+    Some(frame)
 }
 
 /// Runs the normalized style span rows operation for this subsystem.
@@ -610,51 +740,67 @@ fn encode_safe_changed_row_span_update(
     if previous_cells.len() != current_cells.len() {
         return None;
     }
-    let start = previous_cells
+    let changed = previous_cells
         .iter()
-        .zip(current_cells.iter())
-        .position(|(previous, current)| !terminal_row_cells_match(previous, current))?;
-    let mut previous_end = previous_cells.len();
-    let mut current_end = current_cells.len();
-    while previous_end > start
-        && current_end > start
-        && terminal_row_cells_match(
-            &previous_cells[previous_end.saturating_sub(1)],
-            &current_cells[current_end.saturating_sub(1)],
-        )
-    {
-        previous_end = previous_end.saturating_sub(1);
-        current_end = current_end.saturating_sub(1);
-    }
-
+        .zip(&current_cells)
+        .enumerate()
+        .filter_map(|(index, (previous, current))| {
+            (!terminal_row_cells_match(previous, current)).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let start = *changed.first()?;
+    let end = changed.last()?.saturating_add(1);
     let start_column = current_cells[start].column_start;
-    let current_end_cell = &current_cells[current_end.saturating_sub(1)];
-    let end_column = current_end_cell.column_end;
-    let (start_column, end_column) =
-        expand_changed_column_range(previous_spans, spans, start_column, end_column);
+    let end_column = current_cells[end - 1].column_end;
     if changed_span_touches_wide_grapheme(&previous_cells, start_column, end_column)
         || changed_span_touches_wide_grapheme(&current_cells, start_column, end_column)
     {
         return None;
     }
-    let start_cell = current_cells
-        .iter()
-        .position(|cell| cell.column_end > start_column)?;
-    // When start_column falls inside a wide glyph continuation cell,
-    // the position above skips the leading cell. Align start_column
-    // back to the leading cell's start so that clipped style spans
-    // match the segment text byte offsets.
-    let start_column = start_column.min(current_cells[start_cell].column_start);
-    let end_cell = current_cells
-        .iter()
-        .rposition(|cell| cell.column_start < end_column)?;
-    let segment = &line[current_cells[start_cell].byte_start..current_cells[end_cell].byte_end];
-
-    let segment_spans = clip_style_spans_to_column_range(spans, start_column, end_column);
-    let encoded_segment = encode_styled_terminal_line(segment, &segment_spans);
-    let mut span_update =
-        format!("\x1b[{row};{}H\x1b[0m", start_column.saturating_add(1)).into_bytes();
-    span_update.extend_from_slice(encoded_segment.as_bytes());
+    let encode_run = |start: usize, end: usize| {
+        let first = &current_cells[start];
+        let last = &current_cells[end - 1];
+        let segment = &line[first.byte_start..last.byte_end];
+        let segment_spans =
+            clip_style_spans_to_column_range(spans, first.column_start, last.column_end);
+        let mut encoded = format!("\x1b[{row};{}H\x1b[0m", first.column_start + 1).into_bytes();
+        encoded.extend_from_slice(encode_styled_terminal_line(segment, &segment_spans).as_bytes());
+        encoded
+    };
+    let bounding = encode_run(start, end);
+    // Cap the number of independent candidates; dense changes use the single
+    // bounding interval. Merge neighboring runs when one cursor move costs
+    // more than repainting their unchanged gap.
+    let mut runs = Vec::<Range<usize>>::new();
+    for index in changed {
+        match runs.last_mut() {
+            Some(last) if last.end == index => last.end += 1,
+            _ => runs.push(index..index + 1),
+        }
+    }
+    let mut span_update = bounding;
+    if runs.len() <= 16 {
+        let mut merged = Vec::<Range<usize>>::new();
+        for run in runs {
+            if let Some(last) = merged.last_mut() {
+                let joined = encode_run(last.start, run.end);
+                if joined.len()
+                    <= encode_run(last.start, last.end).len() + encode_run(run.start, run.end).len()
+                {
+                    last.end = run.end;
+                    continue;
+                }
+            }
+            merged.push(run);
+        }
+        let candidate = merged
+            .into_iter()
+            .flat_map(|run| encode_run(run.start, run.end))
+            .collect::<Vec<_>>();
+        if candidate.len() < span_update.len() {
+            span_update = candidate;
+        }
+    }
 
     let mut row_update = format!("\x1b[{row};1H\x1b[0m").into_bytes();
     row_update.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
@@ -677,37 +823,6 @@ fn changed_span_touches_wide_grapheme(
             && cell.column_start <= end_column
             && cell.column_end >= start_column
     })
-}
-
-/// Expands one changed column range to include any overlapping style spans.
-fn expand_changed_column_range(
-    previous_spans: &[TerminalStyleSpan],
-    spans: &[TerminalStyleSpan],
-    start: usize,
-    end: usize,
-) -> (usize, usize) {
-    let mut expanded_start = start;
-    let mut expanded_end = end;
-    loop {
-        let mut changed = false;
-        for span in previous_spans.iter().chain(spans.iter()) {
-            let span_start = span.start;
-            let span_end = span.start.saturating_add(span.length);
-            if span_start < expanded_end && span_end > expanded_start {
-                let next_start = expanded_start.min(span_start);
-                let next_end = expanded_end.max(span_end);
-                if next_start != expanded_start || next_end != expanded_end {
-                    expanded_start = next_start;
-                    expanded_end = next_end;
-                    changed = true;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    (expanded_start, expanded_end)
 }
 
 /// Carries one rendered grapheme cell plus the rendition active across it.
@@ -764,6 +879,22 @@ fn terminal_row_cells_match(previous: &TerminalRowCell<'_>, current: &TerminalRo
         && previous.column_start == current.column_start
         && previous.column_end == current.column_end
         && previous.rendition == current.rendition
+}
+
+/// Compares effective rendered cells rather than style-span representation.
+fn terminal_row_cells_match_all(
+    previous_line: &str,
+    previous_spans: &[TerminalStyleSpan],
+    line: &str,
+    spans: &[TerminalStyleSpan],
+) -> bool {
+    let previous = terminal_row_cells(previous_line, previous_spans);
+    let current = terminal_row_cells(line, spans);
+    previous.len() == current.len()
+        && previous
+            .iter()
+            .zip(&current)
+            .all(|(old, new)| terminal_row_cells_match(old, new))
 }
 
 /// Clips row style spans to a changed column range.
@@ -918,13 +1049,54 @@ fn encode_styled_terminal_line(line: &str, style_spans: &[TerminalStyleSpan]) ->
         }
         let rendition = styles.rendition_at(column);
         if rendition != active {
-            encoded.push_str(&sgr_sequence(rendition));
+            encoded.push_str(&sgr_transition(active, rendition));
             active = rendition;
         }
         encoded.push_str(sanitized.as_str());
         column = column.saturating_add(terminal_grapheme_width(grapheme));
     }
     encoded
+}
+
+/// Uses a shorter local color transition only when all non-color attributes
+/// are unchanged. Other transitions retain the conservative full reset; each
+/// line starts from a known reset at the owning frame or row-write boundary.
+fn sgr_transition(previous: GraphicRendition, next: GraphicRendition) -> String {
+    let full = sgr_sequence(next);
+    if previous == GraphicRendition::default()
+        || next == GraphicRendition::default()
+        || previous.bold != next.bold
+        || previous.dim != next.dim
+        || previous.italic != next.italic
+        || previous.underline != next.underline
+        || previous.double_underline != next.double_underline
+        || previous.strikethrough != next.strikethrough
+        || previous.inverse != next.inverse
+        || previous.hidden != next.hidden
+    {
+        return full;
+    }
+    let mut codes = Vec::new();
+    if previous.foreground != next.foreground {
+        if let Some(color) = next.foreground {
+            push_sgr_color_codes(&mut codes, color, false);
+        } else {
+            codes.push("39".to_string());
+        }
+    }
+    if previous.background != next.background {
+        if let Some(color) = next.background {
+            push_sgr_color_codes(&mut codes, color, true);
+        } else {
+            codes.push("49".to_string());
+        }
+    }
+    let partial = format!("\x1b[{}m", codes.join(";"));
+    if partial.len() < full.len() {
+        partial
+    } else {
+        full
+    }
 }
 
 /// Returns terminal-display text for one rendered grapheme cluster.

@@ -162,26 +162,12 @@ fn build_openai_chat_completions_http_request(
     let stream = options.streaming_enabled();
     let body = openai_chat_completions_request_body_with_stream(request, options, stream)?;
     let mut headers = BTreeMap::new();
-    headers.insert(
-        "Accept".to_string(),
-        if stream {
-            "text/event-stream".to_string()
-        } else {
-            "application/json".to_string()
-        },
-    );
-    headers.insert("Content-Type".to_string(), "application/json".to_string());
     if let Some(api_key) = api_key {
         headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
     }
-    Ok(ProviderHttpRequest {
-        method: "POST".to_string(),
-        url: endpoint.to_string(),
-        headers,
-        body,
-        timeouts: mez_agent::ProviderHttpTimeouts::from_total(timeout_ms),
-        max_response_bytes: None,
-    })
+    Ok(super::provider_json_post_request(
+        endpoint, body, stream, timeout_ms, headers,
+    ))
 }
 
 /// Builds a generic OpenAI-compatible model-list HTTP request.

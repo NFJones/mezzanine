@@ -16,8 +16,9 @@ use super::super::shared_sqlite::{
 };
 use super::repository::LeaseDatabase;
 use super::{MezError, RemoteSessionLease, RemoteSessionLeaseState, Result};
+use crate::storage::row_diff;
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Database file owned by the remote-session lease repository.
@@ -283,17 +284,8 @@ fn read_database(connection: &Connection) -> Result<LeaseDatabase> {
     Ok(database)
 }
 
-/// One stored lease row's required write to turn one in-memory state into
-/// another.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum LeaseRowWrite<'a> {
-    /// The row is new and must be inserted.
-    Insert(&'a RemoteSessionLease),
-    /// The row exists and its validated record changed.
-    Update(&'a RemoteSessionLease),
-    /// The row is gone and must be removed.
-    Delete(&'a str),
-}
+/// One stored lease row's required write.
+pub(super) type LeaseRowWrite<'a> = row_diff::RowWrite<'a, RemoteSessionLease>;
 
 /// Returns the row-level writes that turn `before` into `after`.
 ///
@@ -306,32 +298,7 @@ pub(super) fn pending_writes<'a>(
     before: &'a LeaseDatabase,
     after: &'a LeaseDatabase,
 ) -> Vec<LeaseRowWrite<'a>> {
-    let before_by_id: HashMap<&str, &RemoteSessionLease> = before
-        .leases
-        .iter()
-        .map(|lease| (lease.lease_id.as_str(), lease))
-        .collect();
-    let after_ids: HashSet<&str> = after
-        .leases
-        .iter()
-        .map(|lease| lease.lease_id.as_str())
-        .collect();
-    let mut writes = Vec::new();
-    // Removals come first so a mutation that changed a lease id can never
-    // collide its insert with the row this plan deletes.
-    for lease in &before.leases {
-        if !after_ids.contains(lease.lease_id.as_str()) {
-            writes.push(LeaseRowWrite::Delete(lease.lease_id.as_str()));
-        }
-    }
-    for lease in &after.leases {
-        match before_by_id.get(lease.lease_id.as_str()) {
-            Some(existing) if *existing == lease => {}
-            Some(_) => writes.push(LeaseRowWrite::Update(lease)),
-            None => writes.push(LeaseRowWrite::Insert(lease)),
-        }
-    }
-    writes
+    row_diff::pending_writes(&before.leases, &after.leases, |lease| &lease.lease_id)
 }
 
 /// Persists one lease row, inserting a new lease or updating a changed one.

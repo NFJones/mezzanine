@@ -447,6 +447,8 @@ pub enum AgentCompactionEvent {
     Completed {
         /// Pane whose conversation was compacted.
         pane_id: String,
+        /// Exact queued task generation that produced the response.
+        task_generation: u64,
         /// Provider response produced by the compaction worker.
         response: Box<ModelResponse>,
     },
@@ -454,6 +456,8 @@ pub enum AgentCompactionEvent {
     Failed {
         /// Pane whose conversation compaction failed.
         pane_id: String,
+        /// Exact queued task generation that produced the failure.
+        task_generation: u64,
         /// Stable failure kind for diagnostics.
         kind: String,
         /// Human-readable failure.
@@ -964,6 +968,8 @@ pub enum RuntimeSideEffect {
     DispatchAgentCompaction {
         /// Pane whose active conversation should be compacted.
         pane_id: String,
+        /// Exact queued task generation that may be claimed.
+        task_generation: u64,
     },
     /// Start model-backed durable memory generation outside the actor.
     DispatchAgentRemember {

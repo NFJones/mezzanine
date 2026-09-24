@@ -450,24 +450,35 @@ impl RuntimeSessionService {
         &mut self,
         role: ClientViewRole,
         config: &TerminalClientLoopConfig,
-        mut view: Option<RenderedClientView>,
+        view: Option<RenderedClientView>,
     ) -> Result<(Option<RenderedClientView>, Vec<u64>)> {
         let Some(window) = self.session.active_window() else {
             return Ok((view, Vec::new()));
         };
+        let presentation_plan = self
+            .window_presentation_plan(window)
+            .ok_or_else(|| MezError::invalid_state("cannot plan a window with no visible panes"))?;
+        self.finalize_client_view_overlays(role, config, window, presentation_plan.as_ref(), view)
+    }
+
+    /// Applies actor-owned overlays in presentation order to a normal window
+    /// view. Editor takeover and provisional resize bypass this finalizer.
+    fn finalize_client_view_overlays(
+        &self,
+        role: ClientViewRole,
+        config: &TerminalClientLoopConfig,
+        window: &mez_mux::layout::Window,
+        presentation_plan: &WindowPresentationPlan,
+        mut view: Option<RenderedClientView>,
+    ) -> Result<(Option<RenderedClientView>, Vec<u64>)> {
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
         {
             self.overlay_copy_modes_on_view(window, view)?;
         }
-        let presentation_plan = self
-            .window_presentation_plan(window)
-            .ok_or_else(|| MezError::invalid_state("cannot plan a window with no visible panes"))?;
         let presentation_ids = view
             .as_mut()
-            .map(|view| {
-                self.overlay_zen_focus_labels(window, presentation_plan.as_ref(), config, view)
-            })
+            .map(|view| self.overlay_zen_focus_labels(window, presentation_plan, config, view))
             .unwrap_or_default();
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
@@ -565,7 +576,7 @@ impl RuntimeSessionService {
         let presentation_plan = self
             .window_presentation_plan(window)
             .ok_or_else(|| MezError::invalid_state("cannot plan a window with no visible panes"))?;
-        let mut view = render_attached_client_view_with_screen_and_row_resolvers(
+        let view = render_attached_client_view_with_screen_and_row_resolvers(
             role,
             window,
             |pane_id| self.presented_pane_screen(pane_id),
@@ -612,48 +623,7 @@ impl RuntimeSessionService {
             config,
             client_size,
         )?;
-        if role == ClientViewRole::Primary
-            && let Some(view) = view.as_mut()
-        {
-            self.overlay_copy_modes_on_view(window, view)?;
-        }
-        let presentation_ids = view
-            .as_mut()
-            .map(|view| {
-                self.overlay_zen_focus_labels(window, presentation_plan.as_ref(), config, view)
-            })
-            .unwrap_or_default();
-        if role == ClientViewRole::Primary
-            && let Some(view) = view.as_mut()
-            && let Some(selector) = self.presentation.pane_agent_status_selector.as_ref()
-        {
-            self.overlay_pane_agent_status_selector(view, selector);
-        }
-        if role == ClientViewRole::Primary
-            && let Some(view) = view.as_mut()
-            && let Some(prompt_input) = self.presentation.primary_prompt_input.as_ref()
-        {
-            self.overlay_primary_prompt_input(view, prompt_input);
-        }
-        if role == ClientViewRole::Primary
-            && let Some(view) = view.as_mut()
-            && let Some(overlay) = self.presentation.primary_display_overlay.as_ref()
-        {
-            self.overlay_primary_display_overlay(view, overlay);
-            if let Some(live_source) = overlay.live_source.as_ref() {
-                view.animation_refresh_interval_ms = match view.animation_refresh_interval_ms {
-                    0 => live_source.refresh_interval_ms,
-                    interval_ms => interval_ms.min(live_source.refresh_interval_ms),
-                };
-            }
-        }
-        if role == ClientViewRole::Primary
-            && let Some(view) = view.as_mut()
-            && let Some(message) = self.presentation.primary_error_status_overlay.as_ref()
-        {
-            self.overlay_primary_error_status(view, message);
-        }
-        Ok((view, presentation_ids))
+        self.finalize_client_view_overlays(role, config, window, presentation_plan.as_ref(), view)
     }
 
     /// Projects an active external editor as the complete attached terminal.

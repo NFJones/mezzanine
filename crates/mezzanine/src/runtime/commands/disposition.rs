@@ -8,8 +8,8 @@
 //! that keeps the classification exhaustive over the registry in
 //! [`mez_agent::slash::baseline_slash_commands`].
 //!
-//! Until the deferred executor lands, every command still executes inline; the
-//! classification is the contract that executor consumes.
+//! Static lane, off-actor membership and awaited host effects are independent
+//! axes. Live store, origin and argument eligibility remain with their callers.
 
 /// Execution lane for one runtime slash command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,94 +22,147 @@ pub(crate) enum RuntimeAgentSlashCommandDisposition {
     Deferred,
 }
 
-/// Commands that keep running inline on the actor.
-///
-/// Every entry mutates state the actor owns (the agent shell session, the active
-/// model, or policy) and does no store or filesystem read that could block. Every
-/// picker open (`/resume`, `/show-issues`, `/show-memories`, `/show-context`) runs
-/// in the deferred command lane, and every refresh after any open runs in the
-/// overlay refresh lane.
-pub(crate) const RUNTIME_AGENT_INLINE_SLASH_COMMANDS: &[&str] = &[
-    "help",
-    "permissions",
-    "approval",
-    "approve",
-    "sandbox",
-    "shell-mode",
-    "objective",
-    "compact",
-    "copy",
-    "directive",
-    "exit",
-    "status",
-    "plan",
-    "model",
-    "thinking",
-    "latency",
-    "routing",
-    "personality",
-    "stop",
-    "name-session",
-    "reset-status",
-    "log-level",
-    "loop",
-    "clear",
-    "new",
-    "remember",
+/// Host effect that the asynchronous agent-shell executor must await.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AgentShellAwaitedCommand {
+    /// Pane model or routing-model selection.
+    Model,
+    /// Model-backed conversation compaction queueing.
+    Compact,
+    /// Model-backed durable-memory extraction.
+    Remember,
+    /// MCP listing after live transport discovery.
+    ListMcp,
+    /// Provider catalog refresh through the async runtime.
+    RefreshProviderInfo,
+}
+
+/// Static runtime-only execution properties, independent of live eligibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CommandExecutionMetadata {
+    /// Canonical registry command or runtime-only display spelling.
+    pub name: &'static str,
+    /// Actor classification; this alone never authorizes worker admission.
+    pub disposition: RuntimeAgentSlashCommandDisposition,
+    /// Whether the command has an off-actor prepared-input executor.
+    pub off_actor: bool,
+    /// Optional awaited effect, separate from the off-actor lane.
+    pub awaited: Option<AgentShellAwaitedCommand>,
+    /// Whether this spelling is a runtime-only display command or alias.
+    pub runtime_display: bool,
+}
+
+impl CommandExecutionMetadata {
+    const fn inline(name: &'static str, awaited: Option<AgentShellAwaitedCommand>) -> Self {
+        Self {
+            name,
+            disposition: RuntimeAgentSlashCommandDisposition::Inline,
+            off_actor: false,
+            awaited,
+            runtime_display: false,
+        }
+    }
+
+    const fn deferred(
+        name: &'static str,
+        off_actor: bool,
+        awaited: Option<AgentShellAwaitedCommand>,
+    ) -> Self {
+        Self {
+            name,
+            disposition: RuntimeAgentSlashCommandDisposition::Deferred,
+            off_actor,
+            awaited,
+            runtime_display: false,
+        }
+    }
+
+    const fn display(name: &'static str) -> Self {
+        Self {
+            name,
+            disposition: RuntimeAgentSlashCommandDisposition::Inline,
+            off_actor: false,
+            awaited: None,
+            runtime_display: true,
+        }
+    }
+}
+
+use AgentShellAwaitedCommand as Awaited;
+use CommandExecutionMetadata as Entry;
+
+/// Product-owned metadata for every canonical slash command plus live display
+/// spellings. Runtime-only display aliases are explicit because their dispatcher
+/// matches the spelling directly; registry aliases resolve to canonical names.
+pub(super) const COMMAND_EXECUTION_METADATA: &[CommandExecutionMetadata] = &[
+    Entry::inline("help", None),
+    Entry::inline("permissions", None),
+    Entry::inline("approval", None),
+    Entry::inline("approve", None),
+    Entry::inline("sandbox", None),
+    Entry::inline("shell-mode", None),
+    Entry::inline("objective", None),
+    Entry::inline("compact", Some(Awaited::Compact)),
+    Entry::inline("copy", None),
+    Entry::inline("directive", None),
+    Entry::inline("exit", None),
+    Entry::inline("status", None),
+    Entry::inline("plan", None),
+    Entry::inline("model", Some(Awaited::Model)),
+    Entry::inline("thinking", None),
+    Entry::inline("latency", None),
+    Entry::inline("routing", None),
+    Entry::inline("personality", None),
+    Entry::inline("stop", None),
+    Entry::inline("name-session", None),
+    Entry::inline("reset-status", None),
+    Entry::inline("log-level", None),
+    Entry::inline("loop", None),
+    Entry::inline("clear", None),
+    Entry::inline("new", None),
+    Entry::inline("remember", Some(Awaited::Remember)),
+    Entry::deferred("show-approvals", true, None),
+    Entry::deferred("list-macros", true, None),
+    Entry::deferred("list-skills", true, None),
+    Entry::deferred("sync-builtin-skills", true, None),
+    Entry::deferred("list-modified-files", true, None),
+    Entry::deferred("copy-context", false, None),
+    Entry::deferred("copy-trace-log", false, None),
+    Entry::deferred("copy-patches", false, None),
+    Entry::deferred("init", false, None),
+    Entry::deferred("auth-status", true, None),
+    Entry::deferred(
+        "refresh-provider-info",
+        false,
+        Some(Awaited::RefreshProviderInfo),
+    ),
+    Entry::deferred("list-mcp", false, Some(Awaited::ListMcp)),
+    Entry::deferred("issue", true, None),
+    Entry::deferred("context-doc", true, None),
+    Entry::deferred("editor-recovery", false, None),
+    Entry::deferred("show-issues", true, None),
+    Entry::deferred("memory", false, None),
+    Entry::deferred("show-memories", true, None),
+    Entry::deferred("show-context", true, None),
+    Entry::deferred("list-personalities", true, None),
+    Entry::deferred("fork", false, None),
+    Entry::deferred("resume", true, None),
+    Entry::deferred("debug-config", false, None),
+    Entry::display("list-clients"),
+    Entry::display("listc"),
+    Entry::display("list-panes"),
+    Entry::display("listp"),
+    Entry::display("show-messages"),
+    Entry::display("show-metrics"),
+    Entry::display("show-pane-status"),
 ];
 
-/// Commands that move to the deferred executor.
-///
-/// Every entry reads a store (transcripts, issues, memory, records), the skill
-/// catalog, or project files, or performs provider/network work; unknown
-/// commands default here as well.
-pub(crate) const RUNTIME_AGENT_DEFERRED_SLASH_COMMANDS: &[&str] = &[
-    "show-approvals",
-    "list-macros",
-    "list-skills",
-    "sync-builtin-skills",
-    "list-modified-files",
-    "copy-context",
-    "copy-trace-log",
-    "copy-patches",
-    "init",
-    "auth-status",
-    "refresh-provider-info",
-    "list-mcp",
-    "issue",
-    "context-doc",
-    "editor-recovery",
-    "show-issues",
-    "memory",
-    "show-memories",
-    "show-context",
-    "list-personalities",
-    "fork",
-    "resume",
-    "debug-config",
-];
-
-/// Runtime commands that must stay inline although they are not part of the
-/// dependency-neutral mez-agent slash registry.
-///
-/// These commands render live in-memory state: session, pane, client, message,
-/// and agent bookkeeping plus, for `show-metrics`, the actor's cached metrics
-/// snapshot that is published on demand for the request families that run
-/// display commands. The deferred executor would classify an unknown command as
-/// deferred, move a pure display off actor for no I/O benefit, and - for
-/// `show-metrics` - read a snapshot that was never published for that path, so
-/// they are pinned inline here instead of falling through the unknown-command
-/// default. Aliases of runtime-only display commands are pinned with them
-/// because the dispatcher matches the alias spelling directly.
-pub(crate) const RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS: &[&str] = &[
-    "list-clients",
-    "listc",
-    "list-panes",
-    "listp",
-    "show-messages",
-    "show-metrics",
-    "show-pane-status",
-];
+/// Looks up a known canonical command or runtime-only display spelling.
+pub(super) fn command_execution_metadata(name: &str) -> Option<&'static CommandExecutionMetadata> {
+    COMMAND_EXECUTION_METADATA
+        .iter()
+        .find(|entry| entry.name == name)
+}
 
 /// Returns the execution lane for one canonical slash command name.
 ///
@@ -118,13 +171,10 @@ pub(crate) const RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS: &[&str] = &[
 pub(crate) fn runtime_agent_slash_command_disposition(
     name: &str,
 ) -> RuntimeAgentSlashCommandDisposition {
-    if RUNTIME_AGENT_INLINE_SLASH_COMMANDS.contains(&name) {
-        return RuntimeAgentSlashCommandDisposition::Inline;
-    }
-    if RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS.contains(&name) {
-        return RuntimeAgentSlashCommandDisposition::Inline;
-    }
-    RuntimeAgentSlashCommandDisposition::Deferred
+    command_execution_metadata(name)
+        .map_or(RuntimeAgentSlashCommandDisposition::Deferred, |entry| {
+            entry.disposition
+        })
 }
 
 #[cfg(test)]
@@ -140,12 +190,13 @@ mod tests {
     fn runtime_slash_command_disposition_covers_the_registry() {
         let registry = mez_agent::slash::baseline_slash_commands();
         let mut classified = BTreeSet::new();
-        for name in RUNTIME_AGENT_INLINE_SLASH_COMMANDS
+        for entry in COMMAND_EXECUTION_METADATA
             .iter()
-            .chain(RUNTIME_AGENT_DEFERRED_SLASH_COMMANDS)
+            .filter(|entry| !entry.runtime_display)
         {
+            let name = entry.name;
             assert!(
-                classified.insert(*name),
+                classified.insert(name),
                 "`{name}` is classified more than once"
             );
         }
@@ -155,7 +206,7 @@ mod tests {
             .collect::<BTreeSet<_>>();
         for name in &classified {
             assert!(
-                !aliases.contains(*name),
+                !aliases.contains(name),
                 "aliases resolve through their canonical command instead of being classified: {name}"
             );
         }
@@ -165,26 +216,27 @@ mod tests {
                 "registry command `{}` has no execution lane",
                 spec.name
             );
-            let expected = if RUNTIME_AGENT_INLINE_SLASH_COMMANDS.contains(&spec.name) {
-                RuntimeAgentSlashCommandDisposition::Inline
-            } else {
-                RuntimeAgentSlashCommandDisposition::Deferred
-            };
+            let entry = command_execution_metadata(spec.name).unwrap();
+            assert!(!entry.runtime_display);
             assert_eq!(
                 runtime_agent_slash_command_disposition(spec.name),
-                expected,
-                "`{}` resolves to the lane its list declares",
+                entry.disposition,
+                "`{}` resolves to the lane its metadata declares",
                 spec.name
             );
         }
         assert!(
             classified.len() == registry.len(),
-            "classification lists must not keep names the registry dropped: {classified:?}"
+            "metadata must not keep names the registry dropped: {classified:?}"
         );
-        for name in RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS {
+        for name in COMMAND_EXECUTION_METADATA
+            .iter()
+            .filter(|entry| entry.runtime_display)
+            .map(|entry| entry.name)
+        {
             assert!(
-                !classified.contains(*name),
-                "display commands live outside the registry and stay in their own list: {name}"
+                !classified.contains(name),
+                "display commands live outside the registry: {name}"
             );
         }
     }
@@ -194,7 +246,19 @@ mod tests {
     /// because its display never touches a store.
     #[test]
     fn runtime_slash_command_disposition_keeps_display_commands_inline() {
-        for name in RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS {
+        for name in [
+            "list-clients",
+            "listc",
+            "list-panes",
+            "listp",
+            "show-messages",
+            "show-metrics",
+            "show-pane-status",
+        ] {
+            let entry = command_execution_metadata(name).unwrap();
+            assert!(entry.runtime_display);
+            assert!(!entry.off_actor);
+            assert_eq!(entry.awaited, None);
             assert_eq!(
                 runtime_agent_slash_command_disposition(name),
                 RuntimeAgentSlashCommandDisposition::Inline,
@@ -214,6 +278,61 @@ mod tests {
         assert_eq!(
             runtime_agent_slash_command_disposition("not-a-runtime-command"),
             RuntimeAgentSlashCommandDisposition::Deferred
+        );
+        assert!(command_execution_metadata("not-a-runtime-command").is_none());
+    }
+
+    /// Pins independent off-actor and awaited axes so an actor classification
+    /// cannot accidentally admit an unprepared worker or lose an async effect.
+    #[test]
+    fn runtime_command_metadata_preserves_execution_axes() {
+        let off_actor = COMMAND_EXECUTION_METADATA
+            .iter()
+            .filter(|entry| entry.off_actor)
+            .map(|entry| entry.name)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            off_actor,
+            BTreeSet::from([
+                "list-skills",
+                "list-macros",
+                "auth-status",
+                "issue",
+                "show-issues",
+                "show-memories",
+                "show-context",
+                "context-doc",
+                "sync-builtin-skills",
+                "resume",
+                "list-modified-files",
+                "show-approvals",
+                "list-personalities",
+            ])
+        );
+        let awaited = COMMAND_EXECUTION_METADATA
+            .iter()
+            .filter_map(|entry| entry.awaited.map(|effect| (entry.name, effect)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            awaited,
+            [
+                ("compact", Awaited::Compact),
+                ("model", Awaited::Model),
+                ("remember", Awaited::Remember),
+                ("refresh-provider-info", Awaited::RefreshProviderInfo),
+                ("list-mcp", Awaited::ListMcp),
+            ]
+        );
+        assert_eq!(
+            command_execution_metadata("copy-context")
+                .unwrap()
+                .disposition,
+            RuntimeAgentSlashCommandDisposition::Deferred
+        );
+        assert!(
+            !command_execution_metadata("copy-context")
+                .unwrap()
+                .off_actor
         );
     }
 }

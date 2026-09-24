@@ -1038,9 +1038,14 @@ impl AsyncRuntimeSessionHandle {
     pub async fn claim_agent_compaction_task(
         &self,
         pane_id: String,
+        task_generation: u64,
     ) -> Result<Option<crate::runtime::RuntimeAgentCompactionDispatch>> {
-        self.request(|reply| AsyncRuntimeRequest::ClaimAgentCompactionTask { pane_id, reply })
-            .await?
+        self.request(|reply| AsyncRuntimeRequest::ClaimAgentCompactionTask {
+            pane_id,
+            task_generation,
+            reply,
+        })
+        .await?
     }
 
     /// Claims one queued deferred slash command for off-actor execution.

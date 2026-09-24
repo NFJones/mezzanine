@@ -855,6 +855,14 @@ fn lease_pending_writes_cover_only_changed_rows() {
         ],
         "only changed, added, and removed rows are written"
     );
+    assert!(super::sqlite::pending_writes(&before, &before).is_empty());
+    let mut renamed = before.clone();
+    renamed.leases[0].lease_id = "lease-z".to_string();
+    let writes = super::sqlite::pending_writes(&before, &renamed);
+    assert!(matches!(writes.as_slice(), [
+        super::sqlite::LeaseRowWrite::Delete("lease-a"),
+        super::sqlite::LeaseRowWrite::Insert(lease)
+    ] if lease.lease_id == "lease-z"));
     let _ = fs::remove_dir_all(root);
 }
 

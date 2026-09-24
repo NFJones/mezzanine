@@ -565,6 +565,8 @@ pub enum RuntimeAgentLoopSettlement {
 /// metadata needed to finish compaction once a model response returns.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentCompactionTask {
+    /// Unique queued/claimed task generation used to reject stale worker outcomes.
+    pub task_generation: u64,
     /// Pane whose visible status should remain `compacting`.
     pub pane_id: String,
     /// Conversation being summarized.
@@ -573,6 +575,8 @@ pub struct RuntimeAgentCompactionTask {
     pub source: String,
     /// Transcript entry count before compaction.
     pub transcript_entries: u64,
+    /// Last durable sequence actually supplied for prefix summarization.
+    pub compacted_through_sequence: Option<u64>,
     /// Raw recent transcript entries to retain after summary insertion.
     pub retained_transcript_entries: u64,
     /// Durable entries supplied to the model compactor.
@@ -587,6 +591,29 @@ pub struct RuntimeAgentCompactionTask {
     pub resume_turn_id: Option<String>,
     /// Exact compaction target retained across the provider worker boundary.
     pub target: RuntimeAgentCompactionTarget,
+    /// Temporary manual-compactor chunks, never a committed replay boundary.
+    pub conversation_chunks: Option<RuntimeConversationCompactionChunks>,
+    /// Resolved wire shape captured at claim for context-limit retry sizing.
+    pub compaction_request_shape: Option<(
+        mez_agent::ProviderApiCompatibility,
+        std::collections::BTreeMap<String, String>,
+        bool,
+    )>,
+}
+
+/// Bounded work remaining before one manual conversation summary can commit.
+#[derive(Debug, Clone)]
+pub struct RuntimeConversationCompactionChunks {
+    /// Current redacted source fragment sent to the compactor.
+    pub current: String,
+    /// Remaining source fragments, in reverse processing order.
+    pub pending: Vec<String>,
+    /// Model-authored summaries awaiting final synthesis.
+    pub summaries: Vec<String>,
+    /// Number of provider context-limit retries in this recursive operation.
+    pub failures: u32,
+    /// Total model responses consumed by this operation.
+    pub completed: usize,
 }
 
 /// Identifies why one active-turn context compaction was requested.
@@ -644,6 +671,10 @@ pub struct RuntimeAgentCompactionDispatch {
     pub task: RuntimeAgentCompactionTask,
     /// Provider used to execute the compaction request.
     pub provider: RuntimeAgentProviderDispatchProvider,
+    /// Non-secret provider options used to estimate the exact retry request shape.
+    pub provider_options: std::collections::BTreeMap<String, String>,
+    /// Wire streaming choice used for the claimed request and its retry.
+    pub stream: bool,
 }
 
 /// Provider-backed durable memory generation queued outside the actor.

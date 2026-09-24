@@ -11,8 +11,7 @@ use super::requests::{
     acknowledge_committed_focus_labels_async, read_async_control_response_frames,
     read_async_control_response_frames_or_disconnected, refresh_attached_client_size_async,
     render_iroh_attach_client_frame_async, render_iroh_attach_client_frame_bounded_async,
-    request_and_render_primary_view_async, request_primary_resize_async,
-    request_primary_view_frame_async, terminal_step_control_request,
+    request_primary_resize_async, terminal_step_control_request,
     terminal_step_if_changed_control_request, write_async_control_body_or_disconnected,
 };
 use super::responses::{
@@ -21,8 +20,8 @@ use super::responses::{
 };
 use super::{
     AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
-    AttachAnimationRefresh, AttachTerminalSizeRefresh, ClientId, MezError, Result, Size,
-    UnixStream, decode_control_frame, io,
+    AttachAnimationRefresh, AttachOrdinaryRenderRate, AttachTerminalSizeRefresh, ClientId,
+    MezError, Result, Size, UnixStream, decode_control_frame, io,
 };
 
 /// Runs the run control socket attached primary client operation for this subsystem.
@@ -240,8 +239,12 @@ async fn present_iroh_wakeup_while_step_pending<I: AsyncAttachedTerminalIo>(
         *cached_frame = Some(snapshot.frame);
     }
     match wakeup.action {
-        AttachRenderAction::None | AttachRenderAction::View if received_pushed_snapshot => Ok(()),
-        AttachRenderAction::View => {
+        AttachRenderAction::None | AttachRenderAction::View | AttachRenderAction::ImmediateView
+            if received_pushed_snapshot =>
+        {
+            Ok(())
+        }
+        AttachRenderAction::View | AttachRenderAction::ImmediateView => {
             if let Some(frame) = cached_frame.as_ref() {
                 let connected = queue_iroh_frame_bounded(
                     terminal_io,
@@ -305,8 +308,10 @@ where
     let mut iteration = 0u64;
     let cursor_blink_epoch = std::time::Instant::now();
     let mut render_requested = !pushed_render_owner;
+    let mut immediate_render = !pushed_render_owner;
     let mut size_refresh = AttachTerminalSizeRefresh::default();
     let mut animation_refresh = AttachAnimationRefresh::default();
+    let mut ordinary_rate = AttachOrdinaryRenderRate::default();
     let mut health = super::AttachIrohHealthTracker::default();
     let mut cached_frame: Option<super::AttachClientFrame> = None;
     let mut pending_output = PendingIrohOutput::default();
@@ -318,6 +323,7 @@ where
         }
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
+            cached_frame = None;
             let outcome = tokio::time::timeout(
                 request_timeout,
                 request_primary_resize_async(stream, &primary_client_id, client_size, iteration),
@@ -335,10 +341,21 @@ where
             }
             iteration = iteration.saturating_add(1);
             render_requested = !pushed_render_owner;
+            immediate_render = !pushed_render_owner;
         }
         let wake_deadline = connection
             .map(|_| health.deadline().min(size_refresh.deadline()))
             .unwrap_or_else(|| size_refresh.deadline());
+        let pending_deadline = (render_requested && !immediate_render)
+            .then(|| ordinary_rate.deadline())
+            .flatten();
+        let wake_deadline =
+            pending_deadline.map_or(wake_deadline, |deadline| deadline.min(wake_deadline));
+        let animation_deadline = if pending_deadline.is_some() {
+            None
+        } else {
+            animation_refresh.deadline()
+        };
         let wake_deadline = if pushed_render_owner && terminal_io.pending_output_bytes() > 0 {
             tokio::time::Instant::now() + std::time::Duration::from_millis(1)
         } else {
@@ -358,7 +375,7 @@ where
                         terminal_io,
                         event_receiver,
                         4096,
-                        animation_refresh.deadline(),
+                        animation_deadline,
                         wake_deadline,
                         cached_frame.as_ref().and_then(|frame| frame.event_cutoff),
                     )
@@ -368,9 +385,8 @@ where
                     read_attached_client_input_or_deadline(
                         terminal_io,
                         4096,
-                        animation_refresh.deadline(),
-                        animation_refresh
-                            .deadline()
+                        animation_deadline,
+                        animation_deadline
                             .filter(|deadline| *deadline <= wake_deadline)
                             .unwrap_or(wake_deadline),
                     )
@@ -441,9 +457,15 @@ where
                 }
             }
             AttachRenderAction::View => render_requested = !pushed_render_owner,
+            AttachRenderAction::ImmediateView => {
+                render_requested = !pushed_render_owner;
+                immediate_render = !pushed_render_owner;
+            }
             AttachRenderAction::InvalidateAndView => {
                 terminal_io.invalidate_output_frame().await?;
+                cached_frame = None;
                 render_requested = !pushed_render_owner;
+                immediate_render = !pushed_render_owner;
             }
             AttachRenderAction::Disconnect => {
                 if let Some(frame) = cached_frame.as_ref() {
@@ -533,9 +555,17 @@ where
             if !render_requested {
                 continue;
             }
+            if !immediate_render && !ordinary_rate.ready() {
+                continue;
+            }
             let frame = tokio::time::timeout(
                 request_timeout,
-                request_primary_view_frame_async(stream, client_size, iteration),
+                super::requests::request_conditional_view_async(
+                    stream,
+                    client_size,
+                    iteration,
+                    cached_frame.as_ref(),
+                ),
             )
             .await
             .map_err(|_| {
@@ -548,6 +578,42 @@ where
                     "Iroh attach disconnected while reading a terminal view; reattach required",
                 )
             })?;
+            let frame = match frame {
+                super::AttachConditionalView::Modified(frame) => *frame,
+                super::AttachConditionalView::NotModified {
+                    render_rate_limit_fps,
+                    event_cutoff,
+                } => {
+                    if let Some(frame) = cached_frame.as_mut() {
+                        frame.event_cutoff = event_cutoff.or(frame.event_cutoff);
+                        let outcome = render_iroh_attach_client_frame_async(
+                            terminal_io,
+                            frame,
+                            true,
+                            health.quality(),
+                            cursor_blink_epoch,
+                        )
+                        .await?;
+                        if !outcome.connected {
+                            return Err(MezError::invalid_state(
+                                "Iroh attach terminal disconnected during local repaint",
+                            ));
+                        }
+                        animation_refresh
+                            .update_from_rendered_view(outcome.animation_refresh_interval_ms);
+                    }
+                    ordinary_rate.update_from_rendered_view(render_rate_limit_fps);
+                    render_requested = false;
+                    immediate_render = false;
+                    iteration = iteration.saturating_add(1);
+                    continue;
+                }
+                super::AttachConditionalView::Missing => {
+                    return Err(MezError::invalid_state(
+                        "Iroh attach received no terminal view; reattach required",
+                    ));
+                }
+            };
             if let Some(connection) = connection {
                 health.sample(connection);
             }
@@ -579,7 +645,9 @@ where
             }
             cached_frame = Some(frame);
             animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
+            ordinary_rate.update_from_rendered_view(outcome.render_rate_limit_fps);
             render_requested = false;
+            immediate_render = false;
             iteration = iteration.saturating_add(1);
             continue;
         }
@@ -716,31 +784,66 @@ where
         if refresh_requirement.client_detached || refresh_requirement.session_terminated {
             return Ok(());
         }
-        if refresh_requirement.full_redraw_required && !pushed_render_owner {
-            terminal_io.invalidate_output_frame().await?;
-        }
         if !pushed_render_owner
             && (inline_frame.is_some()
                 || render_requested
                 || refresh_requirement.view_refresh_required)
         {
+            let inline_rendered = inline_frame.is_some();
             let frame = match inline_frame {
                 Some(frame) => frame,
-                None => tokio::time::timeout(
-                    request_timeout,
-                    request_primary_view_frame_async(stream, client_size, iteration),
-                )
-                .await
-                .map_err(|_| {
-                    MezError::invalid_state(
+                None => {
+                    let result = tokio::time::timeout(
+                        request_timeout,
+                        super::requests::request_conditional_view_async(
+                            stream, client_size, iteration, cached_frame.as_ref(),
+                        ),
+                    )
+                    .await
+                    .map_err(|_| MezError::invalid_state(
                         "Iroh terminal view acknowledgement timed out; reattach required",
-                    )
-                })??
-                .ok_or_else(|| {
-                    MezError::invalid_state(
+                    ))??
+                    .ok_or_else(|| MezError::invalid_state(
                         "Iroh attach disconnected while reading a terminal view; reattach required",
-                    )
-                })?,
+                    ))?;
+                    match result {
+                        super::AttachConditionalView::Modified(frame) => *frame,
+                        super::AttachConditionalView::NotModified {
+                            render_rate_limit_fps,
+                            event_cutoff,
+                        } => {
+                            if let Some(frame) = cached_frame.as_mut() {
+                                frame.event_cutoff = event_cutoff.or(frame.event_cutoff);
+                                let outcome = render_iroh_attach_client_frame_async(
+                                    terminal_io,
+                                    frame,
+                                    true,
+                                    health.quality(),
+                                    cursor_blink_epoch,
+                                )
+                                .await?;
+                                if !outcome.connected {
+                                    return Err(MezError::invalid_state(
+                                        "Iroh attach terminal disconnected during local repaint",
+                                    ));
+                                }
+                                animation_refresh.update_from_rendered_view(
+                                    outcome.animation_refresh_interval_ms,
+                                );
+                            }
+                            ordinary_rate.update_from_rendered_view(render_rate_limit_fps);
+                            render_requested = false;
+                            immediate_render = false;
+                            iteration = iteration.saturating_add(1);
+                            continue;
+                        }
+                        super::AttachConditionalView::Missing => {
+                            return Err(MezError::invalid_state(
+                                "Iroh attach received no terminal view; reattach required",
+                            ));
+                        }
+                    }
+                }
             };
             if let Some(connection) = connection {
                 health.sample(connection);
@@ -772,9 +875,21 @@ where
                 ));
             }
             cached_frame = Some(frame);
+            if inline_rendered {
+                // An inline terminal/step view has no conditional identity.
+                if let Some(frame) = cached_frame.as_mut() {
+                    frame.view_identity = None;
+                }
+            }
             animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
+            if inline_rendered && outcome.render_rate_limit_fps.is_none() {
+                ordinary_rate.mark_inline_rendered();
+            } else {
+                ordinary_rate.update_from_rendered_view(outcome.render_rate_limit_fps);
+            }
         }
         render_requested = false;
+        immediate_render = false;
         iteration = iteration.saturating_add(1);
     }
 }
@@ -786,6 +901,183 @@ where
 )]
 mod pushed_snapshot_tests {
     use super::*;
+
+    /// Verifies legacy Iroh primary event wakeups coalesce behind the advertised
+    /// cadence and request one current view after the initial immediate frame.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn primary_legacy_iroh_event_wakeups_are_paced() {
+        let (mut client_stream, mut server_stream) = tokio::io::duplex(16 * 1024);
+        let mut terminal_io = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+        for _ in 0..8 {
+            terminal_io.push_pending_input_read();
+        }
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+        let server = async move {
+            for text in ["initial", "latest"] {
+                let request =
+                    read_async_control_response_frames(&mut server_stream, 1024 * 1024, 1)
+                        .await
+                        .unwrap();
+                let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+                let request: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(request["method"], "terminal/view");
+                let response = serde_json::json!({
+                    "jsonrpc": "2.0", "id": request["id"],
+                    "result": {"render_rate_limit_fps": 10,
+                        "view": {"lines": [text], "line_style_spans": [[]],
+                            "cursor": {"row": 0, "column": 0, "visible": false},
+                            "output_modes": {}}}
+                });
+                tokio::io::AsyncWriteExt::write_all(
+                    &mut server_stream,
+                    &super::super::encode_control_body(&response.to_string()),
+                )
+                .await
+                .unwrap();
+                if text == "initial" {
+                    for _ in 0..2 {
+                        sender
+                            .send(Ok(IrohAttachRenderWakeup::new(
+                                AttachRenderAction::View,
+                                None,
+                            )))
+                            .await
+                            .unwrap();
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    assert!(
+                        tokio::time::timeout(
+                            std::time::Duration::from_millis(30),
+                            read_async_control_response_frames(&mut server_stream, 1024 * 1024, 1)
+                        )
+                        .await
+                        .is_err(),
+                        "ordinary wakeups must wait for the cadence"
+                    );
+                }
+            }
+            drop(sender);
+        };
+        let client = run_iroh_attached_primary_client_loop_async_with_events(
+            &mut client_stream,
+            &mut terminal_io,
+            None,
+            ClientId::parse('c', "c1".to_string()).unwrap(),
+            Size::new(80, 24).unwrap(),
+            std::time::Duration::from_secs(1),
+            Some(&mut receiver),
+            false,
+        );
+        let (result, ()) = tokio::join!(client, server);
+        assert!(
+            result.is_err(),
+            "closed event stream must end attachment visibly"
+        );
+        assert_eq!(
+            terminal_io
+                .written_frames
+                .iter()
+                .take(2)
+                .map(|frame| frame.lines[0].as_str())
+                .collect::<Vec<_>>(),
+            ["initial", "latest"]
+        );
+    }
+
+    /// An inline input frame has no rate field; it must reset the render clock
+    /// without forgetting the policy learned from the initial terminal/view.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn primary_legacy_iroh_inline_input_preserves_render_cadence() {
+        async fn read_request(stream: &mut tokio::io::DuplexStream) -> serde_json::Value {
+            let request = read_async_control_response_frames(stream, 1024 * 1024, 1)
+                .await
+                .unwrap();
+            let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+            serde_json::from_str(&body).unwrap()
+        }
+        let (mut client_stream, mut server_stream) = tokio::io::duplex(16 * 1024);
+        let (mut terminal_io, input) = InjectableTerminalIo::new();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+        let server = async move {
+            let initial = read_request(&mut server_stream).await;
+            assert_eq!(initial["method"], "terminal/view");
+            let initial_response = serde_json::json!({"jsonrpc":"2.0","id":initial["id"],
+                "result":{"render_rate_limit_fps":1,"view":{"lines":["initial"],
+                    "line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},
+                    "output_modes":{}}}});
+            tokio::io::AsyncWriteExt::write_all(
+                &mut server_stream,
+                &super::super::encode_control_body(&initial_response.to_string()),
+            )
+            .await
+            .unwrap();
+
+            input.push(b"x".to_vec());
+            let step = read_request(&mut server_stream).await;
+            assert_eq!(step["method"], "terminal/step");
+            let inline_response = serde_json::json!({"jsonrpc":"2.0","id":step["id"],
+                "result":{"input_bytes":1,"application":{"view_refresh_required":false,
+                    "full_redraw_required":false},"view":{"lines":["inline"],
+                    "line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},
+                    "output_modes":{}}}});
+            tokio::io::AsyncWriteExt::write_all(
+                &mut server_stream,
+                &super::super::encode_control_body(&inline_response.to_string()),
+            )
+            .await
+            .unwrap();
+            sender
+                .send(Ok(IrohAttachRenderWakeup::new(
+                    AttachRenderAction::View,
+                    None,
+                )))
+                .await
+                .unwrap();
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    read_async_control_response_frames(&mut server_stream, 1024 * 1024, 1)
+                )
+                .await
+                .is_err(),
+                "inline repaint must preserve the one-second rate limit"
+            );
+            let trailing = read_request(&mut server_stream).await;
+            assert_eq!(trailing["method"], "terminal/view");
+            let trailing_response = serde_json::json!({"jsonrpc":"2.0","id":trailing["id"],
+                "result":{"render_rate_limit_fps":1,"view":{"lines":["trailing"],
+                    "line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},
+                    "output_modes":{}}}});
+            tokio::io::AsyncWriteExt::write_all(
+                &mut server_stream,
+                &super::super::encode_control_body(&trailing_response.to_string()),
+            )
+            .await
+            .unwrap();
+            drop(sender);
+        };
+        let client = run_iroh_attached_primary_client_loop_async_with_events(
+            &mut client_stream,
+            &mut terminal_io,
+            None,
+            ClientId::parse('c', "c1".to_string()).unwrap(),
+            Size::new(80, 24).unwrap(),
+            std::time::Duration::from_secs(2),
+            Some(&mut receiver),
+            false,
+        );
+        let (result, ()) = tokio::join!(client, server);
+        assert!(result.is_err());
+        assert_eq!(
+            terminal_io
+                .frames
+                .iter()
+                .take(3)
+                .map(|frame| frame.lines[0].as_str())
+                .collect::<Vec<_>>(),
+            ["initial", "inline", "trailing"]
+        );
+    }
 
     /// Shared synchronization and observation state for slow terminal output.
     #[derive(Debug, Default)]
@@ -1141,6 +1433,8 @@ mod pushed_snapshot_tests {
                         presentation_ids: Vec::new(),
                         iroh_status_slot: None,
                         event_cutoff: Some(7),
+                        render_rate_limit_fps: None,
+                        view_identity: None,
                     },
                     invalidate_output: true,
                 },
@@ -1299,6 +1593,8 @@ mod pushed_snapshot_tests {
                             presentation_ids: Vec::new(),
                             iroh_status_slot: None,
                             event_cutoff: Some(8),
+                            render_rate_limit_fps: None,
+                            view_identity: None,
                         },
                         invalidate_output: false,
                     },
@@ -1416,6 +1712,8 @@ mod pushed_snapshot_tests {
                             presentation_ids: Vec::new(),
                             iroh_status_slot: None,
                             event_cutoff: Some(8),
+                            render_rate_limit_fps: None,
+                            view_identity: None,
                         },
                         invalidate_output: false,
                     },
@@ -1504,6 +1802,8 @@ mod pushed_snapshot_tests {
                             presentation_ids: Vec::new(),
                             iroh_status_slot: None,
                             event_cutoff: Some(9),
+                            render_rate_limit_fps: None,
+                            view_identity: None,
                         },
                         invalidate_output: false,
                     },
@@ -1619,6 +1919,8 @@ mod pushed_snapshot_tests {
                             presentation_ids: Vec::new(),
                             iroh_status_slot: None,
                             event_cutoff: Some(9),
+                            render_rate_limit_fps: None,
+                            view_identity: None,
                         },
                         invalidate_output: false,
                     },
@@ -1723,6 +2025,170 @@ mod pushed_snapshot_tests {
             .await
             .unwrap();
         tokio::io::AsyncWriteExt::flush(stream).await.unwrap();
+    }
+
+    /// Verifies separately delivered legacy redraw wakeups wait for the server's
+    /// resolved frame cadence and fetch only the latest view at the trailing edge.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn control_socket_loop_paces_separate_redraw_wakeups() {
+        let (control_client, control_server) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (event_client, event_server) = std::os::unix::net::UnixStream::pair().unwrap();
+        for socket in [
+            &control_client,
+            &control_server,
+            &event_client,
+            &event_server,
+        ] {
+            socket.set_nonblocking(true).unwrap();
+        }
+        let mut control_client = tokio::net::UnixStream::from_std(control_client).unwrap();
+        let mut control_server = tokio::net::UnixStream::from_std(control_server).unwrap();
+        let event_client = tokio::net::UnixStream::from_std(event_client).unwrap();
+        let mut event_server = tokio::net::UnixStream::from_std(event_server).unwrap();
+        let (mut terminal_io, input) = InjectableTerminalIo::new();
+
+        let server = async move {
+            for (index, text) in [(0, "initial"), (1, "latest")] {
+                let request =
+                    read_async_control_response_frames(&mut control_server, 1024 * 1024, 1)
+                        .await
+                        .unwrap();
+                let response = control_request_response(&request, "terminal/view", |id| {
+                    serde_json::json!({"jsonrpc": "2.0", "id": id, "result": {
+                        "render_rate_limit_fps": 10,
+                        "view": {"lines": [text], "line_style_spans": [[]],
+                            "cursor": {"row": 0, "column": 0, "visible": false},
+                            "output_modes": {}}
+                    }})
+                });
+                write_control_body(&mut control_server, &response).await;
+                if index == 0 {
+                    for _ in 0..2 {
+                        tokio::io::AsyncWriteExt::write_all(&mut event_server,
+                            &super::super::encode_control_body(
+                                r#"{"jsonrpc":"2.0","method":"render/wakeup","params":{"invalidate_output":false}}"#
+                            )).await.unwrap();
+                        tokio::io::AsyncWriteExt::flush(&mut event_server)
+                            .await
+                            .unwrap();
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    assert!(
+                        tokio::time::timeout(
+                            std::time::Duration::from_millis(30),
+                            read_async_control_response_frames(&mut control_server, 1024 * 1024, 1),
+                        )
+                        .await
+                        .is_err(),
+                        "ordinary wakeups must not fetch before the cadence"
+                    );
+                }
+            }
+            input.push(Vec::<u8>::new());
+        };
+        let client = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
+            &mut control_client,
+            &mut terminal_io,
+            ClientId::parse('c', "c1".to_string()).unwrap(),
+            Size::new(80, 24).unwrap(),
+            Some(event_client),
+        );
+        let (client, ()) = tokio::join!(client, server);
+        client.unwrap();
+        assert_eq!(
+            terminal_io
+                .frames
+                .iter()
+                .map(|frame| frame.lines[0].as_str())
+                .collect::<Vec<_>>(),
+            ["initial", "latest"]
+        );
+    }
+
+    /// Verifies input remains responsive during an ordinary rate window and
+    /// its immediate post-step view satisfies the queued redraw exactly once.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn control_socket_loop_input_bypasses_pending_redraw_gate() {
+        let (control_client, control_server) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (event_client, event_server) = std::os::unix::net::UnixStream::pair().unwrap();
+        for socket in [
+            &control_client,
+            &control_server,
+            &event_client,
+            &event_server,
+        ] {
+            socket.set_nonblocking(true).unwrap();
+        }
+        let mut control_client = tokio::net::UnixStream::from_std(control_client).unwrap();
+        let mut control_server = tokio::net::UnixStream::from_std(control_server).unwrap();
+        let event_client = tokio::net::UnixStream::from_std(event_client).unwrap();
+        let mut event_server = tokio::net::UnixStream::from_std(event_server).unwrap();
+        let (mut terminal_io, input) = InjectableTerminalIo::new();
+        let server = async move {
+            let request = read_async_control_response_frames(&mut control_server, 1024 * 1024, 1)
+                .await
+                .unwrap();
+            let response = control_request_response(&request, "terminal/view", |id| {
+                serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "render_rate_limit_fps": 1,
+                    "view":{"lines":["initial"],"line_style_spans":[[]],
+                        "cursor":{"row":0,"column":0,"visible":false},"output_modes":{}}
+                }})
+            });
+            write_control_body(&mut control_server, &response).await;
+            tokio::io::AsyncWriteExt::write_all(&mut event_server,
+                &super::super::encode_control_body(
+                    r#"{"jsonrpc":"2.0","method":"render/wakeup","params":{"invalidate_output":false}}"#
+                )).await.unwrap();
+            tokio::io::AsyncWriteExt::flush(&mut event_server)
+                .await
+                .unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            input.push(b"x".to_vec());
+            let request = tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                read_async_control_response_frames(&mut control_server, 1024 * 1024, 1),
+            )
+            .await
+            .expect("input must bypass the one-second rate window")
+            .unwrap();
+            let response = control_request_response(&request, "terminal/step", |id| {
+                serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "input_bytes":1,"application":{"view_refresh_required":true,
+                        "full_redraw_required":false},"client_detached":false}}
+                )
+            });
+            write_control_body(&mut control_server, &response).await;
+            let request = read_async_control_response_frames(&mut control_server, 1024 * 1024, 1)
+                .await
+                .unwrap();
+            let response = control_request_response(&request, "terminal/view", |id| {
+                serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "render_rate_limit_fps":1,
+                    "view":{"lines":["after input"],"line_style_spans":[[]],
+                        "cursor":{"row":0,"column":0,"visible":false},"output_modes":{}}
+                }})
+            });
+            write_control_body(&mut control_server, &response).await;
+            input.push(Vec::<u8>::new());
+        };
+        let client = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
+            &mut control_client,
+            &mut terminal_io,
+            ClientId::parse('c', "c1".to_string()).unwrap(),
+            Size::new(80, 24).unwrap(),
+            Some(event_client),
+        );
+        let (client, ()) = tokio::join!(client, server);
+        client.unwrap();
+        assert_eq!(
+            terminal_io
+                .frames
+                .iter()
+                .map(|frame| frame.lines[0].as_str())
+                .collect::<Vec<_>>(),
+            ["initial", "after input"]
+        );
     }
 
     /// Verifies the runtime-events control-socket loop keeps the last painted
@@ -1857,10 +2323,12 @@ where
     let cursor_blink_epoch = std::time::Instant::now();
     let mut render_requested = true;
     let mut size_refresh = AttachTerminalSizeRefresh::default();
+    let mut committed_view = None;
 
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
+            committed_view = None;
             if !request_primary_resize_async(stream, &primary_client_id, client_size, iteration)
                 .await?
                 .connected
@@ -1888,13 +2356,14 @@ where
             continue;
         }
         if input.bytes.is_empty() {
-            if !request_and_render_primary_view_async(
+            if !super::requests::request_and_render_conditional_primary_view_async(
                 stream,
                 terminal_io,
                 &primary_client_id,
                 client_size,
                 iteration,
                 cursor_blink_epoch,
+                &mut committed_view,
             )
             .await?
             .connected
@@ -1928,17 +2397,15 @@ where
         if refresh_requirement.client_detached || refresh_requirement.session_terminated {
             break Ok(());
         }
-        if refresh_requirement.full_redraw_required {
-            terminal_io.invalidate_output_frame().await?;
-        }
         if (render_requested || refresh_requirement.view_refresh_required)
-            && !request_and_render_primary_view_async(
+            && !super::requests::request_and_render_conditional_primary_view_async(
                 stream,
                 terminal_io,
                 &primary_client_id,
                 client_size,
                 iteration,
                 cursor_blink_epoch,
+                &mut committed_view,
             )
             .await?
             .connected
@@ -1971,12 +2438,16 @@ where
     let mut iteration = 0u64;
     let cursor_blink_epoch = std::time::Instant::now();
     let mut render_requested = true;
+    let mut immediate_render = true;
     let mut event_stream = event_stream.map(AttachedRuntimeEventStream::new);
     let mut animation_refresh = AttachAnimationRefresh::default();
+    let mut ordinary_rate = AttachOrdinaryRenderRate::default();
     let mut size_refresh = AttachTerminalSizeRefresh::default();
+    let mut committed_view = None;
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
+            committed_view = None;
             if !request_primary_resize_async(stream, &primary_client_id, client_size, iteration)
                 .await?
                 .connected
@@ -1985,13 +2456,23 @@ where
             }
             iteration = iteration.saturating_add(1);
             render_requested = true;
+            immediate_render = true;
         }
+        let pending_deadline = (render_requested && !immediate_render)
+            .then(|| ordinary_rate.deadline())
+            .flatten();
+        let gated = pending_deadline.is_some();
         let input = read_attached_client_input_or_runtime_event(
             terminal_io,
             event_stream.as_mut(),
             4096,
-            animation_refresh.deadline(),
+            if gated {
+                None
+            } else {
+                animation_refresh.deadline()
+            },
             size_refresh.deadline(),
+            pending_deadline,
         )
         .await?;
         size_refresh.reschedule();
@@ -2003,9 +2484,15 @@ where
             AttachRenderAction::View => {
                 render_requested = true;
             }
+            AttachRenderAction::ImmediateView => {
+                render_requested = true;
+                immediate_render = true;
+            }
             AttachRenderAction::InvalidateAndView => {
                 terminal_io.invalidate_output_frame().await?;
+                committed_view = None;
                 render_requested = true;
+                immediate_render = true;
             }
             AttachRenderAction::Disconnect => break Ok(()),
         }
@@ -2015,21 +2502,27 @@ where
             }
             continue;
         }
+        if input.bytes.is_empty() && !immediate_render && !ordinary_rate.ready() {
+            continue;
+        }
         if input.bytes.is_empty() {
-            let outcome = request_and_render_primary_view_async(
+            let outcome = super::requests::request_and_render_conditional_primary_view_async(
                 stream,
                 terminal_io,
                 &primary_client_id,
                 client_size,
                 iteration,
                 cursor_blink_epoch,
+                &mut committed_view,
             )
             .await?;
             if !outcome.connected {
                 break Ok(());
             }
             animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
+            ordinary_rate.update_from_rendered_view(outcome.render_rate_limit_fps);
             render_requested = false;
+            immediate_render = false;
             iteration = iteration.saturating_add(1);
             continue;
         }
@@ -2059,38 +2552,42 @@ where
         if refresh_requirement.client_detached || refresh_requirement.session_terminated {
             break Ok(());
         }
-        if refresh_requirement.full_redraw_required {
-            terminal_io.invalidate_output_frame().await?;
-        }
         if let Some(event_stream) = event_stream.as_mut() {
             match event_stream.try_read_ready_render_action()? {
                 AttachRenderAction::None => {}
                 AttachRenderAction::View => {
                     render_requested = true;
                 }
+                AttachRenderAction::ImmediateView => {
+                    render_requested = true;
+                }
                 AttachRenderAction::InvalidateAndView => {
                     terminal_io.invalidate_output_frame().await?;
+                    committed_view = None;
                     render_requested = true;
                 }
                 AttachRenderAction::Disconnect => break Ok(()),
             }
         }
         if render_requested || refresh_requirement.view_refresh_required {
-            let outcome = request_and_render_primary_view_async(
+            let outcome = super::requests::request_and_render_conditional_primary_view_async(
                 stream,
                 terminal_io,
                 &primary_client_id,
                 client_size,
                 iteration,
                 cursor_blink_epoch,
+                &mut committed_view,
             )
             .await?;
             if !outcome.connected {
                 break Ok(());
             }
             animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
+            ordinary_rate.update_from_rendered_view(outcome.render_rate_limit_fps);
         }
         render_requested = false;
+        immediate_render = false;
         iteration = iteration.saturating_add(1);
     }
 }

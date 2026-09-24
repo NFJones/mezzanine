@@ -1190,13 +1190,13 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[test]
+#[tokio::test]
 /// Verifies a generic compatible backend can explicitly opt in to standard
 /// OpenAI Chat Completions SSE without changing the default unary behavior.
 ///
 /// The streamed function name and arguments arrive in fragments and must only
 /// become a validated MAAP batch after the terminal event has been observed.
-fn openai_compatible_chat_completions_provider_supports_opt_in_streaming() {
+async fn openai_compatible_chat_completions_provider_supports_opt_in_streaming() {
     let root = std::env::temp_dir().join(format!(
         "mez-agent-provider-generic-chat-streaming-{}",
         std::process::id()
@@ -1278,8 +1278,8 @@ fn openai_compatible_chat_completions_provider_supports_opt_in_streaming() {
             }
         })
     );
-    let transport = FakeProviderHttpTransport {
-        requests: RefCell::new(Vec::new()),
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
         response: ProviderHttpResponse {
             status_code: 200,
             headers: Default::default(),
@@ -1298,7 +1298,20 @@ fn openai_compatible_chat_completions_provider_supports_opt_in_streaming() {
         transport,
     )
     .unwrap();
-    let response = provider.send_request(&request).unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+    let response = provider
+        .send_request_async_with_progress(&request, Some(sender))
+        .await
+        .unwrap();
+    let events = std::iter::from_fn(|| receiver.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            mez_agent::StreamingSayEvent::TextDelta { action_index: 0, text }
+                if text.contains("hello")
+        )),
+        "events={events:?}"
+    );
 
     assert_eq!(response.usage.input_tokens, 13);
     assert_eq!(response.usage.output_tokens, 8);
@@ -1307,7 +1320,7 @@ fn openai_compatible_chat_completions_provider_supports_opt_in_streaming() {
         response.action_batch.unwrap().rationale,
         "generic compatible streaming completed"
     );
-    let sent = provider.transport.requests.borrow();
+    let sent = provider.transport.requests.lock().unwrap();
     assert_eq!(
         sent[0].headers.get("Accept").map(String::as_str),
         Some("text/event-stream")

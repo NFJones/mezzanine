@@ -538,30 +538,7 @@ impl RuntimeMetricsSnapshot {
         latest_usage: ModelTokenUsage,
         model_key: &ModelTokenUsageKey,
     ) {
-        self.provider_input_tokens = self
-            .provider_input_tokens
-            .saturating_add(usage.input_tokens);
-        self.provider_output_tokens = self
-            .provider_output_tokens
-            .saturating_add(usage.output_tokens);
-        self.provider_reasoning_tokens = self
-            .provider_reasoning_tokens
-            .saturating_add(usage.reasoning_tokens);
-        self.provider_cached_input_tokens = self
-            .provider_cached_input_tokens
-            .saturating_add(usage.cached_input_tokens.unwrap_or(0));
-        self.provider_cache_write_input_tokens = self
-            .provider_cache_write_input_tokens
-            .saturating_add(usage.cache_write_input_tokens.unwrap_or(0));
-        self.provider_billed_input_tokens = self
-            .provider_billed_input_tokens
-            .saturating_add(usage.billed_input_tokens());
-        if !usage.is_zero() {
-            self.provider_token_usage_by_model
-                .entry(model_key.clone())
-                .or_default()
-                .add_assign(usage);
-        }
+        self.record_provider_cumulative_token_usage(usage, model_key);
         self.provider_input_tokens_per_response
             .record(latest_usage.input_tokens);
         self.provider_output_tokens_per_response
@@ -598,6 +575,38 @@ impl RuntimeMetricsSnapshot {
         } else {
             self.provider_cached_input_unknown =
                 self.provider_cached_input_unknown.saturating_add(1);
+        }
+    }
+
+    /// Adds reported provider cost without updating latest successful response samples.
+    pub(crate) fn record_provider_cumulative_token_usage(
+        &mut self,
+        usage: ModelTokenUsage,
+        model_key: &ModelTokenUsageKey,
+    ) {
+        self.provider_input_tokens = self
+            .provider_input_tokens
+            .saturating_add(usage.input_tokens);
+        self.provider_output_tokens = self
+            .provider_output_tokens
+            .saturating_add(usage.output_tokens);
+        self.provider_reasoning_tokens = self
+            .provider_reasoning_tokens
+            .saturating_add(usage.reasoning_tokens);
+        self.provider_cached_input_tokens = self
+            .provider_cached_input_tokens
+            .saturating_add(usage.cached_input_tokens.unwrap_or(0));
+        self.provider_cache_write_input_tokens = self
+            .provider_cache_write_input_tokens
+            .saturating_add(usage.cache_write_input_tokens.unwrap_or(0));
+        self.provider_billed_input_tokens = self
+            .provider_billed_input_tokens
+            .saturating_add(usage.billed_input_tokens());
+        if !usage.is_zero() {
+            self.provider_token_usage_by_model
+                .entry(model_key.clone())
+                .or_default()
+                .add_assign(usage);
         }
     }
 
@@ -705,6 +714,37 @@ mod provider_wire_tests {
     use crate::integrations::agent::provider::{
         ProviderRequestPurpose, ProviderWireRequestObservation,
     };
+
+    /// A cutoff spends tokens but cannot replace the last successful response
+    /// sample or add a zero-valued response to its histograms.
+    #[test]
+    fn output_cutoff_cost_preserves_latest_successful_metrics() {
+        let mut metrics = RuntimeMetricsSnapshot::default();
+        let key = ModelTokenUsageKey::new("openai", "gpt-test");
+        let successful = ModelTokenUsage {
+            input_tokens: 70,
+            output_tokens: 7,
+            reasoning_tokens: 1,
+            cached_input_tokens: Some(35),
+            cache_write_input_tokens: None,
+        };
+        let cutoff = ModelTokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            reasoning_tokens: 5,
+            cached_input_tokens: Some(10),
+            cache_write_input_tokens: None,
+        };
+        metrics.record_provider_token_usage(successful, successful, &key);
+        metrics.record_provider_cumulative_token_usage(cutoff, &key);
+        assert_eq!(metrics.provider_input_tokens, 170);
+        assert_eq!(metrics.provider_output_tokens, 27);
+        assert_eq!(metrics.provider_cached_input_tokens, 45);
+        assert_eq!(metrics.last_provider_input_tokens, Some(70));
+        assert_eq!(metrics.last_provider_cached_input_tokens, Some(35));
+        assert_eq!(metrics.provider_input_tokens_per_response.observations, 1);
+        assert_eq!(metrics.provider_output_tokens_per_response.observations, 1);
+    }
 
     fn request(model: &str, lineage: &str) -> mez_agent::ModelRequest {
         mez_agent::ModelRequest {

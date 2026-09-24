@@ -663,5 +663,13 @@ fn assignment_pending_writes_cover_only_changed_rows() {
         ],
         "only changed, added, and removed rows are written"
     );
+    assert!(super::sqlite::pending_writes(&before, &before).is_empty());
+    let mut renamed = before.clone();
+    renamed.assignments[0].session_id = "$z".to_string();
+    let writes = super::sqlite::pending_writes(&before, &renamed);
+    assert!(matches!(writes.as_slice(), [
+        super::sqlite::AssignmentRowWrite::Delete("$a"),
+        super::sqlite::AssignmentRowWrite::Insert(assignment)
+    ] if assignment.session_id == "$z"));
     let _ = fs::remove_dir_all(root);
 }

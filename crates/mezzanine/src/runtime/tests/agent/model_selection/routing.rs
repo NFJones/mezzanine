@@ -1547,10 +1547,12 @@ fn runtime_routed_child_malformed_compaction_completion_recovers_parent() {
     service.claim_agent_compaction_task_state(
         worker_turn.pane_id.clone(),
         RuntimeAgentCompactionTask {
+            task_generation: 0,
             pane_id: worker_turn.pane_id.clone(),
             conversation_id,
             source: "provider-output-limit".to_string(),
             transcript_entries: 1,
+            compacted_through_sequence: None,
             retained_transcript_entries: 1,
             summarized_entries: 1,
             model_profile_name: worker_turn.model_profile.clone(),
@@ -1561,6 +1563,8 @@ fn runtime_routed_child_malformed_compaction_completion_recovers_parent() {
             ),
             resume_turn_id: Some(worker_turn.turn_id.clone()),
             target: RuntimeAgentCompactionTarget::Conversation,
+            conversation_chunks: None,
+            compaction_request_shape: None,
         },
     );
 
@@ -1620,10 +1624,12 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
     service.claim_agent_compaction_task_state(
         worker_turn.pane_id.clone(),
         RuntimeAgentCompactionTask {
+            task_generation: 0,
             pane_id: worker_turn.pane_id.clone(),
             conversation_id,
             source: "provider-output-limit".to_string(),
             transcript_entries: 1,
+            compacted_through_sequence: None,
             retained_transcript_entries: 1,
             summarized_entries: 1,
             model_profile_name: worker_turn.model_profile.clone(),
@@ -1634,6 +1640,8 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
             ),
             resume_turn_id: Some(worker_turn.turn_id.clone()),
             target: RuntimeAgentCompactionTarget::Conversation,
+            conversation_chunks: None,
+            compaction_request_shape: None,
         },
     );
     service

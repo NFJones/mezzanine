@@ -1685,8 +1685,14 @@ impl AsyncRuntimeSessionActor {
                 }
                 false
             }
-            AsyncRuntimeRequest::ClaimAgentCompactionTask { pane_id, reply } => {
-                let result = self.service.claim_agent_compaction_task(&pane_id);
+            AsyncRuntimeRequest::ClaimAgentCompactionTask {
+                pane_id,
+                task_generation,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .claim_agent_compaction_task(&pane_id, task_generation);
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);
                 if should_notify {

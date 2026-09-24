@@ -700,7 +700,7 @@ impl RuntimeSessionService {
         } else {
             session.transcript_entries
         };
-        if transcript_entries == 0 {
+        if transcript_entries == 0 && session.ephemeral {
             return RuntimeAgentPromptHistoryWork {
                 memory_blocks,
                 transcript_work: None,

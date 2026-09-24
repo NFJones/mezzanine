@@ -66,6 +66,54 @@ pub(crate) struct RuntimeAgentHistoryEpochWork {
 pub(crate) fn execute_runtime_agent_history_epoch_work(
     work: RuntimeAgentHistoryEpochWork,
 ) -> Result<RuntimeAgentTranscriptContext> {
+    let epoch = work.store.compaction_epoch(&work.inputs.conversation_id)?;
+    if epoch.is_none()
+        && work.inputs.active_entries == Some(0)
+        && work.inputs.pending_entries.is_empty()
+    {
+        return Ok(RuntimeAgentTranscriptContext {
+            blocks: Vec::new(),
+            execution_events: Vec::new(),
+            provider_history_repair_identity: None,
+        });
+    }
+    if let Some(epoch) = epoch
+        && work
+            .inputs
+            .ephemeral_source_entries
+            .is_none_or(|limit| epoch.through_sequence <= limit)
+    {
+        let mut entries = work
+            .store
+            .inspect_after_sequence(&work.inputs.conversation_id, epoch.through_sequence)?;
+        entries.extend(work.inputs.pending_entries);
+        entries.retain(|entry| {
+            entry.conversation_id == work.inputs.conversation_id
+                && entry.sequence > epoch.through_sequence
+                && work
+                    .inputs
+                    .ephemeral_source_entries
+                    .is_none_or(|limit| entry.sequence <= limit)
+        });
+        entries.sort_by_key(|entry| entry.sequence);
+        entries.dedup_by_key(|entry| entry.sequence);
+        let mut history = runtime_agent_transcript_context(&work.inputs.pane_id, &entries);
+        history.blocks.insert(
+            0,
+            ContextBlock::reference_event(
+                ContextSourceKind::Memory,
+                format!(
+                    "memory {} (conversation)",
+                    mez_agent::memory::canonical_memory_uuid(&format!(
+                        "compact-{}",
+                        work.inputs.conversation_id
+                    ))
+                ),
+                epoch.summary,
+            ),
+        );
+        return Ok(history);
+    }
     let entries = match work.inputs.active_entries {
         Some(active_entries) => work
             .store
@@ -109,6 +157,13 @@ pub(crate) fn execute_runtime_agent_prompt_history_work(
         });
     };
     let transcript = execute_runtime_agent_history_epoch_work(transcript_work)?;
+    if transcript
+        .blocks
+        .first()
+        .is_some_and(|block| block.source == ContextSourceKind::Memory)
+    {
+        blocks.clear();
+    }
     blocks.extend(transcript.blocks);
     Ok(RuntimeAgentTranscriptContext {
         blocks,

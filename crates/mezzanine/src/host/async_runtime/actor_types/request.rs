@@ -949,6 +949,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ClaimAgentCompactionTask {
         /// Pane whose queued compaction should be claimed.
         pane_id: String,
+        /// Exact task generation requested by the dispatch side effect.
+        task_generation: u64,
         /// Stores the reply value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module

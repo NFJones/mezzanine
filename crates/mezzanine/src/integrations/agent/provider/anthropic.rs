@@ -225,29 +225,15 @@ fn build_anthropic_messages_http_request(
     let body = anthropic_messages_request_body(request, stream, options)?;
     let mut headers = BTreeMap::new();
     headers.insert(
-        "Accept".to_string(),
-        if stream {
-            "text/event-stream".to_string()
-        } else {
-            "application/json".to_string()
-        },
-    );
-    headers.insert("Content-Type".to_string(), "application/json".to_string());
-    headers.insert(
         "anthropic-version".to_string(),
         options.anthropic_version().to_string(),
     );
     if let Some(api_key) = api_key {
         headers.insert("x-api-key".to_string(), api_key.to_string());
     }
-    Ok(ProviderHttpRequest {
-        method: "POST".to_string(),
-        url: endpoint.to_string(),
-        headers,
-        body,
-        timeouts: mez_agent::ProviderHttpTimeouts::from_total(timeout_ms),
-        max_response_bytes: None,
-    })
+    Ok(super::provider_json_post_request(
+        endpoint, body, stream, timeout_ms, headers,
+    ))
 }
 
 #[cfg(test)]

@@ -60,6 +60,10 @@ const SESSION_SUMMARY_FILE_NAME: &str = "summary.json";
 const SESSION_METADATA_FILE_NAME: &str = "metadata.json";
 /// Current per-conversation metadata schema version.
 const SESSION_METADATA_VERSION: u64 = 3;
+/// Versioned authoritative summary and replay-boundary sidecar.
+const COMPACTION_EPOCH_FILE_NAME: &str = "compaction-epoch.json";
+/// Maximum encoded size accepted for one durable compaction epoch.
+const COMPACTION_EPOCH_MAX_BYTES: u64 = 1024 * 1024;
 
 /// Versioned authoritative metadata for one durable conversation.
 ///
@@ -95,6 +99,9 @@ struct ConversationMetadata {
     /// conversation's next turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent_model_profile_selection: Option<AgentModelProfileSelection>,
+    /// A committed compaction requires its summary/boundary sidecar for replay.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    compaction_epoch_required: bool,
 }
 
 /// Provider, model, and reasoning selection for one agent-scoped profile.
@@ -379,6 +386,8 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
             fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
@@ -401,6 +410,7 @@ impl AgentTranscriptStore {
             fail_legacy_promotion_permissions_after_rename: Arc::new(AtomicBool::new(false)),
             fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
+            fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
             fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
             fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
         }
@@ -458,6 +468,13 @@ impl AgentTranscriptStore {
     #[cfg(test)]
     pub fn fail_next_agent_session_metadata_write(&self) {
         self.fail_agent_session_metadata_write
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Causes the next compaction-epoch sidecar replacement to fail in tests.
+    #[cfg(test)]
+    pub fn fail_next_compaction_epoch_write(&self) {
+        self.fail_compaction_epoch_write
             .store(true, Ordering::SeqCst);
     }
 
@@ -769,6 +786,155 @@ impl AgentTranscriptStore {
             }
         }
         Ok(bytes)
+    }
+
+    /// Reads the authoritative compaction summary and replay boundary, if one exists.
+    ///
+    /// A malformed, mismatched, unsupported, or oversized sidecar is an error;
+    /// callers must not silently replay only a shortened transcript suffix.
+    pub fn compaction_epoch(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<super::types::AgentCompactionEpoch>> {
+        validate_conversation_id(conversation_id)?;
+        let path = self
+            .session_dir_for(conversation_id)?
+            .join(COMPACTION_EPOCH_FILE_NAME);
+        if !path.exists() {
+            if self
+                .read_conversation_metadata(conversation_id)
+                .map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "conversation objective metadata is unavailable: {}",
+                        error.message()
+                    ))
+                })?
+                .compaction_epoch_required
+            {
+                return Err(MezError::invalid_state(
+                    "required compaction epoch sidecar is missing",
+                ));
+            }
+            return Ok(None);
+        }
+        if path.metadata()?.len() > COMPACTION_EPOCH_MAX_BYTES {
+            return Err(MezError::invalid_args(
+                "compaction epoch sidecar exceeds the accepted size limit",
+            ));
+        }
+        let bytes = std_fs::read(path)?;
+        let epoch: super::types::AgentCompactionEpoch =
+            serde_json::from_slice(&bytes).map_err(|error| {
+                MezError::invalid_args(format!("compaction epoch decode failed: {error}"))
+            })?;
+        if epoch.version != 1
+            || epoch.conversation_id != conversation_id
+            || epoch.summary.trim().is_empty()
+            || epoch.summary.len() as u64 > COMPACTION_EPOCH_MAX_BYTES
+        {
+            return Err(MezError::invalid_args(
+                "compaction epoch sidecar has invalid identity, version, or summary",
+            ));
+        }
+        let next_sequence = self.next_sequence(conversation_id)?;
+        if epoch.through_sequence >= next_sequence {
+            return Err(MezError::invalid_state(
+                "compaction epoch replay boundary exceeds the durable transcript",
+            ));
+        }
+        Ok(Some(epoch))
+    }
+
+    /// Atomically commits the summary and the highest transcript sequence it replaces.
+    ///
+    /// The append-only transcript is not rewritten. The conversation lock
+    /// serializes this boundary with transcript appends and other sidecar updates.
+    pub fn save_compaction_epoch(
+        &self,
+        conversation_id: &str,
+        through_sequence: u64,
+        summary: &str,
+    ) -> Result<()> {
+        validate_conversation_id(conversation_id)?;
+        if summary.trim().is_empty() || summary.len() as u64 > COMPACTION_EPOCH_MAX_BYTES {
+            return Err(MezError::invalid_args(
+                "compaction epoch summary is empty or exceeds the accepted size limit",
+            ));
+        }
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        let latest_sequence = match self.next_sequence(conversation_id) {
+            Ok(next) => Some(next.saturating_sub(1)),
+            Err(error) if error.kind() == MezErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        if let Some(latest_sequence) = latest_sequence {
+            if through_sequence > latest_sequence {
+                return Err(MezError::invalid_args(
+                    "compaction epoch boundary exceeds the durable transcript high-water mark",
+                ));
+            }
+        } else if through_sequence != 0 {
+            return Err(MezError::invalid_state(
+                "compaction epoch boundary requires a durable transcript",
+            ));
+        }
+        if let Some(previous) = self.compaction_epoch(conversation_id)?
+            && through_sequence < previous.through_sequence
+        {
+            return Err(MezError::invalid_state(
+                "compaction epoch replay boundary cannot move backwards",
+            ));
+        }
+        let epoch = super::types::AgentCompactionEpoch {
+            version: 1,
+            conversation_id: conversation_id.to_string(),
+            through_sequence,
+            summary: summary.to_string(),
+        };
+        let session_dir = self.ensure_session_dir(conversation_id)?;
+        let path = session_dir.join(COMPACTION_EPOCH_FILE_NAME);
+        let temp_path = session_dir.join(".compaction-epoch.json.tmp");
+        let write_result = (|| {
+            let encoded = serde_json::to_vec(&epoch).map_err(|error| {
+                MezError::invalid_args(format!("compaction epoch encode failed: {error}"))
+            })?;
+            if encoded.len().saturating_add(1) as u64 > COMPACTION_EPOCH_MAX_BYTES {
+                return Err(MezError::invalid_args(
+                    "encoded compaction epoch exceeds the accepted size limit",
+                ));
+            }
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&temp_path)?;
+            file.write_all(&encoded)?;
+            file.write_all(b"\n")?;
+            file.sync_all()?;
+            set_private_file_permissions(&temp_path)?;
+            #[cfg(test)]
+            if self
+                .fail_compaction_epoch_write
+                .swap(false, Ordering::SeqCst)
+            {
+                return Err(MezError::invalid_state(
+                    "injected compaction epoch replacement failure",
+                ));
+            }
+            let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+            if !metadata.compaction_epoch_required {
+                metadata.compaction_epoch_required = true;
+                self.write_conversation_metadata_locked(conversation_id, &metadata)?;
+            }
+            std_fs::rename(&temp_path, &path)?;
+            set_private_file_permissions(&path)?;
+            std_fs::File::open(&session_dir)?.sync_all()?;
+            Ok(())
+        })();
+        if write_result.is_err() {
+            let _ = std_fs::remove_file(&temp_path);
+        }
+        write_result
     }
 
     /// Returns the durable agent-scoped model identity for one conversation.
@@ -1593,6 +1759,14 @@ impl AgentTranscriptStore {
         if !existing_path.exists() {
             return Ok(CompareAndSwapTranscriptEntryResult::Deleted);
         }
+        if self
+            .compaction_epoch(conversation_id)?
+            .is_some_and(|epoch| sequence <= epoch.through_sequence)
+        {
+            return Err(MezError::invalid_state(
+                "cannot edit transcript history already represented by a compaction epoch",
+            ));
+        }
         let mut entries = self.inspect(conversation_id)?;
         let Some(entry) = entries.iter_mut().find(|entry| entry.sequence == sequence) else {
             return Ok(CompareAndSwapTranscriptEntryResult::Deleted);
@@ -1625,6 +1799,11 @@ impl AgentTranscriptStore {
             ));
         }
         let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        if self.compaction_epoch(conversation_id)?.is_some() {
+            return Err(MezError::invalid_state(
+                "cannot renumber transcript sequences while a compaction epoch is committed",
+            ));
+        }
         let existing_path = self.existing_transcript_path_for(conversation_id)?;
         let mut entries = self.inspect(conversation_id)?;
         let Some(index) = entries.iter().position(|entry| entry.sequence == sequence) else {
@@ -1802,6 +1981,86 @@ impl AgentTranscriptStore {
                 decode_transcript_entry(&text)
             })
             .collect()
+    }
+
+    /// Reads the exact transcript suffix after a committed compaction boundary.
+    /// Older archived rows are neither decoded nor rewritten; malformed suffix
+    /// rows remain errors rather than silently losing required replay data.
+    pub fn inspect_after_sequence(
+        &self,
+        conversation_id: &str,
+        through_sequence: u64,
+    ) -> Result<Vec<TranscriptEntry>> {
+        let path = self.existing_transcript_path_for(conversation_id)?;
+        let mut file = std_fs::File::open(path)?;
+        let mut position = file.metadata()?.len();
+        let mut prefix = Vec::new();
+        let mut entries: Vec<TranscriptEntry> = Vec::new();
+        let mut newer_sequence: Option<u64> = None;
+        while position > 0 {
+            let chunk_len = usize::try_from(position.min(64 * 1024))
+                .expect("bounded transcript chunk fits usize");
+            position -= chunk_len as u64;
+            file.seek(SeekFrom::Start(position))?;
+            let mut chunk = vec![0; chunk_len];
+            file.read_exact(&mut chunk)?;
+            chunk.extend_from_slice(&prefix);
+            let mut segments = chunk.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+            prefix = segments.remove(0).to_vec();
+            for segment in segments
+                .into_iter()
+                .rev()
+                .filter(|segment| !segment.is_empty())
+            {
+                let entry = decode_transcript_entry(&String::from_utf8_lossy(segment))?;
+                if entry.conversation_id != conversation_id
+                    || newer_sequence
+                        .is_some_and(|newer| entry.sequence.checked_add(1) != Some(newer))
+                {
+                    return Err(MezError::invalid_state(
+                        "compaction transcript suffix has missing, reordered, or foreign entries",
+                    ));
+                }
+                if entry.sequence <= through_sequence {
+                    if entry.sequence != through_sequence
+                        || entries.last().is_some_and(|oldest| {
+                            oldest.sequence != through_sequence.saturating_add(1)
+                        })
+                    {
+                        return Err(MezError::invalid_state(
+                            "compaction transcript boundary is absent from the archive",
+                        ));
+                    }
+                    entries.reverse();
+                    return Ok(entries);
+                }
+                newer_sequence = Some(entry.sequence);
+                entries.push(entry);
+            }
+        }
+        if !prefix.is_empty() {
+            let entry = decode_transcript_entry(&String::from_utf8_lossy(&prefix))?;
+            if entry.conversation_id != conversation_id
+                || newer_sequence.is_some_and(|newer| entry.sequence.checked_add(1) != Some(newer))
+            {
+                return Err(MezError::invalid_state(
+                    "compaction transcript suffix has missing, reordered, or foreign entries",
+                ));
+            }
+            if entry.sequence > through_sequence {
+                entries.push(entry);
+            }
+        }
+        if entries
+            .last()
+            .is_some_and(|entry| entry.sequence != through_sequence.saturating_add(1))
+        {
+            return Err(MezError::invalid_state(
+                "compaction transcript boundary is absent from the archive",
+            ));
+        }
+        entries.reverse();
+        Ok(entries)
     }
 
     /// Returns the next append sequence for one conversation without scanning
@@ -3106,6 +3365,7 @@ impl AgentTranscriptStore {
                 subagent_lineage: None,
                 agent_model_profile: None,
                 agent_model_profile_selection: None,
+                compaction_epoch_required: false,
             });
         }
         let data = std_fs::read(&path)?;

@@ -1,9 +1,10 @@
 //! Regression tests for terminal client incremental output behavior.
 
 use crate::attached_client::output::{
-    AttachedTerminalOutputFrameState, compose_terminal_output_style_spans,
-    encode_attached_terminal_output_frame_with_styles,
+    AttachedTerminalModeTransitions, AttachedTerminalOutputFrameState,
+    compose_terminal_output_style_spans, encode_attached_terminal_output_frame_with_styles,
     encode_attached_terminal_output_update_frame_with_styles,
+    encode_attached_terminal_output_update_frame_with_verified_size,
 };
 use crate::presentation::{
     AttachedTerminalOutputModes, ClientViewRole, RenderedClientView, TerminalCursorStyle,
@@ -37,6 +38,82 @@ fn styled_line_rendition_at(
         .unwrap_or_default()
 }
 
+/// Adjacent syntax colors sharing a background use local SGR changes without
+/// re-emitting the background, while the modeled cells retain exact styling.
+#[test]
+fn attached_terminal_output_shortens_shared_background_color_transitions() {
+    let background = Some(TerminalColor::Rgb(4, 5, 6));
+    let spans = vec![vec![
+        TerminalStyleSpan {
+            start: 0,
+            length: 1,
+            rendition: GraphicRendition {
+                foreground: Some(TerminalColor::Indexed(1)),
+                background,
+                ..GraphicRendition::default()
+            },
+        },
+        TerminalStyleSpan {
+            start: 1,
+            length: 1,
+            rendition: GraphicRendition {
+                foreground: Some(TerminalColor::Indexed(4)),
+                background,
+                ..GraphicRendition::default()
+            },
+        },
+        TerminalStyleSpan {
+            start: 2,
+            length: 1,
+            rendition: GraphicRendition {
+                background,
+                ..GraphicRendition::default()
+            },
+        },
+    ]];
+    let lines = vec!["ABC".to_string()];
+    let frame = encode_attached_terminal_output_frame_with_styles(
+        &lines,
+        &spans,
+        None,
+        AttachedTerminalOutputModes::default(),
+    );
+    let output = String::from_utf8(frame.clone()).unwrap();
+    assert!(output.contains("\u{1b}[34mB\u{1b}[39mC"), "{output:?}");
+    assert_eq!(output.matches("48;2;4;5;6").count(), 1, "{output:?}");
+    let conservative = output.replace(
+        "\u{1b}[34mB\u{1b}[39mC",
+        "\u{1b}[0;34;48;2;4;5;6mB\u{1b}[0;48;2;4;5;6mC",
+    );
+    assert!(
+        output.len() < conservative.len(),
+        "optimized {} vs conservative {} bytes",
+        output.len(),
+        conservative.len()
+    );
+    let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
+    screen.feed(&frame);
+    let row = &screen.visible_styled_lines()[0];
+    assert_eq!(row.text.trim_end(), "ABC");
+    for (column, foreground) in [
+        Some(TerminalColor::Indexed(1)),
+        Some(TerminalColor::Indexed(4)),
+        None,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            styled_line_rendition_at(row, column),
+            GraphicRendition {
+                foreground,
+                background,
+                ..GraphicRendition::default()
+            }
+        );
+    }
+}
+
 /// Verifies that stable-size attached-terminal redraws are encoded as row
 /// updates instead of clearing the full viewport. This reduces foreground TTY
 /// flicker while still allowing the first draw and resizes to invalidate the
@@ -66,6 +143,227 @@ fn attached_terminal_output_update_redraws_only_changed_rows() {
     assert!(rendered.contains("\x1b[2;1H\x1b[0mchanged"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[K"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[1;1Hone"), "{rendered:?}");
+}
+
+/// Reuses exact shifted full-width rows instead of repainting the viewport;
+/// the modeled terminal must agree with an independently drawn target frame.
+#[test]
+fn attached_terminal_output_reuses_exact_shifted_rows() {
+    let columns = 40;
+    let rows = 12;
+    let previous_lines = (0..rows)
+        .map(|index| {
+            format!(
+                "row {index:02} {}",
+                char::from(b'a' + index as u8)
+                    .to_string()
+                    .repeat(columns - 7)
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut next_lines = previous_lines[1..].to_vec();
+    next_lines.push(format!("row {rows:02} {}", "y".repeat(columns - 7)));
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        cursor_blink: false,
+        ..AttachedTerminalOutputModes::default()
+    };
+    let previous = AttachedTerminalOutputFrameState::new_with_modes(&previous_lines, &[], modes);
+    let initial =
+        encode_attached_terminal_output_frame_with_styles(&previous_lines, &[], None, modes);
+    let update = encode_attached_terminal_output_update_frame_with_verified_size(
+        &next_lines,
+        &[],
+        None,
+        modes,
+        Some(&previous),
+        AttachedTerminalModeTransitions::default(),
+        Some(Size::new(columns as u16, rows as u16).unwrap()),
+    );
+    assert!(
+        update.windows(4).any(|bytes| bytes == b"\x1b[1M"),
+        "expected a line-delete candidate: {} bytes",
+        update.len()
+    );
+    assert!(
+        update.len() < initial.len() / 2,
+        "scroll update {} vs full {}",
+        update.len(),
+        initial.len()
+    );
+    let mut actual =
+        TerminalScreen::new(Size::new(columns as u16, rows as u16).unwrap(), 20).unwrap();
+    let mut expected =
+        TerminalScreen::new(Size::new(columns as u16, rows as u16).unwrap(), 20).unwrap();
+    actual.feed(&initial);
+    actual.feed(&update);
+    expected.feed(&encode_attached_terminal_output_frame_with_styles(
+        &next_lines,
+        &[],
+        None,
+        modes,
+    ));
+    assert_eq!(
+        actual.visible_styled_lines(),
+        expected.visible_styled_lines()
+    );
+    assert_eq!(actual.history().len(), expected.history().len());
+}
+
+/// A two-row reverse shift must preserve unchanged chrome and physical rows
+/// below the rendered region, including their effective styles.
+#[test]
+fn attached_terminal_output_shift_down_keeps_chrome_and_lower_rows() {
+    let columns = 40;
+    let previous_lines = (0..10)
+        .map(|index| {
+            format!(
+                "row {index:02} {}",
+                char::from(b'a' + index as u8).to_string().repeat(33)
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut next_lines = previous_lines.clone();
+    next_lines[2..9].clone_from_slice(&previous_lines[0..7]);
+    next_lines[0] = format!("new 00 {}", "z".repeat(33));
+    next_lines[1] = format!("new 01 {}", "y".repeat(33));
+    next_lines[9] = previous_lines[9].clone();
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        ..Default::default()
+    };
+    let previous = AttachedTerminalOutputFrameState::new_with_modes(&previous_lines, &[], modes);
+    let initial =
+        encode_attached_terminal_output_frame_with_styles(&previous_lines, &[], None, modes);
+    let update = encode_attached_terminal_output_update_frame_with_verified_size(
+        &next_lines,
+        &[],
+        None,
+        modes,
+        Some(&previous),
+        AttachedTerminalModeTransitions::default(),
+        Some(Size::new(columns, 12).unwrap()),
+    );
+    assert!(
+        update.windows(4).any(|bytes| bytes == b"\x1b[2L"),
+        "expected scoped insert-line reuse: {} bytes",
+        update.len()
+    );
+    let mut actual = TerminalScreen::new(Size::new(columns, 12).unwrap(), 20).unwrap();
+    let mut expected = TerminalScreen::new(Size::new(columns, 12).unwrap(), 20).unwrap();
+    actual.feed(&initial);
+    expected.feed(&initial);
+    for screen in [&mut actual, &mut expected] {
+        screen.feed(b"\x1b[12;1Hlower row");
+    }
+    actual.feed(&update);
+    // Paint only changed presentation rows in the oracle; a full redraw would
+    // erase the host-owned row below the presented region.
+    for (row, line) in next_lines.iter().enumerate().take(9) {
+        expected.feed(format!("\x1b[{};1H\x1b[0m\x1b[2K{}", row + 1, line).as_bytes());
+    }
+    assert_eq!(
+        actual.visible_styled_lines(),
+        expected.visible_styled_lines()
+    );
+    assert_eq!(actual.history().len(), expected.history().len());
+}
+
+/// Shifted styled rows retain their renditions, while the newly exposed row
+/// is repainted safely even when it contains a wide glyph.
+#[test]
+fn attached_terminal_output_shift_preserves_styles_and_wide_cells() {
+    let columns = 40;
+    let previous_lines = (0..10)
+        .map(|index| {
+            format!(
+                "row {index:02} {}",
+                char::from(b'a' + index as u8).to_string().repeat(33)
+            )
+        })
+        .collect::<Vec<_>>();
+    let rendition = GraphicRendition {
+        foreground: Some(TerminalColor::Rgb(100, 120, 140)),
+        ..Default::default()
+    };
+    let previous_spans = vec![
+        vec![TerminalStyleSpan {
+            start: 0,
+            length: 6,
+            rendition
+        }];
+        10
+    ];
+    let mut next_lines = previous_lines[1..].to_vec();
+    next_lines.push(format!("wide 界 {}", "z".repeat(32)));
+    let mut next_spans = previous_spans[1..].to_vec();
+    next_spans.push(vec![TerminalStyleSpan {
+        start: 0,
+        length: 7,
+        rendition,
+    }]);
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        ..Default::default()
+    };
+    let previous =
+        AttachedTerminalOutputFrameState::new_with_modes(&previous_lines, &previous_spans, modes);
+    let initial = encode_attached_terminal_output_frame_with_styles(
+        &previous_lines,
+        &previous_spans,
+        None,
+        modes,
+    );
+    let update = encode_attached_terminal_output_update_frame_with_verified_size(
+        &next_lines,
+        &next_spans,
+        None,
+        modes,
+        Some(&previous),
+        AttachedTerminalModeTransitions::default(),
+        Some(Size::new(columns, 10).unwrap()),
+    );
+    assert!(update.windows(4).any(|bytes| bytes == b"\x1b[1M"));
+    let mut actual = TerminalScreen::new(Size::new(columns, 10).unwrap(), 20).unwrap();
+    let mut expected = TerminalScreen::new(Size::new(columns, 10).unwrap(), 20).unwrap();
+    actual.feed(&initial);
+    actual.feed(&update);
+    expected.feed(&encode_attached_terminal_output_frame_with_styles(
+        &next_lines,
+        &next_spans,
+        None,
+        modes,
+    ));
+    assert_eq!(
+        actual.visible_styled_lines(),
+        expected.visible_styled_lines()
+    );
+    assert_eq!(actual.history().len(), expected.history().len());
+}
+
+/// Line edits affect physical terminal rows, so missing geometry or any
+/// partial-width presentation must retain ordinary row-diff encoding.
+#[test]
+fn attached_terminal_output_shift_requires_verified_full_width() {
+    let lines = (0..12)
+        .map(|index| format!("row {index:02} {}", "x".repeat(33)))
+        .collect::<Vec<_>>();
+    let mut shifted = lines[1..].to_vec();
+    shifted.push(format!("row 12 {}", "y".repeat(33)));
+    let modes = AttachedTerminalOutputModes::default();
+    let previous = AttachedTerminalOutputFrameState::new_with_modes(&lines, &[], modes);
+    for verified_size in [None, Some(Size::new(41, 12).unwrap())] {
+        let encoded = encode_attached_terminal_output_update_frame_with_verified_size(
+            &shifted,
+            &[],
+            None,
+            modes,
+            Some(&previous),
+            AttachedTerminalModeTransitions::default(),
+            verified_size,
+        );
+        assert!(!encoded.windows(4).any(|bytes| bytes == b"\x1b[1M"));
+    }
 }
 
 /// Verifies an authoritative style-only command-preview update preserves the
@@ -198,6 +496,123 @@ fn attached_terminal_output_update_uses_changed_ascii_span_when_safe() {
     assert!(!rendered.contains("aaaabaaaaa"), "{rendered:?}");
 }
 
+/// One changed cell under a full-width style must not resend its unchanged
+/// neighbors, while preserving the effective rendition of the changed cell.
+#[test]
+fn attached_terminal_output_update_limits_full_span_damage_to_changed_cell() {
+    let previous_lines = vec!["a".repeat(80)];
+    let current_lines = vec![format!("{}b{}", "a".repeat(39), "a".repeat(40))];
+    let rendition = GraphicRendition {
+        background: Some(TerminalColor::Rgb(12, 34, 56)),
+        ..GraphicRendition::default()
+    };
+    let spans = vec![vec![TerminalStyleSpan {
+        start: 0,
+        length: 80,
+        rendition,
+    }]];
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &spans);
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        cursor_blink: false,
+        ..Default::default()
+    };
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &current_lines,
+        &spans,
+        None,
+        modes,
+        Some(&previous),
+    );
+    let encoded = String::from_utf8(frame).unwrap();
+    assert!(encoded.contains("\x1b[1;40H"), "{encoded:?}");
+    assert!(
+        !encoded.contains(&current_lines[0]),
+        "unchanged cells were repainted: {encoded:?}"
+    );
+    let mut screen = TerminalScreen::new(Size::new(81, 1).unwrap(), 10).unwrap();
+    screen.feed(&encode_attached_terminal_output_frame_with_styles(
+        &previous_lines,
+        &spans,
+        None,
+        modes,
+    ));
+    screen.feed(encoded.as_bytes());
+    let row = &screen.visible_styled_lines()[0];
+    assert_eq!(&row.text[..80], current_lines[0]);
+    assert_eq!(styled_line_rendition_at(row, 0), rendition);
+    assert_eq!(styled_line_rendition_at(row, 39), rendition);
+    assert_eq!(styled_line_rendition_at(row, 79), rendition);
+}
+
+/// Different span representations of the same effective terminal cells must
+/// produce no redundant row output.
+#[test]
+fn attached_terminal_output_update_ignores_equivalent_style_spans() {
+    let lines = vec!["same row".to_string()];
+    let previous = AttachedTerminalOutputFrameState::new(&lines, &[Vec::new()]);
+    let equivalent = vec![vec![TerminalStyleSpan {
+        start: 0,
+        length: 8,
+        rendition: GraphicRendition::default(),
+    }]];
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &lines,
+        &equivalent,
+        None,
+        AttachedTerminalOutputModes {
+            cursor_visible: false,
+            cursor_blink: false,
+            ..Default::default()
+        },
+        Some(&previous),
+    );
+    assert!(
+        frame.is_empty(),
+        "equivalent spans repainted a row: {:?}",
+        String::from_utf8_lossy(&frame)
+    );
+
+    let rendition = GraphicRendition {
+        foreground: Some(TerminalColor::Rgb(12, 34, 56)),
+        ..GraphicRendition::default()
+    };
+    let whole = vec![vec![TerminalStyleSpan {
+        start: 0,
+        length: 8,
+        rendition,
+    }]];
+    let split = vec![vec![
+        TerminalStyleSpan {
+            start: 0,
+            length: 3,
+            rendition,
+        },
+        TerminalStyleSpan {
+            start: 3,
+            length: 5,
+            rendition,
+        },
+    ]];
+    let previous = AttachedTerminalOutputFrameState::new(&lines, &whole);
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &lines,
+        &split,
+        None,
+        AttachedTerminalOutputModes {
+            cursor_visible: false,
+            cursor_blink: false,
+            ..Default::default()
+        },
+        Some(&previous),
+    );
+    assert!(
+        frame.is_empty(),
+        "partitioned spans repainted a row: {:?}",
+        String::from_utf8_lossy(&frame)
+    );
+}
+
 /// Verifies title-like frame edits can update several changed rows through
 /// bounded row segments instead of repainting each full row. Window-group,
 /// window, and pane title changes commonly touch a small set of frame rows, and
@@ -239,10 +654,8 @@ fn attached_terminal_output_update_uses_segment_updates_for_small_multi_row_titl
     assert!(!rendered.contains("\x1b[3;1H#1 build"), "{rendered:?}");
 }
 
-/// Verifies large multi-row viewport changes still rewrite whole rows instead
-/// of emitting many small segment updates. Scrollback paging and similar bulk
-/// transitions change enough rows that self-contained full-row redraws remain
-/// the better tradeoff.
+/// Verifies multiple changed rows choose the smaller safe encoding per row,
+/// rather than imposing a global changed-row threshold.
 #[test]
 fn attached_terminal_output_update_rewrites_full_rows_for_many_row_changes() {
     let previous_lines = vec![
@@ -253,33 +666,170 @@ fn attached_terminal_output_update_rewrites_full_rows_for_many_row_changes() {
     ];
     let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &[]);
 
+    let current_lines = vec![
+        "row 101".to_string(),
+        "row 102".to_string(),
+        "row 103".to_string(),
+        "row 104".to_string(),
+    ];
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        cursor_blink: false,
+        ..AttachedTerminalOutputModes::default()
+    };
     let frame = encode_attached_terminal_output_update_frame_with_styles(
-        &[
-            "row 101".to_string(),
-            "row 102".to_string(),
-            "row 103".to_string(),
-            "row 104".to_string(),
-        ],
+        &current_lines,
         &[],
         None,
-        AttachedTerminalOutputModes {
-            cursor_visible: false,
-            cursor_blink: false,
-            ..AttachedTerminalOutputModes::default()
-        },
+        modes,
         Some(&previous),
     );
-    let rendered = String::from_utf8(frame).unwrap();
+    let rendered = String::from_utf8(frame.clone()).unwrap();
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[1;1H\x1b[0mrow 101"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[2;1H\x1b[0mrow 102"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[3;1H\x1b[0mrow 103"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[4;1H\x1b[0mrow 104"), "{rendered:?}");
-    assert!(!rendered.contains("\x1b[1;5H1"), "{rendered:?}");
-    assert!(!rendered.contains("\x1b[2;5H1"), "{rendered:?}");
-    assert!(!rendered.contains("\x1b[3;5H1"), "{rendered:?}");
-    assert!(!rendered.contains("\x1b[4;5H1"), "{rendered:?}");
+    for row in 1..=4 {
+        assert!(
+            rendered.contains(&format!("\x1b[{row};5H\x1b[0m1")),
+            "{rendered:?}"
+        );
+    }
+    let mut screen = TerminalScreen::new(Size::new(12, 4).unwrap(), 10).unwrap();
+    screen.feed(&encode_attached_terminal_output_frame_with_styles(
+        &previous_lines,
+        &[],
+        None,
+        modes,
+    ));
+    screen.feed(&frame);
+    for (row, expected) in screen.visible_styled_lines().iter().zip(&current_lines) {
+        assert_eq!(&row.text[..7], expected);
+    }
+}
+
+/// Four independent one-cell edits must not repaint every unchanged cell merely
+/// because they occur in more than three rows.
+#[test]
+fn attached_terminal_output_update_uses_sparse_segments_across_four_rows() {
+    let previous_lines = (0..4).map(|_| "a".repeat(80)).collect::<Vec<_>>();
+    let current_lines = (0..4)
+        .map(|_| format!("{}b{}", "a".repeat(39), "a".repeat(40)))
+        .collect::<Vec<_>>();
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &[]);
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        cursor_blink: false,
+        ..Default::default()
+    };
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &current_lines,
+        &[],
+        None,
+        modes,
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame.clone()).unwrap();
+    assert!(
+        frame.len() < 180,
+        "four sparse edits repainted rows: {rendered:?}"
+    );
+    for row in 1..=4 {
+        assert!(
+            rendered.contains(&format!("\x1b[{row};40H\x1b[0mb")),
+            "{rendered:?}"
+        );
+    }
+    let mut screen = TerminalScreen::new(Size::new(81, 4).unwrap(), 10).unwrap();
+    screen.feed(&encode_attached_terminal_output_frame_with_styles(
+        &previous_lines,
+        &[],
+        None,
+        modes,
+    ));
+    screen.feed(&frame);
+    for (row, expected) in screen.visible_styled_lines().iter().zip(&current_lines) {
+        assert_eq!(&row.text[..80], expected);
+    }
+}
+
+/// Distant one-cell changes should not transmit the unchanged interior when
+/// two independent cursor-addressed runs are cheaper than one bounding span.
+#[test]
+fn attached_terminal_output_update_uses_two_distant_changed_runs() {
+    let previous_lines = vec!["a".repeat(160)];
+    let mut current = previous_lines[0].clone().into_bytes();
+    current[2] = b'b';
+    current[157] = b'c';
+    let current_lines = vec![String::from_utf8(current).unwrap()];
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &[]);
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        cursor_blink: false,
+        ..Default::default()
+    };
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &current_lines,
+        &[],
+        None,
+        modes,
+        Some(&previous),
+    );
+    let encoded = String::from_utf8(frame.clone()).unwrap();
+    assert!(encoded.contains("\x1b[1;3H\x1b[0mb"), "{encoded:?}");
+    assert!(encoded.contains("\x1b[1;158H\x1b[0mc"), "{encoded:?}");
+    assert!(
+        frame.len() < 150,
+        "unchanged middle was repainted: {encoded:?}"
+    );
+    let mut screen = TerminalScreen::new(Size::new(161, 1).unwrap(), 10).unwrap();
+    screen.feed(&encode_attached_terminal_output_frame_with_styles(
+        &previous_lines,
+        &[],
+        None,
+        modes,
+    ));
+    screen.feed(&frame);
+    assert_eq!(
+        &screen.visible_styled_lines()[0].text[..160],
+        current_lines[0]
+    );
+}
+
+/// Many alternating changes stay bounded by choosing one contiguous row
+/// candidate instead of generating an unbounded sequence of cursor moves.
+#[test]
+fn attached_terminal_output_update_bounds_dense_run_planning() {
+    let previous_lines = vec!["a".repeat(80)];
+    let current_lines = vec!["ba".repeat(40)];
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &[]);
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        cursor_blink: false,
+        ..Default::default()
+    };
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &current_lines,
+        &[],
+        None,
+        modes,
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame.clone()).unwrap();
+    assert!(
+        frame.len() < 160,
+        "dense update generated too many runs: {rendered:?}"
+    );
+    let mut screen = TerminalScreen::new(Size::new(81, 1).unwrap(), 10).unwrap();
+    screen.feed(&encode_attached_terminal_output_frame_with_styles(
+        &previous_lines,
+        &[],
+        None,
+        modes,
+    ));
+    screen.feed(&frame);
+    assert_eq!(
+        &screen.visible_styled_lines()[0].text[..80],
+        current_lines[0]
+    );
 }
 
 /// Verifies rows that change display width still keep the full-row rewrite
@@ -308,13 +858,12 @@ fn attached_terminal_output_update_rewrites_rows_when_glyph_width_changes() {
     assert!(rendered.contains("aaXaa "), "{rendered:?}");
 }
 
-/// Verifies row-diff updates expand to cover trailing prompt padding when one
-/// changed prompt segment overlaps a full-row background span.
+/// Verifies a changed prompt retains the full-row background on trailing
+/// padding without unnecessarily repainting the unchanged styled cells.
 ///
-/// Pasting multiline input can replace only the visible text on one wrapped
-/// prompt row while preserving the same prompt background on trailing spaces.
-/// The incremental row encoder must repaint those trailing padding cells so the
-/// attached terminal does not leave them with stale default styling.
+/// Pasting multiline input replaces visible text while the same prompt style
+/// remains active on the trailing spaces. The physical result must match a
+/// fresh styled render even when only the changed prefix is emitted.
 #[test]
 fn attached_terminal_output_update_repaints_trailing_prompt_padding_after_text_change() {
     let previous_lines = vec!["      ".to_string()];
@@ -347,17 +896,30 @@ fn attached_terminal_output_update_repaints_trailing_prompt_padding_after_text_c
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
     assert!(rendered.contains("\x1b[1;1H\x1b[0m"), "{rendered:?}");
-    assert!(rendered.contains("alpha "), "{rendered:?}");
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        cursor_blink: false,
+        ..Default::default()
+    };
+    let mut screen = TerminalScreen::new(Size::new(16, 1).unwrap(), 10).unwrap();
+    screen.feed(&encode_attached_terminal_output_frame_with_styles(
+        &previous_lines,
+        &previous_spans,
+        None,
+        modes,
+    ));
+    screen.feed(rendered.as_bytes());
+    let row = &screen.visible_styled_lines()[0];
+    assert_eq!(&row.text[..6], "alpha ");
+    assert_eq!(styled_line_rendition_at(row, 5), prompt_span.rendition);
 }
 
-/// Verifies wrapped agent-prompt continuation rows with full-row styling fall
-/// back to a full-row rewrite instead of a bounded segment update.
+/// Verifies wrapped agent-prompt continuation rows keep their unchanged
+/// indentation and padding with the original style after a bounded update.
 ///
 /// History navigation can swap one wrapped continuation row for another while
-/// keeping the changed text inside a narrow interior segment. The row-diff
-/// path must still rewrite the whole row when prompt styling spans extend past
-/// the changed text, or the continuation indentation and prompt background can
-/// inherit stale cells from the prior render.
+/// keeping the changed text inside a narrow interior segment. Compare actual
+/// terminal cells and styles instead of requiring an obsolete full-row repaint.
 #[test]
 fn attached_terminal_output_update_rewrites_fully_styled_prompt_continuation_rows() {
     let previous_lines = vec!["      alpha     ".to_string()];
@@ -389,9 +951,24 @@ fn attached_terminal_output_update_rewrites_fully_styled_prompt_continuation_row
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[1;1H\x1b[0m"), "{rendered:?}");
-    assert!(rendered.contains("      omega     "), "{rendered:?}");
-    assert!(!rendered.contains("\x1b[1;7H\x1b[0momega"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;7H\x1b[0m"), "{rendered:?}");
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        cursor_blink: false,
+        ..Default::default()
+    };
+    let mut screen = TerminalScreen::new(Size::new(20, 1).unwrap(), 10).unwrap();
+    screen.feed(&encode_attached_terminal_output_frame_with_styles(
+        &previous_lines,
+        &previous_spans,
+        None,
+        modes,
+    ));
+    screen.feed(rendered.as_bytes());
+    let row = &screen.visible_styled_lines()[0];
+    assert_eq!(&row.text[..16], "      omega     ");
+    assert_eq!(styled_line_rendition_at(row, 0), prompt_span.rendition);
+    assert_eq!(styled_line_rendition_at(row, 15), prompt_span.rendition);
 }
 
 /// Verifies bounded row-segment updates keep selected-link styling off the
@@ -739,6 +1316,40 @@ fn attached_terminal_output_update_emits_only_changed_bracketed_paste_mode() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert_eq!(rendered, "\x1b[?2004h");
+}
+
+/// Repainting a changed row must assign changed mouse and focus modes once,
+/// after the mandatory coordinate reset, without redundant pre-reset writes.
+#[test]
+fn attached_terminal_repaint_sets_mouse_and_focus_once() {
+    let prior = vec!["before  ".to_string()];
+    let previous = AttachedTerminalOutputFrameState::new_with_modes(
+        &prior,
+        &[],
+        AttachedTerminalOutputModes::default(),
+    );
+    let next = vec!["after   ".to_string()];
+    let modes = AttachedTerminalOutputModes {
+        host_mouse_reporting: false,
+        focus_events: true,
+        ..AttachedTerminalOutputModes::default()
+    };
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &next,
+        &[],
+        None,
+        modes,
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+    assert!(rendered.contains("\x1b[?6l\x1b[?69l\x1b[r"), "{rendered:?}");
+    assert_eq!(
+        rendered
+            .matches("\x1b[?1006l\x1b[?1002l\x1b[?1000l")
+            .count(),
+        1
+    );
+    assert_eq!(rendered.matches("\x1b[?1004h").count(), 1);
 }
 
 /// Verifies that attached-terminal row-diff updates keep styling on the final

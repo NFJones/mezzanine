@@ -509,7 +509,14 @@ impl RuntimeSessionService {
                 .ok_or_else(|| MezError::invalid_state("queued compaction turn is unavailable"))?;
             return Ok(Some(RuntimeTransition {
                 applied: true,
-                side_effects: vec![RuntimeSideEffect::DispatchAgentCompaction { pane_id }],
+                side_effects: vec![RuntimeSideEffect::DispatchAgentCompaction {
+                    task_generation: self
+                        .pending_agent_compaction_task_generation(&pane_id)
+                        .ok_or_else(|| {
+                            MezError::invalid_state("queued compaction generation is unavailable")
+                        })?,
+                    pane_id,
+                }],
             }));
         }
         if !recovered {

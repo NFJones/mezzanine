@@ -588,19 +588,23 @@ fn model_context_retained_group_indexes(
 ) -> Vec<usize> {
     let mut retained_words = 0usize;
     let mut retained = Vec::new();
+    let mut next_group = eligible_groups.last().copied();
     for group_index in eligible_groups.iter().copied().rev() {
+        if next_group != Some(group_index) {
+            break;
+        }
         let group = &groups[group_index];
         if blocks[group.clone()]
             .iter()
             .any(context_block_is_compaction_summary)
         {
-            continue;
+            break;
         }
         if blocks[group.clone()]
             .iter()
             .any(|block| block.content.len() > MODEL_CONTEXT_BLOCK_LIMIT_BYTES)
         {
-            continue;
+            break;
         }
         // Only rendered blocks consume the raw tail budget: a block the active
         // provider never receives must not displace a rendered group that the
@@ -610,10 +614,11 @@ fn model_context_retained_group_indexes(
             &block_visible[group.clone()],
         );
         if retained_words.saturating_add(group_words) > tail_budget_words {
-            continue;
+            break;
         }
         retained_words = retained_words.saturating_add(group_words);
         retained.push(group_index);
+        next_group = group_index.checked_sub(1);
     }
     retained.sort_unstable();
     retained
@@ -814,6 +819,56 @@ mod tests {
             with_unrendered,
             vec![1, 2],
             "an unrendered group must not displace a rendered group from the tail"
+        );
+    }
+
+    /// A newer closed group that cannot fit ends the retained suffix; older
+    /// smaller groups must not fill the unused budget behind it.
+    #[test]
+    fn model_context_retained_tail_does_not_skip_oversized_newest_group() {
+        let blocks = vec![
+            ContextBlock::assistant_event("older", "older ".repeat(10)),
+            ContextBlock::assistant_event("newer", "newer ".repeat(300)),
+        ];
+        let groups = vec![0..1, 1..2];
+        let retained =
+            model_context_retained_group_indexes(&blocks, &[true, true], &groups, &[0, 1], 100);
+        assert!(
+            retained.is_empty(),
+            "retained groups must be a recent suffix: {retained:?}"
+        );
+    }
+
+    /// A fitting newest group remains exact, but a non-fitting predecessor
+    /// ends selection instead of allowing still-older small groups to fill it.
+    #[test]
+    fn model_context_retained_tail_stops_at_non_fitting_predecessor() {
+        let blocks = vec![
+            ContextBlock::assistant_event("old small", "old ".repeat(5)),
+            ContextBlock::assistant_event("middle large", "middle ".repeat(300)),
+            ContextBlock::assistant_event("new small", "new ".repeat(5)),
+        ];
+        let groups = vec![0..1, 1..2, 2..3];
+        assert_eq!(
+            model_context_retained_group_indexes(
+                &blocks,
+                &[true, true, true],
+                &groups,
+                &[0, 1, 2],
+                100,
+            ),
+            vec![2]
+        );
+        assert_eq!(
+            model_context_retained_group_indexes(
+                &blocks,
+                &[true, true, true],
+                &groups,
+                &[0, 2],
+                100,
+            ),
+            vec![2],
+            "an ineligible causal group cannot be skipped to retain older history"
         );
     }
 
@@ -1117,6 +1172,54 @@ mod tests {
         assert_eq!(chronology[3].block().content, "keep this result raw");
         assert_eq!(chronology[4].block().label, "later assistant");
         assert!(chronology[4].block().content.contains("later decision"));
+    }
+
+    /// An oversized newest closed group must be summarized with its preceding
+    /// group, never replaced by an older small group in the retained tail.
+    #[test]
+    fn model_context_compaction_summarizes_oversized_newest_closed_group() {
+        let context = AgentContext::new_durable(vec![
+            ContextBlock::user_event("exact instruction", "keep this instruction exact"),
+            ContextBlock::assistant_event("older decision", "older ".repeat(10)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "older result",
+                "older result",
+            ),
+            ContextBlock::assistant_event("newer decision", "newer ".repeat(300)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "newer result",
+                "newer result",
+            ),
+        ])
+        .unwrap();
+        let plan = plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            1_000,
+            10,
+            context.event_sequence_high_water_mark(),
+        )
+        .unwrap();
+
+        assert!(plan.retained_tail().is_empty());
+        assert_eq!(plan.replacement_blocks().len(), 4);
+        assert_eq!(plan.replacement_blocks()[0].label, "older decision");
+        assert_eq!(plan.replacement_blocks()[3].label, "newer result");
+        let (compacted, _) = apply_model_context_compaction_plan(
+            context,
+            &plan,
+            "Both completed decisions and their evidence were summarized.",
+        )
+        .unwrap();
+        assert_eq!(
+            compacted.chronology()[0].block().content,
+            "keep this instruction exact"
+        );
+        assert_eq!(
+            compacted.chronology()[1].block().label,
+            "context compaction summary"
+        );
     }
 
     /// Verifies progressive model-request backoff moves exactly the newest

@@ -427,7 +427,9 @@ fn foreground_serve_zen_round_trip_resizes_real_pane_pty() {
     process.write_input(b"\x01:zen off\r").unwrap();
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("mez-app-size 10 40") && contains_pane_frame(text, "sleep")
+            text.contains("mez-app-size 10 40")
+                && (contains_pane_frame(text, "sleep")
+                    || (text.contains("\x1b[1;5H") && text.contains("leep")))
         })
         .unwrap();
 
@@ -484,9 +486,11 @@ fn foreground_zen_focus_label_expires_without_input() {
     screen.feed(&output);
     output.clear();
     process.write_input(b"\x01:zen on\r").unwrap();
+    // Zen retains the split divider; wait for its final-row repaint rather
+    // than assuming logical recomposition clears the physical terminal.
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("\x1b[2J\x1b[H")
+            text.contains("\x1b[24;1H") && text.contains("\x1b[?25h")
         })
         .unwrap();
     screen.feed(&output);
@@ -755,7 +759,9 @@ fn foreground_serve_pane_status_explicit_rails_remain_diagnostic_in_zen() {
     process.write_input(b"\x01:zen off\r").unwrap();
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("mez-pane-status-zen-size 22 80") && contains_pane_frame(text, "sleep")
+            text.contains("mez-pane-status-zen-size 22 80")
+                && (contains_pane_frame(text, "sleep")
+                    || (text.contains("\x1b[1;5H") && text.contains("leep")))
         })
         .unwrap();
 

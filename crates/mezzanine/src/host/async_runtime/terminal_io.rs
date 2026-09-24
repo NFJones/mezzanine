@@ -21,7 +21,7 @@ use mez_mux::attached_client::{
     AttachedTerminalModeTransitions, AttachedTerminalOutputFrameState,
     attached_terminal_enhanced_keyboard_reporting_frame,
     attached_terminal_enter_presentation_frame, attached_terminal_restore_presentation_frame,
-    encode_attached_terminal_output_update_frame_with_styles_and_transitions,
+    encode_attached_terminal_output_update_frame_with_verified_size,
 };
 use mez_terminal::TerminalStyleSpan;
 #[cfg(test)]
@@ -443,13 +443,16 @@ impl AsyncAttachedTerminalFdLoopIo {
             enhanced_keyboard_reporting: enhanced_keyboard_transition,
         };
         let transition_end = transitions.encoded_len();
-        let bytes = encode_attached_terminal_output_update_frame_with_styles_and_transitions(
+        let bytes = encode_attached_terminal_output_update_frame_with_verified_size(
             lines,
             line_style_spans,
             keypad_transition,
             modes,
             self.previous_output_frame.as_ref(),
             transitions,
+            read_attached_terminal_size(self.output.get_ref().fd)
+                .ok()
+                .flatten(),
         );
         let next_state =
             AttachedTerminalOutputFrameState::new_with_modes(lines, line_style_spans, modes);
@@ -484,13 +487,16 @@ impl AsyncAttachedTerminalFdLoopIo {
             enhanced_keyboard_reporting: enhanced_keyboard_transition,
         };
         let transition_end = transitions.encoded_len();
-        let bytes = encode_attached_terminal_output_update_frame_with_styles_and_transitions(
+        let bytes = encode_attached_terminal_output_update_frame_with_verified_size(
             &lines,
             &line_style_spans,
             keypad_transition,
             modes,
             self.previous_output_frame.as_ref(),
             transitions,
+            read_attached_terminal_size(self.output.get_ref().fd)
+                .ok()
+                .flatten(),
         );
         let next_state =
             AttachedTerminalOutputFrameState::from_owned_with_modes(lines, line_style_spans, modes);

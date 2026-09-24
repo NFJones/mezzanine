@@ -244,6 +244,9 @@ fn runtime_agent_prompt_resume_displays_saved_transcript_context() {
             })
             .unwrap();
     }
+    transcript_store
+        .save_compaction_epoch(conversation_id, 1, "CROSS_PANE_DURABLE_SUMMARY")
+        .unwrap();
     service.set_agent_transcript_store(transcript_store);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -266,6 +269,27 @@ fn runtime_agent_prompt_resume_displays_saved_transcript_context() {
         .unwrap()
         .expect("the deferred direct resume settles");
     assert!(settled.contains("resumed=true"), "{settled}");
+    let history = service
+        .agent_context_for_pane_prompt("%1", "continue", 0)
+        .unwrap();
+    assert!(
+        history
+            .blocks()
+            .iter()
+            .any(|block| block.content == "CROSS_PANE_DURABLE_SUMMARY")
+    );
+    assert!(
+        !history
+            .blocks()
+            .iter()
+            .any(|block| block.content == "aGVsbG8K")
+    );
+    assert!(
+        history
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("I inspected the repo"))
+    );
     let pane_text = service
         .pane_screen("%1")
         .unwrap()

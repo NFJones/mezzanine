@@ -2,6 +2,43 @@
 
 use super::*;
 
+/// Normal worker composition and inline composition must apply the same
+/// exact-client overlays and return the same painted receipt identities.
+#[test]
+fn runtime_worker_and_inline_client_view_overlays_match() {
+    let mut service = test_runtime_service();
+    let size = Size::new(80, 24).unwrap();
+    let primary = service.attach_primary("primary", true, size, 120).unwrap();
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    service
+        .show_primary_display_overlay(vec!["overlay parity".to_string()])
+        .unwrap();
+    for (client_id, role) in [
+        (primary, ClientViewRole::Primary),
+        (observer, ClientViewRole::Observer),
+    ] {
+        let inline = service
+            .render_client_view_for_client_with_resolved_config_and_receipts(
+                &client_id, role, size, &config,
+            )
+            .unwrap();
+        let snapshot = service
+            .capture_client_render_snapshot(&client_id, role, size, &config)
+            .unwrap();
+        let base = super::super::super::compose_client_render_snapshot(snapshot).unwrap();
+        let worker = service
+            .complete_client_render_snapshot(role, &config, base)
+            .unwrap();
+        assert_eq!(worker, inline, "{role:?} worker and inline views diverged");
+    }
+}
+
 /// Verifies exact-client rendering rejects identities that are not currently
 /// attached instead of falling back to the session's compatibility focus.
 #[test]

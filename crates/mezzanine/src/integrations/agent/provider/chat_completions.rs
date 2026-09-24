@@ -11,8 +11,8 @@ use super::{
     AsyncModelProvider, AsyncProviderHttpTransport, DEFAULT_PROVIDER_TIMEOUT_MS, ExposeSecret,
     MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse,
     ProviderModelCatalog, ProviderWireObservationContext, Result, SecretString,
-    bounded_streaming_say_events, parse_openai_models_http_body, provider_maap_stream_fragment,
-    provider_quota_usage_from_headers, validate_non_empty,
+    SseProgressForwarder, parse_openai_models_http_body, provider_quota_usage_from_headers,
+    validate_non_empty,
 };
 #[cfg(test)]
 use super::{ModelProvider, ProviderHttpTransport};
@@ -508,34 +508,10 @@ where
             } else {
                 None
             };
-            let mut streaming_say_extractor = mez_agent::StreamingSayExtractor::default();
-            let mut stream_error = None;
+            let mut forwarding = SseProgressForwarder::default();
             let response_result = if let Some(decoder) = stream_decoder.as_mut() {
                 let mut on_event = |event| {
-                    let mut progress_events = Vec::new();
-                    if stream_error.is_none() {
-                        match decoder.push_event(&event) {
-                            Ok(Some(_)) => {}
-                            Ok(None) => {}
-                            Err(error) => stream_error = Some(error),
-                        }
-                        if let Some(fragment) = provider_maap_stream_fragment(&event) {
-                            progress_events = bounded_streaming_say_events(
-                                streaming_say_extractor.push_delta(&fragment),
-                            );
-                        }
-                    }
-                    let progress = progress.clone();
-                    Box::pin(async move {
-                        let Some(progress) = progress else {
-                            return;
-                        };
-                        for event in progress_events {
-                            if progress.send(event).await.is_err() {
-                                break;
-                            }
-                        }
-                    }) as Pin<Box<dyn Future<Output = ()> + Send>>
+                    forwarding.on_event(&event, |event| decoder.push_event(event), progress.clone())
                 };
                 self.transport
                     .send_async_with_sse_events(&http_request, &mut on_event)
@@ -560,7 +536,7 @@ where
                 }
                 return result;
             }
-            if let Some(error) = stream_error {
+            if let Some(error) = forwarding.error {
                 let result = Err(error);
                 if let Some(observation) = observation.as_ref() {
                     observation.observe(request, 1, None, &result).await;

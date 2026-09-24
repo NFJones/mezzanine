@@ -989,6 +989,113 @@ async fn async_actor_applies_render_timer_events_as_side_effects() {
     assert_eq!(exit.metrics.runtime_timer_events_ignored, 1);
 }
 
+/// Verifies a client-owned blink timer wakes only its owner, even when
+/// separate primary clients are attached and their timer firings are staggered.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_cursor_blink_timer_targets_only_its_client() {
+    let mut service = test_service();
+    let first = service
+        .attach_primary("first", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let second = service
+        .attach_primary("second", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        handle.drain_runtime_side_effects(64).await.unwrap();
+        for (owner, generation) in [(&first, 100), (&second, 200)] {
+            let key =
+                RuntimeTimerKey::new(RuntimeTimerKind::CursorBlink, owner.as_str(), generation);
+            handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+                    key: key.clone(),
+                    delay_ms: 1,
+                }])
+                .await
+                .unwrap();
+            handle.drain_timer_side_effects(64).await.unwrap();
+            let mut batch = RuntimeEventBatch::new();
+            batch.push(RuntimeEvent::Timer(TimerEvent {
+                key,
+                now_ms: generation + 1,
+            }));
+            handle.submit_runtime_events(batch).await.unwrap();
+            let recipients = handle
+                .drain_runtime_side_effects(64)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter_map(|effect| match effect {
+                    RuntimeSideEffect::RenderClient {
+                        client_id,
+                        reason: RenderInvalidationReason::CursorBlink,
+                    } => Some(client_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(recipients, vec![owner.clone()]);
+        }
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
+/// Verifies an observer's client-local cursor timer does not wake its source
+/// primary and a superseded timer generation cannot repaint either client.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_observer_cursor_blink_ignores_stale_generation() {
+    use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
+
+    let mut session = SessionFixture::new().build();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let observer = session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    let service = RuntimeServiceFixture::new().build_with_session(session);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        handle.drain_runtime_side_effects(64).await.unwrap();
+        let stale = RuntimeTimerKey::new(RuntimeTimerKind::CursorBlink, observer.as_str(), 100);
+        let active = RuntimeTimerKey::new(RuntimeTimerKind::CursorBlink, observer.as_str(), 200);
+        for key in [&stale, &active] {
+            handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+                    key: key.clone(),
+                    delay_ms: 1,
+                }])
+                .await
+                .unwrap();
+            handle.drain_timer_side_effects(64).await.unwrap();
+        }
+        for (key, expected) in [(stale, None), (active, Some(observer.clone()))] {
+            let mut batch = RuntimeEventBatch::new();
+            batch.push(RuntimeEvent::Timer(TimerEvent { key, now_ms: 201 }));
+            handle.submit_runtime_events(batch).await.unwrap();
+            let recipients = handle
+                .drain_runtime_side_effects(64)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter_map(|effect| match effect {
+                    RuntimeSideEffect::RenderClient {
+                        client_id,
+                        reason: RenderInvalidationReason::CursorBlink,
+                    } => Some(client_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(recipients, expected.into_iter().collect::<Vec<_>>());
+            assert!(!recipients.contains(&primary));
+        }
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
 /// Verifies that resize debounce timer events are generation checked by the
 /// actor before producing a render invalidation. Rapid resize activity cancels
 /// the old debounce key and schedules a new one, so a late firing for the stale

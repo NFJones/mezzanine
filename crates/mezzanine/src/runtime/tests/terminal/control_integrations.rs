@@ -183,6 +183,65 @@ fn runtime_terminal_view_reports_latest_event_cutoff() {
     assert_eq!(response["result"]["event_cutoff"], expected_cutoff);
 }
 
+/// A client carrying the exact previous presentation identity receives a
+/// metadata-only response, but an obsolete identity receives a full view.
+#[test]
+fn runtime_terminal_view_conditional_response_keeps_exact_base() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let request = |identity: Option<&str>| {
+        let mut params = serde_json::json!({"client_size":{"columns":80,"rows":24}});
+        if let Some(identity) = identity {
+            params["if_view_identity"] = identity.into();
+        }
+        serde_json::json!({"jsonrpc":"2.0","id":"view","method":"terminal/view","params":params})
+            .to_string()
+    };
+    let initial: serde_json::Value =
+        serde_json::from_str(&service.dispatch_runtime_control_body(&request(None), &primary))
+            .unwrap();
+    let identity = initial["result"]["view_identity"].as_str().unwrap();
+    assert!(!initial["result"]["view"].is_null());
+    let unchanged: serde_json::Value = serde_json::from_str(
+        &service.dispatch_runtime_control_body(&request(Some(identity)), &primary),
+    )
+    .unwrap();
+    assert_eq!(unchanged["result"]["not_modified"], true);
+    assert!(unchanged["result"].get("view").is_none());
+    assert_eq!(unchanged["result"]["view_identity"], identity);
+    assert!(
+        service
+            .dispatch_runtime_control_body(&request(Some("invalid")), &primary)
+            .contains("invalid_params"),
+        "malformed conditional identities must be rejected"
+    );
+    let resized_request = serde_json::json!({
+        "jsonrpc": "2.0", "id": "resized", "method": "terminal/view",
+        "params": {"client_size": {"columns": 100, "rows": 30}, "if_view_identity": identity}
+    });
+    let resized: serde_json::Value = serde_json::from_str(
+        &service.dispatch_runtime_control_body(&resized_request.to_string(), &primary),
+    )
+    .unwrap();
+    assert!(!resized["result"]["view"].is_null());
+    let other = service
+        .attach_primary("other", true, Size::new(80, 24).unwrap(), 121)
+        .unwrap();
+    let other_response: serde_json::Value = serde_json::from_str(
+        &service.dispatch_runtime_control_body(&request(Some(identity)), &other),
+    )
+    .unwrap();
+    assert!(!other_response["result"]["view"].is_null());
+    assert_ne!(other_response["result"]["view_identity"], identity);
+    let changed: serde_json::Value = serde_json::from_str(
+        &service.dispatch_runtime_control_body(&request(Some("0".repeat(64).as_str())), &primary),
+    )
+    .unwrap();
+    assert!(!changed["result"]["view"].is_null());
+}
+
 /// Verifies control-rendered zen labels carry commit receipts and arm exactly
 /// once after an authenticated client reports a complete local frame write.
 /// Malformed and duplicate receipts must not create or renew a deadline.
@@ -206,6 +265,14 @@ fn runtime_terminal_view_focus_receipts_arm_once_after_acknowledgement() {
         .as_array()
         .expect("terminal view should carry presentation receipts");
     assert_eq!(presentation_ids.len(), 1);
+    let identity = response["result"]["view_identity"].as_str().unwrap();
+    let still_pending: serde_json::Value = serde_json::from_str(
+        &service.dispatch_runtime_control_body(
+            &format!(r#"{{"jsonrpc":"2.0","id":"same","method":"terminal/view","params":{{"client_size":{{"columns":80,"rows":24}},"if_view_identity":"{identity}"}}}}"#),
+            &primary,
+        ),
+    ).unwrap();
+    assert_eq!(still_pending["result"]["not_modified"], true);
     assert_eq!(
         service.zen_focus_label_next_due_ms_for_client(&primary, 1),
         None,
@@ -231,6 +298,14 @@ fn runtime_terminal_view_focus_receipts_arm_once_after_acknowledgement() {
     );
     let first = service.dispatch_runtime_control_body(&acknowledgement, &primary);
     assert!(first.contains(r#""acknowledged":true"#), "{first}");
+    let after_ack: serde_json::Value = serde_json::from_str(
+        &service.dispatch_runtime_control_body(
+            &format!(r#"{{"jsonrpc":"2.0","id":"after-ack","method":"terminal/view","params":{{"client_size":{{"columns":80,"rows":24}},"if_view_identity":"{identity}"}}}}"#),
+            &primary,
+        ),
+    ).unwrap();
+    assert_eq!(after_ack["result"]["not_modified"], true);
+    assert_eq!(after_ack["result"]["view_identity"], identity);
     let deadline = service
         .zen_focus_label_next_due_ms_for_client(&primary, 1)
         .expect("acknowledgement should arm the configured expiry");

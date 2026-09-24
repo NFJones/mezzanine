@@ -6,6 +6,7 @@
 //! `commands::mod` focused on cross-family command wiring while sibling
 //! modules own concrete slash-command behavior.
 
+use super::disposition::{AgentShellAwaitedCommand, command_execution_metadata};
 use super::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellVisibility, EventKind, MezError,
     Result, RuntimeSessionService, RuntimeSideEffect, agent_shell_visibility_json_name,
@@ -75,36 +76,16 @@ enum AgentShellCommandPlan {
     Awaited(AgentShellAwaitedCommand),
 }
 
-/// Agent-shell commands whose concrete effect executor may await host work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AgentShellAwaitedCommand {
-    /// Pane model or routing-model selection.
-    Model,
-    /// Model-backed conversation compaction queueing.
-    Compact,
-    /// Model-backed durable-memory extraction.
-    Remember,
-    /// MCP listing after live transport discovery.
-    ListMcp,
-    /// Provider catalog refresh through the async runtime.
-    RefreshProviderInfo,
-}
-
 /// Classifies one agent-shell input once before selecting an executor.
 fn agent_shell_command_plan(input: &str) -> AgentShellCommandPlan {
     let invocation = parse_slash_command(input).ok().flatten();
-    match invocation
-        .as_ref()
-        .map(|invocation| invocation.name.as_str())
-    {
-        Some("model") => AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::Model),
-        Some("compact") => AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::Compact),
-        Some("remember") => AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::Remember),
-        Some("list-mcp") => AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::ListMcp),
-        Some("refresh-provider-info") => {
-            AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::RefreshProviderInfo)
+    match invocation.as_ref() {
+        Some(invocation) => {
+            match command_execution_metadata(&invocation.name).and_then(|entry| entry.awaited) {
+                Some(effect) => AgentShellCommandPlan::Awaited(effect),
+                None => AgentShellCommandPlan::Immediate,
+            }
         }
-        Some(_) => AgentShellCommandPlan::Immediate,
         None if input.trim().is_empty() => AgentShellCommandPlan::Immediate,
         None => AgentShellCommandPlan::Prompt,
     }

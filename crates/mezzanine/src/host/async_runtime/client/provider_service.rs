@@ -633,8 +633,14 @@ async fn dispatch_agent_provider_side_effects(
                     Ok(None)
                 });
             }
-            RuntimeSideEffect::DispatchAgentCompaction { pane_id } => {
-                let dispatch = match handle.claim_agent_compaction_task(pane_id.clone()).await {
+            RuntimeSideEffect::DispatchAgentCompaction {
+                pane_id,
+                task_generation,
+            } => {
+                let dispatch = match handle
+                    .claim_agent_compaction_task(pane_id.clone(), task_generation)
+                    .await
+                {
                     Ok(Some(dispatch)) => dispatch,
                     Ok(None) => continue,
                     Err(error) => {
@@ -642,6 +648,7 @@ async fn dispatch_agent_provider_side_effects(
                         batch.push(RuntimeEvent::AgentCompaction(
                             AgentCompactionEvent::Failed {
                                 pane_id,
+                                task_generation,
                                 kind: provider_worker_error_kind(&error).to_string(),
                                 message: error.message().to_string(),
                                 provider_failure_json: error
@@ -1234,6 +1241,7 @@ async fn monitor_runtime_agent_compaction_dispatch(
 ) -> Result<AsyncAgentProviderWorkerResult> {
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
+    let task_generation = dispatch.task.task_generation;
     let conversation_id = dispatch.task.conversation_id.clone();
     let (observation_sender, mut observation_receiver) =
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
@@ -1247,7 +1255,11 @@ async fn monitor_runtime_agent_compaction_dispatch(
                 while let Ok(observation) = observation_receiver.try_recv() {
                     submit_provider_wire_request_observation(&handle, observation).await?;
                 }
-                return Ok(Some(compaction_worker_event(pane_id, Ok(result))));
+                return Ok(Some(compaction_worker_event(
+                    pane_id,
+                    task_generation,
+                    Ok(result),
+                )));
             }
             Some(observation) = observation_receiver.recv() => {
                 submit_provider_wire_request_observation(&handle, observation).await?;
@@ -1440,12 +1452,14 @@ fn provider_worker_event(
 /// Converts a compaction worker result into a runtime event.
 fn compaction_worker_event(
     pane_id: String,
+    task_generation: u64,
     result: std::result::Result<Result<mez_agent::ModelResponse>, tokio::task::JoinError>,
 ) -> (RuntimeEvent, bool) {
     match result {
         Ok(Ok(response)) => (
             RuntimeEvent::AgentCompaction(AgentCompactionEvent::Completed {
                 pane_id,
+                task_generation,
                 response: Box::new(response),
             }),
             true,
@@ -1453,6 +1467,7 @@ fn compaction_worker_event(
         Ok(Err(error)) => (
             RuntimeEvent::AgentCompaction(AgentCompactionEvent::Failed {
                 pane_id,
+                task_generation,
                 kind: provider_worker_error_kind(&error).to_string(),
                 message: error.message().to_string(),
                 provider_failure_json: error.provider_failure_json().map(str::to_string),
@@ -1463,6 +1478,7 @@ fn compaction_worker_event(
         Err(error) => (
             RuntimeEvent::AgentCompaction(AgentCompactionEvent::Failed {
                 pane_id,
+                task_generation,
                 kind: "invalid_state".to_string(),
                 message: format!("provider worker join failed: {error}"),
                 provider_failure_json: None,
@@ -1531,6 +1547,58 @@ fn session_title_worker_event(
             false,
         ),
     }
+}
+
+/// Inputs shared by the four concrete observed provider turn adapters. Provider
+/// selection and the OpenAI-only previous-request choice remain at the caller.
+struct ObservedTurnInputs<'a> {
+    turn: &'a AgentTurnRecord,
+    context: &'a mez_agent::AgentContext,
+    allowed_actions: &'a Option<mez_agent::AllowedActionSet>,
+    interaction_kind: Option<mez_agent::ModelInteractionKind>,
+    model_profile: &'a ModelProfile,
+    permissions: &'a dyn mez_agent::PermissionPlanning,
+    subagent_scope: Option<&'a mez_agent::SubagentScopeDeclaration>,
+    available_mcp_servers: &'a [String],
+    available_mcp_tools: &'a [mez_agent::McpPromptTool],
+    memory_actions_enabled: bool,
+    issue_actions_enabled: bool,
+    progress: &'a Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+}
+
+/// Runs one concrete provider through the product observation and permission
+/// adapters. The canonical turn runner still owns execution and failure policy.
+async fn execute_observed_provider_turn<P: AsyncModelProvider>(
+    provider: &P,
+    observer: &ProviderWireRequestObserver,
+    inputs: &ObservedTurnInputs<'_>,
+    previous_request: Option<&ModelRequest>,
+) -> Result<super::AgentTurnExecution> {
+    let mut ledger = AgentTurnLedger::new(false);
+    let provider =
+        ObservedAsyncModelProvider::new(provider, observer, ProviderRequestPurpose::Execution);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: inputs.model_profile.clone(),
+        permissions: inputs.permissions,
+        subagent_scope: inputs.subagent_scope,
+        subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+        available_mcp_servers: inputs.available_mcp_servers.to_vec(),
+        available_mcp_tools: inputs.available_mcp_tools,
+        memory_actions_enabled: inputs.memory_actions_enabled,
+        issue_actions_enabled: inputs.issue_actions_enabled,
+    };
+    runner
+        .run_turn_async_ref_with_previous_request_and_progress(
+            &mut ledger,
+            inputs.turn.clone(),
+            inputs.context,
+            inputs.allowed_actions.clone(),
+            inputs.interaction_kind,
+            previous_request,
+            inputs.progress.clone(),
+        )
+        .await
 }
 
 /// Runs the execute runtime agent provider dispatch operation for this subsystem.
@@ -1625,173 +1693,52 @@ async fn execute_runtime_agent_provider_dispatch(
             Box::new(auto_sizing_execution.into_routing_selection()),
         ));
     }
-    match provider {
+    let permissions = crate::security::permissions::ProductPermissionPlanning::new(
+        &permission_policy,
+        &session_approvals,
+        path_scopes.as_ref(),
+    )
+    .with_shell_classification(&shell_classification)
+    .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
+    .with_macro_bridge_recipients(macro_bridge_recipients);
+    let inputs = ObservedTurnInputs {
+        turn: &turn,
+        context: &context,
+        allowed_actions: &allowed_actions,
+        interaction_kind,
+        model_profile: &model_profile,
+        permissions: &permissions,
+        subagent_scope: subagent_scope.as_ref(),
+        available_mcp_servers: &available_mcp_servers,
+        available_mcp_tools: &available_mcp_tools,
+        memory_actions_enabled,
+        issue_actions_enabled,
+        progress: &output_progress_sender,
+    };
+    let mut execution = match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-            let mut ledger = AgentTurnLedger::new(false);
-            let provider = ObservedAsyncModelProvider::new(
+            execute_observed_provider_turn(
                 &provider,
                 &execution_observer,
-                ProviderRequestPurpose::Execution,
-            );
-            let runner = AgentTurnRunner {
-                provider: &provider,
-                model_profile,
-                permissions: &crate::security::permissions::ProductPermissionPlanning::new(
-                    &permission_policy,
-                    &session_approvals,
-                    path_scopes.as_ref(),
-                )
-                .with_shell_classification(&shell_classification)
-                .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
-                .with_macro_bridge_recipients(macro_bridge_recipients.clone()),
-                subagent_scope: subagent_scope.as_ref(),
-                subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
-                available_mcp_servers,
-                available_mcp_tools: &available_mcp_tools,
-                memory_actions_enabled,
-                issue_actions_enabled,
-            };
-            let execution = runner
-                .run_turn_async_ref_with_previous_request_and_progress(
-                    &mut ledger,
-                    turn.clone(),
-                    &context,
-                    allowed_actions.clone(),
-                    interaction_kind,
-                    previous_request.as_ref(),
-                    output_progress_sender.clone(),
-                )
-                .await?;
-            let mut execution = execution;
-            execution.routing_token_usage_by_model = routing_token_usage_by_model;
-            Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
-                execution,
-            )))
+                &inputs,
+                previous_request.as_ref(),
+            )
+            .await?
         }
         RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
-            let mut ledger = AgentTurnLedger::new(false);
-            let provider = ObservedAsyncModelProvider::new(
-                &provider,
-                &execution_observer,
-                ProviderRequestPurpose::Execution,
-            );
-            let runner = AgentTurnRunner {
-                provider: &provider,
-                model_profile,
-                permissions: &crate::security::permissions::ProductPermissionPlanning::new(
-                    &permission_policy,
-                    &session_approvals,
-                    path_scopes.as_ref(),
-                )
-                .with_shell_classification(&shell_classification)
-                .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
-                .with_macro_bridge_recipients(macro_bridge_recipients.clone()),
-                subagent_scope: subagent_scope.as_ref(),
-                subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
-                available_mcp_servers,
-                available_mcp_tools: &available_mcp_tools,
-                memory_actions_enabled,
-                issue_actions_enabled,
-            };
-            let execution = runner
-                .run_turn_async_ref_with_allowed_actions_and_progress(
-                    &mut ledger,
-                    turn.clone(),
-                    &context,
-                    allowed_actions.clone(),
-                    interaction_kind,
-                    output_progress_sender.clone(),
-                )
-                .await?;
-            let mut execution = execution;
-            execution.routing_token_usage_by_model = routing_token_usage_by_model;
-            Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
-                execution,
-            )))
+            execute_observed_provider_turn(&provider, &execution_observer, &inputs, None).await?
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
-            let mut ledger = AgentTurnLedger::new(false);
-            let provider = ObservedAsyncModelProvider::new(
-                &provider,
-                &execution_observer,
-                ProviderRequestPurpose::Execution,
-            );
-            let runner = AgentTurnRunner {
-                provider: &provider,
-                model_profile,
-                permissions: &crate::security::permissions::ProductPermissionPlanning::new(
-                    &permission_policy,
-                    &session_approvals,
-                    path_scopes.as_ref(),
-                )
-                .with_shell_classification(&shell_classification)
-                .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
-                .with_macro_bridge_recipients(macro_bridge_recipients.clone()),
-                subagent_scope: subagent_scope.as_ref(),
-                subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
-                available_mcp_servers,
-                available_mcp_tools: &available_mcp_tools,
-                memory_actions_enabled,
-                issue_actions_enabled,
-            };
-            let execution = runner
-                .run_turn_async_ref_with_allowed_actions_and_progress(
-                    &mut ledger,
-                    turn.clone(),
-                    &context,
-                    allowed_actions.clone(),
-                    interaction_kind,
-                    output_progress_sender.clone(),
-                )
-                .await?;
-            let mut execution = execution;
-            execution.routing_token_usage_by_model = routing_token_usage_by_model;
-            Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
-                execution,
-            )))
+            execute_observed_provider_turn(&provider, &execution_observer, &inputs, None).await?
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
-            let mut ledger = AgentTurnLedger::new(false);
-            let provider = ObservedAsyncModelProvider::new(
-                &provider,
-                &execution_observer,
-                ProviderRequestPurpose::Execution,
-            );
-            let runner = AgentTurnRunner {
-                provider: &provider,
-                model_profile,
-                permissions: &crate::security::permissions::ProductPermissionPlanning::new(
-                    &permission_policy,
-                    &session_approvals,
-                    path_scopes.as_ref(),
-                )
-                .with_shell_classification(&shell_classification)
-                .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
-                .with_macro_bridge_recipients(macro_bridge_recipients.clone()),
-                subagent_scope: subagent_scope.as_ref(),
-                subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
-                available_mcp_servers,
-                available_mcp_tools: &available_mcp_tools,
-                memory_actions_enabled,
-                issue_actions_enabled,
-            };
-            let execution = runner
-                .run_turn_async_ref_with_allowed_actions_and_progress(
-                    &mut ledger,
-                    turn.clone(),
-                    &context,
-                    allowed_actions.clone(),
-                    interaction_kind,
-                    output_progress_sender.clone(),
-                )
-                .await?;
-            let mut execution = execution;
-            execution.routing_token_usage_by_model = routing_token_usage_by_model;
-            Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
-                execution,
-            )))
+            execute_observed_provider_turn(&provider, &execution_observer, &inputs, None).await?
         }
-    }
+    };
+    execution.routing_token_usage_by_model = routing_token_usage_by_model;
+    Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
+        execution,
+    )))
 }
 
 /// Executes one model-backed conversation compaction request.
@@ -1799,7 +1746,12 @@ async fn execute_runtime_agent_compaction_dispatch(
     dispatch: RuntimeAgentCompactionDispatch,
     observer: &ProviderWireRequestObserver,
 ) -> Result<mez_agent::ModelResponse> {
-    let RuntimeAgentCompactionDispatch { task, provider } = dispatch;
+    let RuntimeAgentCompactionDispatch {
+        task,
+        provider,
+        provider_options,
+        stream,
+    } = dispatch;
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
             let provider = ObservedAsyncModelProvider::new(
@@ -1811,6 +1763,8 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &provider,
                 task.request,
                 &task.model_profile,
+                &provider_options,
+                stream,
             )
             .await
         }
@@ -1824,6 +1778,8 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &provider,
                 task.request,
                 &task.model_profile,
+                &provider_options,
+                stream,
             )
             .await
         }
@@ -1837,6 +1793,8 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &provider,
                 task.request,
                 &task.model_profile,
+                &provider_options,
+                stream,
             )
             .await
         }
@@ -1850,6 +1808,8 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &provider,
                 task.request,
                 &task.model_profile,
+                &provider_options,
+                stream,
             )
             .await
         }
@@ -2067,6 +2027,8 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
     provider: &P,
     mut request: ModelRequest,
     model_profile: &ModelProfile,
+    provider_options: &std::collections::BTreeMap<String, String>,
+    stream: bool,
 ) -> Result<ModelResponse> {
     match provider.send_request_async(&request).await {
         Ok(response) => Ok(response),
@@ -2090,6 +2052,23 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
                     This retry instruction is not durable transcript or future-turn context."
                     .to_string(),
             });
+            if let Some(cap) = request.max_input_tokens {
+                let estimate = mez_agent::provider_request_input_estimate(
+                    &request,
+                    provider.api_compatibility(),
+                    provider_options,
+                    stream,
+                )?;
+                if estimate.exceeds_explicit_cap(cap) {
+                    return Err(MezError::invalid_state(format!(
+                        "compaction output-limit retry exceeds configured input cap: estimated_input_tokens={} max_input_tokens={cap}",
+                        estimate.input_tokens
+                    ))
+                    .with_provider_failure_json(
+                        r#"{"error":{"code":"context_length_exceeded"}}"#,
+                    ));
+                }
+            }
             provider.send_request_async(&request).await
         }
         Err(error) => Err(error),
@@ -2127,6 +2106,295 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared observed runner forwards a prior request only when selected
+    /// by the concrete dispatch branch, and preserves request observation.
+    #[tokio::test]
+    async fn observed_turn_executor_preserves_previous_request_selection() {
+        use std::sync::Mutex;
+
+        struct RecordingProvider(Mutex<Vec<bool>>);
+        impl AsyncModelProvider for RecordingProvider {
+            fn provider_id(&self) -> &str {
+                "test"
+            }
+            fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+                mez_agent::ProviderApiCompatibility::OpenAiResponses
+            }
+            fn prepare_request_prefix_extension(
+                &self,
+                _request: &mut ModelRequest,
+                previous: Option<&ModelRequest>,
+            ) -> Result<()> {
+                self.0.lock().unwrap().push(previous.is_some());
+                Ok(())
+            }
+            fn send_request_async<'a>(
+                &'a self,
+                _request: &'a ModelRequest,
+            ) -> std::pin::Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>
+            {
+                Box::pin(async {
+                    Ok(ModelResponse {
+                        provider: "test".into(),
+                        model: "test".into(),
+                        raw_text: "finished".into(),
+                        usage: Default::default(),
+                        latest_request_usage: None,
+                        quota_usage: Vec::new(),
+                        action_batch: Some(mez_agent::MaapBatch {
+                            rationale: "completed".into(),
+                            actions: vec![mez_agent::AgentAction {
+                                id: "say-1".into(),
+                                payload: mez_agent::AgentActionPayload::Say {
+                                    text: "finished".into(),
+                                    status: mez_agent::SayStatus::Final,
+                                    content_type: "text/plain; charset=utf-8".into(),
+                                },
+                            }],
+                        }),
+                        provider_transcript_events: Vec::new(),
+                    })
+                })
+            }
+        }
+        let provider = RecordingProvider(Mutex::new(Vec::new()));
+        let turn = AgentTurnRecord {
+            turn_id: "turn-test".into(),
+            conversation_id: "conversation-test".into(),
+            agent_id: "agent-test".into(),
+            pane_id: "%1".into(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 2,
+            deadline_at_unix_millis: 0,
+            policy_profile: "default".into(),
+            model_profile: "default".into(),
+            parent_turn_id: None,
+            state: AgentTurnState::Queued,
+            cooperation_mode: None,
+            initial_capability: None,
+        };
+        let context = mez_agent::AgentContext::new(vec![mez_agent::ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".into(),
+            content: "reply".into(),
+        }])
+        .unwrap();
+        let profile = ModelProfile {
+            provider: "test".into(),
+            model: "test".into(),
+            ..Default::default()
+        };
+        let policy = mez_agent::permissions::PermissionPolicy::default();
+        let approvals = mez_agent::permissions::SessionApprovalStore::default();
+        let permissions =
+            crate::security::permissions::ProductPermissionPlanning::new(&policy, &approvals, None);
+        let allowed_actions = None;
+        let progress = None;
+        let inputs = ObservedTurnInputs {
+            turn: &turn,
+            context: &context,
+            allowed_actions: &allowed_actions,
+            interaction_kind: None,
+            model_profile: &profile,
+            permissions: &permissions,
+            subagent_scope: None,
+            available_mcp_servers: &[],
+            available_mcp_tools: &[],
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            progress: &progress,
+        };
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+        let observer = ProviderWireRequestObserver::new("conversation-test", "%1", sender);
+        let previous = crate::integrations::agent::context::assemble_model_request(
+            &profile,
+            provider.api_compatibility(),
+            &turn,
+            &context,
+        )
+        .unwrap();
+        for baseline in [None, Some(&previous)] {
+            let execution = execute_observed_provider_turn(&provider, &observer, &inputs, baseline)
+                .await
+                .unwrap();
+            assert_eq!(execution.response.raw_text, "finished");
+            let observation = receiver.recv().await.unwrap();
+            assert_eq!(observation.purpose, ProviderRequestPurpose::Execution);
+            assert!(observation.succeeded);
+        }
+        assert_eq!(*provider.0.lock().unwrap(), [false, true]);
+    }
+
+    /// A failing concrete provider retains the same typed error and produces
+    /// an execution observation through the shared worker boundary.
+    #[tokio::test]
+    async fn observed_turn_executor_preserves_provider_failure() {
+        struct FailingProvider;
+        impl AsyncModelProvider for FailingProvider {
+            fn provider_id(&self) -> &str {
+                "test"
+            }
+            fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+                mez_agent::ProviderApiCompatibility::OpenAiResponses
+            }
+            fn send_request_async<'a>(
+                &'a self,
+                _request: &'a ModelRequest,
+            ) -> std::pin::Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>
+            {
+                Box::pin(async { Err(MezError::invalid_state("synthetic provider failure")) })
+            }
+        }
+        let turn = AgentTurnRecord {
+            turn_id: "turn-failure".into(),
+            conversation_id: "conversation-failure".into(),
+            agent_id: "agent-failure".into(),
+            pane_id: "%1".into(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 2,
+            deadline_at_unix_millis: 0,
+            policy_profile: "default".into(),
+            model_profile: "default".into(),
+            parent_turn_id: None,
+            state: AgentTurnState::Queued,
+            cooperation_mode: None,
+            initial_capability: None,
+        };
+        let context = mez_agent::AgentContext::new(vec![mez_agent::ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".into(),
+            content: "reply".into(),
+        }])
+        .unwrap();
+        let profile = ModelProfile {
+            provider: "test".into(),
+            model: "test".into(),
+            ..Default::default()
+        };
+        let policy = mez_agent::permissions::PermissionPolicy::default();
+        let approvals = mez_agent::permissions::SessionApprovalStore::default();
+        let permissions =
+            crate::security::permissions::ProductPermissionPlanning::new(&policy, &approvals, None);
+        let allowed_actions = None;
+        let progress = None;
+        let inputs = ObservedTurnInputs {
+            turn: &turn,
+            context: &context,
+            allowed_actions: &allowed_actions,
+            interaction_kind: None,
+            model_profile: &profile,
+            permissions: &permissions,
+            subagent_scope: None,
+            available_mcp_servers: &[],
+            available_mcp_tools: &[],
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            progress: &progress,
+        };
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+        let observer = ProviderWireRequestObserver::new("conversation-failure", "%1", sender);
+        let error = execute_observed_provider_turn(&FailingProvider, &observer, &inputs, None)
+            .await
+            .unwrap_err();
+        assert!(
+            error.message().contains("synthetic provider failure"),
+            "{error:?}"
+        );
+        let observation = receiver.recv().await.unwrap();
+        assert_eq!(observation.purpose, ProviderRequestPurpose::Execution);
+        assert!(!observation.succeeded);
+    }
+
+    /// A compactor output-limit response must not cause a second request whose
+    /// added guidance exceeds the configured input cap.
+    #[tokio::test]
+    async fn compactor_output_limit_retry_does_not_send_over_input_cap() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CutoffProvider(AtomicUsize);
+        impl AsyncModelProvider for CutoffProvider {
+            fn provider_id(&self) -> &str {
+                "openai"
+            }
+            fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+                mez_agent::ProviderApiCompatibility::OpenAiResponses
+            }
+            fn send_request_async<'a>(
+                &'a self,
+                _request: &'a ModelRequest,
+            ) -> std::pin::Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>
+            {
+                Box::pin(async move {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    Err(MezError::invalid_state("provider output exhausted")
+                        .with_provider_failure_json(r#"{"error":{"code":"max_tokens"}}"#))
+                })
+            }
+        }
+        let provider = CutoffProvider(AtomicUsize::new(0));
+        let request = ModelRequest {
+            provider: "openai".into(),
+            model: "test".into(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: Some(128),
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "compact-test".into(),
+            agent_id: "agent-%1".into(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: mez_agent::ModelInteractionKind::Compaction,
+            allowed_actions: mez_agent::AllowedActionSet::default(),
+            stop: None,
+            messages: vec![ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::Transcript,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                content: "compact the source".into(),
+            }]
+            .into(),
+        };
+        let options = std::collections::BTreeMap::new();
+        let cap = mez_agent::provider_request_input_estimate(
+            &request,
+            provider.api_compatibility(),
+            &options,
+            false,
+        )
+        .unwrap()
+        .input_tokens;
+        let mut request = request;
+        request.max_input_tokens = Some(cap);
+        let error = runtime_send_compaction_request_with_output_limit_retry(
+            &provider,
+            request,
+            &ModelProfile::default(),
+            &options,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("retry exceeds configured input cap")
+        );
+        assert_eq!(
+            provider_error_retry_class(&error),
+            ProviderErrorRetryClass::ContextLimit
+        );
+        assert_eq!(provider.0.load(Ordering::SeqCst), 1);
+    }
 
     /// Verifies title failure reasons come from the typed error, not its text.
     #[test]

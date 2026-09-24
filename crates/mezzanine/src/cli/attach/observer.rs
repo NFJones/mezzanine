@@ -8,12 +8,12 @@ use super::event_stream::{
 use super::requests::{
     acknowledge_committed_focus_labels_async, refresh_attached_client_size_async,
     render_attach_client_frame_async, render_iroh_attach_client_frame_async,
-    request_observer_resize_async, request_primary_view_frame_async,
+    request_conditional_view_async, request_observer_resize_async,
 };
 use super::{
     AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
-    AttachAnimationRefresh, AttachTerminalSizeRefresh, ClientId, MezError, Result, Size,
-    UnixStream, io,
+    AttachAnimationRefresh, AttachOrdinaryRenderRate, AttachTerminalSizeRefresh, ClientId,
+    MezError, Result, Size, UnixStream, io,
 };
 
 /// Runs the run control socket attached observer client operation for this subsystem.
@@ -153,13 +153,16 @@ where
     let cursor_blink_epoch = std::time::Instant::now();
     let mut size_refresh = AttachTerminalSizeRefresh::default();
     let mut animation_refresh = AttachAnimationRefresh::default();
+    let mut ordinary_rate = AttachOrdinaryRenderRate::default();
     let mut health = super::AttachIrohHealthTracker::default();
     let mut cached_frame: Option<super::AttachClientFrame> = None;
     let mut render_requested = !pushed_render_owner;
+    let mut immediate_render = !pushed_render_owner;
 
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
+            cached_frame = None;
             if pushed_render_owner {
                 let observer_client_id = observer_client_id.as_ref().ok_or_else(|| {
                     MezError::invalid_state("pushed observer render owner omitted its client id")
@@ -187,18 +190,31 @@ where
                 iteration = iteration.saturating_add(1);
             }
             render_requested = !pushed_render_owner;
+            immediate_render = !pushed_render_owner;
         }
         let wake_deadline = connection
             .map(|_| health.deadline().min(size_refresh.deadline()))
             .unwrap_or_else(|| size_refresh.deadline());
+        let pending_deadline = (render_requested && !immediate_render)
+            .then(|| ordinary_rate.deadline())
+            .flatten();
+        let gated = pending_deadline.is_some();
+        let wake_deadline =
+            pending_deadline.map_or(wake_deadline, |deadline| deadline.min(wake_deadline));
+        let animation_deadline = if gated {
+            None
+        } else {
+            animation_refresh.deadline()
+        };
         let input = match (event_stream.as_deref_mut(), event_receiver.as_deref_mut()) {
             (Some(event_stream), None) => {
                 read_attached_client_input_or_runtime_event(
                     terminal_io,
                     Some(event_stream),
                     4096,
-                    animation_refresh.deadline(),
+                    animation_deadline,
                     wake_deadline,
+                    pending_deadline,
                 )
                 .await?
             }
@@ -207,7 +223,7 @@ where
                     terminal_io,
                     event_receiver,
                     4096,
-                    animation_refresh.deadline(),
+                    animation_deadline,
                     wake_deadline,
                     cached_frame.as_ref().and_then(|frame| frame.event_cutoff),
                 )
@@ -217,9 +233,8 @@ where
                 read_attached_client_input_or_deadline(
                     terminal_io,
                     4096,
-                    animation_refresh.deadline(),
-                    animation_refresh
-                        .deadline()
+                    animation_deadline,
+                    animation_deadline
                         .filter(|deadline| *deadline <= wake_deadline)
                         .unwrap_or(wake_deadline),
                 )
@@ -256,7 +271,9 @@ where
         }
         match input.render_action {
             AttachRenderAction::None => {}
-            AttachRenderAction::View if pushed_render_owner && !received_pushed_snapshot => {
+            AttachRenderAction::View | AttachRenderAction::ImmediateView
+                if pushed_render_owner && !received_pushed_snapshot =>
+            {
                 if let Some(frame) = cached_frame.as_ref() {
                     let outcome = render_iroh_attach_client_frame_async(
                         terminal_io,
@@ -276,9 +293,15 @@ where
                 }
             }
             AttachRenderAction::View => render_requested = !pushed_render_owner,
+            AttachRenderAction::ImmediateView => {
+                render_requested = !pushed_render_owner;
+                immediate_render = !pushed_render_owner;
+            }
             AttachRenderAction::InvalidateAndView => {
                 terminal_io.invalidate_output_frame().await?;
+                cached_frame = None;
                 render_requested = !pushed_render_owner;
+                immediate_render = !pushed_render_owner;
             }
             AttachRenderAction::Disconnect => {
                 if let Some(frame) = cached_frame.as_ref() {
@@ -324,9 +347,51 @@ where
         if !render_requested {
             continue;
         }
-        let Some(frame) = request_primary_view_frame_async(stream, client_size, iteration).await?
+        if input.bytes.is_empty() && !immediate_render && !ordinary_rate.ready() {
+            continue;
+        }
+        let Some(result) =
+            request_conditional_view_async(stream, client_size, iteration, cached_frame.as_ref())
+                .await?
         else {
             break Ok(());
+        };
+        let frame = match result {
+            super::AttachConditionalView::Modified(frame) => *frame,
+            super::AttachConditionalView::NotModified {
+                render_rate_limit_fps,
+                event_cutoff,
+            } => {
+                if let Some(frame) = cached_frame.as_mut() {
+                    frame.event_cutoff = event_cutoff.or(frame.event_cutoff);
+                    let outcome = if connection.is_some() {
+                        render_iroh_attach_client_frame_async(
+                            terminal_io,
+                            frame,
+                            true,
+                            health.quality(),
+                            cursor_blink_epoch,
+                        )
+                        .await?
+                    } else {
+                        render_attach_client_frame_async(terminal_io, frame, cursor_blink_epoch)
+                            .await?
+                    };
+                    if !outcome.connected {
+                        break Ok(());
+                    }
+                    animation_refresh
+                        .update_from_rendered_view(outcome.animation_refresh_interval_ms);
+                }
+                if !pushed_render_owner {
+                    ordinary_rate.update_from_rendered_view(render_rate_limit_fps);
+                }
+                render_requested = false;
+                immediate_render = false;
+                iteration = iteration.saturating_add(1);
+                continue;
+            }
+            super::AttachConditionalView::Missing => break Ok(()),
         };
         if let Some(connection) = connection {
             health.sample(connection);
@@ -362,7 +427,11 @@ where
         }
         cached_frame = Some(frame);
         animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
+        if !pushed_render_owner {
+            ordinary_rate.update_from_rendered_view(outcome.render_rate_limit_fps);
+        }
         render_requested = false;
+        immediate_render = false;
         iteration = iteration.saturating_add(1);
     }
 }
@@ -370,6 +439,98 @@ where
 #[cfg(test)]
 mod pushed_snapshot_tests {
     use super::*;
+
+    /// Verifies a legacy observer's separate event wakeups produce one trailing
+    /// exact-client view fetch at the server-advertised cadence.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn observer_legacy_event_wakeups_are_paced() {
+        let (mut client_stream, mut server_stream) = tokio::io::duplex(16 * 1024);
+        let (event_client, event_server) = std::os::unix::net::UnixStream::pair().unwrap();
+        event_client.set_nonblocking(true).unwrap();
+        event_server.set_nonblocking(true).unwrap();
+        let mut events = AttachedRuntimeEventStream::new(
+            tokio::net::UnixStream::from_std(event_client).unwrap(),
+        );
+        let mut event_server = tokio::net::UnixStream::from_std(event_server).unwrap();
+        let mut terminal_io = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+        for _ in 0..8 {
+            terminal_io.push_pending_input_read();
+        }
+        let server = async move {
+            for text in ["initial", "latest"] {
+                let request = super::super::requests::read_async_control_response_frames(
+                    &mut server_stream,
+                    1024 * 1024,
+                    1,
+                )
+                .await
+                .unwrap();
+                let (body, _) = super::super::decode_control_frame(&request, 1024 * 1024).unwrap();
+                let request: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(request["method"], "terminal/view");
+                let response = serde_json::json!({
+                    "jsonrpc": "2.0", "id": request["id"],
+                    "result": {"render_rate_limit_fps": 10,
+                        "view": {"lines": [text], "line_style_spans": [[]],
+                            "cursor": {"row": 0, "column": 0, "visible": false},
+                            "output_modes": {}}}
+                });
+                tokio::io::AsyncWriteExt::write_all(
+                    &mut server_stream,
+                    &super::super::encode_control_body(&response.to_string()),
+                )
+                .await
+                .unwrap();
+                if text == "initial" {
+                    for _ in 0..2 {
+                        tokio::io::AsyncWriteExt::write_all(&mut event_server,
+                            &super::super::encode_control_body(
+                                r#"{"jsonrpc":"2.0","method":"render/wakeup","params":{"invalidate_output":false}}"#
+                            )).await.unwrap();
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    assert!(
+                        tokio::time::timeout(
+                            std::time::Duration::from_millis(30),
+                            super::super::requests::read_async_control_response_frames(
+                                &mut server_stream,
+                                1024 * 1024,
+                                1
+                            )
+                        )
+                        .await
+                        .is_err()
+                    );
+                }
+            }
+            drop(event_server);
+        };
+        let client = run_attached_observer_client_loop_async(
+            &mut client_stream,
+            &mut terminal_io,
+            None,
+            Some(ClientId::parse('c', "c2".to_string()).unwrap()),
+            Size::new(80, 24).unwrap(),
+            std::time::Duration::from_secs(1),
+            Some(&mut events),
+            None,
+            false,
+        );
+        let (result, ()) = tokio::join!(client, server);
+        assert!(
+            result.is_err(),
+            "closing the event stream must end attachment visibly"
+        );
+        assert_eq!(
+            terminal_io
+                .written_frames
+                .iter()
+                .map(|frame| frame.lines[0].as_str())
+                .collect::<Vec<_>>(),
+            ["initial", "latest", "latest"],
+            "the final write repaints the cached view for disconnect cleanup"
+        );
+    }
 
     /// Verifies negotiated observer v3 renders its initial pushed snapshot and
     /// exits on terminal EOF without issuing the legacy `terminal/view` request.
@@ -390,6 +551,8 @@ mod pushed_snapshot_tests {
                         presentation_ids: Vec::new(),
                         iroh_status_slot: None,
                         event_cutoff: Some(7),
+                        render_rate_limit_fps: None,
+                        view_identity: None,
                     },
                     invalidate_output: true,
                 },
