@@ -556,7 +556,7 @@ default_model = "test"
 provider = "runtime-batch"
 model = "test"
 context_window_tokens = 40000
-max_input_tokens = 100
+max_input_tokens = 800
 "#
             .to_string(),
         }])
@@ -664,7 +664,7 @@ max_input_tokens = 100
                 request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
                 response,
                 latest_response_usage: mez_agent::ModelTokenUsage {
-                    input_tokens: 100,
+                    input_tokens: 800,
                     output_tokens: 1,
                     reasoning_tokens: 0,
                     cached_input_tokens: Some(20),

@@ -256,12 +256,43 @@ fn plan_model_context_compaction_with_projection(
         &eligible_groups,
         tail_budget,
     );
-    let replacement_ranges = eligible_groups
+    let eligible_replacements = eligible_groups
         .iter()
         .copied()
         .filter(|group_index| !retained_groups.contains(group_index))
         .map(|group_index| execution_groups[group_index].clone())
         .collect::<Vec<_>>();
+    let Some(first_replacement) = eligible_replacements.first() else {
+        return Ok(ModelContextCompactionPlan::unchanged(
+            blocks,
+            ModelContextCompactionReport::default(),
+            consumed_sequence_high_water,
+        ));
+    };
+    // A single rolling summary is inserted at the earliest selected range. Keep
+    // this operation within that range's barrier-delimited segment so the
+    // summary cannot move later chronology ahead of an exact user/task event.
+    let first_segment_start = immutable_chronology[..first_replacement.start]
+        .iter()
+        .rposition(model_context_block_is_protected_barrier)
+        .map_or(0, |index| index.saturating_add(1));
+    let first_segment_end = immutable_chronology[first_replacement.end..]
+        .iter()
+        .position(model_context_block_is_protected_barrier)
+        .map_or(immutable_chronology.len(), |offset| {
+            first_replacement.end.saturating_add(offset)
+        });
+    let replacement_ranges = eligible_replacements
+        .into_iter()
+        .filter(|range| range.start >= first_segment_start && range.end <= first_segment_end)
+        .collect::<Vec<_>>();
+    let first_gap = replacement_ranges
+        .windows(2)
+        .position(|ranges| ranges[0].end != ranges[1].start);
+    let mut replacement_ranges = replacement_ranges;
+    if let Some(first_gap) = first_gap {
+        replacement_ranges.truncate(first_gap.saturating_add(1));
+    }
     if replacement_ranges.is_empty() {
         return Ok(ModelContextCompactionPlan::unchanged(
             blocks,
@@ -935,6 +966,157 @@ mod tests {
         .unwrap();
         assert_eq!(compacted.chronology().len(), 2);
         assert_eq!(compacted.chronology()[1].block().content, post_boundary);
+    }
+
+    /// Verifies a rolling summary remains in the segment where its source
+    /// events occurred instead of pulling later facts ahead of exact steering.
+    ///
+    /// When eligible history exists on both sides of a user event, one summary
+    /// anchored before that event may replace only the older segment. The later
+    /// segment must remain raw and in its original order after the barrier.
+    #[test]
+    fn model_context_compaction_does_not_gather_history_across_exact_barrier() {
+        let context = AgentContext::new_durable(vec![
+            ContextBlock::assistant_event("earlier decision", "earlier decision ".repeat(300)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "earlier outcome",
+                "earlier outcome ".repeat(300),
+            ),
+            ContextBlock::user_event("user steering", "keep this steering in place"),
+            ContextBlock::assistant_event("later decision", "later decision ".repeat(300)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "later outcome",
+                "later outcome ".repeat(300),
+            ),
+        ])
+        .unwrap();
+        let plan = plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            2_000,
+            1,
+            context.event_sequence_high_water_mark(),
+        )
+        .unwrap();
+
+        assert_eq!(plan.replacement_blocks().len(), 2);
+        assert!(plan.replacement_blocks().iter().all(|block| {
+            !block.content.contains("later decision") && !block.content.contains("later outcome")
+        }));
+
+        let (compacted, _) = apply_model_context_compaction_plan(
+            context,
+            &plan,
+            "Earlier decision and outcome are summarized.",
+        )
+        .unwrap();
+        let chronology = compacted.chronology();
+        assert_eq!(chronology.len(), 4);
+        assert_eq!(
+            chronology[0].block().content,
+            "Earlier decision and outcome are summarized."
+        );
+        assert_eq!(chronology[1].block().content, "keep this steering in place");
+        assert!(chronology[2].block().content.contains("later decision"));
+        assert!(chronology[3].block().content.contains("later outcome"));
+    }
+
+    /// Verifies one rolling summary does not gather eligible history across an
+    /// unrecoverable execution group retained between the source ranges.
+    #[test]
+    fn model_context_compaction_does_not_gather_across_ineligible_group() {
+        let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user steering",
+            "preserve this instruction",
+        )])
+        .unwrap();
+        let earlier = crate::ContextExecutionGroupId::new("earlier").unwrap();
+        context
+            .append_assistant_event(
+                "earlier assistant",
+                "earlier decision ".repeat(40),
+                earlier.clone(),
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "earlier result",
+                "earlier result ".repeat(40),
+                earlier,
+                None,
+                true,
+            )
+            .unwrap();
+
+        let unrecoverable = crate::ContextExecutionGroupId::new("unrecoverable").unwrap();
+        context
+            .append_assistant_event(
+                "unrecoverable assistant",
+                "unrecoverable request",
+                unrecoverable.clone(),
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "unrecoverable result",
+                "keep this result raw",
+                unrecoverable,
+                None,
+                false,
+            )
+            .unwrap();
+
+        let later = crate::ContextExecutionGroupId::new("later").unwrap();
+        context
+            .append_assistant_event(
+                "later assistant",
+                "later decision ".repeat(40),
+                later.clone(),
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "later result",
+                "later result ".repeat(40),
+                later,
+                None,
+                true,
+            )
+            .unwrap();
+
+        let plan = plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            200,
+            1,
+            context.event_sequence_high_water_mark(),
+        )
+        .unwrap();
+        assert_eq!(plan.replacement_blocks().len(), 2);
+        assert!(plan.replacement_blocks().iter().all(|block| {
+            block.label == "earlier assistant" || block.label == "earlier result"
+        }));
+
+        let (compacted, _) = apply_model_context_compaction_plan(
+            context,
+            &plan,
+            "Earlier decision and result summarized.",
+        )
+        .unwrap();
+        let chronology = compacted.chronology();
+        assert_eq!(chronology.len(), 6);
+        assert_eq!(chronology[0].block().content, "preserve this instruction");
+        assert_eq!(
+            chronology[1].block().content,
+            "Earlier decision and result summarized."
+        );
+        assert_eq!(chronology[2].block().label, "unrecoverable assistant");
+        assert_eq!(chronology[3].block().content, "keep this result raw");
+        assert_eq!(chronology[4].block().label, "later assistant");
+        assert!(chronology[4].block().content.contains("later decision"));
     }
 
     /// Verifies progressive model-request backoff moves exactly the newest
