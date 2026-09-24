@@ -2691,15 +2691,29 @@ immediate or deferred replay. Exactly matching provisional batch rationale MAY
 be promoted with one or more matching `say` actions when the current atomic
 projection contains every promoted component; completion MUST retain the
 existing rows and MUST NOT append the rationale or `say` output again. A
-response containing rationale without a promotable `say`, or containing command
-source, MUST first validate the complete raw source against the accepted batch,
-then restore the pre-stream pane and use the ordinary validated response
-presentation and shell-dispatch paths. This restoration MUST ensure the settled
-pane has exactly the same ordering, prefixes, styling, wrapping, command bounds,
-persistence, approval behavior, and execution behavior as a non-streamed
-response. If projection is unavailable, validation fails, or any source
-mismatches, Mezzanine MUST restore the pre-stream pane and present only validated
-source through the normal renderers. Provider failure, cancellation, retry,
+rationale-only projection MAY likewise be retained when its complete source
+exactly matches a validated `Complete` batch, its render context and pane
+lineage remain current, and no other streamed component is present. The
+retained rationale MUST be persisted exactly once and MUST NOT mark an action
+as presented. A matching action-header preview MAY remain with its matching
+batch rationale and progress `say` rows when the current projection is owned
+by the pane and the accepted action is pending runtime execution or has
+succeeded. The validated header and matching visible siblings MUST be persisted
+once; the header MUST NOT mark the action as executed or suppress action-result
+output. Its execution-owned presentation MUST claim the matching row without
+appending a duplicate. Matching headers and ready, untruncated command previews
+MAY be retained together with their matching rationale, summaries, and progress
+`say` siblings in accepted-action order. When a header differs or is rejected,
+Mezzanine MAY install a complete validated replacement in one screen mutation,
+retaining matching siblings without presenting a rejected header as execution.
+A final `say` accompanying pending runtime-visible work remains provisional:
+it MUST NOT become durable or suppress deferred presentation until that work
+completes successfully. Intervening pane writes retire its provisional screen
+ownership; failure MUST NOT promote its source. Replacement MUST preserve
+static styling, wrapping, copy semantics, action results, and approved dispatch.
+If projection is unavailable, validation fails, or source mismatches cannot be
+reconciled independently, Mezzanine MUST restore the owned pre-stream pane and
+present only validated source through normal renderers. Provider failure, cancellation, retry,
 stale completion, claim loss, or pane/session replacement MUST likewise discard
 unvalidated live state and restore that pre-stream state.
 Mezzanine MUST NOT impose a total per-turn automatic shell dispatch count cap,

@@ -491,6 +491,46 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             runtime_metrics.agent_streaming_projection_lineage_rejections
         ),
         format!(
+            "agent_streaming_settled_rationales = {}",
+            runtime_metrics.agent_streaming_settled_rationales
+        ),
+        format!(
+            "agent_streaming_settled_says = {}",
+            runtime_metrics.agent_streaming_settled_says
+        ),
+        format!(
+            "agent_streaming_settled_commands = {}",
+            runtime_metrics.agent_streaming_settled_commands
+        ),
+        format!(
+            "agent_streaming_settled_headers = {}",
+            runtime_metrics.agent_streaming_settled_headers
+        ),
+        format!(
+            "agent_streaming_settlement_replacements = {}",
+            runtime_metrics.agent_streaming_settlement_replacements
+        ),
+        format!(
+            "agent_streaming_settlement_restorations = {}",
+            runtime_metrics.agent_streaming_settlement_restorations
+        ),
+        format!(
+            "agent_streaming_settlement_source_mismatches = {}",
+            runtime_metrics.agent_streaming_settlement_source_mismatches
+        ),
+        format!(
+            "agent_streaming_settlement_stale_owners = {}",
+            runtime_metrics.agent_streaming_settlement_stale_owners
+        ),
+        format!(
+            "agent_streaming_settlement_incomplete_sources = {}",
+            runtime_metrics.agent_streaming_settlement_incomplete_sources
+        ),
+        format!(
+            "agent_streaming_settlement_projection_misses = {}",
+            runtime_metrics.agent_streaming_settlement_projection_misses
+        ),
+        format!(
             "agent_presentation_decoded_cache_hits = {}",
             runtime_metrics.agent_presentation_decoded_cache_hits
         ),

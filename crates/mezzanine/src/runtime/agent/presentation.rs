@@ -169,6 +169,7 @@ impl RuntimeSessionService {
                 });
         let batch_rationale_was_presented = !batch.rationale.trim().is_empty()
             && !streamed_response_was_promoted
+            && !self.agent_streaming_rationale_is_promoted(pane_id, &execution.request.turn_id)
             && !runtime_agent_batch_rationale_repeats_visible_batch_text(
                 batch,
                 &visible_action_texts,
@@ -269,6 +270,13 @@ impl RuntimeSessionService {
         pane_id: &str,
         execution: &AgentTurnExecution,
     ) -> Result<usize> {
+        if execution.terminal_state != AgentTurnState::Running {
+            self.settle_pending_final_say_preview(
+                pane_id,
+                &execution.request.turn_id,
+                execution.terminal_state == AgentTurnState::Completed,
+            )?;
+        }
         if execution.terminal_state != AgentTurnState::Completed {
             return Ok(0);
         }

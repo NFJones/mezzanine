@@ -156,6 +156,20 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) agent_streaming_projection_rejections: u64,
     /// Number of rejected streaming projections whose pane lineage changed.
     pub(crate) agent_streaming_projection_lineage_rejections: u64,
+    /// Validated provider components retained at successful settlement, by kind.
+    pub(crate) agent_streaming_settled_rationales: u64,
+    pub(crate) agent_streaming_settled_says: u64,
+    pub(crate) agent_streaming_settled_commands: u64,
+    pub(crate) agent_streaming_settled_headers: u64,
+    /// Validated replacements installed and baseline restorations actually applied.
+    pub(crate) agent_streaming_settlement_replacements: u64,
+    pub(crate) agent_streaming_settlement_restorations: u64,
+    /// Source mismatches and stale-owned settlement attempts (including no-op drops).
+    pub(crate) agent_streaming_settlement_source_mismatches: u64,
+    pub(crate) agent_streaming_settlement_stale_owners: u64,
+    /// Incomplete streamed source and absent/current-context projection fallbacks.
+    pub(crate) agent_streaming_settlement_incomplete_sources: u64,
+    pub(crate) agent_streaming_settlement_projection_misses: u64,
     /// Number of resize workers that reused actor-cached decoded entries.
     pub(crate) agent_presentation_decoded_cache_hits: u64,
     /// Number of resize workers that decoded durable presentation storage.
@@ -672,6 +686,53 @@ impl RuntimeMetricsSnapshot {
     pub(crate) fn record_agent_streaming_projection_noop(&mut self) {
         self.agent_streaming_projection_results =
             self.agent_streaming_projection_results.saturating_add(1);
+    }
+
+    /// Records a bounded, content-free successful settlement component.
+    pub(crate) fn record_agent_streaming_settled_component(&mut self, kind: &str) {
+        let counter = match kind {
+            "rationale" => &mut self.agent_streaming_settled_rationales,
+            "say" => &mut self.agent_streaming_settled_says,
+            "command" => &mut self.agent_streaming_settled_commands,
+            "header" => &mut self.agent_streaming_settled_headers,
+            _ => return,
+        };
+        *counter = counter.saturating_add(1);
+    }
+
+    /// Records whether a settlement replaced a projection or actually restored
+    /// its baseline; unsuccessful stale-owner drops are not screen mutations.
+    pub(crate) fn record_agent_streaming_settlement_screen_change(&mut self, replacement: bool) {
+        let counter = if replacement {
+            &mut self.agent_streaming_settlement_replacements
+        } else {
+            &mut self.agent_streaming_settlement_restorations
+        };
+        *counter = counter.saturating_add(1);
+    }
+
+    /// Records a source mismatch separately from an ownership/context loss.
+    pub(crate) fn record_agent_streaming_settlement_rejection(&mut self, stale_owner: bool) {
+        let counter = if stale_owner {
+            &mut self.agent_streaming_settlement_stale_owners
+        } else {
+            &mut self.agent_streaming_settlement_source_mismatches
+        };
+        *counter = counter.saturating_add(1);
+    }
+
+    /// Records an incomplete source independently of source inequality.
+    pub(crate) fn record_agent_streaming_settlement_incomplete_source(&mut self) {
+        self.agent_streaming_settlement_incomplete_sources = self
+            .agent_streaming_settlement_incomplete_sources
+            .saturating_add(1);
+    }
+
+    /// Records an unavailable or outdated projection without claiming screen mutation.
+    pub(crate) fn record_agent_streaming_settlement_projection_miss(&mut self) {
+        self.agent_streaming_settlement_projection_misses = self
+            .agent_streaming_settlement_projection_misses
+            .saturating_add(1);
     }
 
     /// Records one completed background presentation resize cache outcome.

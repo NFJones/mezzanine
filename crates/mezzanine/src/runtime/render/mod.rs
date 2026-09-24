@@ -599,9 +599,14 @@ pub(crate) struct RuntimePresentationComponent {
     /// Source-backed provider `say` output awaiting validated completion.
     agent_streaming_say_presentations:
         std::collections::BTreeMap<String, RuntimeStreamingSayPresentation>,
+    /// Final say kept visible but unpersisted until runtime-visible actions settle.
+    agent_pending_final_say_previews:
+        std::collections::BTreeMap<String, RuntimePendingFinalSayPreview>,
     /// Streamed action indices already installed as validated presentation.
     agent_promoted_streaming_say_actions:
         std::collections::BTreeMap<(String, String), std::collections::BTreeSet<usize>>,
+    /// Accepted headers waiting for their exact execution-owned append.
+    agent_accepted_streaming_headers: std::collections::BTreeMap<(String, String, String), String>,
     /// Accepted sender-side message actions already represented in a pane.
     agent_settled_outbound_message_actions: std::collections::BTreeSet<(String, String, String)>,
     /// Panes replaying durable agent presentation entries.
@@ -773,6 +778,24 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     projected_rationale: Option<RuntimeStreamingSayProjectedRationale>,
     /// Installed screen lineage associated with retained projection metadata.
     projected_lineage: Option<u64>,
+}
+
+/// One final say still visible as provisional output while runtime work settles.
+#[derive(Debug, Clone)]
+struct RuntimePendingFinalSayPreview {
+    /// Turn and conversation that own the projected final component.
+    turn_id: String,
+    conversation_id: String,
+    /// Every validated final component retained until settlement in action order.
+    finals: Vec<(
+        usize,
+        RuntimeStreamingSayAction,
+        RuntimeStreamingSayProjectedAction,
+    )>,
+    /// Exact pane generation containing the provisional final component.
+    installed_lineage: u64,
+    /// Complete screen without the final component, ready for an atomic handoff.
+    without_final_screen: std::sync::Arc<TerminalScreen>,
 }
 
 /// Non-source inputs that determine one streaming projection generation.
@@ -1304,12 +1327,16 @@ pub(crate) struct RuntimeAgentPresentationResizeResult {
 /// Pane-local presentation state restored when conversation resume fails.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeAgentResumePresentationSnapshot {
+    /// Exact pane generation that owned accepted header handoffs at capture.
+    header_owner: Option<(String, u64)>,
     prompt_input: Option<RuntimeAgentPromptInput>,
     shell_output_previews: Option<RuntimeAgentShellPreviewPresentation>,
     action_presentation_progress: Option<RuntimeActionPresentationProgressPresentation>,
     streaming_say_presentation: Option<RuntimeStreamingSayPresentation>,
+    pending_final_say_preview: Option<RuntimePendingFinalSayPreview>,
     promoted_streaming_say_actions:
         std::collections::BTreeMap<(String, String), std::collections::BTreeSet<usize>>,
+    accepted_streaming_headers: std::collections::BTreeMap<(String, String, String), String>,
     projection: Option<(String, Size)>,
     pending_resize: Option<Size>,
     replay_active: bool,
@@ -1748,8 +1775,11 @@ impl RuntimePresentationComponent {
         self.agent_shell_output_previews.remove(pane_id);
         self.action_presentation_progress.remove(pane_id);
         self.agent_streaming_say_presentations.remove(pane_id);
+        self.agent_pending_final_say_previews.remove(pane_id);
         self.agent_promoted_streaming_say_actions
             .retain(|(candidate_pane_id, _turn_id), _indices| candidate_pane_id != pane_id);
+        self.agent_accepted_streaming_headers
+            .retain(|(candidate_pane_id, _, _), _| candidate_pane_id != pane_id);
         self.agent_settled_outbound_message_actions
             .retain(|(candidate_pane_id, _turn_id, _action_id)| candidate_pane_id != pane_id);
         self.agent_presentation_replay_panes.remove(pane_id);
@@ -1794,6 +1824,40 @@ impl RuntimePresentationComponent {
             .insert(pane_id.to_string(), size);
         self.agent_presentation_projection_cache
             .insert(pane_id.to_string(), (conversation_id.to_string(), size));
+    }
+
+    /// Seeds and observes an execution-header handoff for resume-lineage tests.
+    #[cfg(test)]
+    pub(crate) fn seed_accepted_streaming_header_for_tests(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        action_id: &str,
+        header: &str,
+    ) {
+        self.agent_accepted_streaming_headers.insert(
+            (
+                pane_id.to_string(),
+                turn_id.to_string(),
+                action_id.to_string(),
+            ),
+            header.to_string(),
+        );
+    }
+
+    /// Reports whether the exact header handoff still owns a row in test state.
+    #[cfg(test)]
+    pub(crate) fn has_accepted_streaming_header_for_tests(
+        &self,
+        pane_id: &str,
+        turn_id: &str,
+        action_id: &str,
+    ) -> bool {
+        self.agent_accepted_streaming_headers.contains_key(&(
+            pane_id.to_string(),
+            turn_id.to_string(),
+            action_id.to_string(),
+        ))
     }
 
     /// Reports whether any pane-keyed agent presentation artifact remains.
@@ -2192,6 +2256,11 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> RuntimeAgentResumePresentationSnapshot {
         RuntimeAgentResumePresentationSnapshot {
+            header_owner: self.agent_pane_screen_state(pane_id).and_then(|state| {
+                let conversation = state.conversation_id().to_string();
+                self.agent_pane_screen_lineage(pane_id, &conversation)
+                    .map(|lineage| (conversation, lineage))
+            }),
             prompt_input: self
                 .presentation
                 .agent_prompt_inputs
@@ -2212,12 +2281,24 @@ impl RuntimeSessionService {
                 .agent_streaming_say_presentations
                 .get(pane_id)
                 .cloned(),
+            pending_final_say_preview: self
+                .presentation
+                .agent_pending_final_say_previews
+                .get(pane_id)
+                .cloned(),
             promoted_streaming_say_actions: self
                 .presentation
                 .agent_promoted_streaming_say_actions
                 .iter()
                 .filter(|((candidate_pane_id, _turn_id), _indices)| candidate_pane_id == pane_id)
                 .map(|(key, indices)| (key.clone(), indices.clone()))
+                .collect(),
+            accepted_streaming_headers: self
+                .presentation
+                .agent_accepted_streaming_headers
+                .iter()
+                .filter(|((candidate_pane_id, _, _), _)| candidate_pane_id == pane_id)
+                .map(|(key, header)| (key.clone(), header.clone()))
                 .collect(),
             projection: self
                 .presentation
@@ -2283,6 +2364,16 @@ impl RuntimeSessionService {
         let current_lineage = current_conversation
             .as_deref()
             .and_then(|conversation_id| self.agent_pane_screen_lineage(pane_id, conversation_id));
+        if snapshot
+            .header_owner
+            .as_ref()
+            .is_none_or(|(conversation, lineage)| {
+                current_conversation.as_deref() != Some(conversation.as_str())
+                    || current_lineage != Some(*lineage)
+            })
+        {
+            snapshot.accepted_streaming_headers.clear();
+        }
         snapshot.shell_output_previews = snapshot.shell_output_previews.take().filter(|preview| {
             current_conversation.as_deref() == Some(preview.conversation_id.as_str())
                 && current_lineage == Some(preview.installed_lineage)
@@ -2302,6 +2393,11 @@ impl RuntimeSessionService {
                     current_conversation.as_deref() == Some(streaming.conversation_id.as_str())
                         && current_lineage == Some(streaming.installed_lineage)
                 });
+        snapshot.pending_final_say_preview =
+            snapshot.pending_final_say_preview.take().filter(|preview| {
+                current_conversation.as_deref() == Some(preview.conversation_id.as_str())
+                    && current_lineage == Some(preview.installed_lineage)
+            });
         if snapshot.streaming_say_presentation.is_none() {
             snapshot.promoted_streaming_say_actions.clear();
         }
@@ -2339,11 +2435,25 @@ impl RuntimeSessionService {
                 .insert(pane_id.to_string(), value);
         }
         self.presentation
+            .agent_pending_final_say_previews
+            .remove(pane_id);
+        if let Some(value) = snapshot.pending_final_say_preview {
+            self.presentation
+                .agent_pending_final_say_previews
+                .insert(pane_id.to_string(), value);
+        }
+        self.presentation
             .agent_promoted_streaming_say_actions
             .retain(|(candidate_pane_id, _turn_id), _indices| candidate_pane_id != pane_id);
         self.presentation
             .agent_promoted_streaming_say_actions
             .extend(snapshot.promoted_streaming_say_actions);
+        self.presentation
+            .agent_accepted_streaming_headers
+            .retain(|(candidate_pane_id, _, _), _| candidate_pane_id != pane_id);
+        self.presentation
+            .agent_accepted_streaming_headers
+            .extend(snapshot.accepted_streaming_headers);
         self.presentation
             .agent_presentation_projection_cache
             .remove(pane_id);

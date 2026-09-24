@@ -37,6 +37,16 @@ projections from very old saved presentation records are replayed unchanged
 and are not rewrapped to this configured cap; they may wrap at the physical
 pane width because rewriting terminal-control bytes is unsafe.
 
+Streaming rationale that exactly matches a validated completion can remain
+visible without a second copy being appended. A matching action header may
+remain while its accepted action is pending, together with matching progress
+text; the action's actual result is still reported separately. A changed header
+can be replaced atomically while matching rationale and progress text stay
+visible. Provisional action previews do not prove execution; rejected source
+does not become an action result. Matching command previews and multiple headers
+can remain visible across acceptance; a final answer following pending actions
+stays provisional and is recorded only if those actions complete successfully.
+
 Type a request and press Enter. Use `Ctrl+J` to insert a literal newline
 without submitting it. In native shell mode, `Ctrl+V` pastes host clipboard
 text into the editable prompt while preserving multiline text. Prompt completion

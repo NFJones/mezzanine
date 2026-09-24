@@ -74,6 +74,8 @@ const AGENT_PRESENTATION_PARENT_PROMPT_CONTENT_TYPE: &str =
 /// Content type for rationale text rendered at replay geometry.
 const AGENT_PRESENTATION_THINKING_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.thinking+text; charset=utf-8";
+/// Reserved presentation marker for an accepted rationale, never an action index.
+const STREAMED_RATIONALE_PRESENTED_MARKER: usize = usize::MAX;
 /// Content type for structured macro lifecycle rows rendered at replay geometry.
 const AGENT_PRESENTATION_MACRO_LIFECYCLE_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.macro-lifecycle+json; charset=utf-8";
@@ -2444,6 +2446,19 @@ impl RuntimeSessionService {
         {
             self.discard_agent_streaming_say_presentation(pane_id, None)?;
         }
+        if let Some(preview) = self
+            .presentation
+            .agent_pending_final_say_previews
+            .remove(pane_id)
+            && self.agent_pane_screen_lineage(pane_id, &preview.conversation_id)
+                == Some(preview.installed_lineage)
+        {
+            self.update_agent_streaming_screen(
+                pane_id,
+                &preview.conversation_id,
+                preview.without_final_screen.as_ref().clone(),
+            )?;
+        }
         Ok(())
     }
 
@@ -3488,6 +3503,34 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Builds a private generation with deferred final says after accepted siblings.
+    /// The synthetic projection positions affect only screen order; action ids,
+    /// source indices, and durable records keep their validated identities.
+    fn build_ordered_pending_final_screen(
+        mut work: crate::runtime::RuntimeStreamingSayProjectionWork,
+        pending_indices: &std::collections::BTreeSet<usize>,
+    ) -> Result<TerminalScreen> {
+        let mut last_index = work
+            .actions
+            .keys()
+            .chain(work.outbound_messages.keys())
+            .chain(work.shell_commands.keys())
+            .chain(work.shell_summaries.keys())
+            .chain(work.action_headers.keys())
+            .copied()
+            .max()
+            .unwrap_or(0);
+        for index in pending_indices {
+            if let Some(source) = work.actions.remove(index) {
+                last_index = last_index.checked_add(1).ok_or_else(|| {
+                    MezError::invalid_state("deferred final projection index overflow")
+                })?;
+                work.actions.insert(last_index, source);
+            }
+        }
+        Ok(Self::build_agent_streaming_say_projection(work)?.screen)
+    }
+
     /// Builds a complete private screen generation from immutable source.
     pub(crate) fn build_agent_streaming_say_projection(
         work: crate::runtime::RuntimeStreamingSayProjectionWork,
@@ -4086,10 +4129,97 @@ impl RuntimeSessionService {
         turn_id: &str,
         action_index: usize,
     ) -> bool {
+        if action_index == STREAMED_RATIONALE_PRESENTED_MARKER {
+            return false;
+        }
         self.presentation
             .agent_promoted_streaming_say_actions
             .get(&(pane_id.to_string(), turn_id.to_string()))
             .is_some_and(|indices| indices.contains(&action_index))
+    }
+
+    /// Reports whether the validated batch rationale already owns visible rows.
+    pub(crate) fn agent_streaming_rationale_is_promoted(
+        &self,
+        pane_id: &str,
+        turn_id: &str,
+    ) -> bool {
+        self.presentation
+            .agent_promoted_streaming_say_actions
+            .get(&(pane_id.to_string(), turn_id.to_string()))
+            .is_some_and(|indices| indices.contains(&STREAMED_RATIONALE_PRESENTED_MARKER))
+    }
+
+    /// Retires unclaimed accepted header handoffs when their turn terminates.
+    pub(crate) fn clear_accepted_streaming_headers_for_turn(&mut self, turn_id: &str) {
+        self.presentation
+            .agent_accepted_streaming_headers
+            .retain(|(_, candidate_turn_id, _), _| candidate_turn_id != turn_id);
+    }
+
+    /// Retires any provisional final component when its turn ends.
+    pub(crate) fn clear_pending_final_say_previews_for_turn(&mut self, turn_id: &str) {
+        self.presentation
+            .agent_pending_final_say_previews
+            .retain(|_, preview| preview.turn_id != turn_id);
+    }
+
+    /// Settles a still-owned final say only after runtime-visible work completes.
+    /// An intervening pane write retires the preview and lets the ordinary
+    /// deferred presenter append the final output at its normal boundary.
+    pub(crate) fn settle_pending_final_say_preview(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        completed: bool,
+    ) -> Result<bool> {
+        let Some(preview) = self
+            .presentation
+            .agent_pending_final_say_previews
+            .remove(pane_id)
+        else {
+            return Ok(false);
+        };
+        if preview.turn_id != turn_id
+            || self.agent_shell_store().get(pane_id).is_none_or(|session| {
+                session.session_id != preview.conversation_id
+                    || session.running_turn_id.as_deref() != Some(turn_id)
+            })
+            || self.agent_pane_screen_lineage(pane_id, &preview.conversation_id)
+                != Some(preview.installed_lineage)
+        {
+            return Ok(false);
+        }
+        if completed {
+            for (action_index, source, row) in &preview.finals {
+                self.persist_agent_presentation_entry(
+                    pane_id,
+                    vec![row.style.clone(); row.rendered_lines.len()],
+                    row.rendered_lines.clone(),
+                    row.copy_lines.clone(),
+                    String::new(),
+                    Some((source.text.as_str(), source.content_type.as_str())),
+                );
+                self.presentation
+                    .agent_promoted_streaming_say_actions
+                    .entry((pane_id.to_string(), turn_id.to_string()))
+                    .or_default()
+                    .insert(*action_index);
+                self.integration
+                    .runtime_metrics_mut()
+                    .record_agent_streaming_settled_component("say");
+            }
+        } else {
+            self.update_agent_streaming_screen(
+                pane_id,
+                &preview.conversation_id,
+                preview.without_final_screen.as_ref().clone(),
+            )?;
+            self.integration
+                .runtime_metrics_mut()
+                .record_agent_streaming_settlement_screen_change(true);
+        }
+        Ok(completed)
     }
 
     /// Appends one accepted sender-side message row and retains its strict
@@ -4409,6 +4539,23 @@ impl RuntimeSessionService {
             .agent_pane_screen_lineage(pane_id, &presentation.conversation_id)
             == Some(presentation.installed_lineage);
         let batch = execution.response.action_batch.as_ref();
+        let incomplete_source = presentation
+            .rationale
+            .as_ref()
+            .is_some_and(|source| !source.complete)
+            || presentation.actions.values().any(|source| !source.complete)
+            || presentation
+                .outbound_messages
+                .values()
+                .any(|source| !source.complete)
+            || presentation
+                .shell_commands
+                .values()
+                .any(|source| !source.complete)
+            || presentation
+                .shell_summaries
+                .values()
+                .any(|source| !source.complete);
         let matches = presentation.turn_id == turn_id
             && conversation_matches
             && batch.is_some_and(|batch| {
@@ -4488,8 +4635,308 @@ impl RuntimeSessionService {
                             };
                             streamed.complete && streamed.text == *summary
                         })
+                    && presentation.action_headers.iter().all(|(index, header)| {
+                        let Some(action) = batch.actions.get(*index) else {
+                            return false;
+                        };
+                        match (header, &action.payload) {
+                            (
+                                mez_agent::StreamingActionHeader::WebSearch { query: streamed },
+                                mez_agent::AgentActionPayload::WebSearch {
+                                    query: accepted, ..
+                                },
+                            ) => streamed == accepted,
+                            (
+                                mez_agent::StreamingActionHeader::FetchUrl { url: streamed },
+                                mez_agent::AgentActionPayload::FetchUrl { url: accepted, .. },
+                            ) => streamed == accepted,
+                            (
+                                mez_agent::StreamingActionHeader::Action { action: streamed },
+                                accepted,
+                            ) => &streamed.payload == accepted,
+                            _ => false,
+                        }
+                    })
             });
-        if !matches {
+        let rejected_header = presentation.turn_id == turn_id
+            && conversation_matches
+            && presentation.action_headers.len() == 1
+            && batch.is_some_and(|batch| {
+                presentation
+                    .action_headers
+                    .keys()
+                    .next()
+                    .is_some_and(|index| {
+                        batch.actions.get(*index).is_some_and(|action| {
+                            execution.action_results.iter().any(|result| {
+                                result.action_id == action.id
+                                    && !matches!(
+                                        result.status,
+                                        mez_agent::ActionStatus::Running
+                                            | mez_agent::ActionStatus::Succeeded
+                                    )
+                            })
+                        })
+                    })
+            });
+        if !matches || rejected_header {
+            if !matches {
+                if incomplete_source {
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_agent_streaming_settlement_incomplete_source();
+                } else {
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_agent_streaming_settlement_rejection(
+                            !conversation_matches
+                                || !screen_is_owned
+                                || presentation.turn_id != turn_id,
+                        );
+                }
+            }
+            // Replace a changed header, or remove a rejected one, privately
+            // while retaining every exact rationale/say sibling in action order.
+            let context = self.agent_streaming_say_projection_context(pane_id).ok();
+            if presentation.turn_id == turn_id
+                && conversation_matches
+                && screen_is_owned
+                && presentation.projected_revision == Some(presentation.revision)
+                && presentation.projected_context == context
+                && presentation.projected_lineage == Some(presentation.installed_lineage)
+                && (!presentation.actions.is_empty() || presentation.projected_rationale.is_some())
+                && presentation.rationale.as_ref().is_none_or(|source| {
+                    source.complete && batch.is_some_and(|batch| source.text == batch.rationale)
+                })
+                && presentation.action_headers.len() == 1
+                && presentation.outbound_messages.is_empty()
+                && presentation.shell_commands.is_empty()
+                && presentation.shell_summaries.is_empty()
+                && let Some(batch) = batch
+                && batch.actions.len() == presentation.actions.len() + 1
+                && let Some((&header_index, _)) = presentation.action_headers.iter().next()
+                && presentation.actions.iter().all(|(index, source)| {
+                    batch.actions.get(*index).is_some_and(|action| {
+                        matches!(&action.payload, mez_agent::AgentActionPayload::Say {
+                            status,
+                            text,
+                            content_type,
+                        } if source.complete
+                            && status == &source.status
+                            && text == &source.text
+                            && mez_agent::normalize_agent_output_content_type(Some(content_type))
+                                == source.content_type
+                            && (source.status == mez_agent::SayStatus::Progress
+                                || (source.status == mez_agent::SayStatus::Final
+                                    && *index > header_index)))
+                            && execution.action_results.iter().any(|result| {
+                                result.action_id == action.id
+                                    && result.status == mez_agent::ActionStatus::Succeeded
+                            })
+                    })
+                })
+                && let Some(accepted_action) = batch.actions.get(header_index)
+                && let Some(accepted_header) =
+                    agent_action_execution_display_header(accepted_action)
+                && execution.action_results.iter().any(|result| {
+                    result.action_id == accepted_action.id
+                        && (rejected_header
+                            || matches!(
+                                result.status,
+                                mez_agent::ActionStatus::Running
+                                    | mez_agent::ActionStatus::Succeeded
+                            ))
+                })
+                && let Some(context) = context
+            {
+                let work = crate::runtime::RuntimeStreamingSayProjectionWork {
+                    pane_id: pane_id.to_string(),
+                    turn_id: turn_id.to_string(),
+                    response_index: presentation.response_index,
+                    conversation_id: presentation.conversation_id.clone(),
+                    revision: presentation.revision,
+                    installed_lineage: presentation.installed_lineage,
+                    baseline_screen: presentation.baseline_screen.clone(),
+                    rationale: presentation.rationale.clone(),
+                    actions: presentation.actions.clone(),
+                    outbound_messages: std::collections::BTreeMap::new(),
+                    shell_commands: std::collections::BTreeMap::new(),
+                    shell_summaries: std::collections::BTreeMap::new(),
+                    action_headers: if rejected_header {
+                        std::collections::BTreeMap::new()
+                    } else {
+                        std::collections::BTreeMap::from([(
+                            header_index,
+                            mez_agent::StreamingActionHeader::Action {
+                                action: Box::new(accepted_action.clone()),
+                            },
+                        )])
+                    },
+                    thinking_enabled: context.thinking_enabled,
+                    shell_classification: context.shell_classification,
+                    presentation_columns: context.presentation_columns,
+                    frame_width: context.frame_width,
+                    table_width: context.table_width,
+                    ui_theme: context.ui_theme.clone(),
+                    screen_size: context.screen_size,
+                };
+                let pending_indices = presentation
+                    .actions
+                    .iter()
+                    .filter(|(_, source)| {
+                        source.status == mez_agent::SayStatus::Final
+                            && execution.terminal_state != mez_agent::AgentTurnState::Completed
+                    })
+                    .map(|(index, _)| *index)
+                    .collect::<std::collections::BTreeSet<_>>();
+                let without_final_screen = if pending_indices.is_empty() {
+                    None
+                } else {
+                    let mut without_final = work.clone();
+                    without_final
+                        .actions
+                        .retain(|index, _| !pending_indices.contains(index));
+                    Some(Self::build_agent_streaming_say_projection(without_final)?.screen)
+                };
+                let ordered_screen = (!pending_indices.is_empty()
+                    && batch.actions.iter().enumerate().any(|(index, _)| {
+                        !pending_indices.contains(&index)
+                            && pending_indices.iter().any(|pending| *pending < index)
+                    }))
+                .then(|| Self::build_ordered_pending_final_screen(work.clone(), &pending_indices))
+                .transpose()?;
+                let replacement = Self::build_agent_streaming_say_projection(work)?;
+                let installed_lineage = self.update_agent_streaming_screen(
+                    pane_id,
+                    &presentation.conversation_id,
+                    ordered_screen.unwrap_or(replacement.screen),
+                )?;
+                self.integration
+                    .runtime_metrics_mut()
+                    .record_agent_streaming_settlement_screen_change(true);
+                let mut promoted = std::collections::BTreeSet::new();
+                if let (Some(source), Some(row)) = (
+                    presentation.rationale.as_ref(),
+                    replacement.projected_rationale.as_ref(),
+                ) {
+                    self.persist_agent_presentation_entry(
+                        pane_id,
+                        vec![row.style.clone(); row.rendered_lines.len()],
+                        row.rendered_lines.clone(),
+                        row.copy_lines.clone(),
+                        String::new(),
+                        Some((
+                            source.text.as_str(),
+                            AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
+                        )),
+                    );
+                    promoted.insert(STREAMED_RATIONALE_PRESENTED_MARKER);
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_agent_streaming_settled_component("rationale");
+                }
+                if !rejected_header {
+                    self.presentation.agent_accepted_streaming_headers.insert(
+                        (
+                            pane_id.to_string(),
+                            turn_id.to_string(),
+                            accepted_action.id.clone(),
+                        ),
+                        accepted_header.clone(),
+                    );
+                }
+                let rendered_lines = wrap_rich_text_line_to_width_with_source_ranges_hard(
+                    agent_action_execution_rendered_line(
+                        &accepted_header,
+                        &self.presentation.settings.ui_theme,
+                    ),
+                    context.frame_width,
+                )
+                .into_iter()
+                .map(|wrapped| wrapped.line.display)
+                .collect::<Vec<_>>();
+                for index in 0..batch.actions.len() {
+                    if index == header_index {
+                        if !rejected_header {
+                            self.persist_agent_presentation_entry(
+                                pane_id,
+                                vec![
+                                    AgentTerminalPresentationStyle::Status
+                                        .persistence_name()
+                                        .to_string();
+                                    rendered_lines.len()
+                                ],
+                                rendered_lines.clone(),
+                                Vec::new(),
+                                String::new(),
+                                Some((
+                                    &accepted_header,
+                                    AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE,
+                                )),
+                            );
+                            self.integration
+                                .runtime_metrics_mut()
+                                .record_agent_streaming_settled_component("header");
+                        }
+                    } else if let (Some(source), Some(row)) = (
+                        presentation.actions.get(&index),
+                        replacement
+                            .projected_actions
+                            .iter()
+                            .find(|row| row.action_index == index),
+                    ) {
+                        if pending_indices.contains(&index) {
+                            continue;
+                        }
+                        self.persist_agent_presentation_entry(
+                            pane_id,
+                            vec![row.style.clone(); row.rendered_lines.len()],
+                            row.rendered_lines.clone(),
+                            row.copy_lines.clone(),
+                            String::new(),
+                            Some((source.text.as_str(), source.content_type.as_str())),
+                        );
+                        promoted.insert(index);
+                        self.integration
+                            .runtime_metrics_mut()
+                            .record_agent_streaming_settled_component("say");
+                    }
+                }
+                self.presentation
+                    .agent_promoted_streaming_say_actions
+                    .insert((pane_id.to_string(), turn_id.to_string()), promoted.clone());
+                if let Some(without_final_screen) = without_final_screen {
+                    let finals = pending_indices
+                        .iter()
+                        .filter_map(|index| {
+                            let source = presentation.actions.get(index)?;
+                            let row = replacement
+                                .projected_actions
+                                .iter()
+                                .find(|row| row.action_index == *index)?;
+                            Some((*index, source.clone(), row.clone()))
+                        })
+                        .collect();
+                    self.presentation.agent_pending_final_say_previews.insert(
+                        pane_id.to_string(),
+                        crate::runtime::render::RuntimePendingFinalSayPreview {
+                            turn_id: turn_id.to_string(),
+                            conversation_id: presentation.conversation_id.clone(),
+                            finals,
+                            installed_lineage,
+                            without_final_screen: std::sync::Arc::new(without_final_screen),
+                        },
+                    );
+                }
+                return Ok(
+                    crate::runtime::render::RuntimeStreamingSayCompletionReconciliation {
+                        promoted_action_indices: promoted
+                            .into_iter()
+                            .filter(|index| *index != STREAMED_RATIONALE_PRESENTED_MARKER)
+                            .collect(),
+                    },
+                );
+            }
             self.presentation
                 .agent_promoted_streaming_say_actions
                 .remove(&(pane_id.to_string(), turn_id.to_string()));
@@ -4499,6 +4946,9 @@ impl RuntimeSessionService {
                     &presentation.conversation_id,
                     presentation.baseline_screen.as_ref().clone(),
                 )?;
+                self.integration
+                    .runtime_metrics_mut()
+                    .record_agent_streaming_settlement_screen_change(false);
             }
             return Ok(Default::default());
         }
@@ -4511,19 +4961,55 @@ impl RuntimeSessionService {
                 && projection_context_is_current
                 && presentation.projected_lineage == Some(presentation.installed_lineage)
         });
+        if !screen_is_owned {
+            self.integration
+                .runtime_metrics_mut()
+                .record_agent_streaming_settlement_rejection(true);
+        } else if current_projected_actions.is_none() {
+            self.integration
+                .runtime_metrics_mut()
+                .record_agent_streaming_settlement_projection_miss();
+        }
         let command_can_promote = batch.is_some_and(|batch| {
             presentation.rationale.as_ref().is_none_or(|rationale| {
                 rationale.complete && rationale.text == batch.rationale
             })
-                && presentation.actions.is_empty()
-                && presentation.shell_commands.len() == 1
+                && presentation.actions.values().all(|source| {
+                    source.complete && source.status == mez_agent::SayStatus::Progress
+                })
+                && !presentation.shell_commands.is_empty()
+                && presentation.outbound_messages.is_empty()
+                && presentation.action_headers.iter().all(|(index, header)| {
+                    batch.actions.get(*index).is_some_and(|action| {
+                        agent_action_execution_display_header(action).is_some_and(|accepted| {
+                            streaming_action_execution_display_header(header) == accepted
+                        }) && execution.action_results.iter().any(|result| {
+                            result.action_id == action.id
+                                && matches!(result.status, mez_agent::ActionStatus::Running | mez_agent::ActionStatus::Succeeded)
+                        })
+                    })
+                })
                 && !self.agent_verbose_enabled(pane_id)
                 && self.pane_readiness_state(pane_id) == mez_agent::PaneReadinessState::Ready
-                && batch.actions.len() == 1
-                && execution.action_results.len() == 1
+                && batch.actions.len()
+                    == presentation.shell_commands.len()
+                        + presentation.actions.len()
+                        + presentation.action_headers.len()
+                && execution.action_results.len() == batch.actions.len()
+                && presentation.actions.iter().all(|(action_index, source)| {
+                    batch.actions.get(*action_index).is_some_and(|action| {
+                        matches!(&action.payload, mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Progress,
+                            text,
+                            ..
+                        } if text == &source.text)
+                    }) && execution.action_results.get(*action_index).is_some_and(|result| {
+                        result.action_id == batch.actions[*action_index].id
+                            && result.status == mez_agent::ActionStatus::Succeeded
+                    })
+                })
                 && presentation.shell_commands.iter().all(|(action_index, source)| {
-                    *action_index == 0
-                        && source.complete
+                    source.complete
                         && !bounded_command_preview_source(&source.text).truncated
                         && batch.actions.get(*action_index).is_some_and(|action| {
                             matches!(
@@ -4532,7 +5018,7 @@ impl RuntimeSessionService {
                                     if command == &source.text
                             )
                         })
-                        && execution.action_results.first().is_some_and(|result| {
+                        && execution.action_results.get(*action_index).is_some_and(|result| {
                             result.action_id == batch.actions[*action_index].id
                                 && result.status == mez_agent::ActionStatus::Running
                         })
@@ -4551,21 +5037,322 @@ impl RuntimeSessionService {
                             })
                     })
                 && current_projected_actions.is_some_and(|projected| {
-                    projected.len() == 1
-                        && projected.first().is_some_and(|projection| {
-                            projection.action_index == 0
-                                && matches!(
-                                    projection.kind,
-                                    crate::runtime::render::RuntimeStreamingSayProjectedActionKind::ShellCommand {
-                                        truncated: false
-                                    }
-                                )
+                    projected.len() + presentation.action_headers.len() == batch.actions.len()
+                        && projected.iter().all(|projection| {
+                            match projection.kind {
+                                crate::runtime::render::RuntimeStreamingSayProjectedActionKind::ShellCommand { truncated: false } =>
+                                    presentation.shell_commands.contains_key(&projection.action_index),
+                                crate::runtime::render::RuntimeStreamingSayProjectedActionKind::Say =>
+                                    presentation.actions.contains_key(&projection.action_index),
+                                _ => false,
+                            }
                         })
                 })
                 && presentation.projected_context.as_ref().is_some_and(|context| {
                     !context.thinking_enabled || presentation.projected_rationale.is_some()
                 })
         });
+
+        // A rationale with no other streamed components already occupies its
+        // final rows. Preserve that exact projection through completion and
+        // record only its semantic source; Complete has no action display row.
+        let rationale_only_can_promote = screen_is_owned
+            && current_projected_actions.is_some_and(Vec::is_empty)
+            && presentation.projected_rationale.is_some()
+            && presentation
+                .rationale
+                .as_ref()
+                .is_some_and(|source| source.complete)
+            && presentation.actions.is_empty()
+            && presentation.outbound_messages.is_empty()
+            && presentation.shell_commands.is_empty()
+            && presentation.shell_summaries.is_empty()
+            && presentation.action_headers.is_empty()
+            && batch.is_some_and(|batch| {
+                !batch.actions.is_empty()
+                    && batch.actions.iter().all(|action| {
+                        matches!(action.payload, mez_agent::AgentActionPayload::Complete)
+                    })
+            });
+        if rationale_only_can_promote
+            && let (Some(rationale), Some(projection)) = (
+                presentation.rationale.as_ref(),
+                presentation.projected_rationale.as_ref(),
+            )
+        {
+            self.persist_agent_presentation_entry(
+                pane_id,
+                vec![projection.style.clone(); projection.rendered_lines.len()],
+                projection.rendered_lines.clone(),
+                projection.copy_lines.clone(),
+                String::new(),
+                Some((
+                    rationale.text.as_str(),
+                    AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
+                )),
+            );
+            self.presentation
+                .agent_promoted_streaming_say_actions
+                .insert(
+                    (pane_id.to_string(), turn_id.to_string()),
+                    std::collections::BTreeSet::from([STREAMED_RATIONALE_PRESENTED_MARKER]),
+                );
+            self.integration
+                .runtime_metrics_mut()
+                .record_agent_streaming_settled_component("rationale");
+            return Ok(Default::default());
+        }
+
+        // An accepted action can claim its exact rendered header. The
+        // provider preview alone is not proof of execution: keep the handoff
+        // separate from action-index promotion until the execution presenter
+        // consumes it and persists the accepted header.
+        let settled_header = screen_is_owned
+            && current_projected_actions.is_some_and(|projected| {
+                projected.len() == presentation.actions.len()
+                    && projected.iter().all(|row| {
+                        matches!(
+                            row.kind,
+                            crate::runtime::render::RuntimeStreamingSayProjectedActionKind::Say
+                        ) && presentation.actions.contains_key(&row.action_index)
+                    })
+            })
+            && presentation.actions.iter().all(|(index, source)| {
+                source.complete
+                    && (source.status == mez_agent::SayStatus::Progress
+                        || (source.status == mez_agent::SayStatus::Final
+                            && presentation
+                                .action_headers
+                                .keys()
+                                .next()
+                                .is_some_and(|header_index| index > header_index)))
+            })
+            && presentation.outbound_messages.is_empty()
+            && presentation.shell_commands.is_empty()
+            && presentation.shell_summaries.is_empty()
+            && !presentation.action_headers.is_empty()
+            && batch.is_some_and(|batch| {
+                batch.actions.len()
+                    == presentation.actions.len() + presentation.action_headers.len()
+            });
+        if settled_header
+            && let Some(batch) = batch
+            && presentation.action_headers.iter().all(|(index, header)| {
+                batch.actions.get(*index).is_some_and(|action| {
+                    agent_action_execution_display_header(action).is_some_and(|static_header| {
+                        streaming_action_execution_display_header(header) == static_header
+                    }) && execution.action_results.iter().any(|result| {
+                        result.action_id == action.id
+                            && matches!(
+                                result.status,
+                                mez_agent::ActionStatus::Running
+                                    | mez_agent::ActionStatus::Succeeded
+                            )
+                    })
+                })
+            })
+            && presentation.actions.iter().all(|(index, _)| {
+                batch.actions.get(*index).is_some_and(|action| {
+                    matches!(action.payload, mez_agent::AgentActionPayload::Say { .. })
+                        && execution.action_results.iter().any(|result| {
+                            result.action_id == action.id
+                                && result.status == mez_agent::ActionStatus::Succeeded
+                        })
+                })
+            })
+        {
+            let pending_finals = presentation
+                .actions
+                .iter()
+                .filter(|(_, source)| {
+                    source.status == mez_agent::SayStatus::Final
+                        && execution.terminal_state != mez_agent::AgentTurnState::Completed
+                })
+                .map(|(&index, source)| {
+                    let projected = current_projected_actions
+                        .and_then(|rows| rows.iter().find(|row| row.action_index == index))
+                        .ok_or_else(|| {
+                            MezError::invalid_state("pending final projection is unavailable")
+                        })?;
+                    Ok((index, source.clone(), projected.clone()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let pending_final_preview = if !pending_finals.is_empty() {
+                let context = presentation.projected_context.as_ref().ok_or_else(|| {
+                    MezError::invalid_state("pending final render context is unavailable")
+                })?;
+                let mut actions = presentation.actions.clone();
+                for (index, _, _) in &pending_finals {
+                    actions.remove(index);
+                }
+                let work = crate::runtime::RuntimeStreamingSayProjectionWork {
+                    pane_id: pane_id.to_string(),
+                    turn_id: turn_id.to_string(),
+                    response_index: presentation.response_index,
+                    conversation_id: presentation.conversation_id.clone(),
+                    revision: presentation.revision,
+                    installed_lineage: presentation.installed_lineage,
+                    baseline_screen: presentation.baseline_screen.clone(),
+                    rationale: presentation.rationale.clone(),
+                    actions,
+                    outbound_messages: presentation.outbound_messages.clone(),
+                    shell_commands: presentation.shell_commands.clone(),
+                    shell_summaries: presentation.shell_summaries.clone(),
+                    action_headers: presentation.action_headers.clone(),
+                    thinking_enabled: context.thinking_enabled,
+                    shell_classification: context.shell_classification,
+                    presentation_columns: context.presentation_columns,
+                    frame_width: context.frame_width,
+                    table_width: context.table_width,
+                    ui_theme: context.ui_theme.clone(),
+                    screen_size: context.screen_size,
+                };
+                let pending_indices = pending_finals
+                    .iter()
+                    .map(|(index, _, _)| *index)
+                    .collect::<std::collections::BTreeSet<_>>();
+                let ordered_screen = if batch.actions.iter().enumerate().any(|(index, _)| {
+                    !pending_indices.contains(&index)
+                        && pending_indices.iter().any(|pending| *pending < index)
+                }) {
+                    let mut ordered_work = work.clone();
+                    ordered_work.actions = presentation.actions.clone();
+                    Some(Self::build_ordered_pending_final_screen(
+                        ordered_work,
+                        &pending_indices,
+                    )?)
+                } else {
+                    None
+                };
+                let without_final_screen = Self::build_agent_streaming_say_projection(work)?.screen;
+                let installed_lineage = if let Some(screen) = ordered_screen {
+                    self.update_agent_streaming_screen(
+                        pane_id,
+                        &presentation.conversation_id,
+                        screen,
+                    )?
+                } else {
+                    presentation.installed_lineage
+                };
+                Some(crate::runtime::render::RuntimePendingFinalSayPreview {
+                    turn_id: turn_id.to_string(),
+                    conversation_id: presentation.conversation_id.clone(),
+                    finals: pending_finals,
+                    installed_lineage,
+                    without_final_screen: std::sync::Arc::new(without_final_screen),
+                })
+            } else {
+                None
+            };
+            if let (Some(rationale), Some(projection)) = (
+                presentation.rationale.as_ref(),
+                presentation.projected_rationale.as_ref(),
+            ) {
+                self.persist_agent_presentation_entry(
+                    pane_id,
+                    vec![projection.style.clone(); projection.rendered_lines.len()],
+                    projection.rendered_lines.clone(),
+                    projection.copy_lines.clone(),
+                    String::new(),
+                    Some((
+                        rationale.text.as_str(),
+                        AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
+                    )),
+                );
+            }
+            let mut promoted = std::collections::BTreeSet::new();
+            if presentation.projected_rationale.is_some() {
+                promoted.insert(STREAMED_RATIONALE_PRESENTED_MARKER);
+                self.integration
+                    .runtime_metrics_mut()
+                    .record_agent_streaming_settled_component("rationale");
+            }
+            // Persist in the projector's action-index order, not grouped by
+            // component kind; replay must reproduce the installed screen.
+            for index in 0..batch.actions.len() {
+                if presentation.action_headers.contains_key(&index) {
+                    let action = &batch.actions[index];
+                    let static_header =
+                        agent_action_execution_display_header(action).ok_or_else(|| {
+                            MezError::invalid_state("validated streaming header disappeared")
+                        })?;
+                    let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
+                    let rendered_lines = wrap_rich_text_line_to_width_with_source_ranges_hard(
+                        agent_action_execution_rendered_line(
+                            &static_header,
+                            &self.presentation.settings.ui_theme,
+                        ),
+                        frame_width,
+                    )
+                    .into_iter()
+                    .map(|wrapped| wrapped.line.display)
+                    .collect::<Vec<_>>();
+                    self.persist_agent_presentation_entry(
+                        pane_id,
+                        vec![
+                            AgentTerminalPresentationStyle::Status
+                                .persistence_name()
+                                .to_string();
+                            rendered_lines.len()
+                        ],
+                        rendered_lines.clone(),
+                        Vec::new(),
+                        String::new(),
+                        Some((
+                            &static_header,
+                            AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE,
+                        )),
+                    );
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_agent_streaming_settled_component("header");
+                    self.presentation.agent_accepted_streaming_headers.insert(
+                        (pane_id.to_string(), turn_id.to_string(), action.id.clone()),
+                        static_header,
+                    );
+                } else if let Some(row) = current_projected_actions
+                    .and_then(|rows| rows.iter().find(|row| row.action_index == index))
+                    && let Some(source) = presentation.actions.get(&index)
+                {
+                    if pending_final_preview.as_ref().is_some_and(|preview| {
+                        preview
+                            .finals
+                            .iter()
+                            .any(|(candidate, _, _)| *candidate == index)
+                    }) {
+                        continue;
+                    }
+                    self.persist_agent_presentation_entry(
+                        pane_id,
+                        vec![row.style.clone(); row.rendered_lines.len()],
+                        row.rendered_lines.clone(),
+                        row.copy_lines.clone(),
+                        String::new(),
+                        Some((source.text.as_str(), source.content_type.as_str())),
+                    );
+                    promoted.insert(index);
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_agent_streaming_settled_component("say");
+                }
+            }
+            self.presentation
+                .agent_promoted_streaming_say_actions
+                .insert((pane_id.to_string(), turn_id.to_string()), promoted.clone());
+            if let Some(preview) = pending_final_preview {
+                self.presentation
+                    .agent_pending_final_say_previews
+                    .insert(pane_id.to_string(), preview);
+            }
+            return Ok(
+                crate::runtime::render::RuntimeStreamingSayCompletionReconciliation {
+                    promoted_action_indices: promoted
+                        .into_iter()
+                        .filter(|index| *index != STREAMED_RATIONALE_PRESENTED_MARKER)
+                        .collect(),
+                },
+            );
+        }
 
         // Shell commands and rationale-only responses have additional
         // completion-time ordering rules. Exact rationale-plus-say projections
@@ -4574,7 +5361,7 @@ impl RuntimeSessionService {
             && presentation.actions.is_empty()
             && presentation.shell_commands.is_empty();
         if rationale_requires_static
-            || !presentation.action_headers.is_empty()
+            || (!presentation.action_headers.is_empty() && !command_can_promote)
             || (!presentation.shell_commands.is_empty() && !command_can_promote)
         {
             self.presentation
@@ -4586,6 +5373,9 @@ impl RuntimeSessionService {
                     &presentation.conversation_id,
                     presentation.baseline_screen.as_ref().clone(),
                 )?;
+                self.integration
+                    .runtime_metrics_mut()
+                    .record_agent_streaming_settlement_screen_change(false);
             }
             return Ok(Default::default());
         }
@@ -4597,9 +5387,14 @@ impl RuntimeSessionService {
                     &presentation.conversation_id,
                     presentation.baseline_screen.as_ref().clone(),
                 )?;
+                self.integration
+                    .runtime_metrics_mut()
+                    .record_agent_streaming_settlement_screen_change(false);
             }
             return Ok(Default::default());
         };
+        let batch = batch
+            .ok_or_else(|| MezError::invalid_state("validated streaming batch disappeared"))?;
         if let (Some(rationale), Some(projection)) = (
             presentation.rationale.as_ref(),
             presentation.projected_rationale.as_ref(),
@@ -4615,26 +5410,72 @@ impl RuntimeSessionService {
                     AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
                 )),
             );
+            self.integration
+                .runtime_metrics_mut()
+                .record_agent_streaming_settled_component("rationale");
         }
-        if presentation
-            .projected_context
-            .as_ref()
-            .is_some_and(|context| context.thinking_enabled)
-        {
-            let rationale_text = presentation
-                .rationale
-                .as_ref()
-                .map(|source| source.text.as_str());
-            let frame_width = presentation
+        let mut promoted = std::collections::BTreeSet::new();
+        for index in 0..batch.actions.len() {
+            if presentation.action_headers.contains_key(&index) {
+                let action = &batch.actions[index];
+                let header = agent_action_execution_display_header(action).ok_or_else(|| {
+                    MezError::invalid_state("validated streaming header disappeared")
+                })?;
+                let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
+                let rendered_lines = wrap_rich_text_line_to_width_with_source_ranges_hard(
+                    agent_action_execution_rendered_line(
+                        &header,
+                        &self.presentation.settings.ui_theme,
+                    ),
+                    frame_width,
+                )
+                .into_iter()
+                .map(|wrapped| wrapped.line.display)
+                .collect::<Vec<_>>();
+                self.persist_agent_presentation_entry(
+                    pane_id,
+                    vec![
+                        AgentTerminalPresentationStyle::Status
+                            .persistence_name()
+                            .to_string();
+                        rendered_lines.len()
+                    ],
+                    rendered_lines,
+                    Vec::new(),
+                    String::new(),
+                    Some((&header, AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE)),
+                );
+                self.presentation.agent_accepted_streaming_headers.insert(
+                    (pane_id.to_string(), turn_id.to_string(), action.id.clone()),
+                    header,
+                );
+                self.integration
+                    .runtime_metrics_mut()
+                    .record_agent_streaming_settled_component("header");
+                continue;
+            }
+            let Some(projection) = projected_actions
+                .iter()
+                .find(|row| row.action_index == index)
+            else {
+                continue;
+            };
+            if presentation
                 .projected_context
                 .as_ref()
-                .map(|context| context.frame_width)
-                .unwrap_or_default();
-            for source in presentation
-                .shell_summaries
-                .values()
-                .filter(|source| Some(source.text.as_str()) != rationale_text)
+                .is_some_and(|context| context.thinking_enabled)
+                && let Some(source) = presentation.shell_summaries.get(&projection.action_index)
+                && presentation
+                    .rationale
+                    .as_ref()
+                    .map(|rationale| rationale.text.as_str())
+                    != Some(source.text.as_str())
             {
+                let frame_width = presentation
+                    .projected_context
+                    .as_ref()
+                    .map(|context| context.frame_width)
+                    .unwrap_or_default();
                 let rendered_lines =
                     agent_thinking_display_lines_for_width(&source.text, frame_width);
                 self.persist_agent_presentation_entry(
@@ -4654,9 +5495,6 @@ impl RuntimeSessionService {
                     )),
                 );
             }
-        }
-        let mut promoted = std::collections::BTreeSet::new();
-        for projection in projected_actions {
             let source = match projection.kind {
                 crate::runtime::render::RuntimeStreamingSayProjectedActionKind::Say => {
                     let Some(action) = presentation.actions.get(&projection.action_index) else {
@@ -4689,6 +5527,14 @@ impl RuntimeSessionService {
                 String::new(),
                 source,
             );
+            self.integration
+                .runtime_metrics_mut()
+                .record_agent_streaming_settled_component(match projection.kind {
+                crate::runtime::render::RuntimeStreamingSayProjectedActionKind::Say => "say",
+                crate::runtime::render::RuntimeStreamingSayProjectedActionKind::ShellCommand {
+                    ..
+                } => "command",
+            });
             promoted.insert(projection.action_index);
         }
         self.presentation
@@ -5406,6 +6252,26 @@ impl RuntimeSessionService {
         action: &AgentAction,
         header: &str,
     ) -> Result<()> {
+        // Only the execution owner can settle a provider-projected header.
+        // Matching the turn, action id and final display text prevents a
+        // provisional preview from becoming execution evidence by itself.
+        let accepted_key = self
+            .agent_shell_store()
+            .get(pane_id)
+            .and_then(|session| session.running_turn_id.as_ref())
+            .map(|turn_id| (pane_id.to_string(), turn_id.clone(), action.id.clone()));
+        if let Some(key) = accepted_key
+            && self
+                .presentation
+                .agent_accepted_streaming_headers
+                .get(&key)
+                .is_some_and(|accepted| accepted == header)
+        {
+            self.presentation
+                .agent_accepted_streaming_headers
+                .remove(&key);
+            return Ok(());
+        }
         let thinking_lines = agent_action_model_thinking_lines(action);
         if !thinking_lines.is_empty() && self.agent_thinking_enabled(pane_id) {
             self.append_agent_thinking_text_to_terminal_buffer(

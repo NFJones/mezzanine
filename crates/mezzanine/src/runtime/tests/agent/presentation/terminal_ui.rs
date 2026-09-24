@@ -2515,6 +2515,221 @@ fn runtime_streaming_rationale_and_command_match_static_projection_and_restore()
     assert_eq!(streaming.agent_pane_screen("%1").unwrap(), &baseline);
 }
 
+/// Verifies validated rationale-only output remains on the pane through
+/// completion instead of briefly returning to the pre-stream baseline.
+#[tokio::test]
+async fn runtime_streaming_rationale_only_keeps_visible_generation() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("streaming-rationale-complete"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .attach_primary("primary", true, Size::new(48, 12).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "finish the rationale")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: "Inspect validated output".to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+            .unwrap();
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let visible = service.agent_pane_screen("%1").unwrap().clone();
+    assert!(
+        visible
+            .normal_content_lines()
+            .join("\n")
+            .contains("Inspect validated output")
+    );
+
+    let action = mez_agent::AgentAction {
+        id: "complete".to_string(),
+        payload: mez_agent::AgentActionPayload::Complete,
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "Inspect validated output".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &action,
+            vec!["turn complete".to_string()],
+            Some(r#"{"complete":true}"#.to_string()),
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    let transition = service
+        .apply_agent_provider_completed_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    assert!(transition.applied);
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert_eq!(
+        rows.iter()
+            .filter(|line| line.contains("Inspect validated output"))
+            .count(),
+        1
+    );
+    assert!(
+        rows.iter()
+            .any(|line| line.contains("thinking: Inspect validated output"))
+    );
+    let entries = transcript_store
+        .inspect_presentation(&conversation_id)
+        .unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.source_text.as_deref() == Some("Inspect validated output"))
+            .count(),
+        1
+    );
+    assert!(
+        visible
+            .normal_content_lines()
+            .join("\n")
+            .contains("Inspect validated output")
+    );
+}
+
+/// Verifies a mismatched completed rationale is not retained or marked as an
+/// accepted action: only the authoritative text may replace provisional rows.
+#[test]
+fn runtime_streaming_rationale_mismatch_restores_baseline() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "baseline")
+        .unwrap();
+    let baseline = service.agent_pane_screen("%1").unwrap().clone();
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: "unvalidated rationale".to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+            .unwrap();
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-1")
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-1"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "authoritative rationale".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "complete".to_string(),
+                    payload: mez_agent::AgentActionPayload::Complete,
+                }],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    assert!(
+        service
+            .reconcile_agent_streaming_say_completion("%1", "turn-1", &execution)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &baseline);
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(rows.contains("authoritative rationale"), "{rows}");
+    assert!(!rows.contains("unvalidated rationale"), "{rows}");
+}
+
 /// Verifies safe shell summaries and closed web-search headers render before
 /// provider completion with the same rows and styling as static presentation.
 ///
@@ -2665,6 +2880,1150 @@ fn runtime_streaming_summary_and_web_header_match_static_projection_and_restore(
             .is_empty()
     );
     assert_eq!(streaming.agent_pane_screen("%1").unwrap(), &baseline);
+}
+
+/// Verifies a validated header does not vanish at provider completion while
+/// its action is still pending, and never counts as an executed result.
+#[tokio::test]
+async fn runtime_streaming_matching_header_survives_reconciliation() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("streaming-header-settlement"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "search for matching header")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    let query = "matching header";
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: "Search for the matching header".to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+            .unwrap();
+    }
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::ActionHeader {
+                action_index: 0,
+                header: Box::new(mez_agent::StreamingActionHeader::WebSearch {
+                    query: query.to_string(),
+                }),
+            },
+        )
+        .unwrap();
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::ActionHeader {
+                action_index: 1,
+                header: Box::new(mez_agent::StreamingActionHeader::WebSearch {
+                    query: "second matching header".to_string(),
+                }),
+            },
+        )
+        .unwrap();
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-1")
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert!(
+        visible
+            .join("\n")
+            .contains("agent: web search: matching header")
+    );
+    let action = mez_agent::AgentAction {
+        id: "action-1".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: query.to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    let second = mez_agent::AgentAction {
+        id: "action-2".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: "second matching header".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "Search for the matching header".to_string(),
+                actions: vec![action.clone(), second.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: [&action, &second]
+            .into_iter()
+            .map(|action| mez_agent::ActionResult::running(&turn, action, Vec::new(), None))
+            .collect(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    let transition = service
+        .apply_agent_provider_completed_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    assert!(transition.applied);
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert_eq!(
+        rows.iter()
+            .filter(|line| line.contains("web search: matching header"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|line| line.contains("web search: second matching header"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        service
+            .runtime_metrics()
+            .agent_streaming_settlement_restorations,
+        0
+    );
+    assert!(
+        rows.iter()
+            .any(|line| line.contains("thinking: Search for the matching header"))
+    );
+    assert!(
+        visible
+            .iter()
+            .any(|line| line.contains("web search: matching header"))
+    );
+    let entries = transcript_store
+        .inspect_presentation(&conversation_id)
+        .unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.source_text.as_deref() == Some("web search: matching header"))
+            .count(),
+        1,
+        "{entries:?}"
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(
+                |entry| entry.source_text.as_deref() == Some("web search: second matching header")
+            )
+            .count(),
+        1
+    );
+}
+
+/// A changed accepted header must instead replace the unvalidated preview,
+/// retaining only the authoritative action text.
+#[test]
+fn runtime_streaming_header_mismatch_restores_validated_source() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::ActionHeader {
+                action_index: 0,
+                header: Box::new(mez_agent::StreamingActionHeader::WebSearch {
+                    query: "unvalidated query".to_string(),
+                }),
+            },
+        )
+        .unwrap();
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-1")
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let action = mez_agent::AgentAction {
+        id: "search".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: "validated query".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-1"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "Use the validated query".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    assert!(
+        service
+            .reconcile_agent_streaming_say_completion("%1", "turn-1", &execution)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        service
+            .append_agent_action_execution_text_to_terminal_buffer("%1", &action)
+            .unwrap()
+    );
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(rows.contains("validated query"), "{rows}");
+    assert!(!rows.contains("unvalidated query"), "{rows}");
+}
+
+/// Distinct raw queries with the same compact header must not inherit a
+/// provisional row or durable source from the rejected provider preview.
+#[test]
+fn runtime_streaming_header_preview_collision_restores_baseline() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "check header collision")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    let prefix = "x".repeat(120);
+    let streamed = format!("{prefix}a");
+    let accepted = format!("{prefix}b");
+    assert_ne!(streamed, accepted);
+    let baseline = service.agent_pane_screen("%1").unwrap().clone();
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::ActionHeader {
+                action_index: 0,
+                header: Box::new(mez_agent::StreamingActionHeader::WebSearch { query: streamed }),
+            },
+        )
+        .unwrap();
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-1")
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let action = mez_agent::AgentAction {
+        id: "search".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: accepted,
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "Use validated query".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &action,
+            vec!["search complete".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    assert!(
+        service
+            .reconcile_agent_streaming_say_completion("%1", "turn-1", &execution)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &baseline);
+}
+
+/// A changed header must not erase a matching sibling progress row while the
+/// authoritative header replaces only the rejected preview.
+#[tokio::test]
+async fn runtime_streaming_header_mismatch_retains_matching_progress() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("streaming-mismatch-sibling"));
+    service.set_agent_transcript_store(store.clone());
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect both rows")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: "Inspect both rows".to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 0,
+            status: mez_agent::SayStatus::Progress,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 0,
+            text: "keep sibling".to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+        mez_agent::StreamingSayEvent::ActionHeader {
+            action_index: 1,
+            header: Box::new(mez_agent::StreamingActionHeader::WebSearch {
+                query: "wrong query".to_string(),
+            }),
+        },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+            .unwrap();
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-1")
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let say = mez_agent::AgentAction {
+        id: "say".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Progress,
+            text: "keep sibling".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let search = mez_agent::AgentAction {
+        id: "search".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: "right query".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "Inspect both rows".to_string(),
+                actions: vec![say.clone(), search.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![
+            mez_agent::ActionResult::succeeded(&turn, &say, Vec::new(), None),
+            mez_agent::ActionResult::succeeded(&turn, &search, Vec::new(), None),
+        ],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    let transition = service
+        .apply_agent_provider_completed_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    assert!(transition.applied);
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(rows.matches("keep sibling").count(), 1, "{rows}");
+    assert!(!rows.contains("wrong query"), "{rows}");
+    assert_eq!(rows.matches("right query").count(), 1, "{rows}");
+    assert_eq!(
+        service
+            .runtime_metrics()
+            .agent_streaming_settlement_restorations,
+        0,
+        "matching siblings must survive an atomic replacement, not baseline restoration"
+    );
+    let entries = store.inspect_presentation(&conversation_id).unwrap();
+    for source in ["keep sibling", "web search: right query"] {
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.source_text.as_deref() == Some(source))
+                .count(),
+            1,
+            "{entries:?}"
+        );
+    }
+}
+
+/// A matching progress say and accepted search header share one projected
+/// screen; accepting the batch must not erase either visible component.
+#[tokio::test]
+async fn runtime_streaming_progress_and_header_keep_matching_rows() {
+    for header_first in [false, true] {
+        streaming_progress_and_header_case(header_first, mez_agent::SayStatus::Progress).await;
+    }
+}
+
+/// A final say following an accepted header is already in settled display order.
+#[tokio::test]
+async fn runtime_streaming_header_then_final_say_keeps_matching_rows() {
+    streaming_progress_and_header_case(true, mez_agent::SayStatus::Final).await;
+}
+
+/// A final say after pending work must not become durable before the runtime
+/// result authorizes deferred presentation.
+#[tokio::test]
+async fn runtime_streaming_header_then_final_say_waits_for_runtime_settlement() {
+    streaming_progress_and_header_case_with_outcome(
+        true,
+        mez_agent::SayStatus::Final,
+        false,
+        false,
+        true,
+    )
+    .await;
+    streaming_progress_and_header_case_with_outcome(
+        true,
+        mez_agent::SayStatus::Final,
+        false,
+        true,
+        true,
+    )
+    .await;
+    streaming_progress_and_header_case_with_outcome(
+        true,
+        mez_agent::SayStatus::Final,
+        true,
+        true,
+        false,
+    )
+    .await;
+    streaming_progress_and_header_case_with_finals(true, true, false).await;
+    streaming_progress_and_header_case_with_finals(true, false, false).await;
+    streaming_progress_and_header_case_with_finals(false, true, true).await;
+}
+
+/// Two final says after pending work remain provisional together and either
+/// become durable on success or disappear together on failure.
+async fn streaming_progress_and_header_case_with_finals(
+    changed: bool,
+    completed: bool,
+    trailing: bool,
+) {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("streaming-multiple-finals"));
+    service.set_agent_transcript_store(store.clone());
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect two finals")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    let search = mez_agent::AgentAction {
+        id: "search".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: "accepted query".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    let finals = ["first final", "second final"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| mez_agent::AgentAction {
+            id: format!("final-{index}"),
+            payload: mez_agent::AgentActionPayload::Say {
+                status: mez_agent::SayStatus::Final,
+                text: text.to_string(),
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+        })
+        .collect::<Vec<_>>();
+    let progress = mez_agent::AgentAction {
+        id: "trailing-progress".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Progress,
+            text: "trailing progress".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: "Inspect two finals".to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+            .unwrap();
+    }
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            &turn.turn_id,
+            &mez_agent::StreamingSayEvent::ActionHeader {
+                action_index: 0,
+                header: Box::new(mez_agent::StreamingActionHeader::WebSearch {
+                    query: if changed {
+                        "preview query"
+                    } else {
+                        "accepted query"
+                    }
+                    .to_string(),
+                }),
+            },
+        )
+        .unwrap();
+    for (index, text) in ["first final", "second final"].into_iter().enumerate() {
+        for event in [
+            mez_agent::StreamingSayEvent::Started {
+                action_index: index + 1,
+                status: mez_agent::SayStatus::Final,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: index + 1,
+                text: text.to_string(),
+            },
+            mez_agent::StreamingSayEvent::TextComplete {
+                action_index: index + 1,
+            },
+        ] {
+            service
+                .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+                .unwrap();
+        }
+    }
+    if trailing {
+        for event in [
+            mez_agent::StreamingSayEvent::Started {
+                action_index: 3,
+                status: mez_agent::SayStatus::Progress,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 3,
+                text: "trailing progress".to_string(),
+            },
+            mez_agent::StreamingSayEvent::TextComplete { action_index: 3 },
+        ] {
+            service
+                .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+                .unwrap();
+        }
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "Inspect two finals".to_string(),
+                actions: std::iter::once(search.clone())
+                    .chain(finals.clone())
+                    .chain(trailing.then_some(progress.clone()))
+                    .collect(),
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: std::iter::once(mez_agent::ActionResult::running(
+            &turn,
+            &search,
+            Vec::new(),
+            None,
+        ))
+        .chain(
+            finals
+                .iter()
+                .map(|action| mez_agent::ActionResult::succeeded(&turn, action, Vec::new(), None)),
+        )
+        .chain(
+            trailing
+                .then(|| mez_agent::ActionResult::succeeded(&turn, &progress, Vec::new(), None)),
+        )
+        .collect(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    let transition = service
+        .apply_agent_provider_completed_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    assert!(transition.applied);
+    let entries = store.inspect_presentation(&conversation_id).unwrap();
+    for text in ["first final", "second final"] {
+        let rows = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines();
+        assert!(rows.iter().any(|row| row.contains(text)), "{rows:?}");
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.source_text.as_deref() == Some(text))
+                .count(),
+            0
+        );
+    }
+    assert_eq!(
+        service
+            .settle_pending_final_say_preview("%1", &turn.turn_id, completed)
+            .unwrap(),
+        completed
+    );
+    let entries = store.inspect_presentation(&conversation_id).unwrap();
+    for text in ["first final", "second final"] {
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.source_text.as_deref() == Some(text))
+                .count(),
+            usize::from(completed)
+        );
+        assert_eq!(
+            service
+                .agent_pane_screen("%1")
+                .unwrap()
+                .normal_content_lines()
+                .iter()
+                .any(|row| row.contains(text)),
+            completed
+        );
+    }
+    if trailing && completed {
+        let live = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines();
+        let live_final = live
+            .iter()
+            .position(|row| row.contains("second final"))
+            .unwrap();
+        let live_progress = live
+            .iter()
+            .position(|row| row.contains("trailing progress"))
+            .unwrap();
+        let sources = entries
+            .iter()
+            .filter_map(|entry| entry.source_text.as_deref())
+            .collect::<Vec<_>>();
+        let durable_final = sources
+            .iter()
+            .position(|source| *source == "second final")
+            .unwrap();
+        let durable_progress = sources
+            .iter()
+            .position(|source| *source == "trailing progress")
+            .unwrap();
+        assert_eq!(
+            live_final < live_progress,
+            durable_final < durable_progress,
+            "{live:?} {sources:?}"
+        );
+    }
+}
+
+/// A blocked header does not become execution evidence, but its accepted
+/// rationale and progress sibling should not disappear during settlement.
+#[tokio::test]
+async fn runtime_streaming_blocked_header_keeps_matching_siblings() {
+    streaming_progress_and_header_case_with_blocked(
+        false,
+        mez_agent::SayStatus::Progress,
+        true,
+        false,
+    )
+    .await;
+    streaming_progress_and_header_case_with_blocked(
+        false,
+        mez_agent::SayStatus::Progress,
+        true,
+        true,
+    )
+    .await;
+}
+
+/// Exercises both action orders so persisted replay matches the live projection.
+async fn streaming_progress_and_header_case(header_first: bool, status: mez_agent::SayStatus) {
+    streaming_progress_and_header_case_with_outcome(header_first, status, false, false, false)
+        .await;
+}
+
+/// Exercises the blocked variant without changing the successful replay oracle.
+async fn streaming_progress_and_header_case_with_blocked(
+    header_first: bool,
+    status: mez_agent::SayStatus,
+    blocked: bool,
+    changed: bool,
+) {
+    streaming_progress_and_header_case_with_outcome(header_first, status, blocked, changed, false)
+        .await;
+}
+
+/// Exercises the pending variant without treating a visible final say as durable.
+async fn streaming_progress_and_header_case_with_outcome(
+    header_first: bool,
+    status: mez_agent::SayStatus,
+    blocked: bool,
+    changed: bool,
+    pending: bool,
+) {
+    let say_index = usize::from(header_first);
+    let header_index = usize::from(!header_first);
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("streaming-progress-header"));
+    service.set_agent_transcript_store(store.clone());
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "search with progress")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    let say = mez_agent::AgentAction {
+        id: "progress".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status,
+            text: "searching now".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let search = mez_agent::AgentAction {
+        id: "search".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: "matching query".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: "Look up matching query".to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+        mez_agent::StreamingSayEvent::Started {
+            action_index: say_index,
+            status,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: say_index,
+            text: "searching now".to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextComplete {
+            action_index: say_index,
+        },
+        mez_agent::StreamingSayEvent::ActionHeader {
+            action_index: header_index,
+            header: Box::new(mez_agent::StreamingActionHeader::WebSearch {
+                query: if changed {
+                    "wrong query"
+                } else {
+                    "matching query"
+                }
+                .to_string(),
+            }),
+        },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+            .unwrap();
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-1")
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert!(visible.iter().any(|row| row.contains("searching now")));
+    assert!(visible.iter().any(|row| row.contains(if changed {
+        "web search: wrong query"
+    } else {
+        "web search: matching query"
+    })));
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "Look up matching query".to_string(),
+                actions: if header_first {
+                    vec![search.clone(), say.clone()]
+                } else {
+                    vec![say.clone(), search.clone()]
+                },
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![
+            mez_agent::ActionResult::succeeded(
+                &turn,
+                &say,
+                vec!["searching now".to_string()],
+                None,
+            ),
+            if pending {
+                mez_agent::ActionResult::running(&turn, &search, Vec::new(), None)
+            } else if blocked {
+                mez_agent::ActionResult::blocked(
+                    &turn,
+                    &search,
+                    Vec::new(),
+                    "{\"approval\":{}}".to_string(),
+                )
+            } else {
+                mez_agent::ActionResult::succeeded(
+                    &turn,
+                    &search,
+                    vec!["search complete".to_string()],
+                    None,
+                )
+            },
+        ],
+        final_turn: !blocked && !pending,
+        terminal_state: if pending {
+            AgentTurnState::Running
+        } else if blocked {
+            AgentTurnState::Blocked
+        } else {
+            AgentTurnState::Completed
+        },
+    };
+    let transition = service
+        .apply_agent_provider_completed_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    assert!(transition.applied);
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.contains("searching now"))
+            .count(),
+        usize::from(!blocked || status == mez_agent::SayStatus::Progress)
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.contains("web search: matching query"))
+            .count(),
+        usize::from(!blocked)
+    );
+    if blocked {
+        assert_eq!(
+            service
+                .runtime_metrics()
+                .agent_streaming_settlement_restorations,
+            0
+        );
+    }
+    let entries = store.inspect_presentation(&conversation_id).unwrap();
+    if pending {
+        assert_eq!(status, mez_agent::SayStatus::Final);
+        assert!(rows.iter().any(|row| row.contains("searching now")));
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry.source_text.as_deref() == Some("searching now")),
+            "pending final must not become durable before the action settles"
+        );
+        return;
+    }
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.source_text.as_deref() == Some("searching now"))
+            .count(),
+        usize::from(!blocked || status == mez_agent::SayStatus::Progress)
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.source_text.as_deref() == Some("web search: matching query"))
+            .count(),
+        usize::from(!blocked)
+    );
+    let ordered_sources = entries
+        .iter()
+        .filter_map(|entry| entry.source_text.as_deref())
+        .filter(|source| {
+            matches!(
+                *source,
+                "Look up matching query" | "searching now" | "web search: matching query"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ordered_sources,
+        if blocked {
+            if status == mez_agent::SayStatus::Progress {
+                vec!["Look up matching query", "searching now"]
+            } else {
+                vec!["Look up matching query"]
+            }
+        } else if header_first {
+            vec![
+                "Look up matching query",
+                "web search: matching query",
+                "searching now",
+            ]
+        } else {
+            vec![
+                "Look up matching query",
+                "searching now",
+                "web search: matching query",
+            ]
+        }
+    );
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    assert!(
+        service
+            .replay_agent_presentation_entries_to_terminal_buffer("%1", &entries)
+            .unwrap()
+    );
+    let replayed = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    let progress_row = replayed
+        .iter()
+        .position(|row| row.contains("searching now"));
+    if blocked {
+        assert_eq!(
+            progress_row.is_some(),
+            status == mez_agent::SayStatus::Progress
+        );
+        assert!(
+            !replayed
+                .iter()
+                .any(|row| row.contains("web search: matching query"))
+        );
+    } else {
+        let progress_row = progress_row.unwrap();
+        let header_row = replayed
+            .iter()
+            .position(|row| row.contains("web search: matching query"))
+            .unwrap();
+        assert_eq!(header_row < progress_row, header_first, "{replayed:?}");
+    }
 }
 
 /// Verifies exact streamed rationale and command rows become the authoritative
@@ -2861,8 +4220,411 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
         1,
         "{entries:?}"
     );
+    let sources = entries
+        .iter()
+        .filter_map(|entry| entry.source_text.as_deref())
+        .filter(|source| [rationale, summary, command].contains(source))
+        .collect::<Vec<_>>();
+    assert_eq!(sources, [rationale, summary, command]);
     service.terminate_all_pane_processes().unwrap();
     drop(primary);
+}
+
+/// Verifies accepting two exact command sources does not blank either already
+/// visible preview while later dispatch remains separately authorized.
+#[tokio::test]
+async fn runtime_streaming_multiple_commands_keep_matching_previews() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("streaming-multiple-commands"));
+    service.set_agent_transcript_store(store.clone());
+    service
+        .attach_primary("primary", true, Size::new(48, 12).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.permission_policy_mut().set_approval_bypass(true);
+    mark_test_pane_ready(&mut service, "%1");
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect two commands")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    let actions = ["printf first", "printf second"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, command)| mez_agent::AgentAction {
+            id: format!("command-{index}"),
+            payload: mez_agent::AgentActionPayload::ShellCommand {
+                summary: format!("summary {index}"),
+                command: command.to_string(),
+                interactive: false,
+                stateful: false,
+                timeout_ms: None,
+            },
+        })
+        .collect::<Vec<_>>();
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: "Inspect both commands".to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+            .unwrap();
+    }
+    for (index, command) in ["printf first", "printf second"].into_iter().enumerate() {
+        for event in [
+            mez_agent::StreamingSayEvent::ShellCommandSummaryStarted {
+                action_index: index,
+            },
+            mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta {
+                action_index: index,
+                text: format!("summary {index}"),
+            },
+            mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete {
+                action_index: index,
+            },
+            mez_agent::StreamingSayEvent::ShellCommandStarted {
+                action_index: index,
+            },
+            mez_agent::StreamingSayEvent::ShellCommandTextDelta {
+                action_index: index,
+                text: command.to_string(),
+            },
+            mez_agent::StreamingSayEvent::ShellCommandTextComplete {
+                action_index: index,
+            },
+        ] {
+            service
+                .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+                .unwrap();
+        }
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert!(visible.iter().any(|line| line.contains("printf first")));
+    assert!(visible.iter().any(|line| line.contains("printf second")));
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "Inspect both commands".to_string(),
+                actions: actions.clone(),
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: actions
+            .iter()
+            .map(|action| mez_agent::ActionResult::running(&turn, action, Vec::new(), None))
+            .collect(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    let transition = service
+        .apply_agent_provider_completed_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    assert!(transition.applied);
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    for command in ["printf first", "printf second"] {
+        assert_eq!(
+            rows.iter().filter(|row| row.contains(command)).count(),
+            1,
+            "{rows:?}"
+        );
+        assert_eq!(
+            store
+                .inspect_presentation(&conversation_id)
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.source_text.as_deref() == Some(command))
+                .count(),
+            1,
+        );
+    }
+    assert!(visible.iter().any(|row| row.contains("printf first")));
+    let entries = store.inspect_presentation(&conversation_id).unwrap();
+    let sources = entries
+        .iter()
+        .filter_map(|entry| entry.source_text.as_deref())
+        .filter(|source| {
+            matches!(
+                *source,
+                "summary 0" | "printf first" | "summary 1" | "printf second"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sources,
+        ["summary 0", "printf first", "summary 1", "printf second"]
+    );
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    assert!(
+        service
+            .replay_agent_presentation_entries_to_terminal_buffer("%1", &entries)
+            .unwrap()
+    );
+    let replayed = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    let locations = ["summary 0", "printf first", "summary 1", "printf second"].map(|fragment| {
+        replayed
+            .iter()
+            .position(|row| row.contains(fragment))
+            .unwrap()
+    });
+    assert!(
+        locations.windows(2).all(|pair| pair[0] < pair[1]),
+        "{replayed:?}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a matching progress row does not disappear when its sibling shell
+/// command is admitted; neither row may become a second final presentation.
+#[tokio::test]
+async fn runtime_streaming_progress_and_shell_keep_matching_rows() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("streaming-progress-shell"));
+    service.set_agent_transcript_store(store.clone());
+    service
+        .attach_primary("primary", true, Size::new(48, 12).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.permission_policy_mut().set_approval_bypass(true);
+    mark_test_pane_ready(&mut service, "%1");
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect the shell")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    let say = mez_agent::AgentAction {
+        id: "progress".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Progress,
+            text: "checking source".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let shell = mez_agent::AgentAction {
+        id: "shell".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: String::new(),
+            command: "printf shell".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let search = mez_agent::AgentAction {
+        id: "search".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: "mixed search".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: "Inspect the shell".to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 0,
+            status: mez_agent::SayStatus::Progress,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 0,
+            text: "checking source".to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+        mez_agent::StreamingSayEvent::ShellCommandStarted { action_index: 1 },
+        mez_agent::StreamingSayEvent::ShellCommandTextDelta {
+            action_index: 1,
+            text: "printf shell".to_string(),
+        },
+        mez_agent::StreamingSayEvent::ShellCommandTextComplete { action_index: 1 },
+        mez_agent::StreamingSayEvent::ActionHeader {
+            action_index: 2,
+            header: Box::new(mez_agent::StreamingActionHeader::WebSearch {
+                query: "mixed search".to_string(),
+            }),
+        },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+            .unwrap();
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert!(visible.iter().any(|row| row.contains("checking source")));
+    assert!(visible.iter().any(|row| row.contains("printf shell")));
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "Inspect the shell".to_string(),
+                actions: vec![say.clone(), shell.clone(), search.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![
+            mez_agent::ActionResult::succeeded(
+                &turn,
+                &say,
+                vec!["checking source".to_string()],
+                None,
+            ),
+            mez_agent::ActionResult::running(&turn, &shell, Vec::new(), None),
+            mez_agent::ActionResult::running(&turn, &search, Vec::new(), None),
+        ],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    let transition = service
+        .apply_agent_provider_completed_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    assert!(transition.applied);
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.contains("checking source"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.contains("printf shell"))
+            .count(),
+        1
+    );
+    assert!(visible.iter().any(|row| row.contains("checking source")));
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.contains("web search: mixed search"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        service
+            .runtime_metrics()
+            .agent_streaming_settlement_restorations,
+        0
+    );
+    let entries = store.inspect_presentation(&conversation_id).unwrap();
+    for source in [
+        "checking source",
+        "printf shell",
+        "web search: mixed search",
+    ] {
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.source_text.as_deref() == Some(source))
+                .count(),
+            1,
+            "{entries:?}"
+        );
+    }
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies a rich generation captured before newer source arrived
@@ -3957,6 +5719,14 @@ fn runtime_agent_resume_snapshot_requires_exact_transient_lineage() {
         "%1",
         TerminalScreen::new(Size::new(40, 12).unwrap(), 120).unwrap(),
     );
+    service
+        .presentation
+        .seed_accepted_streaming_header_for_tests(
+            "%1",
+            "turn-snapshot",
+            "search-snapshot",
+            "web search: snapshot",
+        );
     let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
         turn_id: "turn-snapshot".to_string(),
         action_id: "shell-snapshot".to_string(),
@@ -3977,6 +5747,11 @@ fn runtime_agent_resume_snapshot_requires_exact_transient_lineage() {
     assert_eq!(restored.len(), 1, "{restored:?}");
     assert_eq!(restored[0].0, owner);
     assert_eq!(restored[0].2, 3);
+    assert!(
+        service
+            .presentation
+            .has_accepted_streaming_header_for_tests("%1", "turn-snapshot", "search-snapshot")
+    );
 
     let stale = service.snapshot_agent_resume_presentation("%1");
     let conversation_id = service
@@ -3994,6 +5769,11 @@ fn runtime_agent_resume_snapshot_requires_exact_transient_lineage() {
         service
             .agent_shell_output_previews_for_tests("%1")
             .is_empty()
+    );
+    assert!(
+        !service
+            .presentation
+            .has_accepted_streaming_header_for_tests("%1", "turn-snapshot", "search-snapshot")
     );
     let text = service
         .agent_pane_screen("%1")
