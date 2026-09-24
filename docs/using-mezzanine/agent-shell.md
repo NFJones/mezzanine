@@ -27,9 +27,10 @@ receive your full terminal screen, scrollback, or other panes.
 Structured agent output wraps at the smaller of the pane width and
 `terminal.agent_wrap_column_cap` (120 display cells by default). This includes
 status, error, diagnostic, action, and result rows as well as transcript text.
-Continuation rows repeat the `▐ ` gutter, while `agent: ` status continuations
-align beneath the status body. `user>`, `mez>`, `parent>`, and peer-message
-continuations use five spaces after the gutter regardless of label length;
+Continuation rows repeat the `▐ ` gutter. Wrapped `agent: ` status/action and
+`thinking: ` rationale/summary rows keep their first-row label and use five
+spaces after the gutter on later rows. `user>`, `mez>`, `parent>`, and peer-message
+continuations also use five spaces after the gutter regardless of label length;
 Markdown structure adds its own indentation. Copy mode recovers the original logical row
 instead of inserting presentation-only wrap boundaries. Retained raw ANSI
 projections from very old saved presentation records are replayed unchanged

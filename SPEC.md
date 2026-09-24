@@ -2505,8 +2505,10 @@ PTY-diagnostic, action-header, and non-diff action-result rows. Ordinary
 non-Markdown pane-log rows MUST hard-split only at terminal grapheme boundaries
 when an unbroken token exceeds that limit. When agent-authored text wraps in the
 pane, Mezzanine MUST repeat the display-only agent gutter prefix on continuation
-rows. Status rows beginning with `agent: ` MUST align continuation text beneath
-the text after that label. Later physical rows of speaker-labeled `user> `,
+rows. Wrapped `agent: ` status/action rows and `thinking: ` rationale/summary
+rows MUST keep the complete label on their first physical row and start later
+physical rows with five display spaces after the gutter. Later physical rows
+of speaker-labeled `user> `,
 `mez> `, `parent> `, `parent< `, `{sender}> `, and `{recipient}< ` messages
 MUST start with five display spaces after the gutter, regardless of speaker
 label width or whether an authored newline or a wrap produced the row. Resize

@@ -46,8 +46,9 @@ without extending its deadline. Viewport clipping never relocates an anchor.
 including transcript text, statuses, errors, diagnostics, action headers,
 result previews, and structured persistence fallbacks. The limit applies per
 runtime service and never widens beyond the pane. Continuation rows repeat the
-agent gutter; ordinary log rows preserve a leading `agent: ` hanging indent and
-split unbroken text only at grapheme boundaries. Legacy ANSI-only presentation
+agent gutter; wrapped `agent: ` and `thinking: ` rows preserve their first-row
+labels and use five display spaces on later rows, splitting unbroken text only
+at grapheme boundaries. Legacy ANSI-only presentation
 records remain byte-preserving and can therefore wrap at the physical pane
 width instead.
 

@@ -11,7 +11,10 @@ use super::{
     AgentAction, AgentActionPayload, GraphicRendition, RichTextLine, RichTextLineKind,
     TerminalStyleSpan, UiTheme, UnicodeWidthStr, apply_patch_touched_paths,
 };
-use mez_mux::render::push_or_extend_style_span;
+use mez_mux::render::{
+    push_or_extend_style_span,
+    wrap_rich_text_line_to_width_with_prefix_and_continuation_indent_hard,
+};
 
 /// Builds the compact header shown for action execution/result output.
 pub(crate) fn agent_action_execution_display_header(action: &AgentAction) -> Option<String> {
@@ -308,24 +311,25 @@ pub(crate) fn agent_thinking_display_lines_for_width(text: &str, columns: usize)
     let prefix = "thinking: ";
     let prefix_width = UnicodeWidthStr::width(prefix);
     let content_width = columns.max(1);
-    let segment_width = content_width.saturating_sub(prefix_width).max(1);
-    let continuation = " ".repeat(prefix_width);
+    let continuation = " ".repeat(5.min(content_width.saturating_sub(1)));
     agent_thinking_display_text(text)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .flat_map(|line| {
-            wrap_agent_terminal_text(&sanitized_agent_terminal_line(line), segment_width)
-                .into_iter()
-                .enumerate()
-                .map(|(index, segment)| {
-                    if index == 0 {
-                        format!("{prefix}{segment}")
-                    } else {
-                        format!("{continuation}{segment}")
-                    }
-                })
-                .collect::<Vec<_>>()
+            wrap_rich_text_line_to_width_with_prefix_and_continuation_indent_hard(
+                RichTextLine {
+                    display: format!("{prefix}{}", sanitized_agent_terminal_line(line)),
+                    style_spans: Vec::new(),
+                    copy_text: None,
+                    kind: RichTextLineKind::Normal,
+                },
+                content_width,
+                prefix_width,
+                &continuation,
+            )
+            .into_iter()
+            .map(|line| line.display)
         })
         .collect()
 }

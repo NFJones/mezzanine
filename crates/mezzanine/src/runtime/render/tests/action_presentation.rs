@@ -435,18 +435,24 @@ fn command_preview_hard_wraps_unbroken_tokens_when_needed() {
     );
 }
 
-/// Verifies agent thinking lines wrap to the bounded pane width and indent
-/// continuations after the `thinking:` label. This keeps rationale output
-/// readable without relying on terminal soft wrapping for normal text.
+/// Verifies rationale keeps its first-row label while later physical rows use
+/// five display spaces and the remaining width. This prevents the label width
+/// from needlessly shortening every continuation segment.
 #[test]
 fn agent_thinking_lines_wrap_with_label_indent() {
     assert_eq!(
         agent_thinking_display_lines_for_width("alpha beta gamma", 16),
-        vec![
-            "thinking: alpha".to_string(),
-            "          beta".to_string(),
-            "          gamma".to_string()
-        ]
+        vec!["thinking: alpha".to_string(), "     beta gamma".to_string()]
+    );
+}
+
+/// Verifies a hard-wrapped rationale token gets the entire available width
+/// after the five-cell indent, while authored lines retain their own label.
+#[test]
+fn agent_thinking_hard_wrap_and_authored_lines_preserve_labels() {
+    assert_eq!(
+        agent_thinking_display_lines_for_width("abcdefghijklmno\nsecond", 16),
+        ["thinking: abcdef", "     ghijklmno", "thinking: second"]
     );
 }
 

@@ -121,7 +121,7 @@ fn runtime_structured_pane_log_rows_honor_configured_column_cap() {
     );
     assert!(
         rows.iter()
-            .any(|line| line.text.starts_with("▐        recovery")),
+            .any(|line| line.text.starts_with("▐      recovery")),
         "{rows:?}"
     );
 
@@ -556,8 +556,8 @@ fn runtime_peer_message_copy_keeps_adjacent_message_payloads() {
     );
 }
 
-/// Verifies snapshot-only structured presentation rows are capped when replay
-/// falls back to saved display text rather than a semantic source renderer.
+/// Verifies snapshot-only structured presentation rows rewrap agent and
+/// thinking labels with the same fixed indent as semantic presentation.
 #[test]
 fn runtime_structured_pane_log_replay_fallback_honors_configured_column_cap() {
     let mut service = test_runtime_service();
@@ -583,6 +583,7 @@ fn runtime_structured_pane_log_replay_fallback_honors_configured_column_cap() {
         .session_id
         .clone();
     let source = "agent: legacy structured status continues beyond the configured cap";
+    let thinking = "thinking: alpha beta gamma";
     let entry = crate::storage::transcript::AgentPresentationEntry {
         conversation_id,
         sequence: 1,
@@ -590,9 +591,9 @@ fn runtime_structured_pane_log_replay_fallback_honors_configured_column_cap() {
         pane_id: "%1".to_string(),
         turn_id: None,
         terminal_width: 80,
-        style_names: vec!["status".to_string()],
-        display_lines: vec![source.to_string()],
-        copy_lines: vec![source.to_string()],
+        style_names: vec!["status".to_string(), "status".to_string()],
+        display_lines: vec![source.to_string(), thinking.to_string()],
+        copy_lines: vec![source.to_string(), thinking.to_string()],
         ansi_text: None,
         source_text: None,
         source_content_type: None,
@@ -617,6 +618,16 @@ fn runtime_structured_pane_log_replay_fallback_honors_configured_column_cap() {
         "{rows:?}"
     );
     assert!(rows.iter().all(|line| line.starts_with("▐ ")), "{rows:?}");
+    assert!(
+        rows.iter()
+            .any(|line| line.starts_with("▐      structured")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter().any(|line| line == "▐ thinking: alpha beta"),
+        "{rows:?}"
+    );
+    assert!(rows.iter().any(|line| line == "▐      gamma"), "{rows:?}");
 }
 
 /// Verifies legacy ANSI-only presentation records remain byte-stream replay
