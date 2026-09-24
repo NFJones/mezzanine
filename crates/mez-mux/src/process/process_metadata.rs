@@ -149,10 +149,12 @@ pub(super) fn parse_linux_stat_start_token(stat: &str) -> Option<u64> {
     let command_end = stat.rfind(')')?;
     // The field after the command is field 3 (state); field 22 is therefore the
     // twentieth whitespace-separated field after the command.
-    stat.get(command_end + 1..)?
-        .split_whitespace()
-        .nth(19)
-        .and_then(|field| field.parse().ok())
+    let mut fields = stat.get(command_end + 1..)?.split_whitespace();
+    let state = fields.next()?;
+    if matches!(state, "Z" | "X") {
+        return None;
+    }
+    fields.nth(18).and_then(|field| field.parse().ok())
 }
 
 /// Returns the Linux procfs creation-time token for `pid` when available.
@@ -186,6 +188,9 @@ pub fn process_start_token_for_pid(pid: u32) -> Option<u64> {
     }
     // SAFETY: the exact structure size was initialized successfully above.
     let info = unsafe { info.assume_init() };
+    if info.pbi_status == libc::SZOMB {
+        return None;
+    }
     info.pbi_start_tvsec
         .checked_mul(1_000_000)?
         .checked_add(info.pbi_start_tvusec)
@@ -548,6 +553,10 @@ mod tests {
         assert_eq!(parse_linux_stat_start_token("not a stat record"), None);
         assert_eq!(parse_linux_stat_start_token("7314 (bash) S 1 2"), None);
         assert_eq!(parse_linux_stat_start_token("7314 (bash"), None);
+        assert_eq!(
+            parse_linux_stat_start_token(&plain.replacen(") S ", ") Z ", 1)),
+            None
+        );
     }
 
     /// Verifies the live reader returns one stable, absolute identity for a

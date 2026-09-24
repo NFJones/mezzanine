@@ -1197,6 +1197,14 @@ mod tests {
         let probe = fixture.daemon_only_probe();
         fixture.start(None);
 
+        assert_eq!(
+            fixture
+                .service
+                .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+            Some("ready"),
+            "host snapshot restore must validate the bound native pane before startup completes"
+        );
+
         assert!(
             fixture
                 .service

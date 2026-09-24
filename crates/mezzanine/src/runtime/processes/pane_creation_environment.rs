@@ -19,7 +19,7 @@
 //! inheriting the user environment unchanged. A bound restored pane is still
 //! admitted or certified through the pane's normal mode-specific startup
 //! contract: pane mode runs the managed admission handshake, and native mode
-//! stays unvalidated until the first agent entry.
+//! validates the fresh root process before restored work may be scheduled.
 //!
 //! The guarantee is deliberate composition, not credential non-possession: a
 //! value deliberately passed at pane creation, or later exported by the pane

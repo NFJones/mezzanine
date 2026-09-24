@@ -18,7 +18,10 @@ const RUNTIME_AGENT_SURFACE_ADMISSION_TIMEOUT_MS: u64 = 15_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeAgentSurfaceStartup {
     /// The pane process exists and native root-process context is being checked.
-    NativeValidating { primary_process_id: u32 },
+    NativeValidating {
+        primary_process_id: u32,
+        start_token: Option<u64>,
+    },
     /// An agent-owned pane shell is publishing authenticated startup admission.
     ManagedPaneAdmitting {
         /// Exact pane root process that must publish admission.
@@ -32,6 +35,7 @@ pub(crate) enum RuntimeAgentSurfaceStartup {
     Ready {
         mode: ShellMode,
         primary_process_id: u32,
+        start_token: Option<u64>,
     },
     /// Startup failed and queued child work was settled terminally.
     Failed {
@@ -62,7 +66,9 @@ impl RuntimeAgentSurfaceStartup {
     /// Returns the primary process fenced by this startup owner.
     pub(crate) fn primary_process_id(self) -> u32 {
         match self {
-            Self::NativeValidating { primary_process_id }
+            Self::NativeValidating {
+                primary_process_id, ..
+            }
             | Self::ManagedPaneBootstrapping { primary_process_id }
             | Self::Ready {
                 primary_process_id, ..
@@ -86,6 +92,13 @@ impl RuntimeAgentComponent {
     }
 }
 
+/// Returns a start token only when the host can verify a live executable identity.
+fn native_root_process_start_token(primary_process_id: u32) -> Option<u64> {
+    mez_mux::process::process_executable_identity_for_pid(primary_process_id)
+        .ok()
+        .map(|identity| identity.start_token)
+}
+
 impl RuntimeSessionService {
     /// Begins mode-specific startup for a newly launched runtime-owned pane.
     pub(crate) fn begin_runtime_agent_surface_startup(
@@ -95,9 +108,10 @@ impl RuntimeSessionService {
         primary_process_id: u32,
     ) {
         let startup = match mode {
-            ShellMode::Native => {
-                RuntimeAgentSurfaceStartup::NativeValidating { primary_process_id }
-            }
+            ShellMode::Native => RuntimeAgentSurfaceStartup::NativeValidating {
+                primary_process_id,
+                start_token: native_root_process_start_token(primary_process_id),
+            },
             ShellMode::Pane => RuntimeAgentSurfaceStartup::ManagedPaneAdmitting {
                 primary_process_id,
                 started_at_unix_ms: current_unix_millis(),
@@ -108,22 +122,89 @@ impl RuntimeSessionService {
             .insert(pane_id.to_string(), startup);
     }
 
-    /// Marks native startup ready after live root-process context validates.
-    pub(crate) fn complete_native_agent_surface_startup(&mut self, pane_id: &str) -> bool {
+    /// Validates the current native root process and releases startup-owned work.
+    ///
+    /// Readiness is tied to the exact process captured when startup began. A
+    /// missing, replaced, or uninspectable root fails startup and settles any
+    /// turns that were queued behind it instead of leaving them blocked forever.
+    pub(crate) fn validate_native_agent_surface_startup(&mut self, pane_id: &str) -> Result<bool> {
         let Some(startup) = self.agent.agent_surface_startups.get(pane_id).copied() else {
-            return false;
+            return Ok(false);
         };
-        let RuntimeAgentSurfaceStartup::NativeValidating { primary_process_id } = startup else {
-            return false;
+        let (primary_process_id, start_token) = match startup {
+            RuntimeAgentSurfaceStartup::NativeValidating {
+                primary_process_id,
+                start_token: Some(start_token),
+            } => (primary_process_id, start_token),
+            RuntimeAgentSurfaceStartup::Ready {
+                mode: ShellMode::Native,
+                primary_process_id,
+                start_token: Some(start_token),
+            } => {
+                if self.primary_pid_for_live_pane_process(pane_id) == Some(primary_process_id)
+                    && native_root_process_start_token(primary_process_id) == Some(start_token)
+                {
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+            RuntimeAgentSurfaceStartup::NativeValidating {
+                primary_process_id: _,
+                start_token: None,
+            } => {
+                self.fail_runtime_agent_surface_startup(
+                    pane_id,
+                    "native pane root process identity could not be captured",
+                )?;
+                return Ok(false);
+            }
+            _ => return Ok(false),
         };
+        if self.primary_pid_for_live_pane_process(pane_id) != Some(primary_process_id)
+            || native_root_process_start_token(primary_process_id) != Some(start_token)
+        {
+            self.fail_runtime_agent_surface_startup(
+                pane_id,
+                "native pane root process changed before startup validation",
+            )?;
+            return Ok(false);
+        }
+        if let Err(error) = self.native_shell_context_for_pane(pane_id) {
+            self.fail_runtime_agent_surface_startup(
+                pane_id,
+                &format!(
+                    "native pane root process could not be validated: {}",
+                    error.message()
+                ),
+            )?;
+            return Ok(false);
+        }
+        if self.primary_pid_for_live_pane_process(pane_id) != Some(primary_process_id)
+            || native_root_process_start_token(primary_process_id) != Some(start_token)
+        {
+            self.fail_runtime_agent_surface_startup(
+                pane_id,
+                "native pane root process changed during startup validation",
+            )?;
+            return Ok(false);
+        }
         self.agent.agent_surface_startups.insert(
             pane_id.to_string(),
             RuntimeAgentSurfaceStartup::Ready {
                 mode: ShellMode::Native,
                 primary_process_id,
+                start_token: Some(start_token),
             },
         );
-        true
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","agent_surface_startup":"ready","mode":"native"}}"#,
+                json_escape(pane_id)
+            ),
+        )?;
+        self.start_ready_agent_turns()?;
+        Ok(true)
     }
 
     /// Advances authenticated managed startup into environment bootstrap.
@@ -158,6 +239,7 @@ impl RuntimeSessionService {
             RuntimeAgentSurfaceStartup::Ready {
                 mode: ShellMode::Pane,
                 primary_process_id,
+                start_token: None,
             },
         );
         true
@@ -354,6 +436,24 @@ impl RuntimeSessionService {
                 RuntimeAgentSurfaceStartup::Ready { .. } => "ready",
                 RuntimeAgentSurfaceStartup::Failed { .. } => "failed",
             })
+    }
+
+    /// Replaces a validating native root token for process-replacement regressions.
+    #[cfg(test)]
+    pub(crate) fn set_native_startup_token_for_tests(&mut self, pane_id: &str, start_token: u64) {
+        let Some(RuntimeAgentSurfaceStartup::NativeValidating {
+            primary_process_id, ..
+        }) = self.agent.agent_surface_startups.get(pane_id).copied()
+        else {
+            return;
+        };
+        self.agent.agent_surface_startups.insert(
+            pane_id.to_string(),
+            RuntimeAgentSurfaceStartup::NativeValidating {
+                primary_process_id,
+                start_token: Some(start_token),
+            },
+        );
     }
 
     /// Returns panes whose runtime-owned execution surfaces are not ready.

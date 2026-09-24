@@ -96,12 +96,12 @@ impl RuntimeSessionService {
     ///
     /// A non-live pane that still has a durable pane-to-agent binding is
     /// re-created through the agent-owned creation path with the pane's
-    /// effective shell mode at restart time. Restore performs no other startup
-    /// work: `start_pane_process_with_start_directory_and_purpose` already arms
-    /// the mode-specific owner and the pane bootstrap, so pane mode runs the
-    /// real managed handshake and native mode keeps validating until first
-    /// agent entry. Panes without a durable binding remain user shells and keep
-    /// inheriting the user environment unchanged.
+    /// effective shell mode at restart time. The startup helper arms the
+    /// mode-specific owner and pane bootstrap. Pane mode runs the real managed
+    /// handshake; native mode validates its freshly launched root before restore
+    /// returns when no restart command replaces the shell. Panes without a
+    /// durable binding remain user shells and keep inheriting the user
+    /// environment unchanged.
     ///
     /// A restart command replaces the managed pane shell, so pane-mode
     /// agent-owned startup can never receive its admission handshake: the
@@ -159,6 +159,16 @@ impl RuntimeSessionService {
                     "restored pane restart command replaces the managed pane shell; pane-mode agent startup cannot admit",
                 )?;
             }
+            if let RuntimePaneProcessPurpose::AgentOwned {
+                shell_mode: crate::runtime::config::ShellMode::Native,
+            } = purpose
+                && explicit_command.is_some()
+            {
+                self.fail_runtime_agent_surface_startup(
+                    &started.pane_id,
+                    "restored pane restart command replaces the native shell root; native agent startup cannot validate",
+                )?;
+            }
             if let Some(screen) = restored_screen {
                 self.process
                     .process_pane_screens
@@ -186,6 +196,15 @@ impl RuntimeSessionService {
                 screen.feed(marker.as_bytes());
             }
             self.session.set_pane_live_state(&started.pane_id, true)?;
+            if matches!(
+                purpose,
+                RuntimePaneProcessPurpose::AgentOwned {
+                    shell_mode: crate::runtime::config::ShellMode::Native,
+                }
+            ) && explicit_command.is_none()
+            {
+                self.validate_native_agent_surface_startup(&started.pane_id)?;
+            }
             self.append_lifecycle_event(
                 EventKind::PaneChanged,
                 format!(
@@ -208,7 +227,7 @@ impl RuntimeSessionService {
     /// restart time, while every other restored pane remains a user shell. The
     /// pane's mode-specific startup contract is unchanged by this decision:
     /// pane mode still admits and certifies through the managed handshake, and
-    /// native mode still validates on first agent entry.
+    /// native mode validates the fresh root process before restore completes.
     pub(crate) fn restored_pane_process_purpose(&self, pane_id: &str) -> RuntimePaneProcessPurpose {
         let bound = self
             .agent_shell_store()

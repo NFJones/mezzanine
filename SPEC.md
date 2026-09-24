@@ -5824,6 +5824,12 @@ Fish, Zsh, or POSIX `sh`; unknown shell classifications MUST fail closed and
 recommend native mode. These startup artifacts MUST be owner-only and removed
 with the pane.
 
+When a runtime-owned native pane is restored, Mezzanine MUST validate native
+execution context against the exact newly launched root-process identity before
+allowing queued agent work to start. Missing, replaced, or uninspectable root
+process evidence MUST fail startup and settle work held behind that startup
+owner; it MUST NOT leave restored turns permanently queued.
+
 When pane-shell agent mode is explicitly shown, the harness MUST create a
 fresh shell-interaction epoch and use the current prompt boundary to begin
 bounded identity discovery. If prompt ownership is not yet available, entry

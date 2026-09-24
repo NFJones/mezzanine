@@ -1874,8 +1874,8 @@ fn runtime_service_restarts_restored_panes_with_fresh_primary_pids() {
 /// sentinel cannot discriminate the purpose on its own because a user shell
 /// pane never consults that snapshot, so the ambient probe that the agent-owned
 /// boundary drops is the discriminating evidence. The cleared base covers the
-/// launch environment only: a bound restored pane still owns an unvalidated
-/// native startup surface until its first agent entry.
+/// launch environment only: native startup becomes ready after the restored
+/// root process has been validated against its exact launch identity.
 #[test]
 fn runtime_restored_agent_bound_pane_clears_daemon_environment_while_unbound_restored_pane_inherits_it()
  {
@@ -2033,8 +2033,8 @@ fn runtime_restored_agent_bound_pane_clears_daemon_environment_while_unbound_res
     );
     assert_eq!(
         service.runtime_agent_surface_startup_phase_for_tests(&bound_pane_id),
-        Some("native-validating"),
-        "a bound restored pane must stay unvalidated until its first agent entry"
+        Some("ready"),
+        "a bound restored native pane must validate its fresh root process during restore"
     );
     assert!(
         !service.pane_environment_authority_is_certified_for_tests(&bound_pane_id),
@@ -2049,6 +2049,263 @@ fn runtime_restored_agent_bound_pane_clears_daemon_environment_while_unbound_res
     drop(unbound_process);
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(transcript_root);
+}
+
+/// Verifies an ordinary prompt validates and releases a restored native agent
+/// pane instead of leaving its scheduler permanently blocked at startup.
+#[test]
+fn runtime_restored_native_agent_prompt_completes_startup() {
+    let mut fixture = RestoredAgentPaneFixture::new("native-prompt-startup", "");
+    fixture.restore_agent_binding();
+    fixture
+        .service
+        .restart_restored_pane_processes(None)
+        .unwrap();
+    let primary = fixture
+        .service
+        .attach_primary("restored-native", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    fixture
+        .service
+        .session
+        .select_pane(&primary, &fixture.bound_pane_id)
+        .unwrap();
+
+    let response = fixture.service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"restored-native-prompt","method":"agent/shell/command","params":{"idempotency_key":"restored-native-prompt","input":"continue after restore"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains(r#""state":"running""#), "{response}");
+    assert_eq!(
+        fixture
+            .service
+            .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+        Some("ready"),
+        "native validation must release the restored pane startup owner"
+    );
+    assert_eq!(fixture.service.pending_agent_provider_tasks().len(), 1);
+    fixture.cleanup();
+}
+
+/// Verifies native process validation completes for a hidden restored root
+/// without changing its saved visibility or admitting visible prompt work.
+#[test]
+fn runtime_restored_hidden_native_agent_validates_without_becoming_visible() {
+    let mut fixture = RestoredAgentPaneFixture::new("hidden-native-startup", "");
+    fixture.restore_agent_binding();
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .request_exit(&fixture.bound_pane_id)
+        .unwrap();
+
+    fixture
+        .service
+        .restart_restored_pane_processes(None)
+        .unwrap();
+
+    assert_eq!(
+        fixture
+            .service
+            .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+        Some("ready")
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_shell_store()
+            .get(&fixture.bound_pane_id)
+            .unwrap()
+            .visibility,
+        AgentShellVisibility::Hidden,
+        "startup validation must not reveal a hidden restored agent session"
+    );
+    assert!(fixture.service.pending_agent_provider_tasks().is_empty());
+    fixture.cleanup();
+}
+
+/// Verifies startup fails closed when the pane root exits after its process
+/// identity is captured, settling turns held behind it.
+#[test]
+fn runtime_restored_native_startup_rejects_replaced_root_and_fails_queued_turn() {
+    let mut fixture = RestoredAgentPaneFixture::new("native-stale-root", "");
+    fixture.restore_agent_binding();
+    fixture
+        .service
+        .restart_restored_pane_processes(None)
+        .unwrap();
+    let primary = fixture
+        .service
+        .attach_primary(
+            "restored-native-stale",
+            true,
+            Size::new(80, 24).unwrap(),
+            120,
+        )
+        .unwrap();
+    fixture
+        .service
+        .session
+        .select_pane(&primary, &fixture.bound_pane_id)
+        .unwrap();
+    let mut process = fixture
+        .service
+        .take_running_pane_process_for_adapter(&fixture.bound_pane_id)
+        .unwrap();
+    let primary_process_id = process.primary_pid();
+    assert!(mez_mux::process::process_start_token_for_pid(primary_process_id).is_some());
+    fixture.service.begin_runtime_agent_surface_startup(
+        &fixture.bound_pane_id,
+        crate::runtime::config::ShellMode::Native,
+        primary_process_id,
+    );
+
+    let response = fixture.service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"restored-native-stale-prompt","method":"agent/shell/command","params":{"idempotency_key":"restored-native-stale-prompt","input":"continue after invalid restore"}}"#,
+        &primary,
+    );
+    assert!(response.contains(r#""state":"queued""#), "{response}");
+    assert_eq!(fixture.service.pending_agent_provider_tasks().len(), 0);
+    process.terminate(Duration::from_millis(100)).unwrap();
+    assert_eq!(
+        mez_mux::process::process_start_token_for_pid(primary_process_id),
+        None,
+        "the native startup root must be gone before validation"
+    );
+
+    assert!(
+        !fixture
+            .service
+            .validate_native_agent_surface_startup(&fixture.bound_pane_id)
+            .unwrap()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+        Some("failed")
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == "turn-1")
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(fixture.service.pending_agent_provider_tasks().is_empty());
+    fixture.cleanup();
+}
+
+/// Verifies a changed root start token fails startup and settles its queued turn.
+#[test]
+fn runtime_restored_native_startup_rejects_changed_token_and_fails_queued_turn() {
+    let mut fixture = RestoredAgentPaneFixture::new("native-changed-token", "");
+    fixture.restore_agent_binding();
+    fixture
+        .service
+        .restart_restored_pane_processes(None)
+        .unwrap();
+    let primary = fixture
+        .service
+        .attach_primary(
+            "restored-native-token-mismatch",
+            true,
+            Size::new(80, 24).unwrap(),
+            120,
+        )
+        .unwrap();
+    fixture
+        .service
+        .session
+        .select_pane(&primary, &fixture.bound_pane_id)
+        .unwrap();
+    let primary_process_id = fixture
+        .service
+        .primary_pid_for_live_pane_process(&fixture.bound_pane_id)
+        .unwrap();
+    let captured_token = mez_mux::process::process_start_token_for_pid(primary_process_id)
+        .expect("the restored root should have a live process token");
+    fixture.service.begin_runtime_agent_surface_startup(
+        &fixture.bound_pane_id,
+        crate::runtime::config::ShellMode::Native,
+        primary_process_id,
+    );
+    fixture
+        .service
+        .set_native_startup_token_for_tests(&fixture.bound_pane_id, captured_token.wrapping_add(1));
+
+    let response = fixture.service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"restored-native-token-mismatch","method":"agent/shell/command","params":{"idempotency_key":"restored-native-token-mismatch","input":"continue after root replacement"}}"#,
+        &primary,
+    );
+    assert!(response.contains(r#""state":"queued""#), "{response}");
+    assert!(fixture.service.pending_agent_provider_tasks().is_empty());
+    assert!(
+        !fixture
+            .service
+            .validate_native_agent_surface_startup(&fixture.bound_pane_id)
+            .unwrap()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+        Some("failed")
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == "turn-1")
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(fixture.service.pending_agent_provider_tasks().is_empty());
+    fixture.cleanup();
+}
+
+/// Verifies an explicit restart command cannot satisfy the native shell-root
+/// contract and leaves the restored agent startup visibly failed.
+#[test]
+fn runtime_restored_native_startup_rejects_explicit_restart_command() {
+    let mut fixture = RestoredAgentPaneFixture::new("native-restart-command", "");
+    fixture.restore_agent_binding();
+
+    fixture
+        .service
+        .restart_restored_pane_processes(Some("cat >/dev/null"))
+        .unwrap();
+
+    assert_eq!(
+        fixture
+            .service
+            .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+        Some("failed"),
+        "a replacement command must not be treated as a validated native shell"
+    );
+    assert!(
+        !fixture
+            .service
+            .agent_surface_allows_scheduler_start(&fixture.bound_pane_id)
+    );
+    let events = fixture
+        .service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::AllPrimaries);
+    assert!(events.iter().any(|event| {
+        event
+            .payload
+            .contains(r#""agent_surface_startup":"failed""#)
+            && event.payload.contains("replaces the native shell root")
+    }));
+    fixture.cleanup();
 }
 
 /// Verifies runtime service restarts restored panes at the rendered PTY size

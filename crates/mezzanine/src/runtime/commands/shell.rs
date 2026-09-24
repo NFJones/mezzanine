@@ -271,13 +271,11 @@ impl RuntimeSessionService {
         if runtime_owned
             && self.effective_agent_shell_mode_for_pane(pane_id)
                 == crate::runtime::config::ShellMode::Native
+            && !self.validate_native_agent_surface_startup(pane_id)?
         {
-            self.native_shell_context_for_pane(pane_id)?;
-            if !self.complete_native_agent_surface_startup(pane_id) {
-                return Err(MezError::invalid_state(
-                    "native runtime-owned agent startup is not awaiting validation",
-                ));
-            }
+            return Err(MezError::invalid_state(
+                "native runtime-owned agent startup could not validate its current root process",
+            ));
         }
         self.checkpoint_agent_session_metadata()?;
         self.request_agent_prompt_selector_extra_candidates_refresh(pane_id);
