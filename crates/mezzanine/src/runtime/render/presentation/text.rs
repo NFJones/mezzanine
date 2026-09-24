@@ -12,10 +12,14 @@ use super::{
     UiTheme, UnicodeSegmentation, UnicodeWidthStr, append_syntax_spans,
     overlay_fixed_column_style_spans, overlay_text_cells, prefix_rich_text_lines, render_markdown,
     render_markdown_with_fenced_block_renderer, runtime_mezzanine_error_code,
-    terminal_grapheme_width, wrap_rich_text_lines_to_width,
+    terminal_grapheme_width,
 };
 use crate::error::MezError;
+use mez_mux::render::wrap_rich_text_line_to_width_with_continuation_indent_hard;
 use mez_mux::render::{push_or_extend_style_span, terminal_color_luminance};
+
+/// Display-only indentation for later physical rows of speaker-labeled messages.
+pub(super) const AGENT_MESSAGE_CONTINUATION_INDENT: &str = "     ";
 
 /// Runs the sanitized agent terminal line operation for this subsystem.
 ///
@@ -44,7 +48,6 @@ pub(crate) fn prefixed_agent_terminal_lines(prefix: &str, text: &str) -> Vec<Str
     if trimmed.is_empty() {
         return vec![prefix.to_string()];
     }
-    let continuation = " ".repeat(prefix.chars().count());
     trimmed
         .lines()
         .enumerate()
@@ -53,7 +56,7 @@ pub(crate) fn prefixed_agent_terminal_lines(prefix: &str, text: &str) -> Vec<Str
             if index == 0 {
                 format!("{prefix}{line}")
             } else {
-                format!("{continuation}{line}")
+                format!("{AGENT_MESSAGE_CONTINUATION_INDENT}{line}")
             }
         })
         .collect()
@@ -61,15 +64,17 @@ pub(crate) fn prefixed_agent_terminal_lines(prefix: &str, text: &str) -> Vec<Str
 
 /// Builds width-wrapped rendered agent transcript rows for simple text.
 ///
-/// Plain `say` output and display-only patch examples should wrap through the
-/// same presentation engine as markdown so continuation rows align under the
-/// first writable column after the speaker indicator.
+/// Speaker-labeled message rows use the same five-cell display-only indent for
+/// authored newlines, whitespace wrapping, and hard-split unbroken tokens.
 pub(crate) fn wrapped_prefixed_agent_terminal_lines(
     prefix: &str,
     text: &str,
     display_width: usize,
 ) -> Vec<RichTextLine> {
-    let lines = prefixed_agent_terminal_lines(prefix, text)
+    let indent = &AGENT_MESSAGE_CONTINUATION_INDENT[..AGENT_MESSAGE_CONTINUATION_INDENT
+        .len()
+        .min(display_width.saturating_sub(1))];
+    prefixed_agent_terminal_lines(prefix, text)
         .into_iter()
         .map(|display| RichTextLine {
             display,
@@ -77,8 +82,10 @@ pub(crate) fn wrapped_prefixed_agent_terminal_lines(
             copy_text: None,
             kind: RichTextLineKind::Normal,
         })
-        .collect::<Vec<_>>();
-    wrap_rich_text_lines_to_width(lines, display_width, display_width)
+        .flat_map(|line| {
+            wrap_rich_text_line_to_width_with_continuation_indent_hard(line, display_width, indent)
+        })
+        .collect()
 }
 
 /// Returns true when a display-only `say` body is a raw Mezzanine patch example.

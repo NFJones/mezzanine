@@ -207,6 +207,7 @@ pub fn wrap_rich_text_line_to_width_with_continuation_indent(
         display_width,
         false,
         Some(continuation_indent),
+        0,
     )
     .into_iter()
     .map(|wrapped| wrapped.line)
@@ -225,6 +226,27 @@ pub fn wrap_rich_text_line_to_width_with_continuation_indent_hard(
         display_width,
         true,
         Some(continuation_indent),
+        0,
+    )
+    .into_iter()
+    .map(|wrapped| wrapped.line)
+    .collect()
+}
+
+/// Hard-wraps a labeled row without treating whitespace inside its first-row
+/// prefix as a break, even when later rows use a shorter display-only indent.
+pub fn wrap_rich_text_line_to_width_with_prefix_and_continuation_indent_hard(
+    line: RichTextLine,
+    display_width: usize,
+    first_prefix_width: usize,
+    continuation_indent: &str,
+) -> Vec<RichTextLine> {
+    wrap_rich_text_line_to_width_with_overflow_policy(
+        line,
+        display_width,
+        true,
+        Some(continuation_indent),
+        first_prefix_width,
     )
     .into_iter()
     .map(|wrapped| wrapped.line)
@@ -239,7 +261,7 @@ pub fn wrap_rich_text_line_to_width_with_source_ranges(
     line: RichTextLine,
     display_width: usize,
 ) -> Vec<WrappedRichTextLine> {
-    wrap_rich_text_line_to_width_with_overflow_policy(line, display_width, false, None)
+    wrap_rich_text_line_to_width_with_overflow_policy(line, display_width, false, None, 0)
 }
 
 /// Wraps one rich-text line and hard-splits unbreakable overflow.
@@ -252,7 +274,7 @@ pub fn wrap_rich_text_line_to_width_with_source_ranges_hard(
     line: RichTextLine,
     display_width: usize,
 ) -> Vec<WrappedRichTextLine> {
-    wrap_rich_text_line_to_width_with_overflow_policy(line, display_width, true, None)
+    wrap_rich_text_line_to_width_with_overflow_policy(line, display_width, true, None, 0)
 }
 
 /// Applies the selected unbreakable-token policy to one rich-text line.
@@ -261,6 +283,7 @@ fn wrap_rich_text_line_to_width_with_overflow_policy(
     display_width: usize,
     hard_split_unbreakable: bool,
     continuation_indent_override: Option<&str>,
+    first_prefix_width: usize,
 ) -> Vec<WrappedRichTextLine> {
     let line = if line.kind == RichTextLineKind::MarkdownRule
         && terminal_text_width(line.display.as_str()) <= display_width
@@ -294,7 +317,7 @@ fn wrap_rich_text_line_to_width_with_overflow_policy(
             continuation_display_width
         };
         let minimum_break_column = if first {
-            continuation_width
+            continuation_width.max(first_prefix_width)
         } else {
             display_start
         };

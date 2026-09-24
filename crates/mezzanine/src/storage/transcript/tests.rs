@@ -237,6 +237,33 @@ fn compaction_epoch_missing_or_corrupt_boundary_fails_closed() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A zero-boundary summary creates an empty archive before publication, and
+/// losing that archive after a later append cannot silently erase exact rows.
+#[test]
+fn compaction_epoch_zero_boundary_precedes_first_transcript_write() {
+    let root = temp_root("compaction-epoch-zero-boundary");
+    let store = AgentTranscriptStore::new(root.clone());
+    store.save_compaction_epoch("epoch", 0, "summary").unwrap();
+    assert!(store.transcript_path("epoch").unwrap().exists());
+    assert_eq!(
+        store
+            .compaction_epoch("epoch")
+            .unwrap()
+            .unwrap()
+            .through_sequence,
+        0
+    );
+    assert!(store.inspect_after_sequence("epoch", 0).unwrap().is_empty());
+    store
+        .append(&entry("epoch", 1, TranscriptRole::User))
+        .unwrap();
+    assert_eq!(store.inspect_after_sequence("epoch", 0).unwrap().len(), 1);
+    fs::remove_file(store.transcript_path("epoch").unwrap()).unwrap();
+    assert!(store.compaction_epoch("epoch").is_err());
+    assert!(store.inspect_after_sequence("epoch", 0).is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// An accepted publication must be readable under the encoded sidecar size
 /// limit, including JSON escapes and framing bytes.
 #[test]

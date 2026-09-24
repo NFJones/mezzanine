@@ -903,6 +903,19 @@ impl AgentTranscriptStore {
                     "encoded compaction epoch exceeds the accepted size limit",
                 ));
             }
+            // A zero boundary can precede the first deferred append. Publish
+            // its empty archive before the sidecar so a later missing archive
+            // remains distinguishable from that legitimate first-write state.
+            if latest_sequence.is_none() {
+                let archive = self.transcript_path_for(conversation_id)?;
+                let file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&archive)?;
+                set_private_file_permissions(&archive)?;
+                file.sync_all()?;
+                std_fs::File::open(&session_dir)?.sync_all()?;
+            }
             let mut file = OpenOptions::new()
                 .create(true)
                 .write(true)

@@ -2506,10 +2506,13 @@ non-Markdown pane-log rows MUST hard-split only at terminal grapheme boundaries
 when an unbroken token exceeds that limit. When agent-authored text wraps in the
 pane, Mezzanine MUST repeat the display-only agent gutter prefix on continuation
 rows. Status rows beginning with `agent: ` MUST align continuation text beneath
-the text after that label. Resize reflow MUST preserve the visual gutter and
-continuation indentation without treating either as agent-authored content for
-copy or observation semantics. Markdown transcript presentation MUST preserve
-the relevant speaker, quote, list, or code indentation on continuation rows.
+the text after that label. Later physical rows of speaker-labeled `user> `,
+`mez> `, `parent> `, `parent< `, `{sender}> `, and `{recipient}< ` messages
+MUST start with five display spaces after the gutter, regardless of speaker
+label width or whether an authored newline or a wrap produced the row. Resize
+reflow MUST preserve the visual gutter and continuation indentation without
+treating either as agent-authored content for copy or observation semantics.
+Markdown quote, list, or code indentation is additive after the five spaces.
 Non-table markdown rows MUST wrap at the nearest whitespace boundary before the
 presentation limit; if no whitespace boundary exists in the overflowing
 segment, Mezzanine SHOULD leave the segment intact and rely on normal terminal
@@ -11334,7 +11337,9 @@ accepted media type. A filtered sender action MUST create no sender row or
 presentation record, and a later log-mode change MUST NOT resurrect it; an
 accepted sender record retains its settlement-time eligibility across replay.
 The logged payload MUST NOT exceed the peer-context payload bound, and each row
-MUST wrap inside the pane the way a user prompt does.
+MUST wrap inside the pane the way a user prompt does. Both sender and recipient
+message continuations MUST use the fixed five-space display-only indent after
+the `▐ ` gutter, independent of endpoint-label width.
 A committed message from a recipient's exact direct parent MUST use the stable
 `parent>` label rather than the parent's mutable pane title. This is a
 presentation-only identity rule: validated restored lineage remains sufficient

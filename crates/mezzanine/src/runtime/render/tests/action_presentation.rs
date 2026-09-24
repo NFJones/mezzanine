@@ -637,6 +637,30 @@ fn plain_agent_output_wraps_under_agent_indicator() {
     );
 }
 
+/// User, assistant, and parent markers keep their first row while every
+/// authored or width-generated continuation starts at the same five cells.
+#[test]
+fn speaker_message_continuations_have_fixed_five_space_indent() {
+    for prefix in ["user> ", "mez> ", "parent> "] {
+        let authored = wrapped_prefixed_agent_terminal_lines(prefix, "first\nsecond", 20)
+            .into_iter()
+            .map(|line| line.display)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            authored,
+            [format!("{prefix}first"), "     second".to_string()]
+        );
+        let wrapped = wrapped_prefixed_agent_terminal_lines(prefix, "alpha beta gamma", 16)
+            .into_iter()
+            .map(|line| line.display)
+            .collect::<Vec<_>>();
+        assert!(
+            wrapped.iter().skip(1).all(|line| line.starts_with("     ")),
+            "{prefix}: {wrapped:?}"
+        );
+    }
+}
+
 /// Verifies unknown file types still render readable diff rows.
 ///
 /// Syntax highlighting is an enhancement over the structural diff display.

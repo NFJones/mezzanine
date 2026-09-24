@@ -52,6 +52,7 @@ pub use rich_text::{
     take_rich_text_display_segment, wrap_rich_text_line_to_width,
     wrap_rich_text_line_to_width_with_continuation_indent,
     wrap_rich_text_line_to_width_with_continuation_indent_hard,
+    wrap_rich_text_line_to_width_with_prefix_and_continuation_indent_hard,
     wrap_rich_text_line_to_width_with_source_ranges,
     wrap_rich_text_line_to_width_with_source_ranges_hard, wrap_rich_text_lines_to_width,
 };

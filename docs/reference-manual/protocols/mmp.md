@@ -153,6 +153,9 @@ created only by recipient commit. Sender retention is operator-visible evidence
 of acceptance or queueing, not delivery confirmation, acknowledgment, agreement,
 or completion, and never participates in receiver receipts, cursors, recovery,
 or MMP routing.
+Both sender and recipient pane-log continuations start five display spaces
+after the `▐ ` gutter, independent of endpoint-label width; Markdown structural
+indentation is additive, and copied source excludes presentation-only padding.
 
 ## Related pages
 

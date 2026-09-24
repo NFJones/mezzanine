@@ -2886,11 +2886,11 @@ fn runtime_peer_message_echo_logs_sender_prefix_without_user_trust_domain() {
         "{echoed:#?}"
     );
     assert!(
-        echoed.iter().any(|line| line == "▐           gamma delta"),
+        echoed.iter().any(|line| line == "▐      gamma delta"),
         "{echoed:#?}"
     );
     assert!(
-        echoed.iter().any(|line| line == "▐           epsilon"),
+        echoed.iter().any(|line| line == "▐      epsilon"),
         "{echoed:#?}"
     );
     assert_eq!(
@@ -3692,7 +3692,7 @@ fn runtime_direct_parent_peer_message_uses_stable_label_only_for_valid_exact_lin
     let received = peer_echo_pane_lines(&service, "%2");
     assert!(
         received.iter().any(|line| line == "▐ parent> first parent")
-            && received.iter().any(|line| line == "▐         instruction"),
+            && received.iter().any(|line| line == "▐      instruction"),
         "the first committed parent message must use the stable label: {received:#?}"
     );
     assert!(
@@ -3701,7 +3701,7 @@ fn runtime_direct_parent_peer_message_uses_stable_label_only_for_valid_exact_lin
             .any(|line| line == "▐ parent> second parent")
             && received
                 .iter()
-                .filter(|line| line.as_str() == "▐         instruction")
+                .filter(|line| line.as_str() == "▐      instruction")
                 .count()
                 == 2,
         "the renamed parent must retain the stable label: {received:#?}"

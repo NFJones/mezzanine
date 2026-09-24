@@ -861,6 +861,9 @@ fn runtime_observed_compaction_preserves_history_when_transcript_arrives_after_q
 #[test]
 fn runtime_observed_input_limit_compacts_at_provider_execution_boundary() {
     let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("observed-input-deferred-first-turn"));
+    service.set_agent_transcript_store(store.clone());
+    service.use_transcript_effect_adapter();
     service
         .replace_config_layers(vec![ConfigLayer {
             name: "observed-input-limit".to_string(),
@@ -970,6 +973,32 @@ max_input_tokens = 100
     assert_eq!(*max_input_tokens, 100);
 
     complete_runtime_test_compaction(&mut service, "%1", "observed input summary");
+    assert!(service.agent_provider_task_is_pending(&task.turn_id));
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|turn| { turn.turn_id == task.turn_id && turn.state == AgentTurnState::Running })
+    );
+    let conversation_id = &turn.conversation_id;
+    assert!(store.transcript_path(conversation_id).unwrap().exists());
+    assert!(store.inspect(conversation_id).unwrap().is_empty());
+    let pending = service
+        .persistence
+        .pending_transcript_entries(conversation_id);
+    assert!(
+        pending
+            .iter()
+            .any(|entry| entry.content.contains("mcp_compaction_epoch"))
+    );
+    let context = service.agent_turn_contexts().get(&task.turn_id).unwrap();
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("observed input summary"))
+    );
     let events = service
         .event_log()
         .unwrap()

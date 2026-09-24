@@ -15,12 +15,13 @@ use super::style::{
     agent_name_marker_rendition,
 };
 use super::text::{
-    agent_say_text_is_displayed_patch_block, agent_terminal_label_rendition,
-    append_styled_agent_terminal_line, append_styled_agent_terminal_rendered_line,
-    bounded_agent_terminal_presentation_columns, bounded_command_preview_source,
-    command_preview_terminal_rendered_lines, render_agent_markdown_body_lines,
-    render_agent_markdown_body_lines_with_prefix, sanitized_agent_terminal_line,
-    shell_output_preview_visual_rows, wrapped_prefixed_agent_terminal_lines,
+    AGENT_MESSAGE_CONTINUATION_INDENT, agent_say_text_is_displayed_patch_block,
+    agent_terminal_label_rendition, append_styled_agent_terminal_line,
+    append_styled_agent_terminal_rendered_line, bounded_agent_terminal_presentation_columns,
+    bounded_command_preview_source, command_preview_terminal_rendered_lines,
+    render_agent_markdown_body_lines, render_agent_markdown_body_lines_with_prefix,
+    sanitized_agent_terminal_line, shell_output_preview_visual_rows,
+    wrapped_prefixed_agent_terminal_lines,
 };
 use super::{
     AGENT_COPY_SKIP_LINE, AgentAction, GraphicRendition, RichTextLine, RichTextLineKind,
@@ -47,6 +48,7 @@ use mez_mux::{
     render::{
         markdown_block_copy_lines, markdown_local_continuation_indent_width,
         wrap_rich_text_line_to_width_with_continuation_indent_hard,
+        wrap_rich_text_line_to_width_with_prefix_and_continuation_indent_hard,
         wrap_rich_text_line_to_width_with_source_ranges_hard,
     },
 };
@@ -179,15 +181,6 @@ fn peer_message_echo_payload(payload: &str) -> String {
     crate::runtime::control::runtime_peer_message_logged_payload(payload)
 }
 
-/// Returns the display-only hanging indent that follows the peer speaker prefix.
-///
-/// Wrapped rows and later payload source lines must start under the payload's
-/// first body column, so the indent mirrors the rendered prefix width the same
-/// way user prompts and plain `say` output derive theirs.
-fn peer_message_continuation_indent(prefix: &str) -> String {
-    " ".repeat(UnicodeWidthStr::width(prefix))
-}
-
 /// Renders one Markdown peer payload while preserving its sender indicator.
 fn peer_message_markdown_rendered_lines(
     prefix: &str,
@@ -195,28 +188,35 @@ fn peer_message_markdown_rendered_lines(
     ui_theme: &mez_mux::theme::UiTheme,
     table_display_width: usize,
 ) -> Vec<RichTextLine> {
-    let continuation = peer_message_continuation_indent(prefix);
-    let prefix_width = UnicodeWidthStr::width(prefix);
+    let continuation = AGENT_MESSAGE_CONTINUATION_INDENT;
     render_agent_markdown_body_lines_with_prefix(
         payload,
         ui_theme,
         table_display_width,
         prefix,
-        continuation.as_str(),
+        continuation,
     )
     .into_iter()
     .flat_map(|line| {
-        let rest = line
-            .display
-            .strip_prefix(prefix)
-            .or_else(|| line.display.strip_prefix(continuation.as_str()))
-            .unwrap_or(line.display.as_str());
-        let indent_width = prefix_width
+        let first_row = line.display.starts_with(prefix);
+        let rest = if first_row {
+            line.display.strip_prefix(prefix).unwrap_or_default()
+        } else {
+            line.display
+                .strip_prefix(continuation)
+                .unwrap_or(line.display.as_str())
+        };
+        let indent_width = UnicodeWidthStr::width(continuation)
             .saturating_add(markdown_local_continuation_indent_width(rest))
             .min(table_display_width.saturating_sub(1));
-        wrap_rich_text_line_to_width_with_continuation_indent_hard(
+        wrap_rich_text_line_to_width_with_prefix_and_continuation_indent_hard(
             line,
             table_display_width,
+            if first_row {
+                UnicodeWidthStr::width(prefix)
+            } else {
+                UnicodeWidthStr::width(continuation)
+            },
             &" ".repeat(indent_width),
         )
     })
@@ -230,7 +230,7 @@ fn peer_message_echo_rendered_lines(
     display_width: usize,
     copy_group: &str,
 ) -> Vec<RichTextLine> {
-    let body_indent = peer_message_continuation_indent(prefix);
+    let body_indent = AGENT_MESSAGE_CONTINUATION_INDENT;
     let payload = payload.trim_end_matches(['\r', '\n']);
     let payload_lines = if payload.is_empty() {
         vec![""]
@@ -248,7 +248,7 @@ fn peer_message_echo_rendered_lines(
                     if source_index == 0 {
                         prefix
                     } else {
-                        body_indent.as_str()
+                        body_indent
                     },
                     sanitized_agent_terminal_line(payload_line),
                 ),
@@ -259,7 +259,7 @@ fn peer_message_echo_rendered_lines(
             wrap_rich_text_line_to_width_with_continuation_indent_hard(
                 line,
                 display_width,
-                body_indent.as_str(),
+                body_indent,
             )
             .into_iter()
             .enumerate()
@@ -5534,9 +5534,10 @@ impl RuntimeSessionService {
 mod tests {
     use super::{
         catch_agent_terminal_presentation_panic, peer_message_echo_rendered_lines,
-        styled_agent_presentation_source_lines,
+        peer_message_markdown_rendered_lines, styled_agent_presentation_source_lines,
     };
     use crate::runtime::{PeerMessageLogMode, runtime_peer_message_presentation_is_visible};
+    use unicode_width::UnicodeWidthStr;
 
     /// Verifies typed styled presentation source preserves valid style and text
     /// pairs while rejecting malformed payloads before replay reaches a pane.
@@ -5637,7 +5638,7 @@ mod tests {
                 .iter()
                 .map(|line| line.display.as_str())
                 .collect::<Vec<_>>(),
-            ["agent-%3> alpha", "          beta gamma"]
+            ["agent-%3> alpha", "     beta gamma"]
         );
         assert_eq!(
             lines
@@ -5648,6 +5649,31 @@ mod tests {
                 Some("\u{1e}mez-copy-source-line:peer-wrapping/0:alpha beta gamma"),
                 Some("\u{1e}mez-copy-skip-line"),
             ]
+        );
+    }
+
+    /// A long first-row label cannot suppress a valid word boundary on a
+    /// later authored Markdown row that carries only the five-space indent.
+    #[test]
+    fn peer_markdown_later_row_wraps_independently_of_long_label() {
+        let lines = peer_message_markdown_rendered_lines(
+            "agent-%123456789> ",
+            "first  \none supercalifragilisticexpialidocious",
+            &mez_mux::theme::UiTheme::default(),
+            22,
+        );
+        let rows = lines
+            .iter()
+            .map(|line| line.display.as_str())
+            .collect::<Vec<_>>();
+        assert!(rows.contains(&"     one"), "{rows:?}");
+        assert!(
+            rows.iter().any(|row| row.starts_with("     super")),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().all(|row| UnicodeWidthStr::width(*row) <= 22),
+            "{rows:?}"
         );
     }
 }

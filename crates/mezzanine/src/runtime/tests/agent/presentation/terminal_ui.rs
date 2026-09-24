@@ -228,10 +228,10 @@ fn runtime_peer_message_wraps_with_source_copy_payload() {
         .iter()
         .enumerate()
         .skip(start.saturating_add(1))
-        .find(|(_index, line)| *line == "▐           epsilon")
+        .find(|(_index, line)| *line == "▐      epsilon")
         .map(|(index, _line)| index)
         .expect("indented peer continuation row");
-    assert!(copy_mode.lines()[start.saturating_add(1)].starts_with("▐           "));
+    assert!(copy_mode.lines()[start.saturating_add(1)].starts_with("▐      "));
     let end_column = UnicodeWidthStr::width(copy_mode.lines()[end].as_str());
     copy_mode
         .select_range(
@@ -254,7 +254,7 @@ fn runtime_peer_message_wraps_with_source_copy_payload() {
 }
 
 /// Verifies authored newlines in canonical plaintext MMP payloads use the same
-/// sender-width hanging indent as width-generated continuation rows while source
+/// fixed five-space indent as width-generated continuation rows while source
 /// copy preserves the original multiline payload without display-only spacing.
 #[test]
 fn runtime_peer_message_authored_newlines_match_wrap_indentation() {
@@ -282,7 +282,7 @@ fn runtime_peer_message_authored_newlines_match_wrap_indentation() {
         .expect("first authored peer-message line");
     assert_eq!(
         copy_mode.lines()[start.saturating_add(1)],
-        "▐           second line"
+        "▐      second line"
     );
     let end_column = UnicodeWidthStr::width(copy_mode.lines()[start + 1].as_str());
     copy_mode
@@ -305,8 +305,8 @@ fn runtime_peer_message_authored_newlines_match_wrap_indentation() {
     );
 }
 
-/// Verifies CommonMark line breaks in MMP payloads receive the dynamic peer
-/// sender-width indent rather than the assistant transcript's fixed indent.
+/// Verifies CommonMark line breaks in MMP payloads receive the same fixed
+/// five-space indent as assistant transcript messages.
 #[test]
 fn runtime_peer_message_markdown_newlines_match_wrap_indentation() {
     let mut service = test_runtime_service();
@@ -332,7 +332,7 @@ fn runtime_peer_message_markdown_newlines_match_wrap_indentation() {
         .iter()
         .position(|line| line == "▐ agent-%3> first line")
         .expect("first Markdown peer-message line");
-    assert_eq!(rows[start.saturating_add(1)], "▐           second line");
+    assert_eq!(rows[start.saturating_add(1)], "▐      second line");
 }
 
 /// Verifies bare and charset-qualified Markdown MMP payloads use the existing
@@ -464,8 +464,7 @@ fn runtime_peer_message_markdown_honors_configured_wrap_cap() {
         "{rows:#?}"
     );
     assert!(
-        rows.iter()
-            .any(|line| line.starts_with("▐           gilistic")),
+        rows.iter().any(|line| line.starts_with("▐      gilistic")),
         "{rows:#?}"
     );
     assert!(
@@ -528,7 +527,7 @@ fn runtime_peer_message_copy_keeps_adjacent_message_payloads() {
         .iter()
         .enumerate()
         .skip(start.saturating_add(1))
-        .rfind(|(_index, line)| line.starts_with("▐           "))
+        .rfind(|(_index, line)| line.starts_with("▐      "))
         .map(|(index, _line)| index)
         .expect("wrapped second peer message row");
     let end_column = UnicodeWidthStr::width(copy_mode.lines()[end].as_str());
@@ -547,7 +546,7 @@ fn runtime_peer_message_copy_keeps_adjacent_message_payloads() {
     let expected = format!("{first_payload}\n{second_payload}");
     assert_eq!(
         copy_mode.copy_selection().unwrap(),
-        "agent-%3> first\n          payload\nagent-%3> second\n          payload\n          wraps\n          across rows"
+        "agent-%3> first\n     payload\nagent-%3> second\n     payload wraps\n     across rows"
     );
     assert_eq!(
         copy_mode

@@ -122,6 +122,12 @@ traffic remains receiver-only. Filtered content creates no row, copy metadata,
 or presentation record, and later log-mode changes do not alter its
 settlement-time eligibility.
 
+Received `{sender}>` and sent `{recipient}<` rows (including `parent>` and
+`parent<`) keep their marker on the first row; every authored or wrapped
+continuation starts five display spaces after the `▐ ` gutter, regardless of
+marker width. Markdown quote, list, and code indentation is additive. The
+padding is display-only and is omitted from copied source payloads.
+
 For a received message, only the recipient's exact direct parent is rendered as
 `parent>`, so parent-pane renames never change that label. Validated restored
 lineage remains sufficient for this presentation alias; a fenced or stale edge,
