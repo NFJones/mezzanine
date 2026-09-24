@@ -179,9 +179,13 @@ bounded metadata sidecars; healthy startup reads only interrupted-operation
 recovery journals, while explicit catalog rebuild may enumerate sidecars
 without decompressing every archive.
 
-The `/resume` pager is active-only by default. Use `r` for the archived-only
-view, `A` to archive or restore the selected row, and Enter to restore and then
-resume an archived row. Archive and restore run on the persistence worker, so
+The `/resume` pager is active-only and scoped to the current Git project by
+default: sibling directories share the nearest repository root, including
+worktrees; outside Git, each canonical directory is its own project. Use `a`
+to toggle all projects, `r` for the archived-only view, `A` to archive or
+restore the selected row, and Enter to restore and then resume an archived
+row. The Directory column and direct resume retain the saved working directory,
+not the project root. Archive and restore run on the persistence worker, so
 the pager remains responsive and reports completion or failure in place.
 
 ## Related pages

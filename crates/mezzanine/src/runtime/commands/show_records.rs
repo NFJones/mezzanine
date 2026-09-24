@@ -1329,7 +1329,7 @@ fn set_record_browser_scope_indicator(
         RuntimeRecordBrowserOverlaySource::Approvals => "live session".to_string(),
         RuntimeRecordBrowserOverlaySource::SavedSessions { directory, .. } => directory
             .clone()
-            .unwrap_or_else(|| "all directories".to_string()),
+            .unwrap_or_else(|| "all projects".to_string()),
         RuntimeRecordBrowserOverlaySource::Personalities { pane_id } => {
             format!("current pane {pane_id}")
         }

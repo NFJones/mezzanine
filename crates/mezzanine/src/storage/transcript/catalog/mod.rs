@@ -31,7 +31,7 @@ use super::types::{
 };
 
 /// Current saved-conversation catalog schema version.
-pub(super) const SCHEMA_VERSION: i64 = 3;
+pub(super) const SCHEMA_VERSION: i64 = 4;
 /// Private SQLite database stored beside saved-conversation directories.
 const CATALOG_FILE_NAME: &str = "catalog.sqlite3";
 /// Advisory lock serializing schema creation, migration, and rebuild.

@@ -23,13 +23,13 @@ pub(super) fn upsert(
         "INSERT INTO saved_conversations (
              conversation_id, conversation_kind, name, named_at,
              entry_count, first_created_at, last_created_at,
-             last_turn_id, agent_id, pane_id, directory,
+             last_turn_id, agent_id, pane_id, directory, project_root,
              initial_prompt, latest_user_prompt, has_transcript,
              has_presentation, payload_layout, catalog_updated_at,
              name_preferred
          ) VALUES (
              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-             ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+             ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
          )
          ON CONFLICT(conversation_id) DO UPDATE SET
              conversation_kind = excluded.conversation_kind,
@@ -47,6 +47,7 @@ pub(super) fn upsert(
              agent_id = excluded.agent_id,
              pane_id = excluded.pane_id,
              directory = COALESCE(excluded.directory, saved_conversations.directory),
+             project_root = COALESCE(excluded.project_root, saved_conversations.project_root),
              initial_prompt = excluded.initial_prompt,
              latest_user_prompt = excluded.latest_user_prompt,
              has_transcript = excluded.has_transcript,
@@ -77,6 +78,7 @@ pub(super) fn upsert(
             candidate.summary.agent_id,
             candidate.summary.pane_id,
             candidate.summary.directory,
+            candidate.summary.project_root,
             candidate.summary.initial_prompt,
             candidate.summary.latest_user_prompt,
             i64::from(candidate.has_transcript),
@@ -185,13 +187,13 @@ pub(super) fn replace_all(
             "INSERT INTO saved_conversations (
                  conversation_id, conversation_kind, name, named_at,
                  entry_count, first_created_at, last_created_at,
-                 last_turn_id, agent_id, pane_id, directory,
+                 last_turn_id, agent_id, pane_id, directory, project_root,
                  initial_prompt, latest_user_prompt, has_transcript,
                  has_presentation, payload_layout, catalog_updated_at,
                  name_preferred
              ) VALUES (
                  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-                 ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+                 ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
              )",
         )?;
         for candidate in candidates {
@@ -221,6 +223,7 @@ pub(super) fn replace_all(
                 candidate.summary.agent_id,
                 candidate.summary.pane_id,
                 candidate.summary.directory,
+                candidate.summary.project_root,
                 candidate.summary.initial_prompt,
                 candidate.summary.latest_user_prompt,
                 i64::from(candidate.has_transcript),

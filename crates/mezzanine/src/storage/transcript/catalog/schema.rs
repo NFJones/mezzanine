@@ -173,6 +173,7 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
                  agent_id TEXT NOT NULL DEFAULT '',
                  pane_id TEXT NOT NULL DEFAULT '',
                  directory TEXT,
+                 project_root TEXT,
                  initial_prompt TEXT,
                  latest_user_prompt TEXT,
                  has_transcript INTEGER NOT NULL DEFAULT 0
@@ -226,6 +227,12 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
                      first_created_at DESC,
                      conversation_id
                  );
+             CREATE INDEX saved_conversations_project_picker
+                 ON saved_conversations(
+                     archived_at, project_root, conversation_kind,
+                     (name IS NOT NULL AND name_preferred = 1) DESC,
+                     last_created_at DESC, first_created_at DESC, conversation_id
+                 );
              CREATE INDEX saved_conversations_pruning
                  ON saved_conversations(
                      archived_at,
@@ -236,14 +243,19 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
              CREATE INDEX saved_conversations_name_nocase
                  ON saved_conversations(name COLLATE NOCASE)
                  WHERE name IS NOT NULL;
-             PRAGMA user_version = 3;",
+             PRAGMA user_version = 4;",
             )
             .map_err(SchemaFailure::Sqlite)?,
         1 => {
             migrate_v1_to_v2(connection)?;
             migrate_v2_to_v3(connection)?;
+            migrate_v3_to_v4(connection)?;
         }
-        2 => migrate_v2_to_v3(connection)?,
+        2 => {
+            migrate_v2_to_v3(connection)?;
+            migrate_v3_to_v4(connection)?;
+        }
+        3 => migrate_v3_to_v4(connection)?,
         SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(SchemaFailure::Semantic(MezError::invalid_state(format!(
@@ -372,6 +384,48 @@ fn migrate_v2_to_v3(connection: &Connection) -> std::result::Result<(), SchemaFa
              PRAGMA user_version = 3;",
         )
         .map_err(SchemaFailure::Sqlite)
+}
+
+/// Adds an indexed project identity without rewriting saved working directories.
+/// The versioned migration resolves existing directory columns only once, not
+/// on every interactive picker query; unavailable paths retain a NULL key.
+fn migrate_v3_to_v4(connection: &Connection) -> std::result::Result<(), SchemaFailure> {
+    connection
+        .execute_batch(
+            "ALTER TABLE saved_conversations ADD COLUMN project_root TEXT;
+             CREATE INDEX saved_conversations_project_picker
+                 ON saved_conversations(
+                     archived_at, project_root, conversation_kind,
+                     (name IS NOT NULL AND name_preferred = 1) DESC,
+                     last_created_at DESC, first_created_at DESC, conversation_id
+                 );
+             PRAGMA user_version = 4;",
+        )
+        .map_err(SchemaFailure::Sqlite)?;
+    let mut statement = connection
+        .prepare("SELECT conversation_id, directory FROM saved_conversations WHERE directory IS NOT NULL")
+        .map_err(SchemaFailure::Sqlite)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(SchemaFailure::Sqlite)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(SchemaFailure::Sqlite)?;
+    drop(statement);
+    for (conversation_id, directory) in rows {
+        if let Some(project_root) =
+            super::super::store::saved_session_project_root(Some(&directory))
+        {
+            connection
+                .execute(
+                    "UPDATE saved_conversations SET project_root = ?1 WHERE conversation_id = ?2",
+                    rusqlite::params![project_root, conversation_id],
+                )
+                .map_err(SchemaFailure::Sqlite)?;
+        }
+    }
+    Ok(())
 }
 
 /// Returns whether one SQLite failure proves the file needs reconstruction.

@@ -22,8 +22,10 @@ pub struct ConversationSummary {
     pub agent_id: String,
     /// Pane id from the last entry.
     pub pane_id: String,
-    /// Best-known project root or working directory for the conversation.
+    /// Saved working directory used by direct resume and the picker column.
     pub directory: Option<String>,
+    /// Project identity captured from runtime-owned context, if available.
+    pub project_root: Option<String>,
     /// Bounded text from the first user-authored prompt in the conversation.
     pub initial_prompt: Option<String>,
     /// Bounded text from the most recent user-authored prompt in the conversation.
@@ -57,6 +59,7 @@ pub fn summarize_conversation(entries: Vec<TranscriptEntry>) -> Option<Conversat
         agent_id: last.agent_id.clone(),
         pane_id: last.pane_id.clone(),
         directory,
+        project_root: None,
         initial_prompt,
         latest_user_prompt,
     })
@@ -81,17 +84,14 @@ pub fn transcript_entry_user_content(entry: &TranscriptEntry) -> Option<String> 
     }
 }
 
-/// Returns the best-known project root or working directory from transcript
-/// context entries.
+/// Returns the best-known working directory from transcript context entries.
 fn conversation_directory(entries: &[TranscriptEntry]) -> Option<String> {
     let mut cwd = None;
     for entry in entries {
+        if entry.role != TranscriptRole::System {
+            continue;
+        }
         for line in entry.content.lines() {
-            if let Some(value) = line.strip_prefix("project_root=")
-                && !value.trim().is_empty()
-            {
-                return Some(value.trim().to_string());
-            }
             if cwd.is_none()
                 && let Some(value) = line
                     .strip_prefix("cwd=")

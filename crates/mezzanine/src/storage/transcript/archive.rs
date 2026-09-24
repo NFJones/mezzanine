@@ -61,6 +61,8 @@ struct ArchiveManifest {
     agent_id: String,
     pane_id: String,
     directory: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
     initial_prompt: Option<String>,
     latest_user_prompt: Option<String>,
     name: Option<String>,
@@ -875,6 +877,7 @@ fn manifest_from_record(
         agent_id: summary.agent_id.clone(),
         pane_id: summary.pane_id.clone(),
         directory: summary.directory.clone(),
+        project_root: summary.project_root.clone(),
         initial_prompt: summary.initial_prompt.clone(),
         latest_user_prompt: summary.latest_user_prompt.clone(),
         name: session.name.clone(),
@@ -929,6 +932,10 @@ fn summary_from_manifest(manifest: &ArchiveManifest) -> ConversationSummary {
         agent_id: manifest.agent_id.clone(),
         pane_id: manifest.pane_id.clone(),
         directory: manifest.directory.clone(),
+        project_root: manifest
+            .project_root
+            .clone()
+            .or_else(|| super::store::saved_session_project_root(manifest.directory.as_deref())),
         initial_prompt: manifest.initial_prompt.clone(),
         latest_user_prompt: manifest.latest_user_prompt.clone(),
     }

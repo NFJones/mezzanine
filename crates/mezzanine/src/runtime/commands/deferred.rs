@@ -418,7 +418,11 @@ impl RuntimeSessionService {
                 };
                 let directory = self
                     .pane_current_working_directory(pane_id)
-                    .map(|path| path.to_string_lossy().into_owned());
+                    .and_then(|path| {
+                        crate::storage::transcript::saved_session_project_root(Some(
+                            &path.to_string_lossy(),
+                        ))
+                    });
                 RuntimeAgentCommandPrepared::SavedSessionsBrowser {
                     store,
                     directory,

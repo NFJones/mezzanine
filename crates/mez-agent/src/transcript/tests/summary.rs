@@ -33,7 +33,8 @@ fn conversation_summary_uses_project_root_and_user_prompt_bounds() {
 
     let summary = summarize_conversation(entries).unwrap();
 
-    assert_eq!(summary.directory.as_deref(), Some("/work/repo"));
+    assert_eq!(summary.directory.as_deref(), Some("/tmp"));
+    assert_eq!(summary.project_root, None);
     assert_eq!(
         summary.initial_prompt.as_deref(),
         Some("inspect the repository")

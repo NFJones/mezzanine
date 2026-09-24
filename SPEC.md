@@ -9009,8 +9009,8 @@ The baseline command capabilities are:
   without changing state.
 - Bare `/resume`: Show resumable saved agent sessions in the shared interactive
   record-browser table keyed by conversation UUID. The table MUST default to
-  sessions whose saved directory matches the active pane directory; `a` MUST
-  toggle between that directory and all saved sessions. The table MUST include name,
+  sessions whose saved project matches the active pane project; `a` MUST
+  toggle between that project and all saved sessions. The table MUST include name,
   last activity, directory, transcript entry count, and latest prompt columns.
   Named sessions MUST appear before UUID-only sessions; each partition MUST be
   sorted by last activity with the most recent session first. Prompt summaries
@@ -12074,10 +12074,19 @@ MUST NOT copy the source name.
 
 The `/resume` command MUST provide an interactive picker for saved
 conversations or snapshots. Its default conversation view MUST be scoped to the
-active pane directory when known, and `a` MUST toggle to or from all directories.
+active pane's canonical project root when known, and `a` MUST toggle to or from
+all projects. The project root is the nearest canonical ancestor with a `.git`
+directory or file (including worktrees and nested repositories); in a non-Git
+directory it is the canonical pane directory. Symlink aliases MUST resolve to
+the same project. Missing historical directories MUST remain unscoped rather
+than receiving a guessed project identity; they remain visible in all-projects
+view. Project identity is only a discovery filter, not trust or sandbox
+authority, and the conversation UUID remains the durable identity. The saved
+working directory MUST remain distinct from this project key and continue to
+govern direct resume and the Directory column.
 Durable subagent conversations MUST be excluded from the default picker, and
 `u` MUST independently toggle whether subagent conversations are included
-without changing the active directory scope. Picker refreshes after either
+without changing the active project scope. Picker refreshes after either
 toggle MUST preserve the selected conversation UUID when that conversation
 remains visible.
 Agent prompt completion for `/resume` MUST include
@@ -12088,7 +12097,7 @@ query SQLite in bounded keyset pages rather than materializing the complete
 catalog. Its page size SHOULD derive from the active viewport with a bounded
 preload, and forward or backward navigation across a page boundary MUST retain
 the named-first and activity ordering contract without using offset pagination.
-Directory scope, subagent inclusion, prompt-presence, and case-insensitive
+Indexed project scope, subagent inclusion, prompt-presence, and case-insensitive
 search across UUID, name, latest prompt, and directory MUST be applied by the
 catalog query. Scope, kind, search, clear-name, and deletion refreshes MUST
 preserve the selected UUID when it remains visible and otherwise select a

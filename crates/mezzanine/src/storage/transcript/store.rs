@@ -1464,6 +1464,7 @@ impl AgentTranscriptStore {
                 agent_id: String::new(),
                 pane_id: entry.pane_id.clone(),
                 directory: named.as_ref().and_then(|session| session.directory.clone()),
+                project_root: None,
                 initial_prompt: None,
                 latest_user_prompt: None,
             }
@@ -2249,6 +2250,10 @@ impl AgentTranscriptStore {
                 if candidate.summary.directory.is_none() {
                     candidate.summary.directory = named.directory.clone();
                 }
+                if candidate.summary.project_root.is_none() {
+                    candidate.summary.project_root =
+                        saved_session_project_root(candidate.summary.directory.as_deref());
+                }
             } else {
                 candidates.insert(
                     named.conversation_id.clone(),
@@ -2291,6 +2296,9 @@ impl AgentTranscriptStore {
         if summary.directory.is_none() {
             summary.directory = named.and_then(|session| session.directory.clone());
         }
+        if summary.project_root.is_none() {
+            summary.project_root = saved_session_project_root(summary.directory.as_deref());
+        }
         Ok(Some(CatalogCandidate {
             summary,
             name: named.map(|session| session.name.clone()),
@@ -2318,6 +2326,7 @@ impl AgentTranscriptStore {
                 agent_id: String::new(),
                 pane_id: String::new(),
                 directory: named.directory.clone(),
+                project_root: saved_session_project_root(named.directory.as_deref()),
                 initial_prompt: None,
                 latest_user_prompt: None,
             },
@@ -2365,6 +2374,9 @@ impl AgentTranscriptStore {
                 agent_id: String::new(),
                 pane_id: String::new(),
                 directory: named.and_then(|session| session.directory.clone()),
+                project_root: saved_session_project_root(
+                    named.and_then(|session| session.directory.as_deref()),
+                ),
                 initial_prompt: None,
                 latest_user_prompt: None,
             },
@@ -2950,8 +2962,9 @@ impl AgentTranscriptStore {
         summary.pane_id = entry.pane_id.clone();
         if summary.directory.is_none() {
             summary.directory = transcript_entry_directory(entry);
-        } else if let Some(directory) = transcript_entry_project_root(entry) {
-            summary.directory = Some(directory);
+        }
+        if summary.project_root.is_none() {
+            summary.project_root = saved_session_project_root(summary.directory.as_deref());
         }
         if let Some(content) = transcript_entry_user_content(entry) {
             let preview = bounded_summary_text(&content, 120);
@@ -3011,9 +3024,7 @@ impl AgentTranscriptStore {
         let first_entry = first.unwrap_or(last);
         let mut directory = first.and_then(transcript_entry_directory);
         for entry in &tail {
-            if let Some(project_root) = transcript_entry_project_root(entry) {
-                directory = Some(project_root);
-            } else if directory.is_none() {
+            if directory.is_none() {
                 directory = transcript_entry_directory(entry);
             }
         }
@@ -3035,6 +3046,7 @@ impl AgentTranscriptStore {
             last_turn_id: last.turn_id.clone(),
             agent_id: last.agent_id.clone(),
             pane_id: last.pane_id.clone(),
+            project_root: saved_session_project_root(directory.as_deref()),
             directory,
             initial_prompt,
             latest_user_prompt,
@@ -3141,6 +3153,9 @@ impl AgentTranscriptStore {
             agent_id: String::new(),
             pane_id: last.pane_id,
             directory: named.and_then(|session| session.directory.clone()),
+            project_root: saved_session_project_root(
+                named.and_then(|session| session.directory.as_deref()),
+            ),
             initial_prompt: None,
             latest_user_prompt: None,
         }))
@@ -4588,6 +4603,7 @@ fn encode_conversation_summary(summary: &ConversationSummary) -> String {
         "agent_id": summary.agent_id,
         "pane_id": summary.pane_id,
         "directory": summary.directory,
+        "project_root": summary.project_root,
         "initial_prompt": summary.initial_prompt,
         "latest_user_prompt": summary.latest_user_prompt,
     })
@@ -4641,6 +4657,7 @@ fn decode_conversation_summary(line: &str) -> Result<ConversationSummary> {
         agent_id: required_summary_string(&value, "agent_id")?,
         pane_id: required_summary_string(&value, "pane_id")?,
         directory: optional_summary_string(&value, "directory"),
+        project_root: optional_summary_string(&value, "project_root"),
         initial_prompt: optional_summary_string(&value, "initial_prompt"),
         latest_user_prompt: optional_summary_string(&value, "latest_user_prompt"),
     };
@@ -4676,23 +4693,27 @@ fn optional_summary_string(value: &serde_json::Value, field: &str) -> Option<Str
 
 /// Returns the best directory hint in one transcript entry.
 fn transcript_entry_directory(entry: &TranscriptEntry) -> Option<String> {
-    transcript_entry_project_root(entry).or_else(|| {
-        entry.content.lines().find_map(|line| {
-            line.strip_prefix("cwd=")
-                .or_else(|| line.strip_prefix("working_directory="))
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
+    (entry.role == mez_agent::transcript::TranscriptRole::System)
+        .then(|| {
+            entry.content.lines().find_map(|line| {
+                line.strip_prefix("cwd=")
+                    .or_else(|| line.strip_prefix("working_directory="))
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
         })
-    })
+        .flatten()
 }
 
-/// Returns a project-root hint from one transcript entry.
-fn transcript_entry_project_root(entry: &TranscriptEntry) -> Option<String> {
-    entry.content.lines().find_map(|line| {
-        line.strip_prefix("project_root=")
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
+/// Resolves a retained working directory to a canonical project key when it exists.
+/// Missing historical directories stay unscoped instead of inventing an identity.
+pub(crate) fn saved_session_project_root(directory: Option<&str>) -> Option<String> {
+    let directory = directory?;
+    crate::security::project::discover_project_root_with_metadata(
+        std::path::Path::new(directory),
+        crate::security::project::ProjectRootInputSource::CurrentDirectory,
+    )
+    .ok()
+    .map(|discovery| discovery.canonical_root.to_string_lossy().into_owned())
 }

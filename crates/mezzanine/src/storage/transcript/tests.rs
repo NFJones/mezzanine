@@ -1321,7 +1321,7 @@ fn transcript_store_list_uses_summary_sidecar_without_full_decode() {
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     let mut first = entry("conv1", 1, TranscriptRole::System);
-    first.content = "project_root=/workspace/mezzanine".to_string();
+    first.content = "cwd=/workspace/mezzanine\nproject_root=/workspace".to_string();
     let mut second = entry("conv1", 2, TranscriptRole::System);
     second.content = mez_agent::TranscriptContextEvent::user_event(
         2,
@@ -1368,7 +1368,7 @@ fn transcript_store_summary_recovers_typed_prompt_after_leading_metadata() {
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     let mut metadata = entry("conv-typed-prefix", 1, TranscriptRole::System);
-    metadata.content = "project_root=/workspace/mezzanine".to_string();
+    metadata.content = "cwd=/workspace/mezzanine\nproject_root=/workspace".to_string();
     let mut prompt = entry("conv-typed-prefix", 2, TranscriptRole::System);
     prompt.content = mez_agent::TranscriptContextEvent::user_event(
         2,
@@ -2570,10 +2570,7 @@ fn transcript_store_catalog_migrates_existing_session_metadata() {
         current.conversation_kind,
         mez_agent::AgentConversationKind::Subagent
     );
-    assert_eq!(
-        current.summary.directory.as_deref(),
-        Some("/workspace/current")
-    );
+    assert_eq!(current.summary.directory.as_deref(), None);
     let presentation = store
         .catalog_saved_session("presentation-only")
         .unwrap()
@@ -2695,7 +2692,7 @@ fn transcript_store_catalog_initializes_private_indexed_schema() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let quick_check: String = connection
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
         .unwrap();
@@ -2799,7 +2796,7 @@ fn transcript_store_catalog_migrates_v1_rows_to_active_v2_rows() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let lifecycle: (Option<i64>, Option<i64>, Option<String>) = connection
         .query_row(
             "SELECT archived_at, archive_compressed_bytes, archive_sha256
@@ -2812,6 +2809,92 @@ fn transcript_store_catalog_migrates_v1_rows_to_active_v2_rows() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies v3 catalog migration resolves existing directories to the nearest
+/// Git root, leaves missing directories unscoped, and retains saved CWDs.
+#[test]
+fn transcript_store_catalog_migrates_v3_project_scope() {
+    let root = temp_root("catalog-v3-project-scope");
+    let repo = root.join("repo");
+    fs::create_dir_all(repo.join("a")).unwrap();
+    fs::create_dir_all(repo.join("b")).unwrap();
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    let store = AgentTranscriptStore::new(root.join("sessions"));
+    fs::create_dir_all(store.root()).unwrap();
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE saved_conversations (
+        conversation_id TEXT PRIMARY KEY, directory TEXT, conversation_kind TEXT,
+        name TEXT, name_preferred INTEGER, entry_count INTEGER,
+        first_created_at INTEGER, last_created_at INTEGER, last_turn_id TEXT,
+        agent_id TEXT, pane_id TEXT, initial_prompt TEXT, latest_user_prompt TEXT,
+        has_transcript INTEGER, has_presentation INTEGER, payload_layout TEXT,
+        archived_at INTEGER, archive_compressed_bytes INTEGER, archive_sha256 TEXT,
+        catalog_updated_at INTEGER);
+        PRAGMA user_version = 3;",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO saved_conversations
+        (conversation_id, directory, conversation_kind, name_preferred, entry_count,
+         first_created_at, last_created_at, last_turn_id, agent_id, pane_id,
+         latest_user_prompt, has_transcript, has_presentation, payload_layout, catalog_updated_at)
+        VALUES ('saved', ?1, 'root', 1, 1, 10, 20, 'turn-1', 'agent', '%1',
+                'prompt', 1, 0, 'directory', 20)",
+            [repo.join("a").to_string_lossy().as_ref()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO saved_conversations
+        (conversation_id, directory, conversation_kind, name_preferred, entry_count,
+         first_created_at, last_created_at, last_turn_id, agent_id, pane_id,
+         latest_user_prompt, has_transcript, has_presentation, payload_layout, catalog_updated_at)
+        VALUES ('missing', '/unavailable/mez-test-project', 'root', 1, 1,
+                10, 20, 'turn-1', 'agent', '%1', 'prompt', 1, 0, 'directory', 20)",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    fs::write(store.root().join(".catalog-migrated-v1"), b"complete\n").unwrap();
+    store.initialize(100).unwrap();
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    let saved: (String, Option<String>) = connection.query_row(
+        "SELECT directory, project_root FROM saved_conversations WHERE conversation_id = 'saved'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert_eq!(saved.0, repo.join("a").to_string_lossy());
+    assert_eq!(saved.1.as_deref(), Some(repo.to_string_lossy().as_ref()));
+    let missing: Option<String> = connection
+        .query_row(
+            "SELECT project_root FROM saved_conversations WHERE conversation_id = 'missing'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(missing, None);
+    let page = store
+        .query_saved_sessions(&SavedSessionQuery {
+            lifecycle: SavedSessionLifecycleFilter::Active,
+            directory: None,
+            project_root: saved.1,
+            include_subagents: false,
+            require_latest_user_prompt: true,
+            search: None,
+            anchor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(page.sessions.len(), 1);
+    assert_eq!(
+        page.sessions[0].summary.directory.as_deref(),
+        Some(saved.0.as_str())
+    );
+    drop(connection);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies a readable catalog from a future release fails closed rather than
 /// being overwritten or downgraded during startup initialization.
 #[test]
@@ -2821,18 +2904,18 @@ fn transcript_store_catalog_rejects_future_schema_versions() {
     fs::create_dir_all(&root).unwrap();
     let store = AgentTranscriptStore::new(root.clone());
     let connection = Connection::open(store.catalog_path()).unwrap();
-    connection.pragma_update(None, "user_version", 4).unwrap();
+    connection.pragma_update(None, "user_version", 5).unwrap();
     drop(connection);
 
     let error = store.initialize(100).unwrap_err();
 
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
-    assert!(error.message().contains("newer than supported version 3"));
+    assert!(error.message().contains("newer than supported version 4"));
     let connection = Connection::open(store.catalog_path()).unwrap();
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -3379,6 +3462,7 @@ fn transcript_store_interactive_catalog_read_stays_fast_during_writer() {
     let query = SavedSessionQuery {
         lifecycle: SavedSessionLifecycleFilter::Active,
         directory: None,
+        project_root: None,
         include_subagents: false,
         require_latest_user_prompt: false,
         search: None,
@@ -3604,6 +3688,7 @@ fn transcript_store_interactive_catalog_read_fails_fast_when_lock_held() {
     let query = SavedSessionQuery {
         lifecycle: SavedSessionLifecycleFilter::Active,
         directory: None,
+        project_root: None,
         include_subagents: false,
         require_latest_user_prompt: false,
         search: None,
@@ -3678,8 +3763,17 @@ fn transcript_store_catalog_bounds_completion_and_keyset_pages() {
     ] {
         let mut transcript_entry = entry(conversation_id, 1, TranscriptRole::User);
         transcript_entry.created_at_unix_seconds = created_at;
-        transcript_entry.content = content.to_string();
+        transcript_entry.content = content
+            .split_once('\n')
+            .map_or(content, |(_, text)| text)
+            .to_string();
         store.append(&transcript_entry).unwrap();
+        if let Some((directory, _)) = content.split_once('\n') {
+            let mut context = entry(conversation_id, 2, TranscriptRole::System);
+            context.created_at_unix_seconds = created_at;
+            context.content = directory.to_string();
+            store.append(&context).unwrap();
+        }
     }
     store
         .name_session("named-a", "Named A", 20, None, false)
@@ -3715,6 +3809,7 @@ fn transcript_store_catalog_bounds_completion_and_keyset_pages() {
     let query = SavedSessionQuery {
         lifecycle: SavedSessionLifecycleFilter::Active,
         directory: None,
+        project_root: None,
         include_subagents: false,
         require_latest_user_prompt: true,
         search: None,
@@ -3824,6 +3919,7 @@ fn transcript_store_picker_pages_exclude_ephemeral_names_from_the_named_rank() {
     let query = SavedSessionQuery {
         lifecycle: SavedSessionLifecycleFilter::Active,
         directory: None,
+        project_root: None,
         include_subagents: false,
         require_latest_user_prompt: false,
         search: None,
@@ -3949,6 +4045,7 @@ fn transcript_store_catalog_filters_active_and_archived_lifecycles() {
     let query = SavedSessionQuery {
         lifecycle: SavedSessionLifecycleFilter::Archived,
         directory: None,
+        project_root: None,
         include_subagents: true,
         require_latest_user_prompt: true,
         search: None,
@@ -3981,12 +4078,19 @@ fn transcript_store_archives_and_restores_session_round_trip() {
     let root = temp_root("archive-round-trip");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
+    let repo = root.join("project");
+    let cwd = repo.join("src");
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    fs::create_dir_all(&cwd).unwrap();
     store
         .append(&entry("archive-round-trip", 1, TranscriptRole::User))
         .unwrap();
     store
         .append(&entry("archive-round-trip", 2, TranscriptRole::Assistant))
         .unwrap();
+    let mut context = entry("archive-round-trip", 3, TranscriptRole::System);
+    context.content = format!("cwd={}", cwd.display());
+    store.append(&context).unwrap();
     store
         .append_presentation(&presentation("archive-round-trip", 1))
         .unwrap();
@@ -4019,7 +4123,15 @@ fn transcript_store_archives_and_restores_session_round_trip() {
     let archived = store.archive_session("archive-round-trip", 100).unwrap();
 
     assert_eq!(archived.archived_at_unix_seconds, 100);
-    assert_eq!(archived.summary.entries, 2);
+    assert_eq!(archived.summary.entries, 3);
+    assert_eq!(
+        archived.summary.directory.as_deref(),
+        Some(cwd.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        archived.summary.project_root.as_deref(),
+        Some(repo.to_string_lossy().as_ref())
+    );
     assert_eq!(archived.name.as_deref(), Some("Archived work"));
     assert_eq!(
         archived.conversation_kind,
@@ -4058,7 +4170,7 @@ fn transcript_store_archives_and_restores_session_round_trip() {
     assert_eq!(restored, archived);
     assert!(!archive_path.exists());
     assert!(!root.join("archived/archive-round-trip.json").exists());
-    assert_eq!(store.inspect("archive-round-trip").unwrap().len(), 2);
+    assert_eq!(store.inspect("archive-round-trip").unwrap().len(), 3);
     assert_eq!(
         store
             .inspect_presentation("archive-round-trip")
@@ -4076,6 +4188,11 @@ fn transcript_store_archives_and_restores_session_round_trip() {
     let active_record = store.saved_session("archive-round-trip").unwrap().unwrap();
     assert_eq!(active_record.archived_at_unix_seconds, None);
     assert_eq!(active_record.name.as_deref(), Some("Archived work"));
+    assert_eq!(active_record.summary.directory, archived.summary.directory);
+    assert_eq!(
+        active_record.summary.project_root,
+        archived.summary.project_root
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -5047,11 +5164,11 @@ fn transcript_store_catalog_scales_bounded_queries_to_one_hundred_thousand_rows(
                 "INSERT INTO saved_conversations (
                      conversation_id, conversation_kind, name, named_at,
                      entry_count, first_created_at, last_created_at,
-                     last_turn_id, agent_id, pane_id, directory,
+                     last_turn_id, agent_id, pane_id, directory, project_root,
                      initial_prompt, latest_user_prompt, has_transcript,
                      has_presentation, payload_layout, catalog_updated_at
                  ) VALUES (?1, 'root', ?2, ?3, 1, ?4, ?4, 'turn',
-                           'agent', '%1', ?5, ?6, ?6, 1, 0, 'directory', ?4)",
+                           'agent', '%1', ?5, ?5, ?6, ?6, 1, 0, 'directory', ?4)",
             )
             .unwrap();
         for index in 0..100_000u64 {
@@ -5085,7 +5202,8 @@ fn transcript_store_catalog_scales_bounded_queries_to_one_hundred_thousand_rows(
         store
             .query_saved_sessions(&SavedSessionQuery {
                 lifecycle: SavedSessionLifecycleFilter::Active,
-                directory: Some("/repo/a".to_string()),
+                directory: None,
+                project_root: Some("/repo/a".to_string()),
                 include_subagents: false,
                 require_latest_user_prompt: true,
                 search: None,
@@ -5103,7 +5221,7 @@ fn transcript_store_catalog_scales_bounded_queries_to_one_hundred_thousand_rows(
             "EXPLAIN QUERY PLAN
              SELECT conversation_id FROM saved_conversations
              WHERE archived_at IS NULL
-               AND directory = '/repo/a' AND conversation_kind = 'root'
+               AND project_root = '/repo/a' AND conversation_kind = 'root'
                AND latest_user_prompt IS NOT NULL
              ORDER BY (name IS NOT NULL) DESC, last_created_at DESC,
                       first_created_at DESC, conversation_id ASC
@@ -5116,7 +5234,7 @@ fn transcript_store_catalog_scales_bounded_queries_to_one_hundred_thousand_rows(
         .unwrap()
         .join("\n");
     assert!(
-        picker_plan.contains("saved_conversations_directory_picker"),
+        picker_plan.contains("saved_conversations_project_picker"),
         "{picker_plan}"
     );
 
@@ -5200,7 +5318,7 @@ fn transcript_store_catalog_status_reports_health_and_bounded_metrics() {
     assert!(before.database_exists);
     assert!(before.migration_complete);
     assert!(before.integrity_ok);
-    assert_eq!(before.schema_version, Some(3));
+    assert_eq!(before.schema_version, Some(4));
     assert_eq!(before.indexed_conversations, Some(1));
     assert!(before.lock_available);
 
@@ -5236,7 +5354,7 @@ fn transcript_store_catalog_rebuild_rejects_future_schema_and_cleans_temporary_f
     assert!(!root.join(".catalog.sqlite3.rebuild-wal").exists());
 
     let connection = Connection::open(store.catalog_path()).unwrap();
-    connection.pragma_update(None, "user_version", 4).unwrap();
+    connection.pragma_update(None, "user_version", 5).unwrap();
     drop(connection);
     let error = store.rebuild_catalog(102).unwrap_err();
     assert!(error.message().contains("refusing to rebuild or downgrade"));
@@ -5244,7 +5362,7 @@ fn transcript_store_catalog_rebuild_rejects_future_schema_and_cleans_temporary_f
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -5745,6 +5863,7 @@ fn objective_title_mirror_tracks_published_objective_refreshes() {
         .query_saved_sessions(&SavedSessionQuery {
             lifecycle: SavedSessionLifecycleFilter::Archived,
             directory: None,
+            project_root: None,
             include_subagents: true,
             require_latest_user_prompt: false,
             search: None,

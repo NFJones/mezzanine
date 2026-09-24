@@ -26,7 +26,7 @@ pub(super) fn record(
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
                 payload_layout, archived_at, archive_compressed_bytes,
-                archive_sha256
+                archive_sha256, project_root
          FROM saved_conversations
          WHERE conversation_id = ?1",
     )?;
@@ -50,7 +50,7 @@ pub(super) fn latest_root_record(
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
                 payload_layout, archived_at, archive_compressed_bytes,
-                archive_sha256
+                archive_sha256, project_root
          FROM saved_conversations
          WHERE conversation_kind = 'root' AND archived_at IS NULL",
     );
@@ -96,7 +96,7 @@ pub(super) fn saved_sessions(connection: &Connection) -> Result<Vec<SavedAgentSe
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
                 payload_layout, archived_at, archive_compressed_bytes,
-                archive_sha256
+                archive_sha256, project_root
          FROM saved_conversations
          ORDER BY conversation_id ASC",
     )?;
@@ -118,7 +118,7 @@ pub(super) fn transcript_summaries(connection: &Connection) -> Result<Vec<Conver
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
                 payload_layout, archived_at, archive_compressed_bytes,
-                archive_sha256
+                archive_sha256, project_root
          FROM saved_conversations
          WHERE has_transcript = 1 AND archived_at IS NULL
          ORDER BY conversation_id ASC",
@@ -225,7 +225,7 @@ pub(super) fn root_session_completions(
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
                 payload_layout, archived_at, archive_compressed_bytes,
-                archive_sha256
+                archive_sha256, project_root
          FROM saved_conversations
          WHERE conversation_kind = 'root'
            AND archived_at IS NULL
@@ -263,7 +263,7 @@ pub(super) fn query_saved_sessions(
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
                 payload_layout, archived_at, archive_compressed_bytes,
-                archive_sha256, (name IS NOT NULL AND name_preferred = 1)
+                archive_sha256, project_root, (name IS NOT NULL AND name_preferred = 1)
          FROM saved_conversations WHERE 1 = 1",
     );
     let mut values = Vec::<Value>::new();
@@ -280,6 +280,10 @@ pub(super) fn query_saved_sessions(
     if let Some(directory) = query.directory.as_deref() {
         sql.push_str(" AND directory = ?");
         values.push(Value::Text(directory.to_string()));
+    }
+    if let Some(project_root) = query.project_root.as_deref() {
+        sql.push_str(" AND project_root = ?");
+        values.push(Value::Text(project_root.to_string()));
     }
     if let Some(search) = query
         .search
@@ -376,7 +380,7 @@ pub(super) fn query_saved_sessions(
             let mut session = decode_record_offset(row, &conversation_id, 1)?.session;
             // The picker projects its own rank column so an anchor built from one
             // returned row carries the same partition the page was ordered by.
-            session.name_preferred = row.get::<_, i64>(18)? != 0;
+            session.name_preferred = row.get::<_, i64>(19)? != 0;
             Ok(session)
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -445,6 +449,7 @@ fn decode_record_offset(
                 agent_id: row.get(offset + 6)?,
                 pane_id: row.get(offset + 7)?,
                 directory: row.get(offset + 8)?,
+                project_root: row.get(offset + 17)?,
                 initial_prompt: row.get(offset + 9)?,
                 latest_user_prompt: row.get(offset + 10)?,
             },

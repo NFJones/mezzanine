@@ -321,21 +321,37 @@ fn overlay_refresh_adjacent_page_past_the_catalog_end_falls_back_to_the_edge() {
 /// deferred rebuild that drops it leaves the operator without the key.
 #[test]
 fn overlay_refresh_adjacent_page_keeps_the_retained_scope_toggle() {
-    const SCOPED_ROOT: &str = "/scope-root";
-    const OTHER_ROOT: &str = "/other-root";
+    let root = temp_root("overlay-refresh-scope-toggle");
+    let scoped_root = root.join("scoped");
+    let other_root = root.join("other");
+    for project in [&scoped_root, &other_root] {
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+    }
     let mut service = test_runtime_service();
-    let transcript_store = AgentTranscriptStore::new(temp_root("overlay-refresh-scope-toggle"));
+    let transcript_store = AgentTranscriptStore::new(root.join("sessions"));
     for index in 0..10 {
         transcript_store
             .append(&mez_agent::transcript::TranscriptEntry {
                 conversation_id: format!("scoped-{index:02}"),
                 sequence: 1,
                 created_at_unix_seconds: 1000 - index,
+                role: mez_agent::transcript::TranscriptRole::System,
+                turn_id: format!("turn-scoped-{index}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("cwd={}", scoped_root.display()),
+            })
+            .unwrap();
+        transcript_store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: format!("scoped-{index:02}"),
+                sequence: 2,
+                created_at_unix_seconds: 1000 - index,
                 role: mez_agent::transcript::TranscriptRole::User,
                 turn_id: format!("turn-scoped-{index}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),
-                content: format!("cwd={SCOPED_ROOT}\nscoped page prompt {index}"),
+                content: format!("scoped page prompt {index}"),
             })
             .unwrap();
     }
@@ -345,11 +361,23 @@ fn overlay_refresh_adjacent_page_keeps_the_retained_scope_toggle() {
                 conversation_id: format!("unscoped-{index:02}"),
                 sequence: 1,
                 created_at_unix_seconds: 200 - index,
+                role: mez_agent::transcript::TranscriptRole::System,
+                turn_id: format!("turn-unscoped-{index}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("cwd={}", other_root.display()),
+            })
+            .unwrap();
+        transcript_store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: format!("unscoped-{index:02}"),
+                sequence: 2,
+                created_at_unix_seconds: 200 - index,
                 role: mez_agent::transcript::TranscriptRole::User,
                 turn_id: format!("turn-unscoped-{index}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),
-                content: format!("cwd={OTHER_ROOT}\nunscoped page prompt {index}"),
+                content: format!("unscoped page prompt {index}"),
             })
             .unwrap();
     }
@@ -361,7 +389,7 @@ fn overlay_refresh_adjacent_page_keeps_the_retained_scope_toggle() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.set_pane_current_working_directory("%1", std::path::PathBuf::from(SCOPED_ROOT));
+    service.set_pane_current_working_directory("%1", scoped_root);
     let response = service
         .execute_agent_shell_command(&primary, "/resume")
         .unwrap();

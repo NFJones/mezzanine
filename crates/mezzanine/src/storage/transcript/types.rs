@@ -219,6 +219,8 @@ pub struct SavedSessionQuery {
     pub lifecycle: SavedSessionLifecycleFilter,
     /// Optional exact directory scope.
     pub directory: Option<String>,
+    /// Optional canonical project identity for the resume picker.
+    pub project_root: Option<String>,
     /// Whether delegated child conversations are included.
     pub include_subagents: bool,
     /// Whether rows must contain a latest user prompt.

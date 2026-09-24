@@ -998,7 +998,11 @@ impl RuntimeSessionService {
         };
         let directory = self
             .pane_current_working_directory(pane_id)
-            .map(|path| path.to_string_lossy().into_owned());
+            .and_then(|path| {
+                crate::storage::transcript::saved_session_project_root(Some(
+                    &path.to_string_lossy(),
+                ))
+            });
         let browser = self.saved_sessions_record_browser_for_directory(directory.as_deref())?;
         let page = browser.render_page();
         self.register_pending_record_browser_overlay(
@@ -1680,7 +1684,8 @@ pub(crate) fn runtime_agent_saved_sessions_browser(
     let sessions = store
         .query_saved_sessions(&SavedSessionQuery {
             lifecycle,
-            directory: directory.map(ToOwned::to_owned),
+            directory: None,
+            project_root: directory.map(ToOwned::to_owned),
             include_subagents,
             require_latest_user_prompt: true,
             search: search.map(ToOwned::to_owned),
@@ -1730,17 +1735,17 @@ pub(crate) fn runtime_agent_saved_sessions_browser(
     };
     browser.set_help(
         Some(format!(
-            "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `a` all/current directory · `u` show/hide subagents · `r` active/archived · {lifecycle_action} · `c` clear name · `d` delete · `/` search"
+            "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `a` all/current project · `u` show/hide subagents · `r` active/archived · {lifecycle_action} · `c` clear name · `d` delete · `/` search"
         )),
         Some(format!(
-            "**Keys:** `Esc` back · `a` all/current directory · `u` show/hide subagents · `r` active/archived · {lifecycle_action} · `d` delete · `/` search"
+            "**Keys:** `Esc` back · `a` all/current project · `u` show/hide subagents · `r` active/archived · {lifecycle_action} · `d` delete · `/` search"
         )),
     );
     if directory.is_some() {
         browser.enable_scope_toggle();
         browser.set_scope_indicator(directory.map(ToOwned::to_owned));
     } else {
-        browser.set_scope_indicator(Some("all directories".to_string()));
+        browser.set_scope_indicator(Some("all projects".to_string()));
     }
     browser.set_empty_message(Some(
         if archived {

@@ -1177,10 +1177,7 @@ fn runtime_title_refresh_keeps_unfiltered_resume_scope() {
         .expect("the deferred /resume picker applies its page");
     let (toggle, rendered) = open_resume_scope_state(&service);
     assert!(!toggle, "an unfiltered picker has no scope toggle");
-    assert!(
-        rendered.contains("**Scope:** all directories"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("**Scope:** all projects"), "{rendered}");
 
     assert!(service.mirror_runtime_agent_objective("refresh-scope", Some("Refreshed objective")));
     assert!(
@@ -1194,10 +1191,7 @@ fn runtime_title_refresh_keeps_unfiltered_resume_scope() {
         !toggle,
         "a title refresh must not enable the scope toggle for an unfiltered picker"
     );
-    assert!(
-        rendered.contains("**Scope:** all directories"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("**Scope:** all projects"), "{rendered}");
     assert!(
         rendered.contains("Refreshed objective"),
         "the refreshed row renders the new derived title: {rendered}"
@@ -1373,10 +1367,15 @@ fn runtime_named_saved_session_exposes_derived_title_in_detail() {
 #[test]
 fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
     let mut service = test_runtime_service();
-    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-directory-scope"));
+    let root = temp_root("runtime-resume-directory-scope");
+    let current = root.join("current");
+    let other = root.join("other");
+    std::fs::create_dir_all(&current).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let transcript_store = AgentTranscriptStore::new(root.join("sessions"));
     for (conversation_id, directory, created_at) in [
-        ("current-directory", "/tmp/resume-current", 20),
-        ("other-directory", "/tmp/resume-other", 10),
+        ("current-directory", &current, 20),
+        ("other-directory", &other, 10),
     ] {
         transcript_store
             .append(&TranscriptEntry {
@@ -1387,7 +1386,7 @@ fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
                 turn_id: format!("turn-{conversation_id}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),
-                content: format!("cwd={directory}"),
+                content: format!("cwd={}", directory.display()),
             })
             .unwrap();
         transcript_store
@@ -1407,7 +1406,7 @@ fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
                 conversation_id,
                 conversation_id,
                 created_at,
-                Some(directory.to_string()),
+                Some(directory.to_string_lossy().into_owned()),
                 false,
             )
             .unwrap();
@@ -1421,8 +1420,7 @@ fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
         .enter_or_resume("%1")
         .unwrap();
     let pane_id = service.active_pane_id().unwrap().to_string();
-    service
-        .set_pane_current_working_directory(pane_id.clone(), PathBuf::from("/tmp/resume-current"));
+    service.set_pane_current_working_directory(pane_id.clone(), current);
 
     let response = service
         .execute_agent_shell_command(&primary, "/resume")
@@ -1485,6 +1483,116 @@ fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
         .map(|record| record.id.as_str())
         .collect::<Vec<_>>();
     assert_eq!(scoped_record_ids, vec!["current-directory"]);
+}
+
+/// Verifies a bare resume picker groups sibling directories of one Git project,
+/// but does not admit a different repository until the all-projects toggle.
+#[test]
+fn runtime_resume_browser_scopes_sibling_git_directories() {
+    let root = temp_root("resume-git-project-scope");
+    let first = root.join("first");
+    let second = root.join("second");
+    for directory in [&first, &second] {
+        std::fs::create_dir_all(directory.join(".git")).unwrap();
+        std::fs::create_dir_all(directory.join("a")).unwrap();
+        std::fs::create_dir_all(directory.join("b")).unwrap();
+    }
+    let store = AgentTranscriptStore::new(root.join("sessions"));
+    for (id, directory, time) in [
+        ("sibling", first.join("a"), 20),
+        ("other-project", second.join("a"), 10),
+    ] {
+        store
+            .append(&TranscriptEntry {
+                conversation_id: id.to_string(),
+                sequence: 1,
+                created_at_unix_seconds: time,
+                role: TranscriptRole::System,
+                turn_id: format!("turn-{id}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("cwd={}", directory.display()),
+            })
+            .unwrap();
+        store
+            .append(&TranscriptEntry {
+                conversation_id: id.to_string(),
+                sequence: 2,
+                created_at_unix_seconds: time,
+                role: TranscriptRole::User,
+                turn_id: format!("turn-{id}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("prompt for {id}"),
+            })
+            .unwrap();
+    }
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service.set_pane_current_working_directory(pane_id, first.join("b"));
+    service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .unwrap();
+    let ids = service
+        .primary_display_overlay()
+        .unwrap()
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .records()
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["sibling"]);
+    let saved = service
+        .persistence
+        .transcript_store()
+        .unwrap()
+        .saved_session("sibling")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        saved.summary.directory.as_deref(),
+        Some(first.join("a").to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        saved.summary.project_root.as_deref(),
+        Some(first.to_string_lossy().as_ref())
+    );
+    service
+        .apply_primary_display_overlay_input(&primary, b"a")
+        .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap()
+    );
+    let ids = service
+        .primary_display_overlay()
+        .unwrap()
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .records()
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["sibling", "other-project"]);
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// Verifies the resume overlay retains only one bounded catalog page and
