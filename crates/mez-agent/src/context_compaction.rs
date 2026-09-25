@@ -262,59 +262,45 @@ fn plan_model_context_compaction_with_projection(
         .filter(|group_index| !retained_groups.contains(group_index))
         .map(|group_index| execution_groups[group_index].clone())
         .collect::<Vec<_>>();
-    let Some(first_replacement) = eligible_replacements.first() else {
-        return Ok(ModelContextCompactionPlan::unchanged(
-            blocks,
-            ModelContextCompactionReport::default(),
-            consumed_sequence_high_water,
-        ));
+    // Select the earliest viable contiguous run within one exact-barrier
+    // segment. An existing summary alone is a no-op, not global exhaustion:
+    // a later segment can still contain consumed, recoverable history.
+    let mut candidates = eligible_replacements.iter().peekable();
+    let replacement_ranges = loop {
+        let Some(first) = candidates.next() else {
+            return Ok(ModelContextCompactionPlan::unchanged(
+                blocks,
+                ModelContextCompactionReport::default(),
+                consumed_sequence_high_water,
+            ));
+        };
+        let segment_end = immutable_chronology[first.end..]
+            .iter()
+            .position(model_context_block_is_protected_barrier)
+            .map_or(immutable_chronology.len(), |offset| {
+                first.end.saturating_add(offset)
+            });
+        let mut ranges = vec![first.clone()];
+        while let Some(next) = candidates.peek()
+            && next.start == ranges.last().map_or(0, |range| range.end)
+            && next.end <= segment_end
+        {
+            ranges.push((*next).clone());
+            candidates.next();
+        }
+        if ranges.len() == 1
+            && immutable_chronology[ranges[0].clone()]
+                .iter()
+                .all(context_block_is_compaction_summary)
+        {
+            continue;
+        }
+        break ranges;
     };
-    // A single rolling summary is inserted at the earliest selected range. Keep
-    // this operation within that range's barrier-delimited segment so the
-    // summary cannot move later chronology ahead of an exact user/task event.
-    let first_segment_start = immutable_chronology[..first_replacement.start]
-        .iter()
-        .rposition(model_context_block_is_protected_barrier)
-        .map_or(0, |index| index.saturating_add(1));
-    let first_segment_end = immutable_chronology[first_replacement.end..]
-        .iter()
-        .position(model_context_block_is_protected_barrier)
-        .map_or(immutable_chronology.len(), |offset| {
-            first_replacement.end.saturating_add(offset)
-        });
-    let replacement_ranges = eligible_replacements
-        .into_iter()
-        .filter(|range| range.start >= first_segment_start && range.end <= first_segment_end)
-        .collect::<Vec<_>>();
-    let first_gap = replacement_ranges
-        .windows(2)
-        .position(|ranges| ranges[0].end != ranges[1].start);
-    let mut replacement_ranges = replacement_ranges;
-    if let Some(first_gap) = first_gap {
-        replacement_ranges.truncate(first_gap.saturating_add(1));
-    }
-    if replacement_ranges.is_empty() {
-        return Ok(ModelContextCompactionPlan::unchanged(
-            blocks,
-            ModelContextCompactionReport::default(),
-            consumed_sequence_high_water,
-        ));
-    }
     let replacement_blocks = replacement_ranges
         .iter()
         .flat_map(|range| immutable_chronology[range.clone()].iter().cloned())
         .collect::<Vec<_>>();
-    if replacement_blocks.len() == 1
-        && replacement_blocks
-            .first()
-            .is_some_and(context_block_is_compaction_summary)
-    {
-        return Ok(ModelContextCompactionPlan::unchanged(
-            blocks,
-            ModelContextCompactionReport::default(),
-            consumed_sequence_high_water,
-        ));
-    }
     let retained_tail = retained_groups
         .iter()
         .flat_map(|index| {
@@ -1075,6 +1061,75 @@ mod tests {
         assert_eq!(chronology[1].block().content, "keep this steering in place");
         assert!(chronology[2].block().content.contains("later decision"));
         assert!(chronology[3].block().content.contains("later outcome"));
+    }
+
+    /// A summary before exact steering cannot prevent a later eligible segment
+    /// from being selected on the next pass.
+    #[test]
+    fn model_context_compaction_skips_summary_only_segment_on_second_pass() {
+        let context = AgentContext::new_durable(vec![
+            ContextBlock::assistant_event("earlier decision", "earlier decision ".repeat(300)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "earlier result",
+                "earlier result ".repeat(300),
+            ),
+            ContextBlock::user_event("steering", "preserve this instruction exactly"),
+            ContextBlock::assistant_event("later decision", "later decision ".repeat(300)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "later result",
+                "later result ".repeat(300),
+            ),
+        ])
+        .unwrap();
+        let first = plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            2_000,
+            1,
+            context.event_sequence_high_water_mark(),
+        )
+        .unwrap();
+        assert_eq!(first.replacement_blocks().len(), 2);
+        let (compacted, _) = apply_model_context_compaction_plan(
+            context,
+            &first,
+            "Earlier decision and result summarized.",
+        )
+        .unwrap();
+        let second = plan_model_context_compaction_at_consumed_sequence(
+            &compacted,
+            2_000,
+            1,
+            compacted.event_sequence_high_water_mark(),
+        )
+        .unwrap();
+        assert!(second.changes_context());
+        assert_eq!(second.replacement_blocks().len(), 2);
+        assert!(
+            second
+                .replacement_blocks()
+                .iter()
+                .all(|block| block.content.contains("later"))
+        );
+        let (twice, _) = apply_model_context_compaction_plan(
+            compacted,
+            &second,
+            "Later decision and result summarized.",
+        )
+        .unwrap();
+        assert_eq!(
+            twice.chronology()[0].block().content,
+            "Earlier decision and result summarized."
+        );
+        assert_eq!(
+            twice.chronology()[1].block().content,
+            "preserve this instruction exactly"
+        );
+        assert_eq!(
+            twice.chronology()[2].block().content,
+            "Later decision and result summarized."
+        );
     }
 
     /// Verifies one rolling summary does not gather eligible history across an

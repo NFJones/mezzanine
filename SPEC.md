@@ -6832,10 +6832,13 @@ that case, the model-authored summary MAY be added to compact memory while the
 raw replay window remains unchanged; reducing that window requires a durable
 projection that preserves every unsummarized exact barrier and retained event.
 Provider-limit and manual compaction MUST expose at most one model-visible
-compaction block. Later compaction MUST recursively replace prior local or
-compatible legacy compaction blocks with one bounded rolling summary while
-preserving exact barriers, retained raw chronology, and frozen consumed-event
-boundaries. The compact-memory block itself MUST explain that older durable
+compaction block per eligible exact-barrier-delimited segment. A prior
+summary-only segment MUST NOT prevent selecting later closed, consumed history
+in another segment; its summary and intervening exact barriers remain in their
+original chronological positions. Later compaction MAY replace prior local or
+compatible legacy compaction blocks together with other eligible blocks within
+the same segment, but MUST NOT gather source across exact barriers or retained
+ineligible groups. The compact-memory block itself MUST explain that older durable
 transcript entries were summarized, that the summary is lossy, and that only
 the retained recent raw tail remains exact; a separate compaction notice MUST
 NOT be injected.

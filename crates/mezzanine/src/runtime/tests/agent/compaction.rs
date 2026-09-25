@@ -115,6 +115,103 @@ fn runtime_context_limit_recovery_replans_retained_tail_noop() {
     );
 }
 
+/// A previously summarized segment must not mask later closed work behind an
+/// exact steering barrier during a subsequent provider context rejection.
+#[test]
+fn runtime_context_limit_recovery_skips_earlier_summary_only_segment() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "summary-segment-recovery".to_string(),
+        path: None,
+        format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary,
+        trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"segment-recovery\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.segment-recovery]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 3000\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"segment","method":"agent/shell/command","params":{"idempotency_key":"summary-segment-recovery","input":"continue"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service
+        .agent_turn_contexts_mut()
+        .get_mut("turn-1")
+        .unwrap()
+        .replace_after_compaction(vec![
+            ContextBlock::reference_event(
+                ContextSourceKind::Memory,
+                "context compaction summary",
+                "[context compacted]\nEarlier decision summarized.",
+            ),
+            ContextBlock::user_event("steering", "preserve this instruction exactly"),
+            ContextBlock::assistant_event("later decision", "later decision ".repeat(300)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "later result",
+                "later result ".repeat(300),
+            ),
+        ])
+        .unwrap();
+    let high_water = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests("turn-1", high_water)
+        .unwrap();
+    let error = MezError::invalid_state("provider context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+        );
+    assert!(
+        service
+            .recover_agent_provider_context_limit_failure(
+                &AgentId::opaque("agent-%1").unwrap(),
+                "turn-1",
+                &error,
+                1,
+            )
+            .unwrap()
+    );
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } =
+        &task.target
+    else {
+        panic!("expected active-turn compaction target");
+    };
+    assert_eq!(plan.replacement_blocks().len(), 2);
+    assert!(
+        plan.replacement_blocks()
+            .iter()
+            .all(|block| block.content.contains("later"))
+    );
+    complete_runtime_test_compaction(&mut service, "%1", "Later events summarized.");
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    assert_eq!(
+        context.chronology()[0].block().content,
+        "[context compacted]\nEarlier decision summarized."
+    );
+    assert_eq!(
+        context.chronology()[1].block().content,
+        "preserve this instruction exactly"
+    );
+    assert_eq!(
+        context.chronology()[2].block().content,
+        "Later events summarized."
+    );
+    assert!(service.agent_provider_task_is_pending("turn-1"));
+}
+
 /// Verifies large bracketed-paste agent prompt input is displayed compactly in
 /// the pane transcript while the agent turn receives the exact pasted payload.
 #[test]

@@ -124,6 +124,10 @@ within an eligible segment, not a best-fit collection of older small groups.
 When the newest closed group cannot fit the raw-tail budget, it is summarized
 instead of retaining an older group in its place; exact user and task barriers
 and incomplete or unconsumed groups remain raw.
+An existing summary alone is not another reduction: planning skips that
+summary-only segment and may select a later eligible segment. Summaries remain
+anchored on their original side of each exact instruction; they are not moved
+or merged across a protected barrier.
 If the provider rejects a request for context length and configured raw-tail
 retention selects no work, Mez tries smaller optional reservations down to its
 one-percent minimum before declaring that no replacement is available. This is
