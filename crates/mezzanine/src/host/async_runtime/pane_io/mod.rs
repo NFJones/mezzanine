@@ -54,8 +54,11 @@ pub use driver_service::{
 };
 #[cfg(test)]
 pub use fake::AsyncFakePaneProcessIo;
+#[cfg(test)]
+pub(crate) use helpers::run_owned_pane_process_worker;
 pub use process_service::run_async_pane_process_service;
 pub use pty::AsyncPtyPaneProcessIo;
+pub(crate) use service_types::AsyncPaneProcessWorkerOutcome;
 #[cfg(test)]
 pub use service_types::{AsyncPaneIoSideEffectServiceConfig, AsyncPaneIoSideEffectServiceReport};
 pub use service_types::{

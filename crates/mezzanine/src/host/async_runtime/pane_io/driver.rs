@@ -211,7 +211,8 @@ where
         let Some(bytes) = self
             .backend
             .read_output(self.config.max_output_bytes_per_event)
-            .await?
+            .await
+            .map_err(MezError::mark_pane_backend_failure)?
         else {
             return Ok(None);
         };
@@ -231,7 +232,12 @@ where
         if self.exit_reported {
             return Ok(None);
         }
-        let Some(event) = self.backend.poll_exit().await? else {
+        let Some(event) = self
+            .backend
+            .poll_exit()
+            .await
+            .map_err(MezError::mark_pane_backend_failure)?
+        else {
             return Ok(None);
         };
         if matches!(event, ProcessEvent::Exited { .. }) {
@@ -242,7 +248,12 @@ where
 
     /// Polls one foreground-process metadata event from the pane backend.
     pub async fn poll_foreground_process_event(&mut self) -> Result<Option<RuntimeEvent>> {
-        let Some(metadata) = self.backend.foreground_process().await? else {
+        let Some(metadata) = self
+            .backend
+            .foreground_process()
+            .await
+            .map_err(MezError::mark_pane_backend_failure)?
+        else {
             return Ok(None);
         };
         Ok(Some(
@@ -261,7 +272,10 @@ where
     pub(super) async fn foreground_process_observation(
         &mut self,
     ) -> Result<Option<AsyncPaneForegroundProcess>> {
-        self.backend.foreground_process().await
+        self.backend
+            .foreground_process()
+            .await
+            .map_err(MezError::mark_pane_backend_failure)
     }
 
     /// Wraps one correlated foreground observation in this process instance.

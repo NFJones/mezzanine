@@ -245,8 +245,19 @@ pub struct AsyncPaneProcessSupervisorServiceReport {
     pub spawned_workers: u64,
     /// Number of pane workers that completed successfully.
     pub completed_workers: u64,
+    /// Number of pane workers retired after a pane-local I/O failure.
+    pub failed_workers: u64,
     /// Last observed runtime lifecycle state.
     pub terminal_state: RuntimeLifecycleState,
+}
+
+/// Outcome produced by one owned pane worker after its local failure policy.
+#[derive(Debug)]
+pub(crate) enum AsyncPaneProcessWorkerOutcome {
+    /// The pane I/O loop ended normally.
+    Completed(AsyncPaneProcessServiceReport),
+    /// Pane-local failure was reported and the exact process generation retired.
+    Failed,
 }
 
 impl AsyncPaneProcessSupervisorServiceReport {
@@ -260,6 +271,7 @@ impl AsyncPaneProcessSupervisorServiceReport {
             polls: 0,
             spawned_workers: 0,
             completed_workers: 0,
+            failed_workers: 0,
             terminal_state: initial_state,
         }
     }

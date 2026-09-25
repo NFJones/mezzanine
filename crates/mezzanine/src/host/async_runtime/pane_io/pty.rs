@@ -33,15 +33,27 @@ pub struct AsyncPtyPaneProcessIo {
 
 impl AsyncPtyPaneProcessIo {
     /// Creates an async PTY backend for one live pane process.
-    pub fn new(pane_id: impl Into<String>, process: super::PaneProcess) -> Result<Self> {
+    pub fn new(pane_id: impl Into<String>, mut process: super::PaneProcess) -> Result<Self> {
         let pane_id = pane_id.into();
         if pane_id.trim().is_empty() {
             return Err(MezError::invalid_args(
                 "async pane PTY process backend pane id must not be empty",
             ));
         }
-        let fd = process.duplicate_master_fd()?;
-        let pty = AsyncFd::new(AsyncPanePtyFd { fd })?;
+        let fd = match process.duplicate_master_fd() {
+            Ok(fd) => fd,
+            Err(error) => {
+                let _ = process.send_signal_to_process_group(rustix::process::Signal::KILL);
+                return Err(error.into());
+            }
+        };
+        let pty = match AsyncFd::new(AsyncPanePtyFd { fd }) {
+            Ok(pty) => pty,
+            Err(error) => {
+                let _ = process.send_signal_to_process_group(rustix::process::Signal::KILL);
+                return Err(error.into());
+            }
+        };
         Ok(Self {
             pane_id,
             process,

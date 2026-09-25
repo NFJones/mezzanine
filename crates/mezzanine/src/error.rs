@@ -541,6 +541,8 @@ pub struct MezError {
     /// This local transcript failure happened before any append, so only the
     /// persistence operation may be retried without ambiguous partial writes.
     local_transcript_precommit_retryable: bool,
+    /// This failure originated in the I/O backend owned by one pane worker.
+    pane_backend_failure: bool,
 }
 
 impl MezError {
@@ -558,6 +560,7 @@ impl MezError {
             provider_failure_json: None,
             provider_output_limit_state: None,
             local_transcript_precommit_retryable: false,
+            pane_backend_failure: false,
         }
     }
 
@@ -644,6 +647,17 @@ impl MezError {
         self.io_kind
     }
 
+    /// Marks an error returned directly by a pane-owned I/O backend.
+    pub(crate) fn mark_pane_backend_failure(mut self) -> Self {
+        self.pane_backend_failure = true;
+        self
+    }
+
+    /// Reports whether this error originated from a pane-owned I/O backend.
+    pub(crate) fn is_pane_backend_failure(&self) -> bool {
+        self.pane_backend_failure
+    }
+
     /// Marks a transcript failure proven to precede any durable append.
     pub(crate) fn mark_local_transcript_precommit_retryable(mut self) -> Self {
         self.local_transcript_precommit_retryable = true;
@@ -717,6 +731,7 @@ impl From<io::Error> for MezError {
             provider_failure_json: None,
             provider_output_limit_state: None,
             local_transcript_precommit_retryable: false,
+            pane_backend_failure: false,
         }
     }
 }

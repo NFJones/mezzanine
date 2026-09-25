@@ -2,9 +2,9 @@
 
 use super::{
     AsyncPaneProcessDriver, AsyncPaneProcessDriverConfig, AsyncPaneProcessIo,
-    AsyncPaneProcessServiceConfig, AsyncPaneProcessServiceReport,
-    AsyncPaneProcessSupervisorServiceReport, AsyncPtyPaneProcessIo, AsyncRuntimeSessionHandle,
-    Duration, HashSet, JoinSet, MezError, PaneEvent, PaneProcessEvent, PaneProcessInstance,
+    AsyncPaneProcessServiceConfig, AsyncPaneProcessSupervisorServiceReport,
+    AsyncPaneProcessWorkerOutcome, AsyncPtyPaneProcessIo, AsyncRuntimeSessionHandle, Duration,
+    HashSet, JoinSet, MezError, PaneEvent, PaneProcessEvent, PaneProcessInstance,
     PaneProcessIoEffect, ProcessEvent, Result, RuntimeEvent, RuntimeEventBatch,
     RuntimeLifecycleState, RuntimeSideEffect, VecDeque, is_terminal_runtime_lifecycle_state,
     run_async_pane_process_service, sleep, watch,
@@ -49,27 +49,97 @@ pub(super) fn is_process_exit_event(event: &RuntimeEvent) -> bool {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn spawn_owned_pane_process_worker(
-    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>>,
+    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>>,
     handle: AsyncRuntimeSessionHandle,
     instance: PaneProcessInstance,
     process: super::PaneProcess,
     config: AsyncPaneProcessServiceConfig,
 ) -> Result<()> {
     let pane_id = instance.pane_id.clone();
-    let backend = AsyncPtyPaneProcessIo::new(pane_id.clone(), process)?;
-    let driver = AsyncPaneProcessDriver::new_for_instance(
-        instance.clone(),
-        backend,
-        AsyncPaneProcessDriverConfig::default(),
-    )?;
+    let primary_pid = process.primary_pid();
     workers.spawn(async move {
-        let mut driver = driver;
-        let report = run_async_pane_process_service(&handle, &mut driver, config, |_, state| {
-            is_terminal_runtime_lifecycle_state(state)
-        })
-        .await?;
-        Ok((instance, report))
+        let backend = match AsyncPtyPaneProcessIo::new(pane_id, process) {
+            Ok(backend) => backend,
+            Err(error) => {
+                retire_failed_pane_process(&handle, &instance, primary_pid, &error).await?;
+                return Ok((instance, AsyncPaneProcessWorkerOutcome::Failed));
+            }
+        };
+        let driver = match AsyncPaneProcessDriver::new_for_instance(
+            instance.clone(),
+            backend,
+            AsyncPaneProcessDriverConfig::default(),
+        ) {
+            Ok(driver) => driver,
+            Err(error) => {
+                retire_failed_pane_process(&handle, &instance, primary_pid, &error).await?;
+                return Ok((instance, AsyncPaneProcessWorkerOutcome::Failed));
+            }
+        };
+        run_owned_pane_process_worker(handle, instance, primary_pid, driver, config).await
     });
+    Ok(())
+}
+
+/// Runs one pane worker and applies its pane-local failure policy.
+pub(crate) async fn run_owned_pane_process_worker<B>(
+    handle: AsyncRuntimeSessionHandle,
+    instance: PaneProcessInstance,
+    primary_pid: u32,
+    mut driver: AsyncPaneProcessDriver<B>,
+    config: AsyncPaneProcessServiceConfig,
+) -> Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>
+where
+    B: AsyncPaneProcessIo + Send + 'static,
+{
+    let result = run_async_pane_process_service(&handle, &mut driver, config, |_, state| {
+        is_terminal_runtime_lifecycle_state(state)
+    })
+    .await;
+    match result {
+        Ok(report) => Ok((instance, AsyncPaneProcessWorkerOutcome::Completed(report))),
+        Err(error) if is_terminal_pane_supervisor_error(&error) => Err(error),
+        Err(error) if error.is_pane_backend_failure() => {
+            // Dropping the exact PTY owner kills its still-live process group
+            // before the actor retires that same generation.
+            drop(driver);
+            retire_failed_pane_process(&handle, &instance, primary_pid, &error).await?;
+            Ok((instance, AsyncPaneProcessWorkerOutcome::Failed))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Reports and closes the exact pane generation whose I/O worker failed.
+///
+/// A failed pane backend cannot safely be returned to the manager because its
+/// PTY/process state may be unusable. The actor first records a pane diagnostic,
+/// then applies normal exit cleanup; if actor ingress is unavailable, the error
+/// remains fatal to the supervisor rather than being silently discarded.
+pub(super) async fn retire_failed_pane_process(
+    handle: &AsyncRuntimeSessionHandle,
+    instance: &PaneProcessInstance,
+    primary_pid: u32,
+    error: &MezError,
+) -> Result<()> {
+    let mut batch = RuntimeEventBatch::new();
+    batch.push(RuntimeEvent::PaneProcess {
+        instance: instance.clone(),
+        event: PaneProcessEvent::Process(ProcessEvent::Failed {
+            pane_id: instance.pane_id.clone(),
+            error: error.to_string(),
+        }),
+    });
+    batch.push(RuntimeEvent::PaneProcess {
+        instance: instance.clone(),
+        event: PaneProcessEvent::Process(ProcessEvent::Exited {
+            pane_id: instance.pane_id.clone(),
+            primary_pid: Some(primary_pid),
+            exit_code: None,
+            signal: Some("pane worker failed".to_string()),
+        }),
+    });
+    handle.submit_runtime_events(batch).await?;
     Ok(())
 }
 
@@ -79,7 +149,7 @@ pub(super) fn spawn_owned_pane_process_worker(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn drain_completed_pane_process_workers(
-    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>>,
+    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>>,
     active_panes: &mut HashSet<PaneProcessInstance>,
     report: &mut AsyncPaneProcessSupervisorServiceReport,
 ) -> Result<()> {
@@ -95,7 +165,7 @@ pub(super) fn drain_completed_pane_process_workers(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) async fn drain_completed_pane_process_workers_after_yields(
-    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>>,
+    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>>,
     active_panes: &mut HashSet<PaneProcessInstance>,
     report: &mut AsyncPaneProcessSupervisorServiceReport,
 ) -> Result<()> {
@@ -116,17 +186,24 @@ pub(super) async fn drain_completed_pane_process_workers_after_yields(
 /// on duplicated control-flow logic.
 pub(super) fn record_joined_pane_process_worker(
     joined: std::result::Result<
-        Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>,
+        Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>,
         tokio::task::JoinError,
     >,
     active_panes: &mut HashSet<PaneProcessInstance>,
     report: &mut AsyncPaneProcessSupervisorServiceReport,
 ) -> Result<()> {
     match joined {
-        Ok(Ok((instance, worker_report))) => {
+        Ok(Ok((instance, outcome))) => {
             active_panes.remove(&instance);
-            report.terminal_state = worker_report.terminal_state;
-            report.completed_workers = report.completed_workers.saturating_add(1);
+            match outcome {
+                AsyncPaneProcessWorkerOutcome::Completed(worker_report) => {
+                    report.terminal_state = worker_report.terminal_state;
+                    report.completed_workers = report.completed_workers.saturating_add(1);
+                }
+                AsyncPaneProcessWorkerOutcome::Failed => {
+                    report.failed_workers = report.failed_workers.saturating_add(1);
+                }
+            }
             Ok(())
         }
         Ok(Err(error)) => Err(error),
@@ -144,13 +221,13 @@ pub(super) fn record_joined_pane_process_worker(
 /// on duplicated control-flow logic.
 pub(super) async fn wait_for_pane_process_supervisor_wakeup(
     handle: &AsyncRuntimeSessionHandle,
-    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>>,
+    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>>,
     lifecycle_watcher: &mut watch::Receiver<RuntimeLifecycleState>,
     side_effect_watcher: &mut watch::Receiver<u64>,
     bounded_idle: Option<Duration>,
 ) -> Option<
     std::result::Result<
-        Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>,
+        Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>,
         tokio::task::JoinError,
     >,
 > {
@@ -222,7 +299,7 @@ pub(super) async fn wait_for_pane_process_supervisor_wakeup(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) async fn abort_pane_process_workers(
-    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>>,
+    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>>,
 ) {
     workers.abort_all();
     while workers.join_next().await.is_some() {}

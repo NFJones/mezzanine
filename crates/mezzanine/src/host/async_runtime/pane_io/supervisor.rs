@@ -13,8 +13,9 @@ use super::{
 };
 use super::{
     AsyncPaneProcessSupervisorServiceConfig, AsyncPaneProcessSupervisorServiceReport,
-    AsyncRuntimeService, AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle, HashSet, JoinSet,
-    PaneProcessInstance, Result, RuntimeLifecycleState, is_terminal_runtime_lifecycle_state,
+    AsyncPaneProcessWorkerOutcome, AsyncRuntimeService, AsyncRuntimeServiceExit,
+    AsyncRuntimeSessionHandle, HashSet, JoinSet, PaneProcessInstance, Result,
+    RuntimeLifecycleState, is_terminal_runtime_lifecycle_state,
 };
 
 /// Builds an auxiliary service for the combined async pane process path.
@@ -66,7 +67,8 @@ where
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncPaneProcessSupervisorServiceReport::new(*lifecycle_watcher.borrow());
     let mut active_panes = HashSet::<PaneProcessInstance>::new();
-    let mut workers = JoinSet::new();
+    let mut workers =
+        JoinSet::<Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>>::new();
 
     while report.polls < config.max_polls {
         let state = *lifecycle_watcher.borrow_and_update();
@@ -179,7 +181,8 @@ pub fn build_async_pane_process_supervisor_service(
         };
         let work_units = report
             .spawned_workers
-            .saturating_add(report.completed_workers);
+            .saturating_add(report.completed_workers)
+            .saturating_add(report.failed_workers);
         Ok(AsyncRuntimeServiceExit::completed(work_units))
     }))
 }

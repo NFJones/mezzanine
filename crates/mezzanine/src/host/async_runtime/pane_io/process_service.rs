@@ -444,7 +444,7 @@ where
             );
             if let Some(output_activity) = driver.output_activity() {
                 tokio::select! {
-                    result = output_activity => result?,
+                    result = output_activity => result.map_err(super::MezError::mark_pane_backend_failure)?,
                     _ = handle.wait_for_event_delivery() => {}
                     result = side_effect_watcher.changed() => {
                         let _ = result;

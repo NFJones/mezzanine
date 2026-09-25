@@ -214,6 +214,8 @@ pub use pane_io::{
     run_async_pane_io_side_effect_service, run_async_pane_process_driver_service,
     run_async_pane_process_service, run_async_pane_process_supervisor_service,
 };
+#[cfg(test)]
+pub(crate) use pane_io::{AsyncPaneProcessWorkerOutcome, run_owned_pane_process_worker};
 pub use side_effects::{
     AsyncClientOutputFlushServiceReport, AsyncRuntimeSideEffectServiceConfig,
     build_async_hook_side_effect_service, build_async_host_clipboard_side_effect_service,
