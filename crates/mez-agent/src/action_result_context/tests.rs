@@ -258,6 +258,31 @@ fn action_result_context_truncates_large_result_body_at_256k() {
     );
 }
 
+/// A shell observation with multiple bounded fields must have one complete
+/// canonical projection that the exact execution-block codec can retain.
+#[test]
+fn shell_result_aggregate_projection_is_durably_encodable() {
+    let result = succeeded_result(
+        "shell-large",
+        "shell_command",
+        vec!["x".repeat(16 * 1024 * 1024)],
+        Some(serde_json::json!({
+            "command": "printf large",
+            "terminal_observation": {"exit_code": 0, "combined_output_preview": "y".repeat(16 * 1024 * 1024)}
+        }).to_string()),
+    );
+    let canonical = action_result_context_content(&result);
+    assert!(
+        crate::TranscriptContextEvent::execution_block(
+            crate::ContextSourceKind::ActionResult,
+            "action result shell-large",
+            canonical,
+        )
+        .is_some(),
+        "the first model-visible result must be persistable"
+    );
+}
+
 #[test]
 /// Verifies shell action result context preserves the recorded output preview
 /// bytes exactly instead of stripping echoed commands or Mezzanine wrapper

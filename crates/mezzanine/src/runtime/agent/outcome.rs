@@ -58,7 +58,7 @@ fn provider_tool_result_event(
     tool_call_id: &str,
     content: &str,
 ) -> Result<mez_agent::ProviderTranscriptEvent> {
-    match provider_owner.api() {
+    let event = match provider_owner.api() {
         ProviderApiCompatibility::OpenAiResponses => Ok(
             mez_agent::ProviderTranscriptEvent::OpenAiFunctionCallOutput {
                 call_id: tool_call_id.to_string(),
@@ -82,7 +82,10 @@ fn provider_tool_result_event(
             "provider API `{}` does not support native tool-result continuity",
             provider_owner.api().as_str()
         ))),
-    }
+    }?;
+    event
+        .bounded_tool_result()
+        .ok_or_else(|| MezError::invalid_state("native tool-result envelope exceeds durable limit"))
 }
 
 impl RuntimeSessionService {
@@ -671,6 +674,36 @@ mod tests {
                 tool_call_id: "call-chat".to_string(),
                 content: "chat result".to_string(),
             }
+        );
+    }
+
+    /// A native result carrying multiple escaped canonical observations must
+    /// be encodable as one exact execution block before entering chronology.
+    #[test]
+    fn native_tool_result_aggregate_is_durably_encodable() {
+        let owner = ProviderContinuityOwner::new(
+            ProviderApiCompatibility::DeepSeekChatCompletions,
+            "deepseek",
+        )
+        .unwrap();
+        let content = format!(
+            "{}\n\n{}",
+            "a".repeat(9 * 1024 * 1024),
+            "\\\0".repeat(2 * 1024 * 1024)
+        );
+        let event = provider_tool_result_event(&owner, "call-large", &content).unwrap();
+        let encoded = event.to_transcript_content();
+        assert!(
+            mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                mez_agent::ContextSourceKind::TranscriptTool,
+                "provider tool result call-large",
+                encoded,
+                ContextExecutionGroupId::new("native-large-group").unwrap(),
+                1,
+                Some(owner),
+            )
+            .is_some(),
+            "native result envelope must fit the exact durable block contract"
         );
     }
 

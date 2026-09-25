@@ -89,6 +89,73 @@ pub enum ProviderTranscriptEvent {
 }
 
 impl ProviderTranscriptEvent {
+    /// Bounds a newly produced native tool result before either live context or
+    /// durable transcript sees it. The call identity and envelope remain intact;
+    /// canonical action-result blocks independently retain their exact bytes.
+    pub fn bounded_tool_result(mut self) -> Option<Self> {
+        const LIMIT: usize = crate::http::DEFAULT_PROVIDER_MAX_RESPONSE_BYTES;
+        const NOTICE: &str = "\n[mez: native tool result truncated to durable limit]";
+        if self.to_transcript_content().len() <= LIMIT {
+            return Some(self);
+        }
+        let body = match &self {
+            Self::OpenAiFunctionCallOutput { output, .. } => output,
+            Self::OpenAiChatCompletionsToolResult { content, .. }
+            | Self::DeepSeekToolResult { content, .. } => content,
+            _ => return None,
+        };
+        let original = body.clone();
+        let mut low = 0usize;
+        let mut high = original.len();
+        while high.saturating_sub(low) > 4 {
+            let mut middle = low + (high - low) / 2;
+            while middle > 0 && !original.is_char_boundary(middle) {
+                middle -= 1;
+            }
+            if middle <= low {
+                break;
+            }
+            let candidate = format!("{}{}", &original[..middle], NOTICE);
+            match &mut self {
+                Self::OpenAiFunctionCallOutput { output, .. } => *output = candidate,
+                Self::OpenAiChatCompletionsToolResult { content, .. }
+                | Self::DeepSeekToolResult { content, .. } => *content = candidate,
+                _ => return None,
+            }
+            if self.to_transcript_content().len() <= LIMIT {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        // At most one UTF-8 scalar remains between the last fitting prefix and
+        // the first non-fitting prefix. Test it without probing a partial scalar.
+        let mut retained = low;
+        for (offset, ch) in original[low..high].char_indices() {
+            let end = low + offset + ch.len_utf8();
+            let candidate = format!("{}{}", &original[..end], NOTICE);
+            match &mut self {
+                Self::OpenAiFunctionCallOutput { output, .. } => *output = candidate,
+                Self::OpenAiChatCompletionsToolResult { content, .. }
+                | Self::DeepSeekToolResult { content, .. } => *content = candidate,
+                _ => return None,
+            }
+            if self.to_transcript_content().len() <= LIMIT {
+                retained = end;
+            } else {
+                break;
+            }
+        }
+        let candidate = format!("{}{}", &original[..retained], NOTICE);
+        match &mut self {
+            Self::OpenAiFunctionCallOutput { output, .. } => *output = candidate,
+            Self::OpenAiChatCompletionsToolResult { content, .. }
+            | Self::DeepSeekToolResult { content, .. } => *content = candidate,
+            _ => return None,
+        }
+        (self.to_transcript_content().len() <= LIMIT).then_some(self)
+    }
+
     /// Encodes one event into hidden transcript content.
     pub fn to_transcript_content(&self) -> String {
         let payload = match self {

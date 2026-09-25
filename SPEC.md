@@ -5500,8 +5500,22 @@ replace it with a generic controller failure message.
 Settled action evidence MUST use one bounded canonical model-visible projection
 before it first enters cache-eligible chronology. That exact projection,
 including captured shell, patch, MCP, web, fetch, skill, and other action output,
-MUST be durable and MUST remain byte-identical within and across turns. It MUST
-NOT be reconstructed as request-local live state, replaced with an omitted-output
+MUST be durable and MUST remain byte-identical within and across turns. The
+complete projected result MUST be bounded, not only its individual fragments;
+any truncation marker MUST be included before the projection first enters model
+context. Control-bearing output (including NUL) MUST retain its exact
+model-visible bytes through reversible transcript encoding. The ordinary
+display transcript row and exact typed execution block MUST obey the same
+lossless content contract; a NUL in a stored TSV content field uses the
+`mez-agent-transcript/2` `\\0` escape, while existing v1 rows retain their
+original escape grammar. A native provider tool-result envelope that aggregates
+action results MUST be bounded before admission using its complete JSON-encoded
+size, including escape expansion and call metadata. Its own truncation notice
+MUST be part of the first provider-visible native projection; the separately
+recorded canonical action-result blocks retain their exact bounded bytes.
+Storage MUST NOT silently strip or rewrite already
+consumed result bytes during persistence. The projection MUST NOT be
+reconstructed as request-local live state, replaced with an omitted-output
 summary at a turn boundary, or reordered when a later action settles. Every
 closed execution-group block consumed by a provider request, including
 controller state, assistant response, native provider continuity, and canonical

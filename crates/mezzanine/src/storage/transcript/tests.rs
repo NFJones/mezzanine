@@ -2415,6 +2415,26 @@ fn transcript_entry_round_trips_escaped_content() {
     assert_eq!(decoded, original);
 }
 
+/// NUL-bearing output uses a versioned escape on disk and recovers its exact
+/// content while older transcript rows retain their existing grammar.
+#[test]
+fn transcript_entry_round_trips_control_bearing_content() {
+    let original = TranscriptEntry {
+        content: "before\0after\\0\nline".to_string(),
+        ..entry("conv1", 1, TranscriptRole::Tool)
+    };
+    let encoded = encode_transcript_entry(&original).unwrap();
+    assert!(encoded.starts_with("mez-agent-transcript/2\t"));
+    assert!(!encoded.contains('\0'));
+    assert_eq!(decode_transcript_entry(&encoded).unwrap(), original);
+    assert!(
+        decode_transcript_entry(
+            &encoded.replace("mez-agent-transcript/2", "mez-agent-transcript/1")
+        )
+        .is_err()
+    );
+}
+
 /// Verifies v2 prompt-history rows preserve multiple UTF-8-aligned pasted
 /// ranges while legacy v1 rows load as literal text with no invented provenance.
 #[test]

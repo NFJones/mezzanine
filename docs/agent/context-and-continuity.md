@@ -29,6 +29,15 @@ shell, patch, MCP, web, fetch, and skill output, so transcripts and context
 exports can contain sensitive task data. Later results append after earlier
 ones; they do not move or replace prior output. Only explicit conversation
 compaction may summarize complete older execution groups.
+The complete model-facing result, including shell observation fields, is bounded
+before first exposure. Control characters such as NUL remain part of the exact
+model-visible content: typed execution blocks JSON-escape them and NUL-bearing
+display transcript rows use a versioned, reversible TSV escape. Older transcript
+rows continue to load under their original grammar. The native action result
+remains separate from a bounded model-facing projection. Native provider
+tool-result envelopes aggregate action results and are independently bounded
+against their full JSON-encoded size before the provider sees them; any
+truncation notice is retained in the exact replayed native event.
 
 Servers listed in `agents.always_exposed_mcp_servers` use the same append-only
 model. Mez stores compact typed directory snapshots containing only server

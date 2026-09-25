@@ -690,7 +690,6 @@ fn valid_execution_block(source: ContextSourceKind, label: &str, content: &str) 
         && !content.trim().is_empty()
         && content.len() <= EXECUTION_BLOCK_CONTENT_LIMIT_BYTES
         && !label.bytes().any(|byte| byte == 0)
-        && !content.bytes().any(|byte| byte == 0)
 }
 
 /// Digests one exact execution block without ambiguous field concatenation.
@@ -955,6 +954,28 @@ mod tests {
                 "must not become an execution block",
             )
             .is_none()
+        );
+    }
+
+    /// A control-bearing shell observation must retain exact model-visible
+    /// bytes through the JSON transcript envelope rather than poison a later
+    /// clean turn's persistence.
+    #[test]
+    fn execution_block_round_trips_nul_bearing_evidence() {
+        let event = TranscriptContextEvent::execution_block_with_metadata(
+            ContextSourceKind::ActionResult,
+            "action result shell-1",
+            "before\0after",
+            ContextExecutionGroupId::new("execution-group-nul").unwrap(),
+            1,
+            None,
+        )
+        .expect("NUL must have a reversible durable representation");
+        let encoded = event.to_transcript_content();
+        assert!(!encoded.contains('\0'));
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(&encoded),
+            Some(event)
         );
     }
 

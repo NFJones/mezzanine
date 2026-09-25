@@ -12,6 +12,10 @@ mod tests;
 /// Maximum action-result content bytes included in one model-facing context
 /// block before native truncation metadata is appended.
 const MODEL_ACTION_RESULT_CONTENT_LIMIT_BYTES: u64 = 256 * 1024;
+/// Ceiling for the complete model-visible result, including shell observations.
+/// Native result records remain intact; this bounds only their first projection.
+const MODEL_ACTION_RESULT_PROJECTION_LIMIT_BYTES: usize =
+    crate::http::DEFAULT_PROVIDER_MAX_RESPONSE_BYTES;
 
 /// Sanitized view of one action result used by model-context and transcript renderers.
 ///
@@ -466,7 +470,17 @@ pub fn action_result_context_content(result: &ActionResult) -> String {
             lines.push(format!("data: {data}"));
         }
     }
-    lines.join("\n")
+    let mut projection = lines.join("\n");
+    if projection.len() > MODEL_ACTION_RESULT_PROJECTION_LIMIT_BYTES {
+        const NOTICE: &str = "\n[mez: action result projection truncated to durable limit]";
+        let mut boundary = MODEL_ACTION_RESULT_PROJECTION_LIMIT_BYTES - NOTICE.len();
+        while !projection.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        projection.truncate(boundary);
+        projection.push_str(NOTICE);
+    }
+    projection
 }
 
 /// Returns the compact lowercase status name used in model-facing result

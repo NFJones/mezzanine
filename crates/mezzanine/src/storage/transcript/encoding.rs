@@ -21,6 +21,8 @@ use std::collections::BTreeMap;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const TRANSCRIPT_VERSION: &str = "mez-agent-transcript/1";
+/// Transcript rows with a reversible NUL escape in their content field.
+const TRANSCRIPT_NUL_VERSION: &str = "mez-agent-transcript/2";
 /// Defines the PROMPT HISTORY VERSION const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -44,8 +46,14 @@ const LEGACY_AGENT_PRESENTATION_VERSION: &str = "mez-agent-presentation/1";
 /// Encodes one canonical transcript entry into the durable TSV format.
 pub(super) fn encode_transcript_entry(entry: &TranscriptEntry) -> Result<String> {
     entry.validate()?;
-    Ok([
-        TRANSCRIPT_VERSION.to_string(),
+    let has_nul = entry.content.contains('\0');
+    let mut fields = [
+        if has_nul {
+            TRANSCRIPT_NUL_VERSION
+        } else {
+            TRANSCRIPT_VERSION
+        }
+        .to_string(),
         entry.conversation_id.clone(),
         entry.sequence.to_string(),
         entry.created_at_unix_seconds.to_string(),
@@ -57,14 +65,26 @@ pub(super) fn encode_transcript_entry(entry: &TranscriptEntry) -> Result<String>
     ]
     .into_iter()
     .map(|field| escape_field(&field))
-    .collect::<Vec<String>>()
-    .join("\t"))
+    .collect::<Vec<String>>();
+    if has_nul {
+        fields[8] = fields[8].replace('\0', "\\0");
+    }
+    Ok(fields.join("\t"))
 }
 
 /// Decodes one canonical transcript entry from the durable TSV format.
 pub(super) fn decode_transcript_entry(line: &str) -> Result<TranscriptEntry> {
-    let fields = split_fields(line)?;
-    if fields.len() != 9 || fields[0] != TRANSCRIPT_VERSION {
+    let nul_version = line.starts_with(&format!("{TRANSCRIPT_NUL_VERSION}\t"));
+    if line.contains('\0') {
+        return Err(MezError::invalid_args(
+            "transcript row contains an unescaped NUL",
+        ));
+    }
+    let fields = split_fields_with_nul_escape(line, nul_version)?;
+    if fields.len() != 9
+        || !(fields[0] == TRANSCRIPT_VERSION
+            || (nul_version && fields[0] == TRANSCRIPT_NUL_VERSION))
+    {
         return Err(MezError::invalid_args("invalid transcript entry"));
     }
     let entry = TranscriptEntry {
@@ -907,6 +927,11 @@ fn escape_field(value: &str) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn split_fields(line: &str) -> Result<Vec<String>> {
+    split_fields_with_nul_escape(line, false)
+}
+
+/// Decodes the transcript-only NUL escape without changing other TSV formats.
+fn split_fields_with_nul_escape(line: &str, allow_nul: bool) -> Result<Vec<String>> {
     let mut fields = Vec::new();
     let mut field = String::new();
     let mut chars = line.chars();
@@ -925,6 +950,7 @@ fn split_fields(line: &str) -> Result<Vec<String>> {
                     't' => '\t',
                     'n' => '\n',
                     'r' => '\r',
+                    '0' if allow_nul => '\0',
                     _ => return Err(MezError::invalid_args("unsupported transcript escape")),
                 });
             }

@@ -90,7 +90,7 @@ pub fn transcript_entries_for_execution(
         content: assistant_transcript_content(execution),
     });
     sequence = sequence.saturating_add(1);
-    for event in provider_transcript_entries_for_execution(execution) {
+    for event in provider_transcript_entries_for_execution(execution)? {
         entries.push(TranscriptEntry {
             conversation_id: conversation_id.to_string(),
             sequence,
@@ -126,31 +126,55 @@ pub fn transcript_entries_for_execution(
 /// Builds hidden provider-native transcript entries for future provider replay.
 fn provider_transcript_entries_for_execution(
     execution: &AgentTurnExecution,
-) -> Vec<ProviderTranscriptEvent> {
+) -> Result<Vec<ProviderTranscriptEvent>, TranscriptContractError> {
     let mut events = Vec::new();
     for event in &execution.response.provider_transcript_events {
         events.push(event.clone());
         for call_id in event.openai_function_call_ids() {
-            events.push(ProviderTranscriptEvent::OpenAiFunctionCallOutput {
-                call_id,
-                output: provider_tool_result_content_for_execution(execution),
-            });
+            events.push(
+                ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+                    call_id,
+                    output: provider_tool_result_content_for_execution(execution),
+                }
+                .bounded_tool_result()
+                .ok_or_else(|| {
+                    TranscriptContractError::new(
+                        "native function-call result envelope exceeds durable limit",
+                    )
+                })?,
+            );
         }
         for tool_call_id in event.openai_chat_completions_tool_call_ids() {
-            events.push(ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
-                provider_id: event.provider_id().to_string(),
-                tool_call_id,
-                content: provider_tool_result_content_for_execution(execution),
-            });
+            events.push(
+                ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+                    provider_id: event.provider_id().to_string(),
+                    tool_call_id,
+                    content: provider_tool_result_content_for_execution(execution),
+                }
+                .bounded_tool_result()
+                .ok_or_else(|| {
+                    TranscriptContractError::new(
+                        "native chat tool-result envelope exceeds durable limit",
+                    )
+                })?,
+            );
         }
         for tool_call_id in event.deepseek_tool_call_ids() {
-            events.push(ProviderTranscriptEvent::DeepSeekToolResult {
-                tool_call_id,
-                content: provider_tool_result_content_for_execution(execution),
-            });
+            events.push(
+                ProviderTranscriptEvent::DeepSeekToolResult {
+                    tool_call_id,
+                    content: provider_tool_result_content_for_execution(execution),
+                }
+                .bounded_tool_result()
+                .ok_or_else(|| {
+                    TranscriptContractError::new(
+                        "native DeepSeek tool-result envelope exceeds durable limit",
+                    )
+                })?,
+            );
         }
     }
-    events
+    Ok(events)
 }
 
 /// Returns compact provider-facing tool output for hidden native replay.

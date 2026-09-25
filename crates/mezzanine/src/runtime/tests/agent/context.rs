@@ -1151,6 +1151,264 @@ fn runtime_action_results_split_canonical_history_from_same_turn_detail() {
     assert_eq!(prepared_result.content, canonical.content);
 }
 
+/// A settled control-bearing shell result must keep its exact canonical bytes
+/// when a later clean response exports the accumulated execution chronology.
+#[test]
+fn runtime_nul_action_evidence_persists_and_replays_exactly() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("nul-execution-evidence"));
+    service.set_agent_transcript_store(store.clone());
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect output")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    let action = mez_agent::AgentAction {
+        id: "synthetic-shell".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect output".to_string(),
+            command: "synthetic-not-executed".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let result =
+        mez_agent::ActionResult::succeeded(&turn, &action, vec!["before\0after".to_string()], None);
+    let canonical = mez_agent::action_result_context_content(&result);
+    let group = mez_agent::ContextExecutionGroupId::new("nul-owned-execution").unwrap();
+    let context = service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap();
+    context
+        .append_assistant_event("earlier assistant", "read output", group.clone())
+        .unwrap();
+    context
+        .commit_settled_action_results_in_group(&[result], group)
+        .unwrap();
+    context.validate_durable().unwrap();
+    let final_action = mez_agent::AgentAction {
+        id: "clean-final".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: "done".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "test".to_string(),
+            raw_text: "done".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "Finish after the earlier result".to_string(),
+                actions: vec![final_action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &final_action,
+            vec!["done\0with control".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
+        .unwrap();
+    let entries = store.inspect(&conversation).unwrap();
+    let restored = entries
+        .iter()
+        .filter_map(|entry| {
+            mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content)
+        })
+        .find_map(|event| match event {
+            mez_agent::TranscriptContextEvent::ExecutionBlock {
+                source: ContextSourceKind::ActionResult,
+                content,
+                ..
+            } if content == canonical => Some(content),
+            _ => None,
+        });
+    assert_eq!(restored.as_deref(), Some(canonical.as_str()));
+    assert!(entries.iter().any(|entry| entry.content.contains('\0')));
+    assert!(entries.iter().any(|entry| {
+        entry.role == TranscriptRole::Tool && entry.content.contains("done\0with control")
+    }));
+}
+
+/// Multiple independently valid results can exceed the native tool-result
+/// envelope once aggregated and JSON escaped. The first admitted native event
+/// must already be the same bounded event later exported and replayed.
+#[test]
+fn runtime_grouped_native_results_persist_exact_bounded_continuity() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("grouped-native-evidence"));
+    service.set_agent_transcript_store(store.clone());
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect native results")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    let actions = (0..2)
+        .map(|index| mez_agent::AgentAction {
+            id: format!("native-shell-{index}"),
+            payload: mez_agent::AgentActionPayload::ShellCommand {
+                summary: "Inspect output".to_string(),
+                command: "synthetic-not-executed".to_string(),
+                interactive: false,
+                stateful: false,
+                timeout_ms: None,
+            },
+        })
+        .collect::<Vec<_>>();
+    let results = actions
+        .iter()
+        .map(|action| {
+            mez_agent::ActionResult::succeeded(
+                &turn,
+                action,
+                vec!["shell command exited with status 0".to_string()],
+                Some(
+                    serde_json::json!({
+                        "command": "synthetic-not-executed",
+                        "terminal_observation": {
+                            "exit_code": 0,
+                            "combined_output_preview": "\\\0".repeat(3 * 1024 * 1024)
+                        }
+                    })
+                    .to_string(),
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut request = runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id);
+    request.provider = "deepseek".to_string();
+    let owner = mez_agent::ProviderContinuityOwner::new(
+        mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+        "deepseek",
+    )
+    .unwrap();
+    let native_call = mez_agent::ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+        content: String::new(),
+        reasoning_content: None,
+        tool_calls: vec![serde_json::json!({
+            "id": "call-native", "type": "function",
+            "function": {"name": "submit_maap_action_batch", "arguments": "{}"}
+        })],
+    };
+    let mut execution = mez_agent::AgentTurnExecution {
+        request,
+        response: mez_agent::ModelResponse {
+            provider: "deepseek".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "Inspect both native results".to_string(),
+                actions: actions.clone(),
+            }),
+            provider_transcript_events: vec![native_call],
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: actions
+            .iter()
+            .map(|action| mez_agent::ActionResult::running(&turn, action, Vec::new(), None))
+            .collect(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .append_agent_execution_chronology_for_provider(&turn, &execution, Some(&owner))
+        .unwrap();
+    service
+        .commit_settled_action_results_context(&turn.turn_id, &results)
+        .unwrap();
+    execution.action_results = results;
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    let native = context
+        .chronology()
+        .iter()
+        .find_map(|event| {
+            (event.block().source == ContextSourceKind::TranscriptTool
+                && event.block().label == "provider tool result call-native")
+                .then(|| event.block().content.clone())
+        })
+        .unwrap();
+    assert!(native.len() <= 16 * 1024 * 1024);
+    let native_event =
+        mez_agent::ProviderTranscriptEvent::from_transcript_content(&native).unwrap();
+    assert!(
+        native_event
+            .to_transcript_content()
+            .contains("native tool result truncated")
+    );
+    service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
+        .unwrap();
+    let entries = store.inspect(&conversation).unwrap();
+    assert!(
+        entries
+            .iter()
+            .filter_map(
+                |entry| mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content)
+            )
+            .any(
+                |event| matches!(event, mez_agent::TranscriptContextEvent::ExecutionBlock {
+            source: ContextSourceKind::TranscriptTool, content, ..
+        } if content == native)
+            )
+    );
+    for action in &actions {
+        assert!(
+            entries
+                .iter()
+                .filter_map(
+                    |entry| mez_agent::TranscriptContextEvent::from_transcript_content(
+                        &entry.content
+                    )
+                )
+                .any(
+                    |event| matches!(event, mez_agent::TranscriptContextEvent::ExecutionBlock {
+                source: ContextSourceKind::ActionResult, label, ..
+            } if label == format!("action result {}", action.id))
+                )
+        );
+    }
+}
+
 /// Verifies ordinary provider preparation does not duplicate the immutable
 /// prompt-boundary environment snapshot in its request-local suffix.
 ///
