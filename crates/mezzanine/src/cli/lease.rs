@@ -34,10 +34,6 @@ enum LeaseCliCommand {
     },
     /// Shows one lease by lease id, session id, or exact name.
     Show { target: String },
-    /// Captures a generation-fenced checkpoint for one active lease.
-    Checkpoint { target: String },
-    /// Explicitly restores one recoverable lease from its checkpoint.
-    Recover { target: String },
     /// Releases a durable reservation without revoking device trust.
     Release {
         target: String,
@@ -74,7 +70,6 @@ enum LeaseCliCommand {
 enum LeaseStateArg {
     Pending,
     Active,
-    Recoverable,
     Released,
     Revoked,
     Failed,
@@ -85,7 +80,6 @@ impl LeaseStateArg {
         match self {
             Self::Pending => "pending",
             Self::Active => "active",
-            Self::Recoverable => "recoverable",
             Self::Released => "released",
             Self::Revoked => "revoked",
             Self::Failed => "failed",
@@ -118,20 +112,6 @@ pub(super) async fn run_lease<W: Write>(
             ("lease/list", params)
         }
         LeaseCliCommand::Show { target } => ("lease/get", serde_json::json!({"target": target})),
-        LeaseCliCommand::Checkpoint { target } => (
-            "lease/checkpoint",
-            serde_json::json!({
-                "target": target,
-                "idempotency_key": cli_idempotency_key("lease-checkpoint")
-            }),
-        ),
-        LeaseCliCommand::Recover { target } => (
-            "lease/recover",
-            serde_json::json!({
-                "target": target,
-                "idempotency_key": cli_idempotency_key("lease-recover")
-            }),
-        ),
         LeaseCliCommand::Release { target, terminate } => (
             "lease/release",
             serde_json::json!({

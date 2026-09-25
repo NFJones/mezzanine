@@ -319,8 +319,8 @@ The local host administration RPC catalog is `host/get`, `host/shutdown`,
 granted to the authenticated principal; its implemented remote operations are
 `host/session/list` and `host/session/kill`. Remote kill requires separately
 granted force-kill authority, `force=true`, an idempotency key, and an explicit
-target. The lease catalog is `lease/list`, `lease/get`, `lease/checkpoint`,
-`lease/recover`, `lease/release`, `lease/revoke`, and `lease/gc`. Local Unix
+target. The lease catalog is `lease/list`, `lease/get`, `lease/release`,
+`lease/revoke`, and `lease/gc`. Local Unix
 administration is authoritative by default; remote attach/create authority
 never implies lease administration. Lease targets may be exact lease IDs,
 session IDs, or unambiguous names. Active release/revoke requests require

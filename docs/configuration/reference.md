@@ -181,7 +181,6 @@ does not require Iroh pairing.
 | `host.max_live_sessions` | integer | `16` | Maximum concurrently live session runtimes; must be positive. |
 | `host.shutdown_timeout_ms` | integer | `10000` | Bounded graceful host shutdown interval; must be positive. |
 | `host.checkpoint_interval_seconds` | integer | `300` | Periodic checkpoint interval; must be positive. |
-| `host.recover_on_start` | string | `"lazy"` | Recovery policy: `lazy`, `eager`, or `disabled`. |
 | `host.default_session_policy` | string | `"most_recent_attachable"` | Existing-session default selection policy: `most_recent_attachable` or `none`. |
 | `host.leases.default_ttl_seconds` | integer | `0` | Default lease lifetime; `0` means no automatic expiry. |
 | `host.leases.failed_retention_seconds` | integer | `604800` | Retention for failed lease records before GC eligibility. |

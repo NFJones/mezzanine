@@ -327,7 +327,7 @@ on supported platforms and approved infrastructure.
 
 | Gate | Current repository evidence | Required release evidence | Status |
 | --- | --- | --- | --- |
-| Disabled default and Unix recovery | Configuration and coexistence regressions preserve Unix control; isolated host restart and lease recovery pass. | Packaged daemon rollback drill. | Locally verified; packaged drill pending. |
+| Disabled default and Unix recovery | Configuration and coexistence regressions preserve Unix control; host restart fails active remote leases and retires legacy remote snapshots. | Packaged daemon rollback drill. | Locally verified; packaged drill pending. |
 | Policy validation | Schema and effective runtime reject contradictory route, relay, lookup, type, and bound combinations. | Validate approved production configuration. | Locally verified. |
 | Direct local path | Direct Iroh control, events, reconnect, malformed traffic, timeout, abrupt loss, and stream limits have focused tests. | Native Linux and macOS controlled runs. | Local Linux environment only; macOS pending. |
 | Relay-required and direct-plus-relay | Explicit configuration paths exist. | Approved custom relay, outage, migration, latency, throughput, and reconnect runs. | Pending; no production relay approved. |

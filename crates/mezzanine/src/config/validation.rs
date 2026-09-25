@@ -1423,15 +1423,6 @@ fn validate_host_config(root: &serde_json::Value) -> Vec<ConfigDiagnostic> {
         }
     }
     if host
-        .get("recover_on_start")
-        .is_some_and(|value| !matches!(value.as_str(), Some("lazy" | "eager" | "disabled")))
-    {
-        diagnostics.push(ConfigDiagnostic {
-            path: "host.recover_on_start".to_string(),
-            message: "host recovery policy must be lazy, eager, or disabled".to_string(),
-        });
-    }
-    if host
         .get("default_session_policy")
         .is_some_and(|value| !matches!(value.as_str(), Some("most_recent_attachable" | "none")))
     {

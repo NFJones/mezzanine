@@ -40,7 +40,7 @@ or `mez attach` to select an existing one.
 | `mez kill [session-id] --force` | Terminate the selected live session through its control socket; the optional target accepts a registered session id or creation-order index. `--force` confirms the destructive operation. Alias: `kill-session`. |
 | `mez snapshot` | Manage persisted snapshots. With no subcommand it lists snapshots; see the snapshot forms below. |
 | `mez host` | Serve, inspect, stop, or reconcile the persistent multi-session host. |
-| `mez lease` | Inspect, checkpoint, recover, release, revoke, or garbage-collect persistent-host leases through local administration. |
+| `mez lease` | Inspect, release, revoke, or garbage-collect persistent-host leases through local administration. |
 
 Creating or attaching a primary client needs an interactive terminal. `mez
 serve` can run without one. Observer attachment also requires an interactive
@@ -263,8 +263,6 @@ mez host reconcile
 
 mez lease list [--state STATE] [--owner CLIENT_ID] [--all]
 mez lease show <lease-id|session-id|name>
-mez lease checkpoint <lease-id|session-id|name>
-mez lease recover <lease-id|session-id|name>
 mez lease release <lease-id|session-id|name> [--terminate]
 mez lease revoke <lease-id|session-id|name> [--reason TEXT] [--terminate]
 mez lease gc [--older-than DURATION] [--dry-run|--apply]
@@ -278,9 +276,8 @@ Lease administration uses only the protected local host socket. Active release
 or revocation requires `--terminate`; neither operation revokes device trust.
 Garbage collection previews by default, removes only terminal lease tombstones,
 and requires `--apply` to mutate durable state. Durations accept plain seconds
-or `s`, `m`, `h`, and `d` suffixes. Checkpoint capture and recovery are
-generation-fenced, and recovery always starts fresh processes from the validated
-checkpoint rather than preserving the previous PTY or process tree.
+or `s`, `m`, `h`, and `d` suffixes. Remote durable leases reserve and authorize
+sessions but do not checkpoint or reconstruct remote runtimes after host restart.
 
 In that mode, bare local `mez` uses the protected local host, attaches to an
 eligible session, or immediately creates and attaches when none is eligible.

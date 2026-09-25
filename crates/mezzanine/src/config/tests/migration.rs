@@ -3781,3 +3781,35 @@ fn migrates_schema_96_without_materializing_env_whitelist_defaults() {
         assert!(root.pointer("/permissions/env_whitelist").is_none());
     }
 }
+
+/// Verifies schema-v97 migration removes the retired remote-lease recovery
+/// policy from each supported format while preserving unrelated host settings.
+#[test]
+fn migrates_schema_97_removing_remote_recovery_policy() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 97\n[host]\nrecover_on_start = \"eager\"\ndefault_session_policy = \"none\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":97,"host":{"recover_on_start":"disabled","default_session_policy":"none"}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 97\nhost:\n  recover_on_start: lazy\n  default_session_policy: none\n",
+        ),
+    ] {
+        let migrated = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &migrated.text).unwrap();
+
+        assert_eq!(migrated.from_version, 97);
+        assert_eq!(migrated.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert!(migrated.changed);
+        assert!(root.pointer("/host/recover_on_start").is_none());
+        assert_eq!(
+            root.pointer("/host/default_session_policy"),
+            Some(&serde_json::json!("none"))
+        );
+    }
+}

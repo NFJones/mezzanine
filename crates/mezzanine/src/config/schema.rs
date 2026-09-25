@@ -518,7 +518,6 @@ pub(super) const HOST_KEYS: &[&str] = &[
     "max_live_sessions",
     "shutdown_timeout_ms",
     "checkpoint_interval_seconds",
-    "recover_on_start",
     "default_session_policy",
     "leases",
 ];

@@ -1552,7 +1552,7 @@ fn remote_lease_state_name(state: RemoteSessionLeaseState) -> &'static str {
     match state {
         RemoteSessionLeaseState::Pending => "pending",
         RemoteSessionLeaseState::Active => "active",
-        RemoteSessionLeaseState::Recoverable => "recoverable",
+        RemoteSessionLeaseState::Recoverable => "failed",
         RemoteSessionLeaseState::Released => "released",
         RemoteSessionLeaseState::Revoked => "revoked",
         RemoteSessionLeaseState::Failed => "failed",
@@ -2345,7 +2345,6 @@ mod tests {
             shell: ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
             max_sessions: 8,
             max_live_sessions: 8,
-            recovery_policy: crate::host::router::HostRecoveryPolicy::Lazy,
             default_session_policy:
                 crate::host::router::HostDefaultSessionPolicy::MostRecentAttachable,
             default_lease_lifetime_seconds: 0,

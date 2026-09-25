@@ -146,16 +146,6 @@ async fn run_host_serve<W: Write>(
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(300),
     );
-    let recovery_policy = match host
-        .and_then(|host| host.get("recover_on_start"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("lazy")
-    {
-        "lazy" => crate::host::router::HostRecoveryPolicy::Lazy,
-        "eager" => crate::host::router::HostRecoveryPolicy::Eager,
-        "disabled" => crate::host::router::HostRecoveryPolicy::Disabled,
-        _ => return Err(MezError::config("invalid host.recover_on_start policy")),
-    };
     let default_session_policy = match host
         .and_then(|host| host.get("default_session_policy"))
         .and_then(serde_json::Value::as_str)
@@ -183,7 +173,6 @@ async fn run_host_serve<W: Write>(
             max_live_sessions,
             shutdown_timeout,
             checkpoint_interval,
-            recovery_policy,
             default_session_policy,
             default_lease_lifetime_seconds,
             failed_lease_retention_seconds,
@@ -197,7 +186,7 @@ async fn run_host_serve<W: Write>(
     if let Some(iroh) = iroh.as_mut() {
         iroh.set_audit_log(server.audit_log_handle());
     }
-    let _ = server.prepare_startup().await?;
+    server.prepare_startup().await?;
     let started = serde_json::json!({
         "serving": true,
         "host": true,
@@ -810,7 +799,6 @@ mod tests {
             max_live_sessions: 4,
             shutdown_timeout: Duration::from_secs(2),
             checkpoint_interval: Duration::from_secs(300),
-            recovery_policy: crate::host::router::HostRecoveryPolicy::Lazy,
             default_session_policy:
                 crate::host::router::HostDefaultSessionPolicy::MostRecentAttachable,
             default_lease_lifetime_seconds: 0,
@@ -893,7 +881,6 @@ mod tests {
             max_live_sessions: 4,
             shutdown_timeout: Duration::from_secs(2),
             checkpoint_interval: Duration::from_secs(300),
-            recovery_policy: crate::host::router::HostRecoveryPolicy::Lazy,
             default_session_policy:
                 crate::host::router::HostDefaultSessionPolicy::MostRecentAttachable,
             default_lease_lifetime_seconds: 0,

@@ -94,10 +94,9 @@ fn lease_reservation_and_activation_share_one_instant() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Legal transitions advance the lease generation, reject stale callbacks,
-/// and accept only checkpoints belonging to the exact leased session.
+/// Lease transitions advance generations and reject stale callbacks.
 #[test]
-fn lease_transitions_are_generation_fenced_and_checkpoint_bound() {
+fn lease_transitions_are_generation_fenced() {
     let root = test_root("transitions");
     let repository = RemoteSessionLeaseRepository::new(root.clone());
     let pending = repository
@@ -122,186 +121,33 @@ fn lease_transitions_are_generation_fenced_and_checkpoint_bound() {
     assert_eq!(active.state, RemoteSessionLeaseState::Active);
 
     let stale = repository
-        .mark_recoverable(
+        .mark_failed(
             &active.lease_id,
             active.boot_generation,
             pending.lease_generation,
             12,
+            "stale callback".to_string(),
         )
         .unwrap_err();
     assert_eq!(stale.kind(), MezErrorKind::Conflict);
 
-    let mismatched = repository
-        .update_checkpoint(
+    let failed = repository
+        .mark_failed(
             &active.lease_id,
             active.boot_generation,
             active.lease_generation,
-            checkpoint("snapshot-1", "$other"),
             12,
-        )
-        .unwrap_err();
-    assert_eq!(mismatched.kind(), MezErrorKind::Conflict);
-
-    let checkpointed = repository
-        .update_checkpoint(
-            &active.lease_id,
-            active.boot_generation,
-            active.lease_generation,
-            checkpoint("snapshot-1", &active.session_id),
-            12,
+            "runtime exited".to_string(),
         )
         .unwrap();
-    let recoverable = repository
-        .mark_recoverable(
-            &checkpointed.lease_id,
-            checkpointed.boot_generation,
-            checkpointed.lease_generation,
-            13,
-        )
-        .unwrap();
-    assert_eq!(recoverable.state, RemoteSessionLeaseState::Recoverable);
-    assert_eq!(recoverable.checkpoint.unwrap().snapshot_id, "snapshot-1");
-
-    let restored = repository
-        .activate(
-            &recoverable.lease_id,
-            recoverable.boot_generation,
-            recoverable.lease_generation,
-            14,
-        )
-        .unwrap();
-    assert_eq!(restored.state, RemoteSessionLeaseState::Active);
+    assert_eq!(failed.state, RemoteSessionLeaseState::Failed);
+    assert_eq!(failed.lease_generation, active.lease_generation + 1);
 
     let _ = fs::remove_dir_all(root);
 }
 
-/// Replacing a checkpoint and collecting its terminal lease must preserve
-/// durable snapshot cleanup work until deletion is acknowledged, while an
-/// identifier still referenced by another lease remains fenced from cleanup.
-#[test]
-fn checkpoint_replacement_and_gc_persist_cleanup_candidates() {
-    let root = test_root("snapshot-cleanup");
-    let repository = RemoteSessionLeaseRepository::new(root.clone());
-    let first_pending = repository
-        .reserve_pending(reservation(
-            "lease-first",
-            "$1",
-            "device-1",
-            "create-first",
-            "fingerprint-first",
-        ))
-        .unwrap()
-        .lease()
-        .clone();
-    let first = repository
-        .activate(
-            &first_pending.lease_id,
-            first_pending.boot_generation,
-            first_pending.lease_generation,
-            11,
-        )
-        .unwrap();
-    let first = repository
-        .update_checkpoint(
-            &first.lease_id,
-            first.boot_generation,
-            first.lease_generation,
-            checkpoint("snapshot-old", &first.session_id),
-            12,
-        )
-        .unwrap();
-    let first = repository
-        .update_checkpoint(
-            &first.lease_id,
-            first.boot_generation,
-            first.lease_generation,
-            checkpoint("snapshot-shared", &first.session_id),
-            13,
-        )
-        .unwrap();
-    assert_eq!(
-        repository.snapshot_cleanup_candidates().unwrap(),
-        vec!["snapshot-old"]
-    );
-
-    let second_pending = repository
-        .reserve_pending(reservation(
-            "lease-second",
-            "$2",
-            "device-2",
-            "create-second",
-            "fingerprint-second",
-        ))
-        .unwrap()
-        .lease()
-        .clone();
-    let second = repository
-        .activate(
-            &second_pending.lease_id,
-            second_pending.boot_generation,
-            second_pending.lease_generation,
-            14,
-        )
-        .unwrap();
-    let cleanup_race = repository
-        .update_checkpoint(
-            &second.lease_id,
-            second.boot_generation,
-            second.lease_generation,
-            checkpoint("snapshot-old", &second.session_id),
-            15,
-        )
-        .unwrap_err();
-    assert_eq!(cleanup_race.kind(), MezErrorKind::Conflict);
-    repository
-        .update_checkpoint(
-            &second.lease_id,
-            second.boot_generation,
-            second.lease_generation,
-            checkpoint("snapshot-shared", &second.session_id),
-            15,
-        )
-        .unwrap();
-    let released = repository
-        .release(
-            &first.lease_id,
-            first.boot_generation,
-            first.lease_generation,
-            16,
-        )
-        .unwrap();
-    assert_eq!(released.state, RemoteSessionLeaseState::Released);
-    repository
-        .apply_gc(LeaseGarbageCollectionPolicy {
-            released_before_unix_seconds: 16,
-            revoked_before_unix_seconds: 16,
-            failed_before_unix_seconds: 16,
-        })
-        .unwrap();
-    assert_eq!(
-        repository.snapshot_cleanup_candidates().unwrap(),
-        vec!["snapshot-old", "snapshot-shared"]
-    );
-    assert!(
-        !repository
-            .acknowledge_snapshot_cleanup("snapshot-shared")
-            .unwrap()
-    );
-    assert!(
-        repository
-            .acknowledge_snapshot_cleanup("snapshot-old")
-            .unwrap()
-    );
-    assert_eq!(
-        repository.snapshot_cleanup_candidates().unwrap(),
-        vec!["snapshot-shared"]
-    );
-
-    let _ = fs::remove_dir_all(root);
-}
-
-/// Advancing the boot generation deterministically fails interrupted pending
-/// work, makes formerly active leases recoverable, and fences prior actors.
+/// Advancing the boot generation fails interrupted leases, retires legacy
+/// recoverable rows and their snapshots, and fences prior actors.
 #[test]
 fn boot_reconciliation_fences_prior_generation_mutations() {
     let root = test_root("restart");
@@ -336,24 +182,56 @@ fn boot_reconciliation_fences_prior_generation_mutations() {
             11,
         )
         .unwrap();
+    let mut legacy_active = active.clone();
+    legacy_active.state = RemoteSessionLeaseState::Recoverable;
+    legacy_active.updated_at_unix_seconds = 13;
+    legacy_active.lease_generation += 1;
+    legacy_active.checkpoint = Some(LeaseCheckpointReference {
+        snapshot_id: "legacy-remote-snapshot".to_string(),
+        snapshot_version: 1,
+        session_id: active.session_id.clone(),
+        recorded_at_unix_seconds: 12,
+    });
+    let after = super::repository::LeaseDatabase {
+        version: 1,
+        boot_generation: active.boot_generation,
+        leases: vec![pending.clone(), legacy_active],
+        snapshot_cleanup_candidates: Vec::new(),
+    };
+    let legacy_root = root.join("legacy-store");
+    fs::create_dir_all(&legacy_root).unwrap();
+    fs::set_permissions(&legacy_root, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(
+        legacy_root.join("leases.json"),
+        serde_json::to_vec(&after).unwrap(),
+    )
+    .unwrap();
+    fs::set_permissions(
+        legacy_root.join("leases.json"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
 
-    assert_eq!(repository.advance_boot_generation(20).unwrap(), 1);
-    let interrupted = repository.get(&pending.lease_id).unwrap().unwrap();
-    let recoverable = repository.get(&active.lease_id).unwrap().unwrap();
+    let legacy_repository = RemoteSessionLeaseRepository::new(legacy_root);
+    assert_eq!(legacy_repository.advance_boot_generation(20).unwrap(), 1);
+    let interrupted = legacy_repository.get(&pending.lease_id).unwrap().unwrap();
+    let failed = legacy_repository.get(&active.lease_id).unwrap().unwrap();
     assert_eq!(interrupted.state, RemoteSessionLeaseState::Failed);
-    assert_eq!(recoverable.state, RemoteSessionLeaseState::Recoverable);
-    assert_eq!(interrupted.boot_generation, 1);
-    assert_eq!(recoverable.boot_generation, 1);
-
-    assert_eq!(repository.advance_boot_generation(30).unwrap(), 2);
-    let still_recoverable = repository.get(&active.lease_id).unwrap().unwrap();
+    assert_eq!(failed.state, RemoteSessionLeaseState::Failed);
+    assert!(failed.checkpoint.is_none());
     assert_eq!(
-        still_recoverable.state,
-        RemoteSessionLeaseState::Recoverable
+        legacy_repository.snapshot_cleanup_candidates().unwrap(),
+        vec!["legacy-remote-snapshot"]
     );
-    assert_eq!(still_recoverable.boot_generation, 2);
+    assert_eq!(interrupted.boot_generation, 1);
+    assert_eq!(failed.boot_generation, 1);
 
-    let stale = repository
+    assert_eq!(legacy_repository.advance_boot_generation(30).unwrap(), 2);
+    let still_failed = legacy_repository.get(&active.lease_id).unwrap().unwrap();
+    assert_eq!(still_failed.state, RemoteSessionLeaseState::Failed);
+    assert_eq!(still_failed.boot_generation, 2);
+
+    let stale = legacy_repository
         .mark_failed(
             &active.lease_id,
             active.boot_generation,
@@ -395,19 +273,20 @@ fn boot_reconciliation_clamps_regressed_wall_clock_to_lease_timestamp() {
         .unwrap();
 
     assert_eq!(repository.advance_boot_generation(5).unwrap(), 1);
-    let recovered = repository.get(&active.lease_id).unwrap().unwrap();
-    assert_eq!(recovered.state, RemoteSessionLeaseState::Recoverable);
+    let failed = repository.get(&active.lease_id).unwrap().unwrap();
+    assert_eq!(failed.state, RemoteSessionLeaseState::Failed);
     assert_eq!(
-        recovered.updated_at_unix_seconds,
+        failed.updated_at_unix_seconds,
         active.updated_at_unix_seconds
     );
-    assert_eq!(recovered.activated_at_unix_seconds, Some(11));
+    assert_eq!(failed.terminal_at_unix_seconds, Some(11));
+    assert_eq!(failed.activated_at_unix_seconds, Some(11));
 
     let _ = fs::remove_dir_all(root);
 }
 
 /// Garbage collection must preview exactly the eligible terminal records and
-/// retain active or recoverable leases regardless of age.
+/// retain active leases regardless of age.
 #[test]
 fn lease_gc_is_previewable_and_preserves_live_authority() {
     let root = test_root("gc");
@@ -579,15 +458,6 @@ fn reservation(
         idempotency_key: idempotency_key.to_string(),
         creation_fingerprint: fingerprint.to_string(),
         now_unix_seconds: 10,
-    }
-}
-
-fn checkpoint(snapshot_id: &str, session_id: &str) -> LeaseCheckpointReference {
-    LeaseCheckpointReference {
-        snapshot_id: snapshot_id.to_string(),
-        snapshot_version: 1,
-        session_id: session_id.to_string(),
-        recorded_at_unix_seconds: 12,
     }
 }
 

@@ -33,7 +33,7 @@ use crate::host::power_inhibition::{
     PowerInhibitionResourceState, PowerInhibitionState,
 };
 use crate::host::router::{
-    HostDefaultSessionPolicy, HostRecoveryPolicy, HostSessionRouter, HostSessionRouterConfig,
+    HostDefaultSessionPolicy, HostSessionRouter, HostSessionRouterConfig,
     LocalSessionLaunchContext, local_launch_environment_key_allowed,
 };
 use crate::host::session::{SessionSupervisorSnapshot, SessionSupervisorState};
@@ -69,10 +69,8 @@ pub(crate) struct HostServerConfig {
     pub(crate) max_live_sessions: usize,
     /// Bounded host shutdown interval.
     pub(crate) shutdown_timeout: Duration,
-    /// Interval between best-effort checkpoints of active durable leases.
+    /// Interval between best-effort checkpoints of active local assignments.
     pub(crate) checkpoint_interval: Duration,
-    /// Automatic startup and attach recovery behavior.
-    pub(crate) recovery_policy: HostRecoveryPolicy,
     /// Existing-session selection behavior for remote default intent.
     pub(crate) default_session_policy: HostDefaultSessionPolicy,
     /// Default finite lifetime for newly created leases; zero disables expiry.
@@ -173,7 +171,6 @@ impl HostServer {
             shell: config.shell.clone(),
             max_sessions: config.max_sessions,
             max_live_sessions: config.max_live_sessions,
-            recovery_policy: config.recovery_policy,
             default_session_policy: config.default_session_policy,
             default_lease_lifetime_seconds: config.default_lease_lifetime_seconds,
         });
@@ -216,10 +213,10 @@ impl HostServer {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// Applies configured eager recovery before listeners start serving.
-    pub(crate) async fn prepare_startup(&self) -> Result<usize> {
+    /// Retires obsolete lease snapshots before listeners start serving.
+    pub(crate) async fn prepare_startup(&self) -> Result<()> {
         let _ = self.router.reconcile_snapshot_cleanup().await?;
-        self.router.apply_startup_recovery_policy().await
+        Ok(())
     }
 
     /// Serves local management requests until cancellation or `host/shutdown`.
@@ -269,12 +266,6 @@ impl HostServer {
                     record_host_maintenance_state(&mut maintenance_failures, "terminal runtime cleanup", cleanup_failure);
                 }
                 _ = checkpoint_timer.tick() => {
-                    let lease_checkpoint_failure = match self.router.checkpoint_active_leases().await {
-                        Ok((_, 0)) => None,
-                        Ok((_, failed)) => Some(format!("{failed} active lease checkpoints failed")),
-                        Err(error) => Some(error.to_string()),
-                    };
-                    record_host_maintenance_state(&mut maintenance_failures, "active lease checkpoint", lease_checkpoint_failure);
                     let local_checkpoint_failure = match Box::pin(self.router.checkpoint_active_local_assignments()).await {
                         Ok((_, 0)) => None,
                         Ok((_, failed)) => Some(format!("{failed} active local assignment checkpoints failed")),
@@ -376,7 +367,6 @@ impl HostServer {
         }
         drop(connections);
         if !shutdown.force {
-            self.router.checkpoint_active_leases_strict().await?;
             Box::pin(self.router.checkpoint_active_local_assignments_strict()).await?;
         }
         self.router
@@ -691,14 +681,6 @@ impl HostServer {
                     })
                     .map(|record| remote_trust_record_json(&record)))
             }
-            "lease/checkpoint" => {
-                self.reconcile_pending_lease(params, previous_generation, |lease| {
-                    lease.checkpoint.is_some()
-                })
-            }
-            "lease/recover" => self.reconcile_pending_lease(params, previous_generation, |lease| {
-                lease.state == crate::storage::lease::RemoteSessionLeaseState::Active
-            }),
             "lease/release" => self.reconcile_pending_lease(params, previous_generation, |lease| {
                 lease.state == crate::storage::lease::RemoteSessionLeaseState::Released
             }),
@@ -938,16 +920,6 @@ impl HostServer {
                 let target = required_string(&params, "target")?;
                 Ok((remote_lease_json(&self.router.get_lease(target)?), None))
             }
-            "lease/checkpoint" => {
-                let target = required_string(&params, "target")?;
-                let lease = self.router.checkpoint_lease(target).await?;
-                Ok((remote_lease_json(&lease), None))
-            }
-            "lease/recover" => {
-                let target = required_string(&params, "target")?;
-                let binding = self.router.recover_lease(target).await?;
-                Ok((remote_lease_json(&binding.lease), None))
-            }
             "lease/release" => {
                 let target = required_string(&params, "target")?;
                 let terminate = params
@@ -1062,14 +1034,14 @@ impl HostServer {
                                     "state": match lease.state {
                                         crate::storage::lease::RemoteSessionLeaseState::Pending => "pending",
                                         crate::storage::lease::RemoteSessionLeaseState::Active => "active",
-                                        crate::storage::lease::RemoteSessionLeaseState::Recoverable => "recoverable",
+                                        crate::storage::lease::RemoteSessionLeaseState::Recoverable => "failed",
                                         crate::storage::lease::RemoteSessionLeaseState::Released => "released",
                                         crate::storage::lease::RemoteSessionLeaseState::Revoked => "revoked",
                                         crate::storage::lease::RemoteSessionLeaseState::Failed => "failed",
                                     },
                                     "socket": Value::Null,
                                     "accepts_primary": false,
-                                    "recoverable": lease.state == crate::storage::lease::RemoteSessionLeaseState::Recoverable,
+                                    "recoverable": false,
                                 })
                             }),
                     );
@@ -1192,11 +1164,6 @@ impl HostServer {
             "snapshot_cleanup_pending": reconciliation.snapshot_cleanup_pending,
             "policy": {
                 "checkpoint_interval_seconds": self.config.checkpoint_interval.as_secs(),
-                "recover_on_start": match self.config.recovery_policy {
-                    HostRecoveryPolicy::Lazy => "lazy",
-                    HostRecoveryPolicy::Eager => "eager",
-                    HostRecoveryPolicy::Disabled => "disabled",
-                },
                 "default_session_policy": match self.config.default_session_policy {
                     HostDefaultSessionPolicy::MostRecentAttachable => "most_recent_attachable",
                     HostDefaultSessionPolicy::None => "none",
@@ -1402,12 +1369,11 @@ fn parse_lease_state(value: &str) -> Result<crate::storage::lease::RemoteSession
     match value {
         "pending" => Ok(crate::storage::lease::RemoteSessionLeaseState::Pending),
         "active" => Ok(crate::storage::lease::RemoteSessionLeaseState::Active),
-        "recoverable" => Ok(crate::storage::lease::RemoteSessionLeaseState::Recoverable),
         "released" => Ok(crate::storage::lease::RemoteSessionLeaseState::Released),
         "revoked" => Ok(crate::storage::lease::RemoteSessionLeaseState::Revoked),
         "failed" => Ok(crate::storage::lease::RemoteSessionLeaseState::Failed),
         _ => Err(MezError::invalid_args(
-            "lease state must be pending, active, recoverable, released, revoked, or failed",
+            "lease state must be pending, active, released, revoked, or failed",
         )),
     }
 }
@@ -1417,8 +1383,6 @@ fn host_administration_mutates(method: &str, request: &Value) -> bool {
         "remote/invite"
         | "remote/client/rename"
         | "remote/client/revoke"
-        | "lease/checkpoint"
-        | "lease/recover"
         | "lease/release"
         | "lease/revoke" => true,
         "lease/gc" => request
@@ -1479,7 +1443,7 @@ fn remote_lease_json(lease: &crate::storage::lease::RemoteSessionLease) -> Value
         "state": match lease.state {
             crate::storage::lease::RemoteSessionLeaseState::Pending => "pending",
             crate::storage::lease::RemoteSessionLeaseState::Active => "active",
-            crate::storage::lease::RemoteSessionLeaseState::Recoverable => "recoverable",
+            crate::storage::lease::RemoteSessionLeaseState::Recoverable => "failed",
             crate::storage::lease::RemoteSessionLeaseState::Released => "released",
             crate::storage::lease::RemoteSessionLeaseState::Revoked => "revoked",
             crate::storage::lease::RemoteSessionLeaseState::Failed => "failed",
@@ -1489,12 +1453,6 @@ fn remote_lease_json(lease: &crate::storage::lease::RemoteSessionLease) -> Value
         "activated_at_unix_seconds": lease.activated_at_unix_seconds,
         "terminal_at_unix_seconds": lease.terminal_at_unix_seconds,
         "expires_at_unix_seconds": lease.expires_at_unix_seconds,
-        "checkpoint": lease.checkpoint.as_ref().map(|checkpoint| json!({
-            "snapshot_id": checkpoint.snapshot_id,
-            "snapshot_version": checkpoint.snapshot_version,
-            "session_id": checkpoint.session_id,
-            "recorded_at_unix_seconds": checkpoint.recorded_at_unix_seconds,
-        })),
         "failure": lease.failure,
         "boot_generation": lease.boot_generation,
         "lease_generation": lease.lease_generation,
@@ -1666,7 +1624,6 @@ mod tests {
             max_live_sessions: 4,
             shutdown_timeout: Duration::from_secs(2),
             checkpoint_interval: Duration::from_secs(300),
-            recovery_policy: HostRecoveryPolicy::Lazy,
             default_session_policy: HostDefaultSessionPolicy::MostRecentAttachable,
             default_lease_lifetime_seconds: 0,
             failed_lease_retention_seconds: 604_800,
@@ -2184,116 +2141,6 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// A graceful host stop captures the latest active lease checkpoint before
-    /// runtime teardown, while a forced stop retains the explicit no-checkpoint
-    /// escape hatch used for emergency shutdown.
-    #[tokio::test(flavor = "current_thread")]
-    async fn graceful_host_shutdown_checkpoints_active_leases() {
-        let root = test_root("graceful-checkpoint");
-        let host = HostServer::bind(config(root.clone())).unwrap();
-        let principal = RemotePrincipal {
-            trust_record_id: "checkpoint-owner".to_string(),
-            endpoint_id: "checkpoint-endpoint".to_string(),
-            role_ceiling: RemoteRoleCeiling::Primary,
-            host_routing: RemoteHostRoutingAuthority {
-                session_create: true,
-                session_kill: false,
-                session_list: true,
-                session_attach_scope: RemoteSessionAttachScope::Own,
-                max_active_leases: 1,
-                max_live_sessions: 1,
-                lease_lifetime_ceiling_seconds: None,
-            },
-            requested_role: RequestedRole::Primary,
-        };
-        let created = host
-            .router
-            .create_remote(
-                &principal,
-                crate::host::router::RemoteSessionCreateRequest {
-                    name: Some("graceful".to_string()),
-                    idempotency_key: "graceful-create".to_string(),
-                    size: Size::new(80, 24).unwrap(),
-                },
-            )
-            .await
-            .unwrap();
-
-        host.serve(async {}).await.unwrap();
-        let checkpointed = host.router.get_lease(&created.lease.lease_id).unwrap();
-        let checkpoint = checkpointed.checkpoint.expect("graceful checkpoint");
-        crate::storage::snapshot::SnapshotRepository::new(root.join("layouts"))
-            .inspect(&checkpoint.snapshot_id)
-            .unwrap();
-        drop(host);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    /// Graceful shutdown fails before runtime teardown when a required lease
-    /// checkpoint cannot commit, while explicit forced teardown remains
-    /// available as the data-loss escape hatch.
-    #[tokio::test(flavor = "current_thread")]
-    async fn graceful_host_shutdown_preserves_runtime_after_checkpoint_failure() {
-        let root = test_root("failed-graceful-checkpoint");
-        let host = HostServer::bind(config(root.clone())).unwrap();
-        let principal = RemotePrincipal {
-            trust_record_id: "failed-checkpoint-owner".to_string(),
-            endpoint_id: "failed-checkpoint-endpoint".to_string(),
-            role_ceiling: RemoteRoleCeiling::Primary,
-            host_routing: RemoteHostRoutingAuthority {
-                session_create: true,
-                session_kill: false,
-                session_list: true,
-                session_attach_scope: RemoteSessionAttachScope::Own,
-                max_active_leases: 1,
-                max_live_sessions: 1,
-                lease_lifetime_ceiling_seconds: None,
-            },
-            requested_role: RequestedRole::Primary,
-        };
-        let created = host
-            .router
-            .create_remote(
-                &principal,
-                crate::host::router::RemoteSessionCreateRequest {
-                    name: Some("failed-graceful".to_string()),
-                    idempotency_key: "failed-graceful-create".to_string(),
-                    size: Size::new(80, 24).unwrap(),
-                },
-            )
-            .await
-            .unwrap();
-        fs::write(root.join("layouts"), b"not a directory\n").unwrap();
-
-        let error = host.serve(async {}).await.unwrap_err();
-        assert!(error.message().contains(&created.lease.lease_id), "{error}");
-        assert_eq!(
-            host.router
-                .get_lease(&created.lease.lease_id)
-                .unwrap()
-                .state,
-            crate::storage::lease::RemoteSessionLeaseState::Active
-        );
-        assert!(
-            host.router
-                .snapshots()
-                .await
-                .unwrap()
-                .iter()
-                .any(|snapshot| {
-                    snapshot.session_id == created.lease.session_id
-                        && snapshot.state == SessionSupervisorState::Running
-                })
-        );
-
-        host.router
-            .shutdown_all(true, Duration::from_secs(2))
-            .await
-            .unwrap();
-        drop(host);
-        let _ = fs::remove_dir_all(root);
-    }
-
     /// Lease RPCs preserve lifecycle distinctions, return secret-free records,
     /// and emit configured local-host audit records for success and failure.
     #[tokio::test(flavor = "current_thread")]
@@ -2347,16 +2194,6 @@ mod tests {
         assert!(!encoded.contains("idempotency"), "{encoded}");
         assert!(!encoded.contains("fingerprint"), "{encoded}");
 
-        let checkpointed = exchange_host_request(
-            &host,
-            "lease/checkpoint",
-            json!({
-                "target":"rpc-lease",
-                "idempotency_key":"checkpoint-rpc-lease"
-            }),
-        )
-        .await;
-        assert!(checkpointed["result"]["checkpoint"]["snapshot_id"].is_string());
         let refused = exchange_host_request(
             &host,
             "lease/release",

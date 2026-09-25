@@ -1755,7 +1755,6 @@ fn persistent_host_policy_is_validated_and_primary_only() {
 
     for (body, path) in [
         ("max_sessions = 0", "host.max_sessions"),
-        ("recover_on_start = \"unknown\"", "host.recover_on_start"),
         (
             "default_session_policy = \"create\"",
             "host.default_session_policy",

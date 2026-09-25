@@ -9,9 +9,9 @@ use rustix::fs::{FlockOperation, Mode, OFlags, flock, open};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    LeaseCheckpointReference, LeaseGarbageCollectionPolicy, LeaseGarbageCollectionPreview,
-    LeaseReservation, LeaseReservationRequest, MezError, RemoteSessionLease,
-    RemoteSessionLeaseState, Result, validate_nonempty_identifier, validate_optional_text,
+    LeaseGarbageCollectionPolicy, LeaseGarbageCollectionPreview, LeaseReservation,
+    LeaseReservationRequest, MezError, RemoteSessionLease, RemoteSessionLeaseState, Result,
+    validate_nonempty_identifier, validate_optional_text,
 };
 use crate::runtime::current_effective_uid;
 
@@ -228,96 +228,10 @@ impl RemoteSessionLeaseRepository {
             expected_lease_generation,
             now_unix_seconds,
             |lease| {
-                require_state(
-                    lease,
-                    &[
-                        RemoteSessionLeaseState::Pending,
-                        RemoteSessionLeaseState::Recoverable,
-                    ],
-                    "activate",
-                )?;
+                require_state(lease, &[RemoteSessionLeaseState::Pending], "activate")?;
                 lease.state = RemoteSessionLeaseState::Active;
                 lease.activated_at_unix_seconds = Some(now_unix_seconds);
                 lease.failure = None;
-                Ok(())
-            },
-        )
-    }
-
-    pub(crate) fn mark_recoverable(
-        &self,
-        lease_id: &str,
-        expected_boot_generation: u64,
-        expected_lease_generation: u64,
-        now_unix_seconds: u64,
-    ) -> Result<RemoteSessionLease> {
-        self.transition(
-            lease_id,
-            expected_boot_generation,
-            expected_lease_generation,
-            now_unix_seconds,
-            |lease| {
-                require_state(
-                    lease,
-                    &[RemoteSessionLeaseState::Active],
-                    "mark recoverable",
-                )?;
-                lease.state = RemoteSessionLeaseState::Recoverable;
-                Ok(())
-            },
-        )
-    }
-
-    /// Marks an active lease recoverable after its supervised runtime exits.
-    pub(crate) fn mark_recoverable_after_runtime_exit(
-        &self,
-        lease_id: &str,
-        expected_boot_generation: u64,
-        expected_lease_generation: u64,
-        now_unix_seconds: u64,
-        diagnostic: String,
-    ) -> Result<RemoteSessionLease> {
-        validate_optional_text(Some(&diagnostic), "runtime exit diagnostic", 1024)?;
-        self.transition(
-            lease_id,
-            expected_boot_generation,
-            expected_lease_generation,
-            now_unix_seconds,
-            |lease| {
-                require_state(
-                    lease,
-                    &[RemoteSessionLeaseState::Active],
-                    "mark recoverable after runtime exit",
-                )?;
-                lease.state = RemoteSessionLeaseState::Recoverable;
-                lease.failure = Some(diagnostic);
-                Ok(())
-            },
-        )
-    }
-
-    /// Records a retryable recovery diagnostic without consuming recoverability.
-    pub(crate) fn record_retryable_recovery_failure(
-        &self,
-        lease_id: &str,
-        expected_boot_generation: u64,
-        expected_lease_generation: u64,
-        now_unix_seconds: u64,
-        failure: String,
-    ) -> Result<RemoteSessionLease> {
-        validate_optional_text(Some(&failure), "recovery failure", 1024)?;
-        self.transition(
-            lease_id,
-            expected_boot_generation,
-            expected_lease_generation,
-            now_unix_seconds,
-            |lease| {
-                require_state(
-                    lease,
-                    &[RemoteSessionLeaseState::Recoverable],
-                    "record retryable recovery failure",
-                )?;
-                lease.failure = Some(failure);
                 Ok(())
             },
         )
@@ -353,79 +267,6 @@ impl RemoteSessionLeaseRepository {
                 Ok(())
             },
         )
-    }
-
-    pub(crate) fn update_checkpoint(
-        &self,
-        lease_id: &str,
-        expected_boot_generation: u64,
-        expected_lease_generation: u64,
-        checkpoint: LeaseCheckpointReference,
-        now_unix_seconds: u64,
-    ) -> Result<RemoteSessionLease> {
-        validate_nonempty_identifier(lease_id, "id")?;
-        self.mutate_database(|database| {
-            if database.boot_generation != expected_boot_generation {
-                return Err(MezError::conflict(
-                    "remote session lease boot generation is stale",
-                ));
-            }
-            let lease = database
-                .leases
-                .iter_mut()
-                .find(|lease| lease.lease_id == lease_id)
-                .ok_or_else(|| {
-                    MezError::new(
-                        crate::error::MezErrorKind::NotFound,
-                        "remote session lease not found",
-                    )
-                })?;
-            if lease.boot_generation != expected_boot_generation
-                || lease.lease_generation != expected_lease_generation
-            {
-                return Err(MezError::conflict(
-                    "remote session lease generation is stale",
-                ));
-            }
-            if now_unix_seconds < lease.updated_at_unix_seconds {
-                return Err(MezError::conflict(
-                    "remote session lease update timestamp is stale",
-                ));
-            }
-            require_state(
-                lease,
-                &[
-                    RemoteSessionLeaseState::Active,
-                    RemoteSessionLeaseState::Recoverable,
-                ],
-                "update checkpoint",
-            )?;
-            checkpoint.validate(&lease.session_id)?;
-            if database
-                .snapshot_cleanup_candidates
-                .contains(&checkpoint.snapshot_id)
-            {
-                return Err(MezError::conflict(
-                    "remote session checkpoint is already pending artifact cleanup",
-                ));
-            }
-            let replaced_snapshot_id = lease
-                .checkpoint
-                .as_ref()
-                .filter(|prior| prior.snapshot_id != checkpoint.snapshot_id)
-                .map(|prior| prior.snapshot_id.clone());
-            lease.checkpoint = Some(checkpoint);
-            lease.updated_at_unix_seconds = now_unix_seconds;
-            lease.lease_generation = lease.lease_generation.saturating_add(1);
-            lease.validate()?;
-            let updated = lease.clone();
-            if let Some(snapshot_id) = replaced_snapshot_id {
-                database.snapshot_cleanup_candidates.push(snapshot_id);
-                database.snapshot_cleanup_candidates.sort();
-                database.snapshot_cleanup_candidates.dedup();
-            }
-            Ok(updated)
-        })
     }
 
     /// Lists snapshot identifiers whose last known owning reference was
@@ -547,15 +388,26 @@ impl RemoteSessionLeaseRepository {
                             Some("lease creation was interrupted by host restart".to_string());
                         lease.terminal_at_unix_seconds = Some(updated_at_unix_seconds);
                     }
-                    RemoteSessionLeaseState::Active => {
-                        lease.state = RemoteSessionLeaseState::Recoverable;
+                    RemoteSessionLeaseState::Active | RemoteSessionLeaseState::Recoverable => {
+                        lease.state = RemoteSessionLeaseState::Failed;
+                        lease.failure = Some(
+                            "remote session lease recovery is no longer supported".to_string(),
+                        );
+                        lease.terminal_at_unix_seconds = Some(updated_at_unix_seconds);
                     }
                     _ => {}
+                }
+                if let Some(checkpoint) = lease.checkpoint.take() {
+                    database
+                        .snapshot_cleanup_candidates
+                        .push(checkpoint.snapshot_id);
                 }
                 lease.updated_at_unix_seconds = updated_at_unix_seconds;
                 lease.boot_generation = database.boot_generation;
                 lease.lease_generation = lease.lease_generation.saturating_add(1);
             }
+            database.snapshot_cleanup_candidates.sort();
+            database.snapshot_cleanup_candidates.dedup();
             Ok(database.boot_generation)
         })
     }

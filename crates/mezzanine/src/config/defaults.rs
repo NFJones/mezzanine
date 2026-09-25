@@ -173,7 +173,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 95
+version = 98
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -184,7 +184,6 @@ max_sessions = 64
 max_live_sessions = 16
 shutdown_timeout_ms = 10000
 checkpoint_interval_seconds = 300
-recover_on_start = "lazy"
 default_session_policy = "most_recent_attachable"
 
 [host.leases]

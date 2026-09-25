@@ -308,25 +308,31 @@ A remote session assignment MUST be represented by a durable
 endpoint-use lock, snapshot, and live socket registry record. A lease MUST have
 stable lease and session identities, an owning trust principal, explicit
 sharing policy, lifecycle state, timestamps, boot generation, optional name and
-default metadata, idempotent creation result, and an optional versioned
-checkpoint reference. Credentials and credential verifiers MUST NOT be stored
-in a lease.
+default metadata, and idempotent creation result. Credentials and credential
+verifiers MUST NOT be stored in a lease. Remote leases MUST NOT reference
+session snapshots or support checkpoint/recovery operations; snapshot recovery
+is limited to local hosted assignments.
 
-Lease states are `pending`, `active`, `recoverable`, `released`, `revoked`, and
-`failed`. Implementations MUST enforce these transitions:
+Lease states are `pending`, `active`, `released`, `revoked`, and `failed`.
+Implementations MUST enforce these transitions:
 
 - creation reserves `pending` before allocating a runtime and commits `active`
   only after that runtime is ready;
-- interruption or host restart MAY move `pending` to `failed` or a documented
-  retryable state, and MUST move a formerly `active` lease to `recoverable`
-  before accepting ordinary routing;
-- successful reconstruction moves `recoverable` to `active` using a fresh
-  runtime and a validated checkpoint;
+- interruption or host restart MUST move `pending` and formerly `active`
+  leases to `failed` before accepting ordinary routing; the durable reservation
+  remains visible for administration until explicit release or garbage
+  collection;
 - `release` removes future reservation after any required live-runtime action,
-  while `revoke` permanently denies future attachment and recovery;
+  while `revoke` permanently denies future attachment;
 - `released`, `revoked`, and `failed` records MAY become garbage-collection
-  candidates under explicit retention policy, but active or recoverable
-  authority MUST NOT be collected.
+  candidates under explicit retention policy; active authority MUST NOT be
+  collected.
+
+For compatibility, startup MUST normalize persisted legacy `recoverable` remote
+leases as failed, clear their checkpoint references, and durably enqueue their
+snapshot artifacts for cleanup. Remote status MUST report such legacy rows as
+failed, never recoverable. This migration behavior does not permit creating new
+remote checkpoint references.
 
 Killing a session runtime, releasing a lease, revoking a lease, and revoking a
 client trust record are separate operations. Killing stops current processes
@@ -337,11 +343,11 @@ lease ownership.
 
 The host MUST persist and advance a boot generation before restart
 reconciliation. Every runtime callback that mutates lease state MUST be fenced
-by lease and boot generation so a stale actor cannot modify a recovered lease.
-A host restart does not preserve its actor-owned PTYs or child processes.
-Recovery means durable assignment plus reconstruction into fresh processes from
-a compatible, integrity-checked checkpoint; user-visible documentation and
-status MUST NOT claim transparent process or PTY continuity.
+by lease and boot generation so a stale actor cannot modify a later lease
+state. A host restart does not preserve remote actor-owned PTYs or child
+processes, and MUST NOT automatically reconstruct a remote session. Local
+hosted-assignment recovery remains separate and MUST NOT be represented as
+remote lease recovery.
 
 Remote creation MUST require a client-generated idempotency key scoped to the
 authenticated host principal and normalized creation request. A replay of the
@@ -9769,8 +9775,8 @@ The persistent-host CLI contract is:
   `mez attach|kill TARGET` session operations;
 - `mez --iroh-profile HOST attach [TARGET|--default]`, `new [--name NAME]`,
   `list`, and `kill TARGET --force` for host-profile remote operations; and
-- `mez lease list|show|checkpoint|recover|release|revoke|gc` for local durable
-  lease administration.
+- `mez lease list|show|release|revoke|gc` for local durable lease
+  administration.
 
 Host-only initialization MUST advertise exactly the host methods granted to the
 principal. `host/session/kill` requires a primary role ceiling, separately
@@ -9780,9 +9786,9 @@ runtime teardown and MUST NOT imply lease-administration or trust-revocation
 authority. The host-scoped JSON-RPC catalog MUST include `host/get`, `host/shutdown`,
 `host/reconcile`, `host/session/list`, `host/session/create`, and
 `host/session/resolve`. The lease catalog MUST include `lease/list`,
-`lease/get`, `lease/checkpoint`, `lease/recover`, `lease/release`,
-`lease/revoke`, and `lease/gc`. Local Unix administration is authoritative by
-default. Results and errors MUST be structured and secret-free, MUST not reveal
+`lease/get`, `lease/release`, `lease/revoke`, and `lease/gc`. Local Unix
+administration is authoritative by default. Results and errors MUST be
+structured and secret-free, MUST not reveal
 unauthorized session existence, and MUST distinguish authentication,
 authorization, quota, conflict, not-found, lifecycle, recovery, timeout,
 rate-limit, and internal failures.

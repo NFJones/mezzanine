@@ -151,7 +151,7 @@ with an explicit target does not silently create a replacement. The host
 routes a connection to one session runtime; pane, client, terminal, agent, and
 presentation state remain isolated in that runtime.
 
-## Manage durable leases and recovery
+## Manage durable leases
 
 Remote session assignments are durable leases, not live process guarantees.
 Inspect them through local Unix administration:
@@ -159,17 +159,17 @@ Inspect them through local Unix administration:
 ```console
 mez lease list --all
 mez lease show TARGET
-mez lease checkpoint TARGET
-mez lease recover TARGET
 ```
 
-Checkpoint and recovery are generation-fenced. A host restart does not preserve
-PTYs or child processes; recovery reconstructs a compatible checkpoint into
-fresh processes. Releasing a lease, revoking a lease, killing a live runtime,
-and revoking device trust are separate operations. Active release or revocation
-requires the explicit `--terminate` option, and garbage collection previews by
-default. See the [CLI reference](../reference-manual/cli.md#persistent-host-command-contract)
-for the complete lease command contract.
+Remote leases retain durable reservations, but remote sessions are not
+checkpointed or reconstructed after a host restart; interrupted active leases
+are reported as failed until released or garbage-collected. Hosted-local
+assignments retain their separate snapshot recovery path. Releasing a lease,
+revoking a lease, killing a live runtime, and revoking device trust are separate
+operations. Active release or revocation requires the explicit `--terminate`
+option, and garbage collection previews by default. See the [CLI
+reference](../reference-manual/cli.md#persistent-host-command-contract) for the
+complete lease command contract.
 
 ## Add remote access deliberately
 

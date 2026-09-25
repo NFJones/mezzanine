@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// The typed lease hierarchy exposes every documented local operation.
+/// The typed lease hierarchy exposes every supported local operation.
 #[test]
 fn lease_help_lists_complete_administration_surface() {
     let (env, home) = test_env("lease-help");
@@ -17,15 +17,7 @@ fn lease_help_lists_complete_administration_surface() {
     )
     .unwrap();
     let output = String::from_utf8(stdout).unwrap();
-    for command in [
-        "list",
-        "show",
-        "checkpoint",
-        "recover",
-        "release",
-        "revoke",
-        "gc",
-    ] {
+    for command in ["list", "show", "release", "revoke", "gc"] {
         assert!(output.contains(command), "{output}");
     }
     assert!(stderr.is_empty());

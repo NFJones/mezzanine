@@ -12,13 +12,13 @@ pub(crate) enum RemoteSessionLeaseState {
     Pending,
     /// A ready runtime currently backs the lease.
     Active,
-    /// Durable authority remains, but a fresh runtime must be reconstructed.
+    /// Legacy on-disk state; startup reconciliation converts it to `Failed`.
     Recoverable,
     /// The durable reservation was intentionally released.
     Released,
-    /// Future attachment and recovery are denied.
+    /// Future attachment is denied.
     Revoked,
-    /// Construction or recovery ended in an administratively visible failure.
+    /// Construction or host restart ended in an administratively visible failure.
     Failed,
 }
 
@@ -29,7 +29,7 @@ impl RemoteSessionLeaseState {
     }
 }
 
-/// Versioned reference to snapshot data used for fresh-process reconstruction.
+/// Legacy remote checkpoint data retained only to decode and retire old stores.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LeaseCheckpointReference {
     /// Existing snapshot manifest identity.
