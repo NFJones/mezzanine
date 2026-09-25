@@ -2919,6 +2919,161 @@ fn runtime_agent_subshell_bootstrap_waits_for_start_before_releasing_payload() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
+/// Verifies authenticated receiver installation captures the persistent shell
+/// group before deferred bootstrap work can change the foreground process.
+#[test]
+fn runtime_agent_subshell_captures_foreground_group_at_receiver_install() {
+    let Some(bash_path) = find_test_shell("bash", &["/bin/bash", "/usr/bin/bash"]) else {
+        eprintln!("skipping receiver-install certification regression because bash is unavailable");
+        return;
+    };
+    let mut service = test_runtime_service();
+    service.enable_legacy_managed_startup_for_tests();
+    service.session.shell = ResolvedShell::new(bash_path, ShellSource::ShellEnv).into();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let pane_id = "%1".to_string();
+    let token = service
+        .bash_receiver_token_for_pane(&pane_id)
+        .cloned()
+        .expect("managed Bash startup should install an authentication token");
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+
+    service
+        .begin_agent_subshell_shell_handoff(&pane_id)
+        .unwrap();
+    let (marker, wrapper) = service
+        .prepare_bootstrap_to_pane(&pane_id)
+        .unwrap()
+        .expect("agent-subshell handoff should register a bootstrap transaction");
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get(&marker)
+        .unwrap()
+        .clone();
+    service.bind_agent_subshell_bootstrap_marker(&pane_id, &marker);
+    service.defer_agent_subshell_bootstrap_wrapper(&pane_id, &marker, wrapper);
+    let _ = service.drain_pane_io_transition();
+    let install_group = 41_231;
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, Some(install_group));
+
+    assert_eq!(
+        service
+            .observe_managed_shell_protocol_event(
+                &pane_id,
+                mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                mez_terminal::ManagedShellAdapter::Bash,
+                token.as_str(),
+                &mez_terminal::ManagedShellProtocolEvent::ChildInstalled {
+                    marker: marker.clone(),
+                },
+            )
+            .unwrap(),
+        1
+    );
+    let observation = service
+        .drain_pane_io_transition()
+        .side_effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect:
+                    crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id,
+                        expected_process_group_id,
+                    },
+            } => Some((instance, observation_id, expected_process_group_id)),
+            _ => None,
+        })
+        .expect("receiver installation should request fresh foreground metadata");
+    assert_eq!(observation.2, None);
+
+    let mut stale_instance = observation.0.clone();
+    stale_instance.generation = stale_instance.generation.saturating_add(1);
+    let stale = service
+        .apply_pane_foreground_process_observation_transition(
+            stale_instance,
+            crate::runtime::PaneForegroundProcessObservation {
+                observation_id: observation.1.clone(),
+                process_name: Some("bash".to_string()),
+                process_group_id: Some(install_group),
+                current_working_directory: None,
+                error: None,
+            },
+        )
+        .unwrap();
+    assert!(!stale.applied);
+    assert!(service.drain_pane_io_transition().side_effects.is_empty());
+
+    let captured = service
+        .apply_pane_foreground_process_observation_transition(
+            observation.0,
+            crate::runtime::PaneForegroundProcessObservation {
+                observation_id: observation.1,
+                process_name: Some("bash".to_string()),
+                process_group_id: Some(install_group),
+                current_working_directory: None,
+                error: None,
+            },
+        )
+        .unwrap();
+    assert!(captured.applied);
+    let released_wrapper = service.drain_pane_io_transition().side_effects;
+    assert!(released_wrapper.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::PaneProcessIo {
+            effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { .. },
+            ..
+        }
+    )));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .get(&marker)
+            .unwrap()
+            .pending_input_payload
+            .is_some()
+    );
+
+    // A later foreground change belongs to transaction execution, not to the
+    // persistent receiver captured before the bootstrap wrapper was released.
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, Some(install_group + 1));
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &marker,
+            &transaction.turn_id,
+            "agent-%1",
+            &pane_id,
+        )
+        .unwrap();
+    let released_payload = service.drain_pane_io_transition().side_effects;
+    assert!(released_payload.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::PaneProcessIo {
+            effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { .. },
+            ..
+        }
+    )));
+    assert!(!released_payload.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::PaneProcessIo {
+            effect: crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess { .. },
+            ..
+        }
+    )));
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
 /// Verifies shell transaction payload bytes are deferred until the wrapper
 /// receiver emits its start marker.
 ///

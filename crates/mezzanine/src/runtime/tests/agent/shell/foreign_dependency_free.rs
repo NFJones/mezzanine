@@ -671,7 +671,7 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
     }));
     service
         .pane_processes_mut()
-        .set_foreground_process_group_id_for_test(&pane_id, None);
+        .set_foreground_process_group_id_for_test(&pane_id, Some(primary_pid.saturating_add(3)));
 
     let bootstrap_marker = service
         .running_shell_transactions_for_tests()
@@ -700,6 +700,36 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
             .unwrap(),
         1
     );
+    let install_effects = service.drain_pane_io_transition().side_effects;
+    let install_observation = install_effects
+        .iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect:
+                    crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id, ..
+                    },
+            } => Some((instance.clone(), observation_id.clone())),
+            _ => None,
+        })
+        .expect("authenticated child installation should request its start-boundary PGID");
+    assert!(
+        pane_input_effects(&install_effects).is_empty(),
+        "bootstrap wrapper must remain deferred until install-boundary PGID arrives"
+    );
+    service
+        .apply_pane_foreground_process_observation_transition(
+            install_observation.0,
+            crate::runtime::PaneForegroundProcessObservation {
+                observation_id: install_observation.1,
+                process_name: None,
+                process_group_id: Some(primary_pid.saturating_add(3)),
+                current_working_directory: None,
+                error: None,
+            },
+        )
+        .unwrap();
     let installed_effects = service.drain_pane_io_transition().side_effects;
     let installed_inputs = pane_input_effects(&installed_effects);
     assert_eq!(

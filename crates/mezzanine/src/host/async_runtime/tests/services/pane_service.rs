@@ -482,12 +482,12 @@ async fn async_pane_process_service_throttles_metadata_during_output_bursts() {
     backend.push_output(b"first".to_vec());
     backend.push_output(b"second".to_vec());
     backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
-        process_name: "vim".to_string(),
+        process_name: Some("vim".to_string()),
         process_group_id: 42,
         current_working_directory: Some(std::path::PathBuf::from("/tmp/project")),
     })));
     backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
-        process_name: "sh".to_string(),
+        process_name: Some("sh".to_string()),
         process_group_id: 43,
         current_working_directory: Some(std::path::PathBuf::from("/tmp/other")),
     })));

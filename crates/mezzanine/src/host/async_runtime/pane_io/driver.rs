@@ -14,8 +14,8 @@ pub type AsyncPaneIoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Sen
 /// Foreground process metadata observed from a pane backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsyncPaneForegroundProcess {
-    /// Foreground process display name.
-    pub process_name: String,
+    /// Foreground process display name when the host supplied one.
+    pub process_name: Option<String>,
     /// Foreground process group id.
     pub process_group_id: u32,
     /// Foreground process current working directory when known.
@@ -256,10 +256,13 @@ where
         else {
             return Ok(None);
         };
+        let Some(process_name) = metadata.process_name else {
+            return Ok(None);
+        };
         Ok(Some(
             self.scope_event(RuntimeEvent::Pane(PaneEvent::ForegroundProcess {
                 pane_id: self.pane_id.clone(),
-                process_name: metadata.process_name,
+                process_name,
                 process_group_id: metadata.process_group_id,
                 current_working_directory: metadata
                     .current_working_directory
@@ -288,7 +291,7 @@ where
         let (process_name, process_group_id, current_working_directory) = metadata
             .map(|metadata| {
                 (
-                    Some(metadata.process_name),
+                    metadata.process_name,
                     Some(metadata.process_group_id),
                     metadata
                         .current_working_directory

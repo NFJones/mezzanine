@@ -57,7 +57,7 @@ async fn async_pane_process_driver_converts_output_to_runtime_event() {
 async fn async_pane_process_driver_reports_foreground_process_metadata() {
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
-        process_name: "vim".to_string(),
+        process_name: Some("vim".to_string()),
         process_group_id: 42,
         current_working_directory: Some(std::path::PathBuf::from("/tmp/project")),
     })));

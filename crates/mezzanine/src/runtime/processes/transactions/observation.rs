@@ -1248,6 +1248,18 @@ impl RuntimeSessionService {
         if handoff.bootstrap_marker.as_deref() != Some(marker) {
             return false;
         }
+        if self
+            .process
+            .bootstrap_shell_certification_evidence
+            .get(marker)
+            .is_some_and(|evidence| {
+                evidence.pane_id == pane_id
+                    && evidence.primary_process_id == handoff.primary_process_id
+                    && evidence.interaction_generation == handoff.interaction_generation
+            })
+        {
+            return false;
+        }
         if let DependencyFreeHandoffProof::Proven { process_group_id } =
             self.dependency_free_handoff_proof(pane_id, marker)
         {
@@ -1268,6 +1280,7 @@ impl RuntimeSessionService {
                         instance: instance.clone(),
                         observation_id: observation_id.clone(),
                         marker: marker.to_string(),
+                        release_deferred_bootstrap_wrapper: false,
                     },
                 );
             self.persistence
@@ -1286,7 +1299,7 @@ impl RuntimeSessionService {
     }
 
     /// Records one fresh persistent-receiver process-group observation.
-    fn record_agent_subshell_bootstrap_start_observation(
+    pub(super) fn record_agent_subshell_bootstrap_start_observation(
         &mut self,
         pane_id: &str,
         marker: &str,
@@ -1724,10 +1737,17 @@ impl RuntimeSessionService {
                 &pending.marker,
                 process_group_id,
             );
-            self.release_agent_shell_transaction_payload_after_start(
-                &pending.marker,
-                &instance.pane_id,
-            )?;
+            if pending.release_deferred_bootstrap_wrapper {
+                self.release_deferred_agent_subshell_bootstrap_wrapper(
+                    &instance.pane_id,
+                    &pending.marker,
+                )?;
+            } else {
+                self.release_agent_shell_transaction_payload_after_start(
+                    &pending.marker,
+                    &instance.pane_id,
+                )?;
+            }
             return Ok(self.runtime_pane_transition_with_render(
                 &instance.pane_id,
                 true,

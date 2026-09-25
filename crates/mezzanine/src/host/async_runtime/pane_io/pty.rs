@@ -205,14 +205,11 @@ impl AsyncPaneProcessIo for AsyncPtyPaneProcessIo {
         &'a mut self,
     ) -> AsyncPaneIoFuture<'a, Option<AsyncPaneForegroundProcess>> {
         Box::pin(async move {
-            let Some(process_name) = self.process.foreground_process_name() else {
-                return Ok(None);
-            };
             let Some(process_group_id) = self.process.foreground_process_group_id() else {
                 return Ok(None);
             };
             Ok(Some(AsyncPaneForegroundProcess {
-                process_name,
+                process_name: self.process.foreground_process_name(),
                 process_group_id,
                 current_working_directory: self.process.current_working_directory(),
             }))

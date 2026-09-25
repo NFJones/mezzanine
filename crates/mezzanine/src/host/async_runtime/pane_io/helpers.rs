@@ -11,7 +11,8 @@ use super::{
 };
 
 /// Number of fresh PTY foreground queries allowed after bootstrap completion.
-const FOREGROUND_CERTIFICATION_OBSERVATION_ATTEMPTS: usize = 50;
+/// Leave headroom beneath the runtime-owned two-second certification deadline.
+const FOREGROUND_CERTIFICATION_OBSERVATION_ATTEMPTS: usize = 150;
 
 /// Delay between foreground queries while the isolated child relinquishes the PTY.
 const FOREGROUND_CERTIFICATION_OBSERVATION_DELAY: Duration = Duration::from_millis(10);
@@ -557,10 +558,10 @@ fn pane_input_chunk_len(bytes: &[u8]) -> usize {
 
 /// Performs one fresh start capture or bounded completion observation.
 ///
-/// A missing expected group captures the first live foreground process at the
-/// start boundary. At completion, output is written by an isolated child, so
-/// the worker performs fresh observations until the start-captured receiver
-/// group reappears or the bound expires.
+/// At completion, output is written by an isolated child, so the worker polls
+/// until the start-captured receiver group reappears. The polling bound leaves
+/// headroom for the runtime-owned certification deadline. An unmatched final
+/// sample is reported as a failure, never as successful foreground evidence.
 async fn correlated_foreground_process_observation_event<B>(
     driver: &mut AsyncPaneProcessDriver<B>,
     observation_id: String,
@@ -611,7 +612,15 @@ where
             sleep(FOREGROUND_CERTIFICATION_OBSERVATION_DELAY).await;
         }
     }
-    driver.foreground_process_observation_event(observation_id, last_metadata, None)
+    let error = match expected_process_group_id {
+        Some(expected) => format!(
+            "foreground process group {expected} was not observed within {} ms",
+            FOREGROUND_CERTIFICATION_OBSERVATION_ATTEMPTS.saturating_sub(1)
+                * FOREGROUND_CERTIFICATION_OBSERVATION_DELAY.as_millis() as usize
+        ),
+        None => "foreground process group did not remain stable across observations".to_string(),
+    };
+    driver.foreground_process_observation_event(observation_id, None, Some(error))
 }
 
 /// Returns the accepted byte count from legacy or instance-scoped write events.
@@ -718,12 +727,12 @@ mod tests {
         };
         let mut backend = AsyncFakePaneProcessIo::default();
         backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
-            process_name: "setsid".to_string(),
+            process_name: Some("setsid".to_string()),
             process_group_id: 22,
             current_working_directory: None,
         })));
         backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
-            process_name: "sh".to_string(),
+            process_name: Some("sh".to_string()),
             process_group_id: 11,
             current_working_directory: None,
         })));
@@ -773,12 +782,12 @@ mod tests {
         };
         let mut backend = AsyncFakePaneProcessIo::default();
         backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
-            process_name: "bash".to_string(),
+            process_name: Some("bash".to_string()),
             process_group_id: 41,
             current_working_directory: Some(std::path::PathBuf::from("/tmp")),
         })));
         backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
-            process_name: "bash".to_string(),
+            process_name: Some("bash".to_string()),
             process_group_id: 41,
             current_working_directory: Some(std::path::PathBuf::from("/tmp")),
         })));
@@ -829,17 +838,17 @@ mod tests {
         };
         let mut backend = AsyncFakePaneProcessIo::default();
         backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
-            process_name: "sh".to_string(),
+            process_name: Some("sh".to_string()),
             process_group_id: 41,
             current_working_directory: None,
         })));
         backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
-            process_name: "zsh".to_string(),
+            process_name: Some("zsh".to_string()),
             process_group_id: 42,
             current_working_directory: None,
         })));
         backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
-            process_name: "zsh".to_string(),
+            process_name: Some("zsh".to_string()),
             process_group_id: 42,
             current_working_directory: None,
         })));
@@ -871,6 +880,151 @@ mod tests {
                     }
                 ),
             }
+        );
+    }
+
+    /// A correlated ownership observation must retain a readable process group
+    /// even when the host cannot resolve its display name.
+    #[tokio::test(flavor = "current_thread")]
+    async fn correlated_foreground_observation_keeps_group_without_process_name() {
+        let instance = PaneProcessInstance {
+            pane_id: "%1".to_string(),
+            generation: 11,
+        };
+        let mut backend = AsyncFakePaneProcessIo::default();
+        backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+            process_name: None,
+            process_group_id: 42,
+            current_working_directory: None,
+        })));
+        let mut driver = AsyncPaneProcessDriver::new_for_instance(
+            instance.clone(),
+            backend,
+            AsyncPaneProcessDriverConfig::default(),
+        )
+        .unwrap();
+
+        let event = correlated_foreground_process_observation_event(
+            &mut driver,
+            "observation-name-unavailable".to_string(),
+            Some(42),
+        )
+        .await;
+
+        assert_eq!(
+            event,
+            RuntimeEvent::PaneProcess {
+                instance,
+                event: PaneProcessEvent::ForegroundProcessObservation(
+                    PaneForegroundProcessObservation {
+                        observation_id: "observation-name-unavailable".to_string(),
+                        process_name: None,
+                        process_group_id: Some(42),
+                        current_working_directory: None,
+                        error: None,
+                    }
+                ),
+            }
+        );
+    }
+
+    /// Completion must keep waiting when the receiver appears after the old
+    /// half-second sampling window, rather than rejecting its valid process group.
+    #[tokio::test(flavor = "current_thread")]
+    async fn correlated_foreground_observation_accepts_receiver_after_old_window() {
+        let instance = PaneProcessInstance {
+            pane_id: "%1".to_string(),
+            generation: 12,
+        };
+        let mut backend = AsyncFakePaneProcessIo::default();
+        for _ in 0..51 {
+            backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+                process_name: Some("bootstrap-helper".to_string()),
+                process_group_id: 41,
+                current_working_directory: None,
+            })));
+        }
+        backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+            process_name: Some("agent-shell".to_string()),
+            process_group_id: 42,
+            current_working_directory: None,
+        })));
+        let mut driver = AsyncPaneProcessDriver::new_for_instance(
+            instance.clone(),
+            backend,
+            AsyncPaneProcessDriverConfig::default(),
+        )
+        .unwrap();
+
+        let event = correlated_foreground_process_observation_event(
+            &mut driver,
+            "observation-delayed-receiver".to_string(),
+            Some(42),
+        )
+        .await;
+
+        assert_eq!(
+            event,
+            RuntimeEvent::PaneProcess {
+                instance,
+                event: PaneProcessEvent::ForegroundProcessObservation(
+                    PaneForegroundProcessObservation {
+                        observation_id: "observation-delayed-receiver".to_string(),
+                        process_name: Some("agent-shell".to_string()),
+                        process_group_id: Some(42),
+                        current_working_directory: None,
+                        error: None,
+                    }
+                ),
+            }
+        );
+    }
+
+    /// Exhausted completion polling must not return the last mismatched group as
+    /// apparently successful foreground evidence.
+    #[tokio::test(flavor = "current_thread")]
+    async fn correlated_foreground_observation_reports_unmatched_group_timeout() {
+        let instance = PaneProcessInstance {
+            pane_id: "%1".to_string(),
+            generation: 13,
+        };
+        let mut backend = AsyncFakePaneProcessIo::default();
+        for _ in 0..FOREGROUND_CERTIFICATION_OBSERVATION_ATTEMPTS {
+            backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+                process_name: Some("bootstrap-helper".to_string()),
+                process_group_id: 41,
+                current_working_directory: None,
+            })));
+        }
+        let mut driver = AsyncPaneProcessDriver::new_for_instance(
+            instance.clone(),
+            backend,
+            AsyncPaneProcessDriverConfig::default(),
+        )
+        .unwrap();
+
+        let event = correlated_foreground_process_observation_event(
+            &mut driver,
+            "observation-unmatched".to_string(),
+            Some(42),
+        )
+        .await;
+
+        let RuntimeEvent::PaneProcess {
+            instance: observed_instance,
+            event: PaneProcessEvent::ForegroundProcessObservation(observation),
+        } = event
+        else {
+            panic!("expected a correlated foreground observation");
+        };
+        assert_eq!(observed_instance, instance);
+        assert_eq!(observation.process_group_id, None);
+        assert!(
+            observation
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("group 42 was not observed")),
+            "unmatched foreground metadata must be an explicit failure: {observation:?}"
         );
     }
 

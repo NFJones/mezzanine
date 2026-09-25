@@ -728,6 +728,8 @@ struct RuntimePendingAgentSubshellStartObservation {
     observation_id: String,
     /// Exact bootstrap marker whose receiver is waiting for its payload.
     marker: String,
+    /// Whether this observation gates release of the authenticated receiver's deferred wrapper.
+    release_deferred_bootstrap_wrapper: bool,
 }
 
 /// Parsed bootstrap context withheld until shell certification succeeds.

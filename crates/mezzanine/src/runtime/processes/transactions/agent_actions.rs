@@ -2,8 +2,9 @@
 
 use super::super::{
     ManagedShellHandoffEffect, ManagedShellHandoffEvent, ManagedShellHandoffIdentity,
-    ManagedShellKind, ManagedShellSettlementRenderPolicy, RuntimeForeignShellBootstrapPhase,
-    RuntimePendingDeferredForeignTransactionEnd, reduce_managed_shell_handoff,
+    ManagedShellKind, ManagedShellSettlementRenderPolicy, PaneProcessIoEffect,
+    RuntimeForeignShellBootstrapPhase, RuntimePendingAgentSubshellStartObservation,
+    RuntimePendingDeferredForeignTransactionEnd, RuntimeSideEffect, reduce_managed_shell_handoff,
 };
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, AgentActionPayload, AgentTurnState,
@@ -1341,22 +1342,44 @@ impl RuntimeSessionService {
             self.write_runtime_pane_input(output_pane_id, &cancelled_bootstrap)?;
             return Ok(1);
         }
-        let wrapper = self
+        let deferred_wrapper_exists = self
             .process
             .pane_shell_handoffs
-            .get_mut(output_pane_id)
-            .and_then(|handoff| handoff.deferred_bootstrap_wrapper.take());
-        if let Some(wrapper) = wrapper {
-            if let Err(error) =
-                self.write_runtime_pane_shell_input(output_pane_id, wrapper.as_bytes())
-            {
-                self.fail_shell_transactions_for_pane_write_failure(
+            .get(output_pane_id)
+            .is_some_and(|handoff| handoff.deferred_bootstrap_wrapper.is_some());
+        if deferred_wrapper_exists {
+            if let Some(instance) = self.adapter_owned_pane_process_instance(output_pane_id) {
+                let observation_id = format!("{marker}:receiver-install:{}", instance.generation);
+                self.process
+                    .pending_agent_subshell_start_observations
+                    .insert(
+                        output_pane_id.to_string(),
+                        RuntimePendingAgentSubshellStartObservation {
+                            instance: instance.clone(),
+                            observation_id: observation_id.clone(),
+                            marker: marker.to_string(),
+                            release_deferred_bootstrap_wrapper: true,
+                        },
+                    );
+                self.persistence
+                    .queue_pane_observation(RuntimeSideEffect::PaneProcessIo {
+                        instance,
+                        effect: PaneProcessIoEffect::ObserveForegroundProcess {
+                            observation_id,
+                            expected_process_group_id: None,
+                        },
+                    });
+            } else {
+                let process_group_id = self
+                    .pane_foreground_process_group_observation(output_pane_id)
+                    .0;
+                self.record_agent_subshell_bootstrap_start_observation(
                     output_pane_id,
-                    error.message(),
-                )?;
-                return Err(error);
+                    marker,
+                    process_group_id,
+                );
+                self.release_deferred_agent_subshell_bootstrap_wrapper(output_pane_id, marker)?;
             }
-            self.record_bootstrap_sent(output_pane_id, marker)?;
         } else {
             let bootstrap_was_prebuffered = self
                 .process
@@ -1384,6 +1407,29 @@ impl RuntimeSessionService {
         }
         self.remember_hidden_shell_render_suppression(output_pane_id);
         Ok(1)
+    }
+
+    /// Sends the deferred bootstrap wrapper after the authenticated receiver's
+    /// foreground process group has been captured for certification.
+    pub(crate) fn release_deferred_agent_subshell_bootstrap_wrapper(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+    ) -> Result<()> {
+        let wrapper = self
+            .process
+            .pane_shell_handoffs
+            .get_mut(pane_id)
+            .filter(|handoff| handoff.bootstrap_marker.as_deref() == Some(marker))
+            .and_then(|handoff| handoff.deferred_bootstrap_wrapper.take());
+        let Some(wrapper) = wrapper else {
+            return Ok(());
+        };
+        if let Err(error) = self.write_runtime_pane_shell_input(pane_id, wrapper.as_bytes()) {
+            self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
+            return Err(error);
+        }
+        self.record_bootstrap_sent(pane_id, marker)
     }
 
     /// Settles a managed receiver transaction only after callback cleanup completes.
