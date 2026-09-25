@@ -9170,7 +9170,11 @@ The baseline command capabilities are:
   Terminal transcript persistence
   MUST be idempotent by conversation and turn so duplicate lifecycle
   finalization cannot append the same execution group or advance the active raw
-  replay high-water mark twice. When
+  replay high-water mark twice. A transcript append failure proven to occur
+  before any row is written MAY be retried once as a local persistence operation
+  against the identical accepted entries; this MUST NOT repeat provider generation
+  or action dispatch. A partial or ambiguous append failure MUST NOT be treated
+  as precommit evidence or blindly retried. When
   persistent memory is enabled and a config root is available, `/compact`
   SHOULD opportunistically prune expired persistent-memory records before it
   builds compaction context or queues model-backed work.

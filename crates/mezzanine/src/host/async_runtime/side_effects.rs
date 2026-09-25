@@ -2044,7 +2044,12 @@ async fn persist_transcript_entries(
     store: AgentTranscriptStore,
     entries: Vec<TranscriptEntry>,
 ) -> Result<usize> {
-    store.append_many_async(&entries).await
+    match store.append_many_async(&entries).await {
+        Err(error) if error.local_transcript_precommit_retryable() => {
+            store.append_many_async(&entries).await
+        }
+        result => result,
+    }
 }
 
 /// Persists an immutable active-session metadata snapshot on the blocking pool.
@@ -2366,4 +2371,41 @@ fn is_terminal_runtime_lifecycle_state(state: RuntimeLifecycleState) -> bool {
             | RuntimeLifecycleState::Killed
             | RuntimeLifecycleState::Failed
     )
+}
+
+#[cfg(test)]
+mod transcript_settlement_tests {
+    use super::*;
+    use mez_agent::transcript::TranscriptRole;
+
+    /// A pre-append worker fault may retry the identical batch, but must not
+    /// create two records or manufacture a provider failure.
+    #[tokio::test]
+    async fn queued_transcript_write_retries_proven_precommit_fault_once() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-async-transcript-precommit-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let entry = TranscriptEntry {
+            conversation_id: "precommit-test".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::Assistant,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted response".to_string(),
+        };
+        store.fail_next_transcript_append();
+        assert!(
+            persist_transcript_entries(store.clone(), vec![entry.clone()])
+                .await
+                .unwrap()
+                > 0
+        );
+        assert_eq!(store.inspect("precommit-test").unwrap(), vec![entry]);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

@@ -538,6 +538,9 @@ pub struct MezError {
     /// This state is distinct from diagnostic raw text and contains no
     /// executable incomplete native-call arguments.
     provider_output_limit_state: Option<Box<mez_agent::ProviderOutputLimitState>>,
+    /// This local transcript failure happened before any append, so only the
+    /// persistence operation may be retried without ambiguous partial writes.
+    local_transcript_precommit_retryable: bool,
 }
 
 impl MezError {
@@ -554,6 +557,7 @@ impl MezError {
             provider_raw_text: None,
             provider_failure_json: None,
             provider_output_limit_state: None,
+            local_transcript_precommit_retryable: false,
         }
     }
 
@@ -640,6 +644,17 @@ impl MezError {
         self.io_kind
     }
 
+    /// Marks a transcript failure proven to precede any durable append.
+    pub(crate) fn mark_local_transcript_precommit_retryable(mut self) -> Self {
+        self.local_transcript_precommit_retryable = true;
+        self
+    }
+
+    /// Whether retrying only the local append cannot duplicate a partial write.
+    pub(crate) fn local_transcript_precommit_retryable(&self) -> bool {
+        self.local_transcript_precommit_retryable
+    }
+
     /// Attach sanitized provider response text for runtime failure handling.
     pub fn with_provider_raw_text(mut self, raw_text: impl Into<String>) -> Self {
         let raw_text = mez_agent::sanitize_provider_diagnostic_text(&raw_text.into());
@@ -701,6 +716,7 @@ impl From<io::Error> for MezError {
             provider_raw_text: None,
             provider_failure_json: None,
             provider_output_limit_state: None,
+            local_transcript_precommit_retryable: false,
         }
     }
 }

@@ -110,7 +110,15 @@ impl RuntimeSessionService {
             if entries.is_empty() {
                 return Ok(0);
             }
-            store.append_many(&entries)?;
+            match store.append_many(&entries) {
+                Ok(_) => {}
+                Err(error) if error.local_transcript_precommit_retryable() => {
+                    // The store proved that no row was written. Retry only the
+                    // identical local append, never the accepted execution.
+                    store.append_many(&entries)?;
+                }
+                Err(error) => return Err(error),
+            }
             entries
         };
         self.agent

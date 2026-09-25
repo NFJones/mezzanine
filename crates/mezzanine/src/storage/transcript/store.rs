@@ -388,6 +388,8 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            fail_next_transcript_append: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
             fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
@@ -411,6 +413,7 @@ impl AgentTranscriptStore {
             fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
+            fail_next_transcript_append: Arc::new(AtomicBool::new(false)),
             fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
             fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
         }
@@ -475,6 +478,13 @@ impl AgentTranscriptStore {
     #[cfg(test)]
     pub fn fail_next_compaction_epoch_write(&self) {
         self.fail_compaction_epoch_write
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Injects one failure before any transcript record is written.
+    #[cfg(test)]
+    pub fn fail_next_transcript_append(&self) {
+        self.fail_next_transcript_append
             .store(true, Ordering::SeqCst);
     }
 
@@ -770,6 +780,17 @@ impl AgentTranscriptStore {
     /// giving async persistence workers a single call that can report a useful
     /// byte count after executing off the runtime actor.
     pub fn append_many(&self, entries: &[TranscriptEntry]) -> Result<usize> {
+        #[cfg(test)]
+        if self
+            .fail_next_transcript_append
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(MezError::from(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "injected transcript append failure before commit",
+            ))
+            .mark_local_transcript_precommit_retryable());
+        }
         let mut grouped = BTreeMap::<String, Vec<&TranscriptEntry>>::new();
         for entry in entries {
             entry.validate()?;
@@ -780,7 +801,17 @@ impl AgentTranscriptStore {
         }
         let mut bytes = 0usize;
         for (conversation_id, entries) in grouped {
-            let _conversation_lock = self.acquire_conversation_lock(&conversation_id)?;
+            // Lock acquisition precedes every append in this conversation. A
+            // one-conversation caller may safely retry the identical batch.
+            let _conversation_lock =
+                self.acquire_conversation_lock(&conversation_id)
+                    .map_err(|error| {
+                        if bytes == 0 {
+                            error.mark_local_transcript_precommit_retryable()
+                        } else {
+                            error
+                        }
+                    })?;
             for entry in entries {
                 bytes = bytes.saturating_add(self.append_one_locked(entry)?);
             }

@@ -332,6 +332,9 @@ pub struct AgentTranscriptStore {
     pub(super) fail_agent_session_metadata_write: Arc<AtomicBool>,
     #[cfg(test)]
     pub(super) fail_compaction_epoch_write: Arc<AtomicBool>,
+    /// One-shot failure before any transcript row is appended.
+    #[cfg(test)]
+    pub(super) fail_next_transcript_append: Arc<AtomicBool>,
     /// Test-only one-shot failure after a child contract sidecar commits.
     #[cfg(test)]
     pub(super) fail_subagent_contract_catalog_upsert: Arc<AtomicBool>,

@@ -1256,6 +1256,184 @@ fn runtime_nul_action_evidence_persists_and_replays_exactly() {
     }));
 }
 
+/// A local transcript write failure after action settlement must not turn an
+/// accepted execution into an empty failed-provider response.
+#[test]
+fn runtime_local_transcript_failure_retains_accepted_execution() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("accepted-settlement-failure"));
+    service.set_agent_transcript_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "finish the accepted action")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    let action = mez_agent::AgentAction {
+        id: "accepted-say".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: "accepted result".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let accepted = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "accepted result".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "finish the accepted action".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &action,
+            vec!["accepted result".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    service
+        .agent_turn_executions_mut()
+        .insert(turn.turn_id.clone(), accepted.clone());
+    store.fail_next_transcript_append();
+    assert!(
+        service
+            .persist_runtime_agent_turn_execution_transcript(&turn, &accepted)
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        service.agent_turn_executions().get(&turn.turn_id),
+        Some(&accepted)
+    );
+    let entries = store.inspect(&turn.conversation_id).unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.role == TranscriptRole::Tool)
+            .count(),
+        1
+    );
+    assert_eq!(
+        service
+            .persist_runtime_agent_turn_execution_transcript(&turn, &accepted)
+            .unwrap(),
+        0
+    );
+    assert_eq!(store.inspect(&turn.conversation_id).unwrap(), entries);
+}
+
+/// Provider completion must retry a proven pre-append failure locally without
+/// replaying the accepted response or turning successful work into a failure.
+#[tokio::test]
+async fn runtime_provider_completion_retries_precommit_transcript_failure() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("provider-precommit-retry"));
+    service.set_agent_transcript_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "complete the response")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    let action = mez_agent::AgentAction {
+        id: "final-say".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: "accepted result".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "accepted result".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "finish accepted work".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &action,
+            vec!["accepted result".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    service.set_agent_turn_model_profile(
+        turn.turn_id.clone(),
+        runtime_model_profile("runtime-batch", "test"),
+    );
+    store.fail_next_transcript_append();
+    assert!(
+        service
+            .apply_agent_provider_completed_event(
+                &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+                &turn.turn_id,
+                execution,
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&turn.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Completed
+    );
+    let entries = store.inspect(&turn.conversation_id).unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.role == TranscriptRole::Tool
+                && entry.content.contains("accepted result"))
+            .count(),
+        1
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.content.contains("provider_error:"))
+    );
+}
+
 /// Multiple independently valid results can exceed the native tool-result
 /// envelope once aggregated and JSON escaped. The first admitted native event
 /// must already be the same bounded event later exported and replayed.
