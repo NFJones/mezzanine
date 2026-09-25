@@ -737,9 +737,35 @@ async fn serve_host_only_connection(
         )
         .await?;
     }
-    bridge.shutdown(policy.setup_timeout).await?;
-    connection.close(iroh::endpoint::VarInt::from_u32(0), b"host-only complete");
-    Ok(())
+    shutdown_host_iroh_connection(
+        bridge,
+        &connection,
+        policy.setup_timeout,
+        0,
+        b"host-only complete",
+    )
+    .await
+}
+
+/// Finishes the host control stream before closing its connection, then
+/// settles the inbound bridge pump after connection close makes peer EOF
+/// observable. All phases share one deadline so a non-cooperative peer cannot
+/// keep a host connection task alive indefinitely.
+async fn shutdown_host_iroh_connection(
+    mut bridge: IrohCompressionBridge,
+    connection: &iroh::endpoint::Connection,
+    timeout: std::time::Duration,
+    close_code: u32,
+    close_reason: &'static [u8],
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let finish_result = bridge.finish_outbound_until(deadline).await;
+    let outbound_result = bridge.settle_outbound_until(deadline).await;
+    connection.close(iroh::endpoint::VarInt::from_u32(close_code), close_reason);
+    let bridge_result = bridge.settle_until(deadline).await;
+    finish_result?;
+    outbound_result?;
+    bridge_result
 }
 
 #[allow(
@@ -781,27 +807,33 @@ async fn serve_routed_initialize(
     let error_write_result: Result<()> = if let Err(error) = result.as_ref()
         && !initialization_sent
     {
-        let response = host_json_rpc_error(response_id, error);
-        tokio::time::timeout(
-            policy.idle_timeout,
-            bridge
-                .stream_mut()
-                .write_all(&encode_control_body(&response)),
-        )
-        .await
-        .map_err(|_| MezError::invalid_state("host routed error response timed out"))??;
-        tokio::time::timeout(policy.idle_timeout, bridge.stream_mut().flush())
+        async {
+            let response = host_json_rpc_error(response_id, error);
+            tokio::time::timeout(
+                policy.idle_timeout,
+                bridge
+                    .stream_mut()
+                    .write_all(&encode_control_body(&response)),
+            )
             .await
-            .map_err(|_| MezError::invalid_state("host routed error flush timed out"))??;
-        Ok(())
+            .map_err(|_| MezError::invalid_state("host routed error response timed out"))??;
+            tokio::time::timeout(policy.idle_timeout, bridge.stream_mut().flush())
+                .await
+                .map_err(|_| MezError::invalid_state("host routed error flush timed out"))??;
+            Ok(())
+        }
+        .await
     } else {
         Ok(())
     };
-    let bridge_result = bridge.shutdown(policy.setup_timeout).await;
-    connection.close(
-        iroh::endpoint::VarInt::from_u32(u32::from(result.is_err())),
+    let bridge_result = shutdown_host_iroh_connection(
+        bridge,
+        &connection,
+        policy.setup_timeout,
+        u32::from(result.is_err()),
         b"routed control complete",
-    );
+    )
+    .await;
     result?;
     error_write_result?;
     bridge_result
@@ -2461,7 +2493,7 @@ mod tests {
             );
             assert_eq!(router.snapshots().await.unwrap().len(), 1);
 
-            let listed = exchange_test_host_list(&client, &server_addr, &credential).await;
+            let listed = exchange_test_host_list(&client, &server_addr, &credential, true).await;
             assert_eq!(
                 listed["result"]["sessions"].as_array().unwrap().len(),
                 1,
@@ -2501,7 +2533,8 @@ mod tests {
                 "{denied_create}"
             );
             let denied_list =
-                exchange_test_host_list(&denied_client, &server_addr, denied_credential).await;
+                exchange_test_host_list(&denied_client, &server_addr, denied_credential, false)
+                    .await;
             assert_eq!(
                 denied_list["error"]["data"]["mezzanine_code"], "forbidden",
                 "{denied_list}"
@@ -2722,9 +2755,12 @@ mod tests {
             })
             .await
             .expect("trust revocation should close an idle routed connection");
-            let _ = persistent_bridge
-                .shutdown(std::time::Duration::from_secs(2))
-                .await;
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                persistent_connection.closed().await;
+            })
+            .await
+            .expect("revocation must close the connection without waiting for peer control FIN");
+            drop(persistent_bridge);
             persistent_connection.close(
                 iroh::endpoint::VarInt::from_u32(0),
                 b"revoked test complete",
@@ -2993,6 +3029,7 @@ mod tests {
         client: &iroh::Endpoint,
         server_addr: &iroh::EndpointAddr,
         credential: &str,
+        keep_control_open: bool,
     ) -> Value {
         let connection = client
             .connect(server_addr.clone(), crate::runtime::MEZZANINE_IROH_ALPN)
@@ -3049,13 +3086,22 @@ mod tests {
             .write_all(&encode_control_body(&list))
             .await
             .unwrap();
-        bridge.stream_mut().shutdown().await.unwrap();
+        if !keep_control_open {
+            bridge.stream_mut().shutdown().await.unwrap();
+        }
         let response =
             read_one_control_frame(bridge.stream_mut(), std::time::Duration::from_secs(3))
                 .await
                 .unwrap();
-        let _ = bridge.shutdown(std::time::Duration::from_secs(3)).await;
-        connection.close(iroh::endpoint::VarInt::from_u32(0), b"test complete");
+        if keep_control_open {
+            tokio::time::timeout(std::time::Duration::from_secs(2), connection.closed())
+                .await
+                .expect("host-only completion must close without peer control FIN");
+            drop(bridge);
+        } else {
+            let _ = bridge.shutdown(std::time::Duration::from_secs(3)).await;
+            connection.close(iroh::endpoint::VarInt::from_u32(0), b"test complete");
+        }
         serde_json::from_str(&response).unwrap()
     }
 }
