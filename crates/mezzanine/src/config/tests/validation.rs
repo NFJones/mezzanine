@@ -2054,6 +2054,35 @@ fn provider_model_metadata_vocabulary_validation() {
     );
     assert!(deepseek_valid.valid, "{:?}", deepseek_valid.diagnostics);
 
+    let deepseek_gpt6_id_invalid = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.deepseek]\nkind = \"deepseek\"\napi = \"deepseek-chat-completions\"\n[providers.deepseek.models.sol]\nid = \"gpt-6-sol\"\nreasoning_levels = [\"none\"]\n",
+        ConfigScope::Primary,
+    );
+    assert!(!deepseek_gpt6_id_invalid.valid);
+
+    let openai_gpt6_valid = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.openai]\nkind = \"openai\"\napi = \"openai-responses\"\n[providers.openai.models.astra]\nid = \"gpt-6-astra\"\nreasoning_levels = [\"low\", \"medium\", \"high\", \"xhigh\", \"max\"]\n[providers.openai.models.sol]\nid = \"gpt-6-sol\"\nreasoning_levels = [\"none\", \"low\", \"medium\", \"high\", \"xhigh\", \"max\"]\n[providers.openai.models.luna]\nid = \"gpt-6-luna\"\nreasoning_levels = [\"none\", \"low\", \"medium\", \"high\", \"xhigh\", \"max\"]\n",
+        ConfigScope::Primary,
+    );
+    assert!(
+        openai_gpt6_valid.valid,
+        "{:?}",
+        openai_gpt6_valid.diagnostics
+    );
+
+    for level in ["none", "max"] {
+        let openai_legacy_level_invalid = validate_config_text(
+            ConfigFormat::Toml,
+            &format!(
+                "[providers.openai]\nkind = \"openai\"\napi = \"openai-responses\"\n[providers.openai.models.legacy]\nid = \"gpt-5.6-terra\"\nreasoning_levels = [\"{level}\"]\n"
+            ),
+            ConfigScope::Primary,
+        );
+        assert!(!openai_legacy_level_invalid.valid, "{level}");
+    }
+
     let permissive = validate_config_text(
         ConfigFormat::Toml,
         "[providers.custom]\nkind = \"openai-compatible\"\n[providers.custom.models.m]\nid = \"m\"\nreasoning_levels = [\"custom-level\"]\n",

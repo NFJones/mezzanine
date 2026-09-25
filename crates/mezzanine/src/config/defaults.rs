@@ -706,7 +706,7 @@ auth_profile = "default"
 # Compatible local APIs may omit stored auth; Mezzanine then sends no
 # Authorization header instead of requiring a placeholder key.
 base_url = ""
-default_model = "gpt-5.6-terra"
+default_model = "gpt-6-sol"
 unknown_model_policy = "conservative"
 
 # Reusable provider-scoped model facts. Model profiles may override these
@@ -716,9 +716,24 @@ unknown_model_policy = "conservative"
 # limits are user-editable configuration and are never inferred at runtime.
 [providers.openai.models.gpt-6-astra]
 id = "gpt-6-astra"
-context_window_tokens = 1000000
-max_input_tokens = 800000
-max_output_tokens = 60000
+context_window_tokens = 1050000
+max_input_tokens = 922000
+max_output_tokens = 128000
+reasoning_levels = ["low", "medium", "high", "xhigh", "max"]
+
+[providers.openai.models.gpt-6-sol]
+id = "gpt-6-sol"
+context_window_tokens = 1050000
+max_input_tokens = 922000
+max_output_tokens = 128000
+reasoning_levels = ["none", "low", "medium", "high", "xhigh", "max"]
+
+[providers.openai.models.gpt-6-luna]
+id = "gpt-6-luna"
+context_window_tokens = 1050000
+max_input_tokens = 922000
+max_output_tokens = 128000
+reasoning_levels = ["none", "low", "medium", "high", "xhigh", "max"]
 
 [providers.openai.models.gpt-5-6-sol]
 id = "gpt-5.6-sol"
@@ -886,7 +901,7 @@ prompt_caching = "enabled"
 
 [model_profiles.default]
 provider = "openai"
-model = "gpt-5.6-terra"
+model = "gpt-6-sol"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
@@ -904,7 +919,7 @@ fallback_profiles = []
 
 [model_profiles.auto-size-router]
 provider = "openai"
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 reasoning_profile = "low"
 latency_preference = "fast"
 multimodal_required = false
@@ -916,7 +931,7 @@ fallback_profiles = []
 
 [model_profiles.auto-size-small]
 provider = "openai"
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 reasoning_profile = "medium"
 latency_preference = "fast"
 multimodal_required = false
@@ -928,7 +943,7 @@ fallback_profiles = []
 
 [model_profiles.auto-size-medium]
 provider = "openai"
-model = "gpt-5.6-terra"
+model = "gpt-6-sol"
 reasoning_profile = "medium"
 latency_preference = "default"
 multimodal_required = false
@@ -940,7 +955,7 @@ fallback_profiles = []
 
 [model_profiles.auto-size-large]
 provider = "openai"
-model = "gpt-5.6-sol"
+model = "gpt-6-astra"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false

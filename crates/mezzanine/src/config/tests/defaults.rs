@@ -873,7 +873,7 @@ fn default_config_includes_anthropic_provider_defaults() {
 
     assert_eq!(
         openai.get("default_model").and_then(toml::Value::as_str),
-        Some("gpt-5.6-terra")
+        Some("gpt-6-sol")
     );
     assert_eq!(
         anthropic.get("kind").and_then(toml::Value::as_str),
@@ -921,8 +921,23 @@ fn default_config_includes_anthropic_provider_defaults() {
 
     assert_eq!(
         default.get("model").and_then(toml::Value::as_str),
-        Some("gpt-5.6-terra")
+        Some("gpt-6-sol")
     );
+    for (profile_name, expected_model) in [
+        ("auto-size-router", "gpt-6-luna"),
+        ("auto-size-small", "gpt-6-luna"),
+        ("auto-size-medium", "gpt-6-sol"),
+        ("auto-size-large", "gpt-6-astra"),
+    ] {
+        assert_eq!(
+            profiles
+                .get(profile_name)
+                .and_then(|profile| profile.get("model"))
+                .and_then(toml::Value::as_str),
+            Some(expected_model),
+            "{profile_name}"
+        );
+    }
     assert_eq!(
         default
             .get("reasoning_profile")
@@ -1037,7 +1052,9 @@ fn default_config_uses_configured_openai_model_token_limits() {
         .unwrap();
 
     for (entry, expected) in [
-        ("gpt-6-astra", (1_000_000, 800_000, 60_000)),
+        ("gpt-6-astra", (1_050_000, 922_000, 128_000)),
+        ("gpt-6-sol", (1_050_000, 922_000, 128_000)),
+        ("gpt-6-luna", (1_050_000, 922_000, 128_000)),
         ("gpt-5-6-sol", (1_000_000, 800_000, 60_000)),
         ("gpt-5-6-terra", (500_000, 400_000, 30_000)),
         ("gpt-5-6-luna", (250_000, 200_000, 15_000)),
@@ -1059,6 +1076,28 @@ fn default_config_uses_configured_openai_model_token_limits() {
             (Some(expected.0), Some(expected.1), Some(expected.2)),
             "{entry}"
         );
+    }
+    for (entry, expected_levels) in [
+        ("gpt-6-astra", vec!["low", "medium", "high", "xhigh", "max"]),
+        (
+            "gpt-6-sol",
+            vec!["none", "low", "medium", "high", "xhigh", "max"],
+        ),
+        (
+            "gpt-6-luna",
+            vec!["none", "low", "medium", "high", "xhigh", "max"],
+        ),
+    ] {
+        let levels = models
+            .get(entry)
+            .and_then(toml::Value::as_table)
+            .and_then(|model| model.get("reasoning_levels"))
+            .and_then(toml::Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(levels, expected_levels, "{entry}");
     }
 }
 

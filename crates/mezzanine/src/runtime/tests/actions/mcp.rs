@@ -428,14 +428,14 @@ fn runtime_applies_permission_and_mcp_state_from_config_layers() {
         "fs"
     );
     assert_eq!(report.providers_configured, 1);
-    assert_eq!(report.model_profiles_configured, 8);
+    assert_eq!(report.model_profiles_configured, 10);
     assert_eq!(report.default_model_profile.as_deref(), Some("default"));
     let profile = service
         .provider_registry()
         .resolve_profile("default")
         .unwrap();
     assert_eq!(profile.provider, "openai");
-    assert_eq!(profile.model, "gpt-5.6-terra");
+    assert_eq!(profile.model, "gpt-6-sol");
     assert!(
         service
             .provider_registry()

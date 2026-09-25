@@ -966,9 +966,24 @@ fn validate_provider_models_config(root: &serde_json::Value) -> Vec<ConfigDiagno
                 .and_then(serde_json::Value::as_array)
                 && let Some(vocabulary) = provider_reasoning_level_vocabulary(provider_id, provider)
             {
+                let provider_kind = provider
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(provider_id);
+                let openai_responses = provider_kind == "openai"
+                    && mez_agent::resolve_provider_api(
+                        provider_kind,
+                        provider.get("api").and_then(serde_json::Value::as_str),
+                    )
+                    .is_ok_and(|api| api == mez_agent::ProviderApiCompatibility::OpenAiResponses);
+                let gpt6_model = matches!(
+                    model_id.map(str::trim),
+                    Some("gpt-6-astra" | "gpt-6-sol" | "gpt-6-luna")
+                ) && openai_responses;
                 for level in levels.iter().filter_map(serde_json::Value::as_str) {
                     let supported = vocabulary.contains(&level)
-                        || (vocabulary.contains(&"max") && level == "xhigh");
+                        || (vocabulary.contains(&"max") && level == "xhigh")
+                        || (gpt6_model && matches!(level, "none" | "max"));
                     if !supported {
                         diagnostics.push(ConfigDiagnostic {
                             path: format!("{entry_path}.reasoning_levels"),

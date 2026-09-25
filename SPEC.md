@@ -4713,9 +4713,9 @@ adapter MUST keep this behavior scoped to DeepSeek request serialization and
 MUST NOT emit thinking controls for providers that do not support them.
 
 Generated default configuration MUST include the auto-sizing model profiles
-referenced by `agents.auto_sizing`: `auto-size-router` using `gpt-5.4-mini`,
-`auto-size-small` using `gpt-5.3-codex`, `auto-size-medium` using `gpt-5.4`, and
-`auto-size-large` using `gpt-5.5`. These default profiles MUST use the same
+referenced by `agents.auto_sizing`: `auto-size-router` and `auto-size-small`
+using `gpt-6-luna`, `auto-size-medium` using `gpt-6-sol`, and `auto-size-large`
+using `gpt-6-astra`. These default profiles MUST use the same
 provider as the default profile unless the user overrides them. The router
 profile SHOULD use a low or medium reasoning effort by default because it is
 used only for bounded classification, while target profiles MAY define their
@@ -5716,13 +5716,14 @@ provider-root connection options only; once a concrete model profile is
 selected, ordinary, routing, compaction, memory, and internal model requests
 MUST use its effective merged options and limits.
 
-The built-in OpenAI provider default model MUST be `gpt-5.6-terra` unless the user
+The built-in OpenAI provider default model MUST be `gpt-6-sol` unless the user
 overrides it through provider or model-profile configuration. The built-in
 OpenAI provider model table SHOULD include only coding-agent harness models:
-`gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
-`gpt-5.4`, and `gpt-5.4-mini`. The built-in `gpt-6-astra` entry MUST use the
-same token limits as `gpt-5.6-sol`: a `1000000` token context window,
-`800000` maximum input tokens, and `60000` maximum output tokens.
+`gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`,
+`gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`.
+The built-in GPT-6 Astra, Sol, and Luna entries MUST use a `1050000` token
+context window, `922000` maximum input tokens, and `128000` maximum output
+tokens, as documented by the OpenAI API model pages.
 When a provider configuration leaves `models` empty, Mezzanine
 MUST load the provider's built-in code-defined model list instead of treating
 the provider as having no selectable models.

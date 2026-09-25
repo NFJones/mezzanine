@@ -908,7 +908,7 @@ rewrite YAML or JSON primary configurations.
 | `providers.<name>.auth_profile` | string | `providers.openai.auth_profile = "default"` | Auth profile id. |
 | `providers.<name>.base_url` | string | `providers.openai.base_url = ""` | Optional API base URL. Empty uses provider default. |
 | `providers.<name>.models` | table | see below | Reusable provider-scoped model records. Empty may use provider built-ins. |
-| `providers.<name>.default_model` | string | `providers.openai.default_model = "gpt-5.6-terra"` | Default model for the provider. |
+| `providers.<name>.default_model` | string | `providers.openai.default_model = "gpt-6-sol"` | Default model for the provider. |
 | `providers.<name>.unknown_model_policy` | string | `"conservative"` | Policy for models without resolvable metadata: `conservative` (default) keeps only the required compatibility floor, `api-default` applies the provider's API-wide defaults. |
 | `providers.<name>.options` | table | `{}` | Provider-specific non-secret options. |
 | `providers.anthropic.options.anthropic_version` | string | omitted | Optional Anthropic Messages API version header; defaults to `2023-06-01`. |
@@ -1013,17 +1013,17 @@ the selected profile's effective merged options.
 Example configured base metadata:
 
 ```toml
-[providers.openai.models.gpt-5-6-terra]
-id = "gpt-5.6-terra"
-display_name = "GPT 5.6 Terra"
-aliases = ["terra"]
-context_window_tokens = 500000
-max_input_tokens = 400000
-max_output_tokens = 30000
-reasoning_levels = ["low", "medium", "high", "xhigh"]
+[providers.openai.models.gpt-6-sol]
+id = "gpt-6-sol"
+display_name = "GPT-6 Sol"
+aliases = ["sol"]
+context_window_tokens = 1050000
+max_input_tokens = 922000
+max_output_tokens = 128000
+reasoning_levels = ["none", "low", "medium", "high", "xhigh", "max"]
 capabilities = ["tool_use", "vision"]
 
-[providers.openai.models.gpt-5-6-terra.provider_options]
+[providers.openai.models.gpt-6-sol.provider_options]
 service_tier = "priority"
 ```
 
@@ -1143,7 +1143,7 @@ Built-in model-profile catalog:
 | Profile | Field | Default declaration |
 | --- | --- | --- |
 | `default` | `provider` | `"openai"` |
-| `default` | `model` | `"gpt-5.6-terra"` |
+| `default` | `model` | `"gpt-6-sol"` |
 | `default` | `reasoning_profile` | `"high"` |
 | `default` | `latency_preference` | `"default"` |
 | `default` | `multimodal_required` | `false` |
@@ -1153,7 +1153,7 @@ Built-in model-profile catalog:
 | `default` | `approval_policy` | `"ask"` |
 | `default` | `fallback_profiles` | `[]` |
 | `auto-size-router` | `provider` | `"openai"` |
-| `auto-size-router` | `model` | `"gpt-5.6-luna"` |
+| `auto-size-router` | `model` | `"gpt-6-luna"` |
 | `auto-size-router` | `reasoning_profile` | `"low"` |
 | `auto-size-router` | `latency_preference` | `"fast"` |
 | `auto-size-router` | `multimodal_required` | `false` |
@@ -1163,7 +1163,7 @@ Built-in model-profile catalog:
 | `auto-size-router` | `approval_policy` | `"ask"` |
 | `auto-size-router` | `fallback_profiles` | `[]` |
 | `auto-size-small` | `provider` | `"openai"` |
-| `auto-size-small` | `model` | `"gpt-5.6-luna"` |
+| `auto-size-small` | `model` | `"gpt-6-luna"` |
 | `auto-size-small` | `reasoning_profile` | `"medium"` |
 | `auto-size-small` | `latency_preference` | `"fast"` |
 | `auto-size-small` | `multimodal_required` | `false` |
@@ -1173,7 +1173,7 @@ Built-in model-profile catalog:
 | `auto-size-small` | `approval_policy` | `"ask"` |
 | `auto-size-small` | `fallback_profiles` | `[]` |
 | `auto-size-medium` | `provider` | `"openai"` |
-| `auto-size-medium` | `model` | `"gpt-5.6-terra"` |
+| `auto-size-medium` | `model` | `"gpt-6-sol"` |
 | `auto-size-medium` | `reasoning_profile` | `"medium"` |
 | `auto-size-medium` | `latency_preference` | `"default"` |
 | `auto-size-medium` | `multimodal_required` | `false` |
@@ -1183,7 +1183,7 @@ Built-in model-profile catalog:
 | `auto-size-medium` | `approval_policy` | `"ask"` |
 | `auto-size-medium` | `fallback_profiles` | `[]` |
 | `auto-size-large` | `provider` | `"openai"` |
-| `auto-size-large` | `model` | `"gpt-5.6-sol"` |
+| `auto-size-large` | `model` | `"gpt-6-astra"` |
 | `auto-size-large` | `reasoning_profile` | `"high"` |
 | `auto-size-large` | `latency_preference` | `"default"` |
 | `auto-size-large` | `multimodal_required` | `false` |
