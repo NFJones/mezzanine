@@ -523,7 +523,7 @@ async fn async_actor_control_initialize_resizes_worker_owned_initial_pane() {
         let prompt_row = view
             .lines
             .iter()
-            .rposition(|line| line.contains("mez>"))
+            .rposition(|line| line.contains("❱"))
             .unwrap();
         assert!(
             prompt_row >= 38,

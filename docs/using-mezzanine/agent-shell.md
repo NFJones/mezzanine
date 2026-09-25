@@ -52,6 +52,9 @@ without submitting it. In native shell mode, `Ctrl+V` pastes host clipboard
 text into the editable prompt while preserving multiline text. Prompt completion
 supports slash commands, `$` skills, `#` macros, and `@` MCP server names where
 enabled.
+The editable prompt begins with `❱ ` (and `▐ ❱ ` when the agent gutter is
+shown). This display-only input marker does not change assistant transcript
+rows, which continue to use `mez> `.
 The prompt remains in this in-pane entry area by default. Press `Ctrl+A e` (or
 the active key preset's `edit_prompt` binding) to request external editing;
 closing a successful editor returns the text to the same prompt and never
@@ -87,6 +90,13 @@ Common controls are `/help`, `/status`, `/model`, `/approval`, `/new`,
 it applies to subsequent turns until `/plan off` (or `/plan toggle`) disables
 it. While enabled, the pane has no write sandbox scopes. Use `/plan status` to
 inspect the current mode.
+
+While a user-owned root agent shell remains visible, its pane frame displays
+`mez` unless the pane has an explicit title. This remains true while a hide is
+pending completion; after the agent surface actually hides, the ordinary
+automatic or program-derived title resumes. The override is presentation-only
+and does not change stored title state. Explicit names (including an explicit
+`mez`), spawned subagent names, and ephemeral worker titles are preserved.
 
 Use `/objective <text>` to set a durable, peer-visible objective for the
 current conversation. It takes precedence over prompt- and model-derived

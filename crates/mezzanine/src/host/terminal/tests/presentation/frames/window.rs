@@ -3,9 +3,9 @@
 use crate::host::terminal::{
     BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE,
     DEFAULT_WINDOW_FRAME_TEMPLATE, FramePillColorOverrides, PaneRenderInput,
-    TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions, WindowFrameAction,
-    render_attached_client_view, render_window_with_pane_frame_template,
-    window_frame_action_pillbox_cells,
+    TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
+    TerminalPaneFrameContext, WindowFrameAction, render_attached_client_view,
+    render_window_with_pane_frame_template, window_frame_action_pillbox_cells,
 };
 use mez_core::ids::IdFactory;
 use mez_mux::layout::{Size, SplitDirection, Window};
@@ -50,6 +50,49 @@ fn render_window_frame_uses_named_template_fields() {
     assert_eq!(rendered.len(), 3);
     assert_eq!(rendered[0], "7|main[31m|2|tiled");
     assert_eq!(rendered[1], "pane0   \u{2502}pane1    ");
+}
+
+/// Verifies pane and generated-window title fields use the same temporary
+/// product title projection rather than falling back to stored pane metadata.
+#[test]
+fn render_window_and_pane_title_fields_use_projected_titles() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(24, 2).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let inputs = vec![PaneRenderInput {
+        pane_id: pane_id.clone(),
+        lines: vec!["body".to_string()],
+    }];
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.windows.push(TerminalWindowFrameContext {
+        id: window.id.to_string(),
+        index: window.index,
+        title: "mez".to_string(),
+        active: true,
+        ..TerminalWindowFrameContext::default()
+    });
+    frame_context.panes.insert(
+        pane_id,
+        TerminalPaneFrameContext {
+            pane_title_override: Some("mez".to_string()),
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+
+    let rendered = render_window_with_pane_frame_template(
+        &window,
+        &inputs,
+        &frame_context,
+        TerminalFrameRenderOptions::plain(
+            true,
+            "#{window.title}|#{pane.title}",
+            TerminalFramePosition::Top,
+        ),
+        TerminalFrameRenderOptions::plain(false, "", TerminalFramePosition::Top),
+    )
+    .unwrap();
+
+    assert_eq!(rendered[0].trim_end(), "mez|mez");
 }
 
 /// Verifies that the built-in default window frame renders ordered window

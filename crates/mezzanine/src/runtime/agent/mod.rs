@@ -261,6 +261,9 @@ use presentation::{
 /// Maximum conversation-scoped provider request chains retained in memory.
 pub(super) const AGENT_PROVIDER_REQUEST_CHAIN_LIMIT: usize = 4096;
 
+/// Maximum completed persistent-child closures retained for same-session retries.
+const RETIRED_PERSISTENT_SUBAGENT_LIMIT: usize = 256;
+
 /// Owns application-side agent execution state and lifecycle invariants.
 ///
 /// The component begins with visible agent-subshell lifecycle state and grows
@@ -649,6 +652,8 @@ pub(crate) struct RuntimeAgentComponent {
     subagent_lineage: BTreeMap<String, RuntimeSubagentLineage>,
     /// Reusable child ownership keyed by MMP agent id.
     persistent_subagents: BTreeMap<String, RuntimePersistentSubagent>,
+    /// Bounded, non-authorizing ownership evidence for children fully retired this session.
+    retired_persistent_subagents: BTreeMap<String, RuntimePersistentSubagent>,
     /// Resumed durable lineage whose historical parent is not live authority.
     restored_subagent_lineage: BTreeSet<String>,
     /// Live descendants fenced when their parent pane binds a different conversation.
@@ -1044,9 +1049,38 @@ impl RuntimeSessionService {
         agent_id: impl Into<String>,
         persistent: RuntimePersistentSubagent,
     ) {
+        let agent_id = agent_id.into();
+        // A new child generation must never inherit a prior generation's
+        // completed-close evidence, even if a runtime identity is reused.
+        self.agent.retired_persistent_subagents.remove(&agent_id);
+        self.agent.persistent_subagents.insert(agent_id, persistent);
+    }
+
+    /// Returns same-session ownership evidence for a fully retired persistent child.
+    pub(crate) fn retired_persistent_subagent(
+        &self,
+        agent_id: &str,
+    ) -> Option<&RuntimePersistentSubagent> {
+        self.agent.retired_persistent_subagents.get(agent_id)
+    }
+
+    /// Forgets completed-close evidence when a pane identity is live again.
+    pub(crate) fn clear_retired_persistent_subagent(&mut self, agent_id: &str) {
+        self.agent.retired_persistent_subagents.remove(agent_id);
+    }
+
+    /// Retains bounded ownership evidence after a persistent child's teardown completes.
+    pub(crate) fn remember_retired_persistent_subagent(
+        &mut self,
+        agent_id: &str,
+        persistent: RuntimePersistentSubagent,
+    ) {
         self.agent
-            .persistent_subagents
-            .insert(agent_id.into(), persistent);
+            .retired_persistent_subagents
+            .insert(agent_id.to_string(), persistent);
+        while self.agent.retired_persistent_subagents.len() > RETIRED_PERSISTENT_SUBAGENT_LIMIT {
+            let _ = self.agent.retired_persistent_subagents.pop_first();
+        }
     }
 
     /// Records runtime lineage metadata for one child agent.
@@ -1056,6 +1090,9 @@ impl RuntimeSessionService {
         lineage: RuntimeSubagentLineage,
     ) {
         let agent_id = agent_id.into();
+        // A newly established child lineage supersedes any retired generation
+        // that happened to use the same pane-derived runtime identity.
+        self.agent.retired_persistent_subagents.remove(&agent_id);
         self.agent.restored_subagent_lineage.remove(&agent_id);
         self.agent.subagent_lineage.insert(agent_id, lineage);
     }
@@ -1067,6 +1104,9 @@ impl RuntimeSessionService {
         lineage: RuntimeSubagentLineage,
     ) {
         let agent_id = agent_id.into();
+        // Restored lineage represents a current identity, not a completed
+        // closure from an earlier generation that reused this agent id.
+        self.agent.retired_persistent_subagents.remove(&agent_id);
         self.agent.subagent_scope_declarations.remove(&agent_id);
         self.agent.subagent_scopes.unregister(&agent_id);
         self.agent
@@ -1305,6 +1345,7 @@ impl RuntimeSessionService {
         self.agent.pending_interrupted_subagent_redirections.clear();
         self.agent.subagent_lineage.clear();
         self.agent.persistent_subagents.clear();
+        self.agent.retired_persistent_subagents.clear();
         self.agent.restored_subagent_lineage.clear();
         self.agent.subagent_scope_declarations.clear();
         self.agent.subagent_scopes = mez_agent::ScopeRegistry::default();

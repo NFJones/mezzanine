@@ -594,6 +594,8 @@ pub fn plan_headless_attached_client_cycle<Action, ErrorRole: Copy>(
 /// without making the mux depend on product-owned prompt or agent types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalPaneFrameContext<Prompt = (), DisplayLines = Vec<String>> {
+    /// Temporary product-owned title override for the pane frame.
+    pub pane_title_override: Option<String>,
     /// Whether this pane's visible title pill should request completion attention.
     pub completion_attention: bool,
     /// Active determinate terminal progress shown beside the pane title.
@@ -649,6 +651,7 @@ pub struct TerminalPaneFrameContext<Prompt = (), DisplayLines = Vec<String>> {
 impl<Prompt, DisplayLines: Default> Default for TerminalPaneFrameContext<Prompt, DisplayLines> {
     fn default() -> Self {
         Self {
+            pane_title_override: None,
             completion_attention: false,
             terminal_progress_percent: None,
             primary_pid: None,

@@ -1101,9 +1101,9 @@ impl RuntimeSessionService {
 
     /// Resolves a stable presentation label for one outbound recipient.
     ///
-    /// Spawn-owned lineage preserves generated names and literal-name mode
-    /// exactly. Selectors and unavailable lineage retain their provider-supplied
-    /// recipient expression without affecting routing or authority.
+    /// A bounded, sanitized spawn-owned lineage name is preferred for concrete
+    /// agents. Selectors retain the provider-supplied expression; concrete
+    /// agents without a usable name fall back to their canonical identity.
     pub(crate) fn runtime_outbound_recipient_display_label(
         &self,
         recipient: &crate::runtime::Recipient,
@@ -1112,27 +1112,30 @@ impl RuntimeSessionService {
         let crate::runtime::Recipient::Agent(agent_id) = recipient else {
             return fallback.to_string();
         };
-        self.subagent_lineage(agent_id.as_str())
-            .map(|lineage| lineage.display_name.trim())
-            .filter(|display_name| !display_name.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| fallback.to_string())
+        self.runtime_concrete_agent_identity_label(agent_id.as_str())
     }
 
-    /// Resolves a peer label from its live pane title without exposing metadata
-    /// beyond the endpoint's already-authorized runtime identity.
+    /// Resolves a concrete peer label from its runtime-owned identity metadata.
+    ///
+    /// Pane, window, and conversation titles are mutable presentation state, not
+    /// agent identity. Use a runtime-owned subagent name when one is available;
+    /// otherwise retain the canonical agent id.
     pub(crate) fn runtime_peer_message_endpoint_label(&self, agent_id: &str) -> String {
-        let Some(pane_id) = agent_id.strip_prefix("agent-") else {
+        self.runtime_concrete_agent_identity_label(agent_id)
+    }
+
+    /// Resolves the bounded display label for one concrete runtime agent.
+    ///
+    /// Only runtime-owned lineage supplies a pretty name. Sanitization that
+    /// removes the complete candidate falls back to the canonical identity.
+    fn runtime_concrete_agent_identity_label(&self, agent_id: &str) -> String {
+        if self.subagent_descendant_is_fenced(agent_id) {
             return agent_id.to_string();
-        };
-        self.session
-            .windows()
-            .iter()
-            .flat_map(|window| window.panes())
-            .find(|pane| pane.id.as_str() == pane_id)
-            .map(|pane| pane.title.trim())
-            .filter(|title| !title.is_empty())
-            .map(str::to_string)
+        }
+        self.subagent_lineage(agent_id)
+            .map(|lineage| mez_agent::agent_list_bounded_text(lineage.display_name.trim()))
+            .map(|display_name| display_name.trim().to_string())
+            .filter(|display_name| !display_name.is_empty())
             .unwrap_or_else(|| agent_id.to_string())
     }
 

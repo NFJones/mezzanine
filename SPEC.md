@@ -1018,6 +1018,15 @@ state MUST NOT override a title restored after the emitting foreground process
 exits. A window title MAY be derived from the active pane
 title while the window uses a generated or default name; an explicit non-default
 window name MUST remain stable until a later user or agent rename replaces it.
+While a durable user-owned root agent shell is `Visible` or
+`HidePendingTaskCompletion`, its pane frame MUST display `mez` in place of the
+ordinary pane title unless that pane title has explicit provenance. This is a
+temporary presentation override only: it MUST NOT change the stored pane title
+or title provenance, and automatic or program title updates MUST remain
+available to display when the agent surface actually becomes `Hidden`. An
+explicit title assigned before or during agent mode MUST take precedence,
+including an explicit title whose text is `mez`. Spawned subagent panes and
+ephemeral worker conversations MUST retain their assigned or ordinary titles.
 Mouse clicks on a rendered group bar, window frame, or status bar MUST be
 treated as multiplexer UI interactions, such as opening the group/window chooser or
 focusing the clicked group/window entry, and MUST NOT be forwarded to the pane
@@ -2957,6 +2966,10 @@ presentation-log entries.
 
 The agent shell MUST support inserting literal newlines into the current prompt
 with `Ctrl+J`; Enter MUST remain the normal prompt submission key.
+The editable agent prompt MUST display `❱ `, with the existing `▐ ` gutter
+preceding it where that gutter is shown. This marker is presentation-only and
+MUST NOT alter submitted input, assistant transcript `mez> ` labels, or copied
+source content.
 
 When the user submits a non-empty agent prompt, the visible prompt input MUST be
 cleared in the same terminal update that accepts the submission, before any
@@ -7314,15 +7327,17 @@ The baseline action types are:
   circumstance. Such a child is owned by the current parent conversation, not
   globally, and is controlled through `list_agents`, `send_message`, and
   `wait`.
-- `close_agent`: Close one live persistent child by `agent_id`. The runtime
-  MUST authorize the action only when authoritative persistent-child metadata
+- `close_agent`: Close one persistent child by `agent_id`. The runtime MUST
+  authorize a live close only when authoritative persistent-child metadata
   records both the current parent agent and current parent conversation as the
-  owner. Malformed agent identifiers MUST return `invalid_params`; syntactically
-  valid unknown, foreign, non-persistent, stale, and already-closed targets
-  MUST return one opaque unavailable result that recommends refreshing
-  `list_agents`. Successful closure MUST use the ordinary forced pane-close
-  lifecycle so process, turn, scope, lineage, MMP identity, and discovery
-  cleanup remain centralized.
+  owner. A repeat request for a child whose completed closure is still recorded
+  for that same owner MUST succeed as a no-op with `closed: false`; this bounded
+  retirement evidence is runtime-session-local and grants no live authority.
+  Malformed agent identifiers MUST return `invalid_params`; syntactically valid
+  unknown, foreign, non-persistent, and stale targets MUST return one opaque
+  unavailable result. Successful live closure MUST use the ordinary forced
+  pane-close lifecycle so process, turn, scope, lineage, MMP identity, and
+  discovery cleanup remain centralized.
 - `config_change`: Propose a live configuration change.
 - `memory_search`: Search runtime-owned persistent memory records after the
   `memory` capability has been granted. This action MUST be available only when
@@ -11393,7 +11408,12 @@ endpoint labeling. Siblings, unrelated agents, roots, and grandparents MUST NOT
 receive the `parent>` label. The `parent>` marker MUST use the
 `agent_transcript_parent` semantic style; other inbound peer markers MUST use
 `agent_transcript_peer_sender`. The receiver persists this distinction so replay
-and resize reproduce the same label and marker styling.
+and resize reproduce the same label and marker styling. Ordinary inbound
+concrete-agent labels MUST use a bounded runtime-owned subagent display name
+when available, otherwise the canonical raw agent id; pane, window, and
+conversation titles MUST NOT supply agent labels. The receiver MUST capture the
+resolved label with its receipt so retry and replay do not consult current
+identity metadata.
 A child sending to its exact direct parent MUST likewise use the stable
 `parent<` marker, including provisional streaming and accepted sender rows.
 This alias compares the syntactically parsed single-agent recipient with the
@@ -11406,7 +11426,9 @@ outbound markers use `agent_transcript_peer_recipient`.
 For ordinary child recipients, outbound sender rows MUST use the spawn-owned
 display name rather than the opaque agent id. Generated human and nonhuman names
 remain readable, while literal-name mode retains its assigned literal name. This
-is presentation-only: routing and authority retain the parsed recipient identity.
+name MUST be bounded and sanitized; an empty result MUST fall back to the
+canonical raw agent id. Selectors MUST retain their explicit recipient
+expression. This is presentation-only: routing and authority retain the parsed recipient identity.
 The accepted sender record MUST persist the resolved label so replay and resize
 do not rename historical rows when lineage changes.
 A logged peer line remains an operator-visible observation: it stays untrusted

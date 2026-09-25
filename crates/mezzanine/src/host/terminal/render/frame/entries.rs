@@ -226,13 +226,22 @@ pub(in crate::host::terminal::render) fn window_frame_field_value(
         "window.buttons" | "window.actions" => {
             window_frame_pillbox_text_from_entries(&window_action_pillbox_entries(frame_context))
         }
-        "window.title" => window.title(),
+        "window.title" => frame_context
+            .windows
+            .iter()
+            .find(|context| context.id == window.id.as_str())
+            .map(|context| context.title.clone())
+            .unwrap_or_else(|| window.title()),
         "window.name" => window.name.clone(),
         "window.active" => "true".to_string(),
         "window.pane_count" => window.panes().len().to_string(),
         "pane.id" => active_pane.id.to_string(),
         "pane.index" => active_pane.index.to_string(),
-        "pane.title" => active_pane.title.clone(),
+        "pane.title" => frame_context
+            .panes
+            .get(active_pane.id.as_str())
+            .and_then(|context| context.pane_title_override.clone())
+            .unwrap_or_else(|| active_pane.title.clone()),
         "pane.active" => active_pane.active.to_string(),
         "layout.name" => window.layout_policy().name().to_string(),
         "agent.active_count" => frame_context

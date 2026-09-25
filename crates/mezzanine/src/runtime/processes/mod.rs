@@ -5650,6 +5650,15 @@ impl RuntimeSessionService {
     /// closed pane appear partially alive to later agent/session surfaces.
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) -> Result<()> {
         let pane_present = self.find_pane_descriptor(pane_id).is_some();
+        let agent_id = format!("agent-{pane_id}");
+        if pane_present {
+            // A live pane at a reused pane-derived identity supersedes any
+            // completed-close evidence from the prior pane generation.
+            self.clear_retired_persistent_subagent(&agent_id);
+        }
+        let retired_persistent = (!pane_present)
+            .then(|| self.persistent_subagent(&agent_id).cloned())
+            .flatten();
         if !pane_present && let Some(process) = self.process.detached_pane_processes.remove(pane_id)
         {
             self.persistence.ensure_pane_termination(
@@ -5792,7 +5801,6 @@ impl RuntimeSessionService {
             self.clear_joined_subagent_dependencies_for_turn(turn_id);
         }
 
-        let agent_id = format!("agent-{pane_id}");
         self.remove_subagent_task_routes_for_parent(&agent_id);
         self.remove_joined_subagent_dependencies_for_agent(&agent_id);
         self.integration
@@ -5803,13 +5811,7 @@ impl RuntimeSessionService {
             .model_profile_overrides_mut()
             .subagent_profiles
             .remove(&agent_id);
-        self.remove_subagent_authority_state(&agent_id);
         self.deregister_macro_managed_subagent(&agent_id);
-        if let Some(agent_id) = AgentId::opaque(agent_id) {
-            self.control
-                .message_service_mut()
-                .retire_agent_identity(&agent_id);
-        }
 
         let live_windows = self
             .session
@@ -5824,8 +5826,17 @@ impl RuntimeSessionService {
             .iter()
             .flat_map(|window| window.panes())
             .any(|pane| pane.id.as_str() == pane_id);
+        self.remove_subagent_authority_state(&agent_id);
+        if let Some(agent_id) = AgentId::opaque(&agent_id) {
+            self.control
+                .message_service_mut()
+                .retire_agent_identity(&agent_id);
+        }
         if !pane_is_live {
             self.checkpoint_agent_session_metadata()?;
+        }
+        if let Some(persistent) = retired_persistent {
+            self.remember_retired_persistent_subagent(&agent_id, persistent);
         }
         Ok(())
     }

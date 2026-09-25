@@ -11,8 +11,7 @@ use super::diff::{
     readable_agent_diff_display_lines_for_width, streaming_agent_diff_display_lines_for_width,
 };
 use super::style::{
-    AGENT_PROMPT_TEXT_PREFIX, AGENT_TERMINAL_MESSAGE_PREFIX, AgentTerminalPresentationStyle,
-    agent_name_marker_rendition,
+    AGENT_TERMINAL_MESSAGE_PREFIX, AgentTerminalPresentationStyle, agent_name_marker_rendition,
 };
 use super::text::{
     AGENT_MESSAGE_CONTINUATION_INDENT, agent_say_text_is_displayed_patch_block,
@@ -39,6 +38,7 @@ use crate::runtime::{
     runtime_effective_config_value, runtime_peer_message_presentation_is_markdown,
     runtime_peer_message_presentation_is_visible,
 };
+use crate::ui::readline::AGENT_PROMPT_TEXT_PREFIX;
 use mez_agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentActionPayload, AgentShellVisibility,
     agent_output_content_type_is_diff, agent_output_content_type_is_markdown,
@@ -1035,7 +1035,7 @@ impl RuntimeSessionService {
     /// Returns display cells available for editable pane-local prompt text.
     ///
     /// This width mirrors the terminal renderer, which draws the editable text
-    /// after both the agent transcript gutter and the `agent>` prompt marker.
+    /// after both the agent transcript gutter and the editable `❱ ` marker.
     ///
     /// # Parameters
     /// - `pane_id`: Pane whose current presentation width bounds the prompt.

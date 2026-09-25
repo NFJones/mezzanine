@@ -40,6 +40,209 @@ fn runtime_native_agent_shell_entry_uses_only_root_process_inspection() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a user-owned root agent surface temporarily displays `mez` without
+/// changing the pane's saved title or provenance, and that hiding restores the
+/// ordinary title while explicit names continue to take precedence.
+#[test]
+fn runtime_root_agent_title_override_is_temporary_and_preserves_explicit_names() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .session
+        .set_pane_title_from_terminal("%1", "shell title")
+        .unwrap();
+
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    let frame = service.terminal_frame_context();
+    assert_eq!(
+        frame.panes["%1"].pane_title_override.as_deref(),
+        Some("mez")
+    );
+    assert_eq!(frame.windows[0].title, "mez");
+    assert_eq!(
+        service.session.pane_title_state("%1").unwrap(),
+        (
+            "shell title".to_string(),
+            mez_mux::layout::PaneTitleSource::Automatic
+        )
+    );
+
+    service
+        .session
+        .set_pane_title_from_program("%1", "foreground program")
+        .unwrap();
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_title_override
+            .as_deref(),
+        Some("mez"),
+        "program title updates remain underneath the active agent default"
+    );
+    assert_eq!(
+        service
+            .agent_shell_store_mut()
+            .request_hide_pending_task_completion("%1")
+            .unwrap()
+            .visibility,
+        AgentShellVisibility::HidePendingTaskCompletion
+    );
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_title_override
+            .as_deref(),
+        Some("mez"),
+        "the title remains agent-owned until hide actually completes"
+    );
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_title_override
+            .as_deref(),
+        None
+    );
+    assert_eq!(
+        service.session.pane_title_state("%1").unwrap(),
+        (
+            "foreground program".to_string(),
+            mez_mux::layout::PaneTitleSource::Program
+        ),
+        "the latest ordinary title and provenance return after the agent surface exits"
+    );
+
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_title_override
+            .as_deref(),
+        Some("mez"),
+        "re-entering the root agent surface reapplies the temporary title"
+    );
+
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_title_override
+            .as_deref(),
+        None,
+        "the shell title resumes after the agent surface is hidden"
+    );
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service
+        .session
+        .set_pane_title_explicit("%1", "mez")
+        .unwrap();
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_title_override
+            .as_deref(),
+        None,
+        "an explicit rename takes precedence immediately while the agent surface is active"
+    );
+    assert_eq!(
+        service.session.pane_title_state("%1").unwrap(),
+        (
+            "mez".to_string(),
+            mez_mux::layout::PaneTitleSource::Explicit
+        )
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies an active delegated or ephemeral agent session does not receive the
+/// temporary title reserved for durable user-owned root conversations.
+#[test]
+fn runtime_subagent_and_ephemeral_sessions_keep_their_pane_titles() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_subagent_conversation_with_lineage("%1", "child-conversation", 0, None)
+        .unwrap();
+    assert_eq!(
+        service.agent_shell_store().get("%1").unwrap().visibility,
+        AgentShellVisibility::Visible
+    );
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_title_override
+            .as_deref(),
+        None,
+        "a visible subagent session keeps its own pane title"
+    );
+
+    service
+        .agent_shell_store_mut()
+        .bind_ephemeral_conversation_with_lineage("%1", "worker-conversation", 0, None)
+        .unwrap();
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_title_override
+            .as_deref(),
+        None,
+        "an ephemeral worker session keeps its own pane title"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a generated or explicit window name remains stable when its text
+/// happens to match the underlying active pane title during agent mode.
+#[test]
+fn runtime_root_agent_title_does_not_override_matching_window_names() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .session
+        .set_pane_title_from_terminal("%1", "work")
+        .unwrap();
+    let window_id = service.session.active_window().unwrap().id.to_string();
+    service
+        .session
+        .rename_window_generated_session_owned(&window_id, "work")
+        .unwrap();
+
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    let frame = service.terminal_frame_context();
+    assert_eq!(
+        frame.panes["%1"].pane_title_override.as_deref(),
+        Some("mez")
+    );
+    assert_eq!(frame.windows[0].title, "work");
+
+    service
+        .session
+        .rename_window(&primary, None, "work")
+        .unwrap();
+    assert_eq!(
+        service.terminal_frame_context().windows[0].title,
+        "work",
+        "explicit window provenance remains authoritative even when the name equals the pane title"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies runtime attached mux action toggles agent shell state.
 ///
 /// This regression scenario documents the behavior being protected so a

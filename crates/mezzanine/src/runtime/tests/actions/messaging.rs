@@ -1268,6 +1268,16 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
         .unwrap();
     let sender_agent_id = sender.agent_id.clone();
     let payload = "failed persistence must replay one receiver row";
+    service.set_subagent_lineage(
+        sender_agent_id.to_string(),
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-root".to_string(),
+            root_agent_id: "agent-root".to_string(),
+            depth: 1,
+            display_name: "captured sender name".to_string(),
+            terminal: false,
+        },
+    );
     let delivery = service
         .control
         .message_service_mut()
@@ -1300,6 +1310,22 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
         "peer-message recipient={} sequence={} id=failed-presentation-receipt",
         recipient.agent_id, delivery.sequence
     );
+    service.set_subagent_lineage(
+        sender_agent_id.to_string(),
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-root".to_string(),
+            root_agent_id: "agent-root".to_string(),
+            depth: 1,
+            display_name: "changed sender name".to_string(),
+            terminal: false,
+        },
+    );
+    let captured_receipt = service
+        .snapshot_unsettled_received_peer_message_presentations()
+        .into_iter()
+        .find(|receipt| receipt.identity == identity)
+        .expect("committed receiver receipt");
+    assert_eq!(captured_receipt.peer_label, "captured sender name");
     let effects = service
         .drain_transcript_persistence_transition()
         .side_effects;
@@ -1526,10 +1552,21 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
         .unwrap()
         .session_id
         .clone();
+    let recovered_entries = store.inspect_presentation(&conversation_id).unwrap();
+    let recovered_peer_entry = recovered_entries
+        .iter()
+        .find(|entry| {
+            entry
+                .source_text
+                .as_deref()
+                .is_some_and(|source| source.contains(identity.as_str()))
+        })
+        .expect("recovered receiver presentation entry");
+    let recovered_source = recovered_peer_entry.source_text.as_deref().unwrap();
+    assert!(recovered_source.contains("captured sender name"));
+    assert!(!recovered_source.contains("changed sender name"));
     assert_eq!(
-        store
-            .inspect_presentation(&conversation_id)
-            .unwrap()
+        recovered_entries
             .iter()
             .filter(|entry| {
                 entry
@@ -2774,10 +2811,10 @@ fn peer_echo_pane_lines(
         .unwrap_or_default()
 }
 
-/// Verifies peer-message labels prefer a live endpoint title and otherwise
-/// preserve the canonical runtime agent id.
+/// Verifies concrete-agent peer labels ignore mutable pane titles, prefer
+/// trusted subagent names, and otherwise retain the canonical runtime id.
 #[test]
-fn runtime_peer_message_endpoint_labels_use_live_titles_with_agent_id_fallback() {
+fn runtime_peer_message_endpoint_labels_use_agent_identity_not_pane_titles() {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(60, 24).unwrap(), 120)
@@ -2789,7 +2826,40 @@ fn runtime_peer_message_endpoint_labels_use_live_titles_with_agent_id_fallback()
 
     assert_eq!(
         service.runtime_peer_message_endpoint_label("agent-%1"),
-        "coordinator pane"
+        "agent-%1"
+    );
+    service.set_subagent_lineage(
+        "agent-%1",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-root".to_string(),
+            root_agent_id: "agent-root".to_string(),
+            depth: 1,
+            display_name: "trusted worker".to_string(),
+            terminal: false,
+        },
+    );
+    service
+        .session
+        .set_pane_title_explicit("%1", "trusted worker title changed")
+        .unwrap();
+    assert_eq!(
+        service.runtime_peer_message_endpoint_label("agent-%1"),
+        "trusted worker"
+    );
+    service.set_subagent_lineage(
+        "agent-%1",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-root".to_string(),
+            root_agent_id: "agent-root".to_string(),
+            depth: 1,
+            display_name: "\n\0".to_string(),
+            terminal: false,
+        },
+    );
+    assert_eq!(
+        service.runtime_peer_message_endpoint_label("agent-%1"),
+        "agent-%1",
+        "a name erased by sanitization must fall back to the canonical identity"
     );
     assert_eq!(
         service.runtime_peer_message_endpoint_label("agent-%9"),
@@ -3545,7 +3615,7 @@ fn runtime_model_peer_mail_without_bridge_provenance_logs_at_sender_and_receiver
 
 /// Verifies committed direct-parent messages retain the stable `parent` label
 /// across a parent-pane rename while every non-direct sender falls back to its
-/// ordinary endpoint label.
+/// identity-based label.
 ///
 /// This drives the receiver commit path rather than only the echo helper. Two
 /// parent envelopes commit into the child's active turn on opposite sides of a
@@ -3726,7 +3796,7 @@ fn runtime_direct_parent_peer_message_uses_stable_label_only_for_valid_exact_lin
             "agent-%3",
             "sibling-fallback",
             "sibling evidence",
-            "agent-%3",
+            "sibling",
         ),
         (
             "external-agent",
@@ -3836,14 +3906,14 @@ fn runtime_direct_parent_peer_message_uses_stable_label_only_for_valid_exact_lin
     assert!(
         peer_echo_pane_lines(&service, "%2")
             .iter()
-            .any(|line| line.starts_with("▐ parent after rename>")),
-        "fenced lineage must use the renamed parent's ordinary endpoint label"
+            .any(|line| line.starts_with("▐ parent> fenced parent")),
+        "fenced lineage must use the parent's trusted pretty name, not its renamed pane title"
     );
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies outbound presentation uses a spawn-owned display name while an
-/// unavailable recipient retains the model-authored recipient expression.
+/// Verifies outbound presentation uses a sanitized spawn-owned name, keeps
+/// selector expressions, and falls back to a concrete recipient's raw ID.
 #[test]
 fn runtime_outbound_recipient_display_label_preserves_spawn_name_and_fallback() {
     let mut service = test_runtime_service();
@@ -3887,7 +3957,7 @@ fn runtime_outbound_recipient_display_label_preserves_spawn_name_and_fallback() 
             &unavailable_recipient,
             "agent:agent-missing",
         ),
-        "agent:agent-missing"
+        "agent-missing"
     );
 }
 

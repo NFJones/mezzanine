@@ -1814,13 +1814,21 @@ impl RuntimeSessionService {
         }
 
         for window in self.session.active_group_windows() {
+            let active_pane = window.active_pane();
+            let active_pane_title_override =
+                self.runtime_root_agent_pane_title_override(active_pane);
+            let window_title = window.title();
             context.windows.push(TerminalWindowFrameContext {
                 id: window.id.to_string(),
                 index: self
                     .session
                     .active_group_window_display_index(&window.id)
                     .unwrap_or(window.index),
-                title: window.title(),
+                title: if window.title_uses_active_pane() {
+                    active_pane_title_override.unwrap_or(window_title)
+                } else {
+                    window_title
+                },
                 active: active_window_id.as_ref() == Some(&window.id.to_string()),
                 subagent: self.is_subagent_window(window.id.as_str()),
                 completion_attention: attention_windows.contains(window.id.as_str()),
@@ -1981,9 +1989,11 @@ impl RuntimeSessionService {
                     .pane_current_working_directory(pane_id.as_str())
                     .as_deref()
                     .map(Self::runtime_pane_frame_working_directory_display);
+                let pane_title_override = self.runtime_root_agent_pane_title_override(pane);
                 context.panes.insert(
                     pane_id.clone(),
                     TerminalPaneFrameContext {
+                        pane_title_override,
                         completion_attention: attention_panes.contains(pane_id.as_str()),
                         terminal_progress_percent: self
                             .process
@@ -2048,6 +2058,27 @@ impl RuntimeSessionService {
         }
 
         context
+    }
+
+    /// Returns the temporary pane-frame title for an active user-owned root
+    /// agent session, unless an explicit pane title takes precedence.
+    fn runtime_root_agent_pane_title_override(
+        &self,
+        pane: &mez_mux::layout::Pane,
+    ) -> Option<String> {
+        self.agent_shell_store()
+            .get(pane.id.as_str())
+            .filter(|session| {
+                session.conversation_kind == mez_agent::AgentConversationKind::Root
+                    && !session.ephemeral
+                    && matches!(
+                        session.visibility,
+                        AgentShellVisibility::Visible
+                            | AgentShellVisibility::HidePendingTaskCompletion
+                    )
+                    && !pane.title_source.is_explicit()
+            })
+            .map(|_| "mez".to_string())
     }
 
     /// Resolves one pane's diagnostic status projection through the same

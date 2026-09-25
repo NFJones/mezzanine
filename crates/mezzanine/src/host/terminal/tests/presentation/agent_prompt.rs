@@ -67,7 +67,7 @@ fn render_attached_client_view_keeps_agent_prompt_before_right_divider() {
     let prompt_row = view
         .lines
         .iter()
-        .position(|line| line.contains("mez>"))
+        .position(|line| line.contains("❱"))
         .expect("left agent prompt should be visible");
     assert_eq!(
         view.lines[prompt_row].chars().nth(divider_column),
@@ -102,10 +102,10 @@ fn readline_prompt_status_row_renders_prompt_and_cursor_column() {
         row.status,
         ClientStatusLine {
             kind: ClientStatusKind::Plain,
-            text: "▐ mez> run  ".to_string(),
+            text: "▐ ❱ run     ".to_string(),
         }
     );
-    assert_eq!(row.cursor_column, 9);
+    assert_eq!(row.cursor_column, 6);
     assert!(row.cursor_visible);
 }
 
@@ -324,9 +324,9 @@ fn prompt_region_presentation_places_agent_prompt_inside_pane() {
     );
 
     assert_eq!(presentation.lines[0], "top line            ");
-    assert_eq!(presentation.lines[2], "ol▐ mez> go         ");
+    assert_eq!(presentation.lines[2], "ol▐ ❱ go            ");
     assert_eq!(presentation.cursor_row, 2);
-    assert_eq!(presentation.cursor_column, 11);
+    assert_eq!(presentation.cursor_column, 8);
     assert!(presentation.cursor_visible);
     assert_eq!(
         presentation.line_style_spans[2]
@@ -367,9 +367,8 @@ fn prompt_region_presentation_wraps_prompt_at_word_boundary() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[1], "▐ mez> alpha            ");
-    assert_eq!(presentation.lines[2], "       beta             ");
-    assert_eq!(presentation.lines[3], "       gamma            ");
+    assert_eq!(presentation.lines[1], "▐ ❱ alpha beta          ");
+    assert_eq!(presentation.lines[2], "    gamma               ");
 }
 
 /// Verifies hard-wrapped unbroken agent prompt input starts at the top of the
@@ -378,7 +377,7 @@ fn prompt_region_presentation_wraps_prompt_at_word_boundary() {
 fn prompt_region_presentation_hard_wrap_keeps_first_row_stable() {
     let mut prompt =
         crate::ui::readline::ReadlinePrompt::new(crate::ui::readline::ReadlinePromptKind::Agent);
-    prompt.buffer.insert_text("abcdefghijkl");
+    prompt.buffer.insert_text("abcdefghijklmn");
     let presentation = compose_prompt_region_presentation_with_styles(
         &[
             "top line                ".to_string(),
@@ -398,8 +397,8 @@ fn prompt_region_presentation_hard_wrap_keeps_first_row_stable() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[1], "▐ mez> abcdefghi        ");
-    assert_eq!(presentation.lines[2], "       jkl              ");
+    assert_eq!(presentation.lines[1], "▐ ❱ abcdefghijkl        ");
+    assert_eq!(presentation.lines[2], "    mn                  ");
     assert_eq!(presentation.lines[3], "footer                  ");
 }
 
@@ -429,16 +428,16 @@ fn prompt_region_presentation_styles_agent_shadow_hint() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[2], "o▐ mez> /model      ");
+    assert_eq!(presentation.lines[2], "o▐ ❱ /model         ");
     assert!(
         presentation.line_style_spans[2]
             .iter()
-            .any(|span| span.start == 12 && span.length == 2 && span.rendition.dim)
+            .any(|span| span.start == 9 && span.length == 2 && span.rendition.dim)
     );
     assert!(
         presentation.line_style_spans[2]
             .iter()
-            .any(|span| span.start == 12
+            .any(|span| span.start == 9
                 && span.length == 2
                 && span.rendition.foreground.is_some_and(|foreground| {
                     test_color_is_grayscale(foreground)
@@ -493,7 +492,7 @@ fn prompt_region_presentation_uses_contrast_prompt_foreground_on_light_theme() {
     assert!(
         presentation.line_style_spans[2]
             .iter()
-            .any(|span| span.start == 12
+            .any(|span| span.start == 9
                 && span.length == 2
                 && span.rendition.dim
                 && span.rendition.foreground.is_some_and(|foreground| {
@@ -542,7 +541,7 @@ fn prompt_region_presentation_styles_agent_skill_shadow_hint() {
         &theme,
     );
 
-    assert_eq!(presentation.lines[2], "o▐ mez> $review     ");
+    assert_eq!(presentation.lines[2], "o▐ ❱ $review        ");
     let prompt_span = presentation.line_style_spans[2]
         .iter()
         .find(|span| span.start == 1 && span.length == 18)
@@ -755,7 +754,7 @@ fn render_attached_client_view_reserves_agent_prompt_row() {
     .unwrap()
     .unwrap();
 
-    assert_eq!(view.lines[3], format!("{:<30}", "▐ mez> "));
+    assert_eq!(view.lines[3], format!("{:<30}", "▐ ❱ "));
     assert!(view.readline_input_active);
     assert_eq!(
         view.agent_prompt_region,
@@ -822,7 +821,7 @@ fn render_attached_client_view_preserves_prompt_style_collision_content() {
         "{view:?}"
     );
     assert_eq!(view.cursor_row, 3);
-    assert!(view.lines[3].contains("mez>"), "{:?}", view.lines);
+    assert!(view.lines[3].contains("❱"), "{:?}", view.lines);
 }
 
 /// Verifies that copy mode keeps the pane-local agent prompt reservation while
@@ -925,7 +924,7 @@ fn render_attached_client_view_draws_agent_prompt_state_in_pane() {
         "{:?}",
         view.lines
     );
-    assert!(view.lines.iter().any(|line| line.contains("▐ mez> first")));
+    assert!(view.lines.iter().any(|line| line.contains("▐ ❱ first")));
     assert!(view.lines.iter().any(|line| line.contains("second")));
     assert!(view.cursor_visible);
 }
@@ -988,7 +987,7 @@ fn render_attached_client_view_masks_alternate_screen_for_native_agent_overlay()
         overlay_view
             .lines
             .iter()
-            .any(|line| line.contains("mez> inspect overlay")),
+            .any(|line| line.contains("❱ inspect overlay")),
         "{:?}",
         overlay_view.lines
     );
@@ -1085,7 +1084,7 @@ fn render_attached_client_view_draws_one_agent_live_footer_at_prompt_edge() {
     let prompt_row = view
         .lines
         .iter()
-        .position(|line| line.contains("mez> running"))
+        .position(|line| line.contains("❱ running"))
         .unwrap();
     let footer_rows = view
         .lines
@@ -1164,7 +1163,7 @@ fn render_agent_live_footer_preserves_lookalike_content_with_wide_neighbor() {
     assert!(
         view.lines
             .iter()
-            .any(|line| line.contains("mez> running (5m 40s • esc to interrupt)")),
+            .any(|line| line.contains("❱ running (5m 40s • esc to interrupt)")),
         "{:?}",
         view.lines
     );
@@ -1222,9 +1221,7 @@ fn render_attached_client_view_hides_agent_live_footer_while_prompt_has_input() 
     .unwrap();
 
     assert!(
-        view.lines
-            .iter()
-            .any(|line| line.contains("mez> write tests")),
+        view.lines.iter().any(|line| line.contains("❱ write tests")),
         "{view:?}"
     );
     assert!(
@@ -1452,7 +1449,7 @@ fn render_agent_working_footer_keeps_state_styling_when_suffix_is_truncated() {
     let footer_row = view
         .lines
         .iter()
-        .position(|line| line.contains("mez> running"))
+        .position(|line| line.contains("❱ running"))
         .expect("working footer should be visible");
     let footer_text = &view.lines[footer_row];
     let state_start_byte = footer_text.find("running").unwrap();

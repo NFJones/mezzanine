@@ -1091,6 +1091,12 @@ fn runtime_close_agent_retires_owned_persistent_child_runtime_state() {
         Some(r#"{"closed":false,"agent_id":"agent-%997"}"#),
         "a missing owned pane is an idempotently completed close rather than a retry loop"
     );
+    let stale_repeat = execute_close_agent_for_test(&mut service, &parent_turn, "agent-%997");
+    assert_eq!(stale_repeat.status, ActionStatus::Succeeded);
+    assert_eq!(
+        stale_repeat.structured_content_json.as_deref(),
+        Some(r#"{"closed":false,"agent_id":"agent-%997"}"#)
+    );
     assert!(service.persistent_subagent("agent-%997").is_none());
     assert!(service.persistent_subagent(&child_agent_id).is_some());
     assert!(service.find_pane_descriptor(&child_pane_id).is_some());
@@ -1148,10 +1154,129 @@ fn runtime_close_agent_retires_owned_persistent_child_runtime_state() {
             .registered_identity(&child_identity)
             .is_none()
     );
-    let denied = execute_close_agent_for_test(&mut service, &parent_turn, &child_agent_id);
-    assert_eq!(close_agent_denial_signature(&denied), unavailable);
+    let repeated = execute_close_agent_for_test(&mut service, &parent_turn, &child_agent_id);
+    assert_eq!(repeated.status, ActionStatus::Succeeded);
+    assert_eq!(
+        repeated.structured_content_json.as_deref(),
+        Some(format!(r#"{{"closed":false,"agent_id":"{child_agent_id}"}}"#).as_str()),
+        "a new close action for an already-retired owned child is a successful no-op"
+    );
     assert!(service.persistent_subagent(&child_agent_id).is_none());
     assert!(service.find_pane_descriptor(&child_pane_id).is_none());
+    let denied = execute_close_agent_for_test(&mut service, &foreign_agent_turn, &child_agent_id);
+    assert_eq!(close_agent_denial_signature(&denied), unavailable);
+    service.set_subagent_lineage(
+        child_agent_id.clone(),
+        crate::runtime::RuntimeSubagentLineage {
+            parent_agent_id: parent_turn.agent_id.clone(),
+            root_agent_id: parent_turn.agent_id.clone(),
+            depth: 1,
+            display_name: "replacement generation".to_string(),
+            terminal: false,
+        },
+    );
+    let reused = execute_close_agent_for_test(&mut service, &parent_turn, &child_agent_id);
+    assert_eq!(close_agent_denial_signature(&reused), unavailable);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies failed metadata checkpointing after pane removal cannot leave
+/// persistent-child authority behind or publish a completed-close tombstone.
+#[test]
+fn runtime_pane_close_checkpoint_failure_retires_child_authority_without_tombstone() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-close-checkpoint-failure"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let parent = service
+        .start_agent_prompt_turn("%1", "provision then close a reusable child")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&parent.turn_id);
+    let parent_turn = service
+        .agent_turn_ledger()
+        .turn(&parent.turn_id)
+        .cloned()
+        .unwrap();
+
+    let mut spawn = runtime_spawn_agent_action("checkpoint-failure-spawn", "");
+    let mez_agent::AgentActionPayload::SpawnAgent {
+        lifetime,
+        objective,
+        ..
+    } = &mut spawn.payload
+    else {
+        unreachable!("spawn fixture must contain spawn_agent");
+    };
+    *lifetime = mez_agent::SubagentLifetime::Persistent;
+    *objective = Some("Handle reusable work".to_string());
+    let spawned = service
+        .execute_spawn_action_for_turn(&parent_turn, &spawn)
+        .unwrap();
+    let spawned: serde_json::Value = serde_json::from_str(
+        spawned
+            .structured_content_json
+            .as_deref()
+            .expect("persistent spawn structured content"),
+    )
+    .unwrap();
+    let child_agent_id = spawned["spawn"]["agent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let child_pane_id = spawned["spawn"]["pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let child_identity = AgentId::opaque(child_agent_id.clone()).unwrap();
+    assert!(service.has_subagent_authority_state(&child_agent_id));
+    assert!(
+        service
+            .message_service()
+            .registered_identity(&child_identity)
+            .is_some()
+    );
+
+    transcript_store.fail_next_agent_session_metadata_write();
+    let primary = service.session.layout_owner_client_id().cloned().unwrap();
+    let close_result = service.dispatch_runtime_pane_close(
+        &primary,
+        &format!(r#"{{"pane_id":"{child_pane_id}","force":true}}"#),
+    );
+    assert!(
+        close_result
+            .unwrap_err()
+            .to_string()
+            .contains("agent session metadata write failure")
+    );
+    assert!(service.find_pane_descriptor(&child_pane_id).is_none());
+    assert!(service.persistent_subagent(&child_agent_id).is_none());
+    assert!(service.subagent_lineage(&child_agent_id).is_none());
+    assert!(!service.has_subagent_authority_state(&child_agent_id));
+    assert!(
+        service
+            .message_service()
+            .registered_identity(&child_identity)
+            .is_none()
+    );
+    assert!(
+        service
+            .retired_persistent_subagent(&child_agent_id)
+            .is_none()
+    );
+    let retry = execute_close_agent_for_test(&mut service, &parent_turn, &child_agent_id);
+    assert_eq!(retry.status, ActionStatus::Rejected);
+    assert_eq!(
+        retry.error.as_ref().map(|error| error.code.as_str()),
+        Some("unavailable")
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 

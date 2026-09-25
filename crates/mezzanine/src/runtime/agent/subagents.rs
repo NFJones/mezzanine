@@ -881,7 +881,24 @@ impl RuntimeSessionService {
                 "persistent child is unavailable; refresh list_agents before retrying",
             )
         };
-        let Some(persistent) = self.persistent_subagent(agent_id) else {
+        let Some(persistent) = self.persistent_subagent(agent_id).cloned() else {
+            let already_closed =
+                self.retired_persistent_subagent(agent_id)
+                    .is_some_and(|retired| {
+                        retired.parent_agent_id == turn.agent_id
+                            && retired.parent_conversation_id == turn.conversation_id
+                            && runtime_agent_pane_id(agent_id).is_some_and(|pane_id| {
+                                self.find_pane_descriptor(pane_id.as_str()).is_none()
+                            })
+                    });
+            if already_closed {
+                return Ok(ActionResult::succeeded(
+                    turn,
+                    action,
+                    vec!["persistent child was already closed".to_string()],
+                    Some(serde_json::json!({"closed": false, "agent_id": agent_id}).to_string()),
+                ));
+            }
             return Ok(unavailable()?);
         };
         if persistent.parent_agent_id != turn.agent_id
@@ -903,6 +920,7 @@ impl RuntimeSessionService {
                 .model_profile_overrides_mut()
                 .subagent_profiles
                 .remove(agent_id);
+            self.remember_retired_persistent_subagent(agent_id, persistent.clone());
             self.remove_subagent_authority_state(agent_id);
             self.deregister_macro_managed_subagent(agent_id);
             if let Some(identity) = mez_core::ids::AgentId::opaque(agent_id.to_string()) {

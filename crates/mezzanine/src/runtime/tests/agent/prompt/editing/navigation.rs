@@ -371,7 +371,7 @@ fn runtime_agent_prompt_navigation_scrolls_visible_rows_with_cursor() {
         .unwrap()
         .unwrap();
     let view_text = view.lines.join("\n");
-    assert!(view_text.contains("mez> row1"), "{view_text}");
+    assert!(view_text.contains("❱ row1"), "{view_text}");
     assert!(!view_text.contains("row7"), "{view_text}");
 }
 

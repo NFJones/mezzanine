@@ -255,8 +255,6 @@ pub(crate) fn push_agent_terminal_sgr_color_codes(
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(crate) const AGENT_TERMINAL_MESSAGE_PREFIX: &str = "▐ ";
-/// Editable prompt marker rendered after the agent terminal gutter.
-pub(crate) const AGENT_PROMPT_TEXT_PREFIX: &str = "mez> ";
 /// Maximum action-result lines rendered directly into the pane buffer.
 pub(crate) const AGENT_ACTION_RESULT_DISPLAY_MAX_LINES: usize = 200;
 /// Maximum action-result bytes rendered directly into the pane buffer.

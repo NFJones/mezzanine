@@ -28,6 +28,9 @@ mod types;
 use mez_mux::readline::{ReadlineEdit, ReadlineOutcome};
 pub use types::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};
 
+/// Editable agent prompt marker, including its trailing separator.
+pub(crate) const AGENT_PROMPT_TEXT_PREFIX: &str = "❱ ";
+
 /// Exposes the tests module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

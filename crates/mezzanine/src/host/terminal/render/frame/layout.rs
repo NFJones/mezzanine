@@ -29,7 +29,12 @@ pub(in crate::host::terminal::render) fn pane_frame_field_value(
             "session.id" => frame_context.session_id.clone().unwrap_or_default(),
             "window.id" => window.id.to_string(),
             "window.index" => window.index.to_string(),
-            "window.title" => window.title(),
+            "window.title" => frame_context
+                .windows
+                .iter()
+                .find(|context| context.id == window.id.as_str())
+                .map(|context| context.title.clone())
+                .unwrap_or_else(|| window.title()),
             "window.name" => window.name.clone(),
             "window.active" => "true".to_string(),
             "window.pane_count" => window.panes().len().to_string(),
@@ -48,7 +53,9 @@ pub(in crate::host::terminal::render) fn pane_frame_field_value(
                 .unwrap_or_default(),
             "pane.id" => pane.id.to_string(),
             "pane.index" => pane.index.to_string(),
-            "pane.title" => pane.title.clone(),
+            "pane.title" => pane_context
+                .and_then(|context| context.pane_title_override.clone())
+                .unwrap_or_else(|| pane.title.clone()),
             "pane.progress" => pane_context
                 .and_then(|context| context.terminal_progress_percent)
                 .map(|percent| format!("{percent}%"))

@@ -9,6 +9,7 @@
 use crate::host::terminal::{
     ReadlinePromptClientPresentation, ReadlinePromptStatusRow, TerminalPaneFrameContext,
 };
+use crate::ui::readline::AGENT_PROMPT_TEXT_PREFIX;
 use crate::ui::readline::{ReadlinePrompt, ReadlinePromptKind};
 use mez_mux::layout::Size;
 use mez_mux::presentation::{ClientStatusKind, ClientStatusLine};
@@ -503,7 +504,8 @@ fn render_wrapped_prompt_layout(
         .map(|(start, length)| (start.saturating_add(2), start.saturating_add(2 + length)));
     let continuation_indent =
         if prompt.kind == ReadlinePromptKind::Agent && !prompt.reverse_search_active() {
-            terminal_text_width(&format!("{MEZ_UI_PREFIX}mez> ")).min(width.saturating_sub(1))
+            terminal_text_width(&format!("{MEZ_UI_PREFIX}{AGENT_PROMPT_TEXT_PREFIX}"))
+                .min(width.saturating_sub(1))
         } else {
             0
         };

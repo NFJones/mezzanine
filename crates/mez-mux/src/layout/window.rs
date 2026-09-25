@@ -208,18 +208,21 @@ impl Window {
         self.layout_root.pane_geometries(&panes)
     }
 
+    /// Returns whether the displayed title follows the active pane title.
+    pub fn title_uses_active_pane(&self) -> bool {
+        !self.name_source.is_explicit()
+            && (self.name.trim().is_empty()
+                || self.name == self.index.to_string()
+                || self.name == "shell")
+    }
+
     /// Returns the displayed title for this window.
     ///
     /// Numeric default window names are treated as generated identities, so the
     /// visible title follows the active pane title until the user explicitly
     /// renames the window to a non-default value.
     pub fn title(&self) -> String {
-        if self.name_source.is_explicit() {
-            self.name.clone()
-        } else if self.name.trim().is_empty()
-            || self.name == self.index.to_string()
-            || self.name == "shell"
-        {
+        if self.title_uses_active_pane() {
             self.active_pane().title.clone()
         } else {
             self.name.clone()

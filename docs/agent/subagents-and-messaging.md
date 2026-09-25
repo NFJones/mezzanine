@@ -140,6 +140,11 @@ three semantics persist through presentation replay and resize. Sender rows
 never become provider context, user-trust context, approval authority, delivery
 state, turn triggers, receiver receipts, or cursors.
 
+Ordinary concrete-agent labels use a bounded, sanitized runtime-owned subagent
+display name when available and otherwise the canonical raw agent id. Pane,
+window, and conversation titles never supply agent labels. Receipts capture the
+resolved label so recovery and replay do not consult mutable identity state.
+
 For ordinary child recipients, outbound sender rows use the recipient's
 spawn-owned display name rather than its opaque agent id. Generated human and
 nonhuman names remain readable, while literal-name mode retains its assigned

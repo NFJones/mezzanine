@@ -13,6 +13,7 @@ use crate::ui::selector::{
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use super::AGENT_PROMPT_TEXT_PREFIX;
 use super::types::{ReadlinePrompt, ReadlinePromptKind};
 use mez_mux::readline::{ReadlineOutcome, ReadlinePromptMode};
 use mez_mux::selector::SelectorShadowHint;
@@ -337,7 +338,7 @@ impl ReadlinePrompt {
     fn prefix(&self) -> &'static str {
         match self.kind {
             ReadlinePromptKind::Command => ":",
-            ReadlinePromptKind::Agent => "mez> ",
+            ReadlinePromptKind::Agent => AGENT_PROMPT_TEXT_PREFIX,
         }
     }
 }

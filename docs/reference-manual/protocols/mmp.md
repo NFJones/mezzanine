@@ -156,6 +156,11 @@ or MMP routing.
 Both sender and recipient pane-log continuations start five display spaces
 after the `▐ ` gutter, independent of endpoint-label width; Markdown structural
 indentation is additive, and copied source excludes presentation-only padding.
+Ordinary concrete-agent labels use the bounded, sanitized runtime-owned
+subagent display name when available, otherwise the canonical raw agent id;
+mutable pane, window, or conversation titles are never used as agent identity.
+Receiver receipts preserve their resolved labels for retry and replay, while
+non-agent selector expressions remain the explicitly addressed label.
 
 ## Related pages
 

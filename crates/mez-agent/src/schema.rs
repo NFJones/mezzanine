@@ -754,7 +754,7 @@ fn maap_close_agent_action_schema() -> serde_json::Value {
             "agent_id",
             serde_json::json!({
                 "type": "string",
-                "description": "Runtime agent id of one live persistent child spawned by the calling parent conversation. Discover the target through list_agents first. The runtime returns the same unavailable result for unknown, non-persistent, foreign-owned, stale, or already-closed targets."
+                "description": "Runtime agent id of one persistent child spawned by the calling parent conversation. Discover the target through list_agents first. A known completed close for this same parent conversation succeeds as a no-op; unknown, non-persistent, foreign-owned, and stale targets return the same unavailable result."
             }),
         )],
         &["agent_id"],
