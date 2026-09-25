@@ -27,6 +27,94 @@ fn runtime_config_reload_applies_compaction_raw_retention() {
     assert_eq!(service.agent_compaction_raw_retention_percent(), 25);
 }
 
+/// A provider context rejection must relax optional raw-tail retention before
+/// declaring that no closed, consumed history can be compacted.
+#[test]
+fn runtime_context_limit_recovery_replans_retained_tail_noop() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "retained-tail-recovery".to_string(),
+        path: None,
+        format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary,
+        trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"tail-recovery\"\ncompaction_raw_retention_percent = 10\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.tail-recovery]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"tail","method":"agent/shell/command","params":{"idempotency_key":"retained-tail-recovery","input":"continue"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    insert_test_context_block(
+        service.agent_turn_contexts_mut().get_mut("turn-1").unwrap(),
+        ContextBlock::evidence_event(
+            ContextSourceKind::ActionResult,
+            "synthetic compactable result",
+            "result ".repeat(500),
+        ),
+    );
+    let high_water = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests("turn-1", high_water)
+        .unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    let budget = 30_000;
+    let ordinary = mez_agent::plan_model_context_compaction_at_consumed_sequence(
+        context, budget, 10, high_water,
+    )
+    .unwrap();
+    let minimum = mez_agent::plan_model_context_compaction_at_consumed_sequence(
+        context, budget, 1, high_water,
+    )
+    .unwrap();
+    assert!(!ordinary.changes_context());
+    assert!(minimum.changes_context());
+    let before = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks()
+        .to_vec();
+    let error = MezError::invalid_state("provider context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+        );
+    assert!(
+        service
+            .recover_agent_provider_context_limit_failure(
+                &AgentId::opaque("agent-%1").unwrap(),
+                "turn-1",
+                &error,
+                1,
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .agent_turn_contexts()
+            .get("turn-1")
+            .unwrap()
+            .blocks(),
+        before
+    );
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+    );
+}
+
 /// Verifies large bracketed-paste agent prompt input is displayed compactly in
 /// the pane transcript while the agent turn receives the exact pasted payload.
 #[test]

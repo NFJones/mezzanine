@@ -286,25 +286,44 @@ impl RuntimeSessionService {
             _ => profile_budget_words.saturating_div(4),
         }
         .max(1);
-        let retained_tail_percent = self.agent_compaction_raw_retention_percent();
+        let configured_tail_percent = self.agent_compaction_raw_retention_percent();
         let provider_projection = self.agent_provider_budget_projection(&model_profile);
-        let plan = self.plan_agent_context_compaction(
+        // An authoritative provider rejection can invalidate the optional raw
+        // reservation even when the ordinary planner selected no replacement.
+        // Replan locally without another provider request, never below the
+        // planner's mandatory one-percent complete-group suffix.
+        let mut retained_tail_percent = configured_tail_percent;
+        let mut plan = self.plan_agent_context_compaction(
             provider_projection,
             &context,
             recovery_budget_words,
             retained_tail_percent,
             consumed_sequence_high_water,
         )?;
+        for percent in [5, 2, 1] {
+            if plan.changes_context() || percent >= retained_tail_percent {
+                continue;
+            }
+            retained_tail_percent = percent;
+            plan = self.plan_agent_context_compaction(
+                provider_projection,
+                &context,
+                recovery_budget_words,
+                retained_tail_percent,
+                consumed_sequence_high_water,
+            )?;
+        }
         if !plan.changes_context() {
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 turn_id,
                 &format!(
-                    "context_limit_recovery skipped attempt={} consumed_event_sequence={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} error_kind={} no_compactable_blocks=true",
+                    "context_limit_recovery skipped attempt={} consumed_event_sequence={} profile_budget_words={} recovery_budget_words={} configured_tail_percent={} attempted_tail_percent={} error_kind={} no_viable_replacement=true",
                     recovery_attempt,
                     consumed_sequence_high_water,
                     profile_budget_words,
                     recovery_budget_words,
+                    configured_tail_percent,
                     retained_tail_percent,
                     runtime_mezzanine_error_code(error.kind())
                 ),
@@ -312,9 +331,10 @@ impl RuntimeSessionService {
             self.append_agent_status_text_to_terminal_buffer(
                 &turn.pane_id,
                 &format!(
-                    "agent: provider rejected context as too large; no compactable active turn context remains profile_budget_words={} recovery_budget_words={}",
+                    "agent: provider rejected context as too large; no viable compaction replacement after reducing optional raw-tail retention profile_budget_words={} recovery_budget_words={} minimum_tail_percent={}",
                     profile_budget_words,
-                    recovery_budget_words
+                    recovery_budget_words,
+                    retained_tail_percent
                 ),
             )?;
             return Ok(false);

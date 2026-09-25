@@ -8266,6 +8266,14 @@ split to fit the budget.
 The raw tail size MUST follow `agents.compaction_raw_retention_percent`, which
 defaults to retaining approximately the newest 10% of the active model context
 budget by estimated replay word count.
+After an authoritative provider context-limit rejection, an unchanged plan
+under that ordinary reservation MUST NOT be treated as global exhaustion.
+Recovery MAY replan locally with progressively smaller optional raw-tail
+reservations down to the planner's one-percent minimum, without resending an
+identical provider request. This fallback MUST retain complete execution
+groups and protected exact barriers; normal and manual compaction retain their
+configured reservation. Only after bounded replanning finds no viable
+replacement MAY recovery report that no replacement is available.
 If the provider rejects a request because the input context exceeds a
 provider or model limit, Mezzanine MUST treat that failure as recoverable while
 the turn remains running, MUST NOT ask the provider for a failure-summary

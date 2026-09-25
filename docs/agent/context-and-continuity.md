@@ -124,6 +124,11 @@ within an eligible segment, not a best-fit collection of older small groups.
 When the newest closed group cannot fit the raw-tail budget, it is summarized
 instead of retaining an older group in its place; exact user and task barriers
 and incomplete or unconsumed groups remain raw.
+If the provider rejects a request for context length and configured raw-tail
+retention selects no work, Mez tries smaller optional reservations down to its
+one-percent minimum before declaring that no replacement is available. This is
+a bounded recovery-only fallback; ordinary compaction keeps the configured
+retention, and exact barriers and incomplete groups remain protected.
 
 A completed conversation compaction writes a versioned summary and the last
 summarized transcript sequence together to a private conversation-owned epoch
