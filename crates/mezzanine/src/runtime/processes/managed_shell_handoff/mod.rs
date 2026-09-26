@@ -103,6 +103,8 @@ pub(super) struct ManagedShellHandoff {
     exit_requested: bool,
     /// Whether a managed Fish child reached an editable prompt after bootstrap.
     child_prompt_ready: bool,
+    /// Whether the authenticated receiver admitted this handoff's frame.
+    frame_admitted: bool,
     /// Time when return or recovery waiting began.
     started_at_unix_ms: Option<u64>,
     /// Fresh foreground proof currently owned by this handoff.
@@ -122,6 +124,7 @@ impl ManagedShellHandoff {
             phase: ManagedShellHandoffPhase::TriggerQueued,
             exit_requested: false,
             child_prompt_ready: false,
+            frame_admitted: false,
             started_at_unix_ms: None,
             recovery_observation: None,
             pending_input: Vec::new(),
@@ -158,6 +161,11 @@ impl ManagedShellHandoff {
     /// Reports whether exit was requested before the handoff settled.
     pub(super) fn exit_requested(&self) -> bool {
         self.exit_requested
+    }
+
+    /// Reports whether the receiver authenticated admission of the pending frame.
+    pub(super) fn frame_admitted(&self) -> bool {
+        self.frame_admitted
     }
 
     /// Reports whether the authenticated managed child has taken ownership.
@@ -220,6 +228,8 @@ pub(super) enum ManagedShellHandoffEvent {
     EditorHeld { marker: String },
     /// The adapter admitted the private frame and runtime released its payload.
     PayloadReleased { marker: String },
+    /// The authenticated receiver admitted the frame before DATA delivery.
+    FrameAdmitted { marker: String },
     /// The persistent child authenticated terminal-input ownership.
     ChildInstalled { marker: String, now_unix_ms: u64 },
     /// A managed Fish child reached an editable prompt after bootstrap.
@@ -333,6 +343,16 @@ pub(super) fn reduce_managed_shell_handoff(
                 ) =>
         {
             handoff.phase = ManagedShellHandoffPhase::PayloadInFlight;
+        }
+        ManagedShellHandoffEvent::FrameAdmitted { marker }
+            if marker == handoff.identity.marker
+                && matches!(
+                    handoff.phase,
+                    ManagedShellHandoffPhase::EditorHeld
+                        | ManagedShellHandoffPhase::PayloadInFlight
+                ) =>
+        {
+            handoff.frame_admitted = true;
         }
         ManagedShellHandoffEvent::ChildInstalled {
             marker,

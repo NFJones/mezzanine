@@ -869,7 +869,36 @@ impl RuntimeSessionService {
                 "managed-shell frame admission does not match deferred cancellation ownership",
             );
         }
-        if !self.complete_managed_shell_admission_cancellation(output_pane_id)? {
+        let Some(handoff_after_request) = self
+            .process
+            .pane_managed_shell_handoffs
+            .get(output_pane_id)
+            .cloned()
+        else {
+            return Ok(0);
+        };
+        let mut handoff_after_admission = handoff_after_request;
+        let admission = reduce_managed_shell_handoff(
+            &mut handoff_after_admission,
+            ManagedShellHandoffEvent::FrameAdmitted {
+                marker: marker.to_string(),
+            },
+        );
+        if !admission.applied {
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction,
+                "managed-frame-admitted-cancellation-phase-mismatch",
+                "managed-shell frame admission reached cancellation outside its owned handoff phase",
+            );
+        }
+        self.process
+            .pane_managed_shell_handoffs
+            .insert(output_pane_id.to_string(), handoff_after_admission.clone());
+        if !self.complete_managed_shell_admission_cancellation(
+            output_pane_id,
+            handoff_after_admission,
+        )? {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,

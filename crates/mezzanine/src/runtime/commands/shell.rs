@@ -219,6 +219,11 @@ impl RuntimeSessionService {
         pane_id: &str,
         runtime_owned: bool,
     ) -> Result<String> {
+        if runtime_owned && self.runtime_agent_surface_startup(pane_id).is_none() {
+            return Err(MezError::invalid_state(
+                "runtime-owned agent pane is missing its startup owner",
+            ));
+        }
         let conversation_id = self
             .agent_shell_store_mut()
             .enter_or_resume(pane_id)?
@@ -226,13 +231,7 @@ impl RuntimeSessionService {
             .clone();
         self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
         self.reload_agent_prompt_history_for_pane(pane_id)?;
-        if runtime_owned {
-            if self.runtime_agent_surface_startup(pane_id).is_none() {
-                return Err(MezError::invalid_state(
-                    "runtime-owned agent pane is missing its startup owner",
-                ));
-            }
-        } else {
+        if !runtime_owned {
             self.enter_agent_subshell_if_needed(pane_id)?;
         }
         self.sync_tracked_pty_sizes()?;
@@ -1598,143 +1597,188 @@ impl RuntimeSessionService {
             .bash_receiver_rcfile_for_pane(pane_id)
             .map(std::path::Path::to_path_buf);
         let fish_receiver_token = self.fish_receiver_token_for_pane(pane_id).cloned();
+        let previous_readiness = self.pane_readiness_state(pane_id);
+        let bootstrap_was_pending = self.pane_bootstrap_is_pending(pane_id);
         self.begin_agent_subshell_shell_handoff(pane_id)?;
         let prepared_bootstrap = match self.prepare_bootstrap_to_pane(pane_id) {
             Ok(prepared_bootstrap) => prepared_bootstrap,
             Err(error) => {
-                self.clear_agent_subshell_shell_identity(pane_id);
+                self.rollback_agent_subshell_shell_handoff(
+                    pane_id,
+                    None,
+                    previous_readiness,
+                    bootstrap_was_pending,
+                );
                 return Err(error);
             }
         };
-        let bash_receiver_install_marker = prepared_bootstrap
-            .as_ref()
-            .map(|(marker, _)| marker.as_str());
-        let exit_marker = runtime_random_marker_token(&format!("agent-subshell-exit\0{pane_id}"))?;
-        let shell_command = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
-            shell_identity.shell_path(),
-            classification,
-            zsh_history_token.as_ref(),
-            managed_zsh.as_ref(),
-            bash_receiver_rcfile.as_deref(),
-            bash_receiver_install_marker,
-            fish_receiver_token.as_ref().zip(
+        let shell_setup = (|| -> Result<_> {
+            let bash_receiver_install_marker = prepared_bootstrap
+                .as_ref()
+                .map(|(marker, _)| marker.as_str());
+            let exit_marker =
+                runtime_random_marker_token(&format!("agent-subshell-exit\0{pane_id}"))?;
+            let shell_command =
+                agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
+                    shell_identity.shell_path(),
+                    classification,
+                    zsh_history_token.as_ref(),
+                    managed_zsh.as_ref(),
+                    bash_receiver_rcfile.as_deref(),
+                    bash_receiver_install_marker,
+                    fish_receiver_token.as_ref().zip(
+                        prepared_bootstrap
+                            .as_ref()
+                            .map(|(marker, _)| marker.as_str()),
+                    ),
+                    (classification == ShellClassification::Zsh)
+                        .then_some(bash_receiver_install_marker)
+                        .flatten(),
+                    Some(&exit_marker),
+                )?;
+            if let Some((marker, wrapper)) = prepared_bootstrap.as_ref() {
+                self.bind_agent_subshell_bootstrap_marker(pane_id, marker);
+                self.defer_agent_subshell_bootstrap_wrapper(pane_id, marker, wrapper.clone());
+            }
+            let shell_input = if classification == ShellClassification::Bash {
+                let (marker, _) = prepared_bootstrap.as_ref().ok_or_else(|| {
+                    MezError::invalid_state(
+                        "managed Bash subshell handoff requires a registered bootstrap owner",
+                    )
+                })?;
+                let token = self
+                    .bash_receiver_token_for_pane(pane_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "managed Bash receiver is unavailable for agent subshell handoff",
+                        )
+                    })?;
+                let parent_proof = runtime_random_marker_token(&format!(
+                    "bash-parent-ready\0{pane_id}\0{marker}"
+                ))?;
+                let private_input = bash_private_handoff_source_input(
+                    &shell_command,
+                    &token,
+                    marker,
+                    &parent_proof,
+                );
+                self.prepend_bash_shell_handoff_payload(
+                    marker,
+                    mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                        private_input.receiver_payload.into_bytes(),
+                        marker.clone(),
+                        true,
+                    ),
+                    &parent_proof,
+                );
+                private_input.wrapper
+            } else if classification == ShellClassification::Fish {
+                let (marker, _) = prepared_bootstrap.as_ref().ok_or_else(|| {
+                    MezError::invalid_state(
+                        "managed Fish subshell handoff requires a registered bootstrap owner",
+                    )
+                })?;
+                let token = fish_receiver_token.ok_or_else(|| {
+                    MezError::invalid_state(
+                        "managed Fish receiver is unavailable for agent subshell handoff",
+                    )
+                })?;
+                let private_input =
+                    mez_agent::fish_private_source_input(&shell_command, &token, marker);
+                self.prepend_fish_shell_receiver_payloads(
+                    marker,
+                    mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                        private_input.receiver_hold.into_bytes(),
+                        marker.clone(),
+                    ),
+                    mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                        private_input.editor_clear_confirmation.into_bytes(),
+                        marker.clone(),
+                    ),
+                    mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                        private_input.receiver_admission.into_bytes(),
+                        marker.clone(),
+                    ),
+                    mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                        private_input.receiver_payload.into_bytes(),
+                        marker.clone(),
+                        private_input.payload_receiver_acknowledgements,
+                    ),
+                );
+                private_input.wrapper
+            } else if classification == ShellClassification::Zsh {
+                let (marker, _) = prepared_bootstrap.as_ref().ok_or_else(|| {
+                    MezError::invalid_state(
+                        "managed Zsh subshell handoff requires a registered bootstrap owner",
+                    )
+                })?;
+                let token = zsh_history_token.ok_or_else(|| {
+                    MezError::invalid_state(
+                        "managed Zsh receiver is unavailable for agent subshell handoff",
+                    )
+                })?;
+                let trigger = managed_zsh
+                    .as_ref()
+                    .map(mez_agent::ManagedZshShell::trigger)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "managed Zsh trigger is unavailable for agent subshell handoff",
+                        )
+                    })?;
+                let private_input =
+                    mez_agent::zsh_private_source_input(&shell_command, &token, marker, trigger)
+                        .map_err(|error| MezError::invalid_state(error.to_string()))?;
+                self.prepend_zsh_shell_receiver_payloads(
+                    marker,
+                    mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                        private_input.receiver_hold.into_bytes(),
+                        marker.clone(),
+                    ),
+                    mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                        private_input.receiver_admission.into_bytes(),
+                        marker.clone(),
+                    ),
+                    mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                        private_input.receiver_payload.into_bytes(),
+                        marker.clone(),
+                        private_input.payload_receiver_acknowledgements,
+                    ),
+                );
+                private_input.wrapper
+            } else {
+                shell_command
+            };
+            Ok((exit_marker, shell_input))
+        })();
+        let (exit_marker, shell_input) = match shell_setup {
+            Ok(setup) => setup,
+            Err(error) => {
+                self.rollback_agent_subshell_shell_handoff(
+                    pane_id,
+                    prepared_bootstrap
+                        .as_ref()
+                        .map(|(marker, _)| marker.as_str()),
+                    previous_readiness,
+                    bootstrap_was_pending,
+                );
+                return Err(error);
+            }
+        };
+        #[cfg(test)]
+        if self.take_agent_subshell_entry_setup_failure_for_tests() {
+            self.rollback_agent_subshell_shell_handoff(
+                pane_id,
                 prepared_bootstrap
                     .as_ref()
                     .map(|(marker, _)| marker.as_str()),
-            ),
-            (classification == ShellClassification::Zsh)
-                .then_some(bash_receiver_install_marker)
-                .flatten(),
-            Some(&exit_marker),
-        )?;
-        if let Some((marker, wrapper)) = prepared_bootstrap.as_ref() {
-            self.bind_agent_subshell_bootstrap_marker(pane_id, marker);
-            self.defer_agent_subshell_bootstrap_wrapper(pane_id, marker, wrapper.clone());
+                previous_readiness,
+                bootstrap_was_pending,
+            );
+            return Err(MezError::invalid_state(
+                "injected agent-subshell entry setup failure",
+            ));
         }
-        let shell_input = if classification == ShellClassification::Bash {
-            let (marker, _) = prepared_bootstrap.as_ref().ok_or_else(|| {
-                MezError::invalid_state(
-                    "managed Bash subshell handoff requires a registered bootstrap owner",
-                )
-            })?;
-            let token = self
-                .bash_receiver_token_for_pane(pane_id)
-                .cloned()
-                .ok_or_else(|| {
-                    MezError::invalid_state(
-                        "managed Bash receiver is unavailable for agent subshell handoff",
-                    )
-                })?;
-            let parent_proof =
-                runtime_random_marker_token(&format!("bash-parent-ready\0{pane_id}\0{marker}"))?;
-            let private_input =
-                bash_private_handoff_source_input(&shell_command, &token, marker, &parent_proof);
-            self.prepend_bash_shell_handoff_payload(
-                marker,
-                mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                    private_input.receiver_payload.into_bytes(),
-                    marker.clone(),
-                    true,
-                ),
-                &parent_proof,
-            );
-            private_input.wrapper
-        } else if classification == ShellClassification::Fish {
-            let (marker, _) = prepared_bootstrap.as_ref().ok_or_else(|| {
-                MezError::invalid_state(
-                    "managed Fish subshell handoff requires a registered bootstrap owner",
-                )
-            })?;
-            let token = fish_receiver_token.ok_or_else(|| {
-                MezError::invalid_state(
-                    "managed Fish receiver is unavailable for agent subshell handoff",
-                )
-            })?;
-            let private_input =
-                mez_agent::fish_private_source_input(&shell_command, &token, marker);
-            self.prepend_fish_shell_receiver_payloads(
-                marker,
-                mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                    private_input.receiver_hold.into_bytes(),
-                    marker.clone(),
-                ),
-                mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                    private_input.editor_clear_confirmation.into_bytes(),
-                    marker.clone(),
-                ),
-                mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                    private_input.receiver_admission.into_bytes(),
-                    marker.clone(),
-                ),
-                mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                    private_input.receiver_payload.into_bytes(),
-                    marker.clone(),
-                    private_input.payload_receiver_acknowledgements,
-                ),
-            );
-            private_input.wrapper
-        } else if classification == ShellClassification::Zsh {
-            let (marker, _) = prepared_bootstrap.as_ref().ok_or_else(|| {
-                MezError::invalid_state(
-                    "managed Zsh subshell handoff requires a registered bootstrap owner",
-                )
-            })?;
-            let token = zsh_history_token.ok_or_else(|| {
-                MezError::invalid_state(
-                    "managed Zsh receiver is unavailable for agent subshell handoff",
-                )
-            })?;
-            let trigger = managed_zsh
-                .as_ref()
-                .map(mez_agent::ManagedZshShell::trigger)
-                .ok_or_else(|| {
-                    MezError::invalid_state(
-                        "managed Zsh trigger is unavailable for agent subshell handoff",
-                    )
-                })?;
-            let private_input =
-                mez_agent::zsh_private_source_input(&shell_command, &token, marker, trigger)
-                    .map_err(|error| MezError::invalid_state(error.to_string()))?;
-            self.prepend_zsh_shell_receiver_payloads(
-                marker,
-                mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                    private_input.receiver_hold.into_bytes(),
-                    marker.clone(),
-                ),
-                mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                    private_input.receiver_admission.into_bytes(),
-                    marker.clone(),
-                ),
-                mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                    private_input.receiver_payload.into_bytes(),
-                    marker.clone(),
-                    private_input.payload_receiver_acknowledgements,
-                ),
-            );
-            private_input.wrapper
-        } else {
-            shell_command
-        };
         match self.write_runtime_pane_shell_input(pane_id, shell_input.as_bytes()) {
             Ok(()) => {
                 self.remember_agent_subshell_exit_marker(
@@ -1827,8 +1871,8 @@ impl RuntimeSessionService {
             }
             return self.request_managed_shell_handoff_exit(pane_id);
         }
-        let cancelled_bootstrap_payload = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
-        if self.pane_has_running_shell_transaction(pane_id) {
+        let pending_bootstrap_payload = self.agent_subshell_bootstrap_payload_for_exit(pane_id);
+        if pending_bootstrap_payload.is_none() && self.pane_has_running_shell_transaction(pane_id) {
             return Ok(false);
         }
         if self.primary_pid_for_live_pane_process(pane_id).is_none() {
@@ -1838,28 +1882,32 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         let retain_input_clear_output = self.agent_subshell_input_clear_was_completed(pane_id);
-        if retain_input_clear_output {
-            self.remember_hidden_shell_render_suppression(pane_id);
-        } else {
-            self.clear_shell_output_filters_for_foreground_input(pane_id);
-        }
         let managed_shell_handoff_pending = self.managed_shell_handoff_is_pending(pane_id);
         let dependency_free_loader_handoff_pending =
             self.dependency_free_foreign_loader_owns_parent_restoration(pane_id);
-        if !managed_shell_handoff_pending && !dependency_free_loader_handoff_pending {
-            self.clear_agent_subshell_shell_identity(pane_id);
-        }
-        let command_exit = self.take_agent_subshell_command_exit(pane_id);
-        self.remember_agent_subshell_exit_echo(pane_id);
+        let command_exit = self.agent_subshell_command_exit_is_pending(pane_id);
         let exit_input = if command_exit {
             b"exit\n".as_slice()
         } else {
             b"\x04".as_slice()
         };
-        let mut input = cancelled_bootstrap_payload.unwrap_or_default();
+        let mut input = pending_bootstrap_payload.clone().unwrap_or_default();
         input.extend_from_slice(exit_input);
         match self.write_runtime_pane_input(pane_id, &input) {
             Ok(()) => {
+                if pending_bootstrap_payload.is_some() {
+                    let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
+                }
+                if retain_input_clear_output {
+                    self.remember_hidden_shell_render_suppression(pane_id);
+                } else {
+                    self.clear_shell_output_filters_for_foreground_input(pane_id);
+                }
+                if !managed_shell_handoff_pending && !dependency_free_loader_handoff_pending {
+                    self.clear_agent_subshell_shell_identity(pane_id);
+                }
+                let _ = self.take_agent_subshell_command_exit(pane_id);
+                self.remember_agent_subshell_exit_echo(pane_id);
                 self.leave_agent_subshell(pane_id);
                 self.invalidate_agent_subshell_environment_after_exit(pane_id);
                 Ok(true)

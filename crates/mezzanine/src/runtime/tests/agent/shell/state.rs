@@ -4662,6 +4662,71 @@ fn runtime_agent_subshell_certification_rejection_explains_bubblewrap_preflight(
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies runtime-owned agent entry rejects a missing startup owner before
+/// creating or exposing an agent-shell session.
+#[test]
+fn runtime_owned_agent_entry_without_startup_owner_does_not_expose_session() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+
+    let error = service
+        .enter_runtime_owned_agent_mode_for_pane("%1")
+        .unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        "runtime-owned agent pane is missing its startup owner"
+    );
+    assert!(service.agent_shell_store().get("%1").is_none());
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a failed child-shell exit write preserves ownership and the
+/// line-oriented exit decision so the operation can be retried safely.
+#[test]
+fn runtime_agent_subshell_exit_write_failure_preserves_retry_state() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service.enter_agent_subshell("%1");
+    service.begin_agent_subshell_shell_handoff("%1").unwrap();
+    let (marker, wrapper) = service
+        .prepare_bootstrap_to_pane("%1")
+        .unwrap()
+        .expect("exit rollback fixture should register bootstrap");
+    service.bind_agent_subshell_bootstrap_marker("%1", &marker);
+    service.defer_agent_subshell_bootstrap_wrapper("%1", &marker, wrapper);
+    service.mark_agent_subshell_command_exit("%1");
+    service.fail_next_pane_input_write_for_tests();
+
+    let error = service.exit_agent_subshell_if_active("%1").unwrap_err();
+
+    assert_eq!(error.message(), "injected pane input write failure");
+    assert!(service.agent_subshell_is_active("%1"));
+    assert!(service.agent_subshell_command_exit_is_pending_for_tests("%1"));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .contains_key(&marker)
+    );
+    assert!(service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert!(service.exit_agent_subshell_if_active("%1").unwrap());
+    assert!(!service.agent_subshell_is_active("%1"));
+    assert!(!service.agent_subshell_command_exit_is_pending_for_tests("%1"));
+    assert!(
+        !service
+            .running_shell_transactions_for_tests()
+            .contains_key(&marker)
+    );
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies certification rejection does not send an unauthenticated exit to
 /// an active child whose managed receiver installation was never proven.
 #[test]

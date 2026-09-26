@@ -1964,6 +1964,187 @@ fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
     process.terminate(Duration::from_millis(100)).unwrap();
 }
 
+/// Verifies a failed managed Fish child-exit write keeps the handoff retryable.
+///
+/// Exit intent must not advance the reducer to `Returning` or discard child
+/// ownership until the PTY accepts the exit input; a retry must dispatch it.
+#[test]
+fn runtime_managed_fish_child_exit_write_failure_is_retryable() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1";
+    let mut process = service
+        .take_running_pane_process_for_adapter(pane_id)
+        .unwrap();
+    let marker = "fish-exit-retry-marker";
+    service.running_shell_transactions_mut_for_tests().insert(
+        marker.to_string(),
+        RunningShellTransactionRef {
+            turn_id: "bootstrap-fish-exit-retry".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: pane_id.to_string(),
+            command: "bootstrap".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: Some(mez_mux::process::ShellInputDelivery::generated_source(
+                Vec::new(),
+            )),
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    service.prepend_fish_shell_receiver_payloads(
+        marker,
+        mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+        mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+        mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+        mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+    );
+    service.bind_agent_subshell_bootstrap_marker(pane_id, marker);
+    assert!(service.mark_managed_shell_payload_released(pane_id, marker));
+    assert_eq!(
+        service.mark_managed_shell_child_installed(pane_id, marker),
+        Some(false)
+    );
+    assert_eq!(
+        service.mark_managed_fish_child_prompt_ready(pane_id, marker),
+        Some(false)
+    );
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(pane_id)
+        .unwrap();
+    service.enter_agent_subshell(pane_id);
+    service.remove_running_shell_transaction(marker);
+    service.clear_shell_transaction_protocol_state(marker);
+    let _ = service.drain_pane_io_transition();
+    service.fail_next_pane_input_write_for_tests();
+
+    let error = service.exit_agent_subshell_if_active(pane_id).unwrap_err();
+
+    assert_eq!(error.message(), "injected pane input write failure");
+    assert!(service.agent_subshell_is_active(pane_id));
+    assert!(service.managed_shell_handoff_is_pending(pane_id));
+    assert!(service.managed_shell_child_exit_is_dispatchable_for_tests(pane_id));
+    assert!(pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty());
+
+    assert!(service.exit_agent_subshell_if_active(pane_id).unwrap());
+    let exit_effects = service.drain_pane_io_transition().side_effects;
+    assert_eq!(pane_input_effects(&exit_effects).len(), 1);
+    assert_eq!(
+        pane_input_effects(&exit_effects)[0].pane_input_parts().1,
+        mez_agent::fish_agent_subshell_exit_input()
+    );
+    assert!(!service.agent_subshell_is_active(pane_id));
+    assert!(!service.managed_shell_child_exit_is_dispatchable_for_tests(pane_id));
+    let _ = process.terminate(Duration::from_millis(100));
+}
+
+/// Verifies a failed Fish pre-payload cancellation can be retried without a
+/// second authenticated frame-admission event.
+#[test]
+fn runtime_managed_fish_cancellation_write_failure_is_retryable() {
+    let Some(fish_path) = find_test_shell(
+        "fish",
+        &[
+            "/usr/bin/fish",
+            "/usr/local/bin/fish",
+            "/opt/homebrew/bin/fish",
+        ],
+    ) else {
+        eprintln!(
+            "skipping managed Fish cancellation retry regression because fish is unavailable"
+        );
+        return;
+    };
+    let mut service = test_runtime_service();
+    service.enable_legacy_managed_startup_for_tests();
+    service.session.shell = ResolvedShell::new(fish_path, ShellSource::ShellEnv).into();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let pane_id = "%1";
+    let token = service
+        .fish_receiver_token_for_pane(pane_id)
+        .cloned()
+        .expect("managed Fish startup should install an authentication token");
+    let mut process = service
+        .take_running_pane_process_for_adapter(pane_id)
+        .unwrap();
+    let marker = "fish-cancel-retry-marker";
+    service.running_shell_transactions_mut_for_tests().insert(
+        marker.to_string(),
+        RunningShellTransactionRef {
+            turn_id: "bootstrap-fish-cancel-retry".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: pane_id.to_string(),
+            command: "bootstrap".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: Some(mez_mux::process::ShellInputDelivery::generated_source(
+                Vec::new(),
+            )),
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    service.prepend_fish_shell_receiver_payloads(
+        marker,
+        mez_mux::process::ShellInputDelivery::generated_source(b"hold\n".to_vec()),
+        mez_mux::process::ShellInputDelivery::generated_source(b"clear\n".to_vec()),
+        mez_mux::process::ShellInputDelivery::generated_source(b"begin\n".to_vec()),
+        mez_mux::process::ShellInputDelivery::generated_source(b"payload\n".to_vec()),
+    );
+
+    assert_eq!(
+        service
+            .observe_managed_shell_protocol_event(
+                pane_id,
+                mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                mez_terminal::ManagedShellAdapter::Fish,
+                token.as_str(),
+                &mez_terminal::ManagedShellProtocolEvent::EditorHeld {
+                    marker: marker.to_string(),
+                },
+            )
+            .unwrap(),
+        1
+    );
+    let _ = service.drain_pane_io_transition();
+    assert!(service.exit_agent_subshell_if_active(pane_id).unwrap());
+    let _ = service.drain_pane_io_transition();
+    service.fail_next_pane_input_write_for_tests();
+
+    let error = service
+        .observe_managed_shell_protocol_event(
+            pane_id,
+            mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+            mez_terminal::ManagedShellAdapter::Fish,
+            token.as_str(),
+            &mez_terminal::ManagedShellProtocolEvent::FrameAdmitted {
+                marker: marker.to_string(),
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(error.message(), "injected pane input write failure");
+    assert!(service.managed_shell_handoff_is_pending(pane_id));
+    assert!(pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty());
+
+    assert!(service.exit_agent_subshell_if_active(pane_id).unwrap());
+    let retry_effects = service.drain_pane_io_transition().side_effects;
+    let retry = pane_input_effects(&retry_effects);
+    assert_eq!(retry.len(), 1);
+    assert!(!retry[0].pane_input_parts().1.is_empty());
+    let _ = process.terminate(Duration::from_millis(100));
+}
+
 /// Verifies managed zsh startup admission fails closed after its bounded
 /// deadline without creating a bootstrap transaction or writing pane input.
 ///
@@ -2798,6 +2979,71 @@ fn runtime_shell_transaction_end_before_start_marker_fails_live_action() {
     assert!(
         pane_text.contains("shell transaction end marker arrived before the start marker"),
         "{pane_text}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies failed managed-shell entry rolls back its bootstrap and leaves retry state intact.
+#[test]
+fn runtime_agent_subshell_entry_setup_failure_rolls_back_bootstrap_for_retry() {
+    let mut service = test_runtime_service();
+    service.enable_legacy_managed_startup_for_tests();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_pane_readiness("%1", PaneReadinessState::Ready);
+    let previous_readiness = service.pane_readiness_state("%1");
+    let unrelated_marker = "unrelated-pane-transaction";
+    service.running_shell_transactions_mut_for_tests().insert(
+        unrelated_marker.to_string(),
+        RunningShellTransactionRef {
+            turn_id: "unrelated-turn".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: "%unrelated".to_string(),
+            command: "unrelated bootstrap".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    let bootstrap_was_pending = service.pane_bootstrap_is_pending_for_tests("%1");
+    service.fail_next_agent_subshell_entry_setup_for_tests();
+
+    let error = service.enter_agent_subshell_if_needed("%1").unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        "injected agent-subshell entry setup failure"
+    );
+    assert!(
+        !service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| transaction.pane_id == "%1")
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .contains_key(unrelated_marker)
+    );
+    assert_eq!(
+        service.pane_bootstrap_is_pending_for_tests("%1"),
+        bootstrap_was_pending
+    );
+    assert_eq!(service.pane_readiness_state("%1"), previous_readiness);
+    assert!(!service.managed_shell_handoff_is_pending("%1"));
+    assert!(!service.enter_agent_subshell_if_needed("%1").unwrap());
+    assert!(service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .contains_key(unrelated_marker)
     );
     service.terminate_all_pane_processes().unwrap();
 }

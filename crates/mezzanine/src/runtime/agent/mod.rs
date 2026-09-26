@@ -4084,6 +4084,13 @@ impl RuntimeSessionService {
             .insert(pane_id.into());
     }
 
+    /// Reports whether a child-shell exit should use a line-oriented command.
+    pub(crate) fn agent_subshell_command_exit_is_pending(&self, pane_id: &str) -> bool {
+        self.agent
+            .agent_subshell_command_exit_panes
+            .contains(pane_id)
+    }
+
     /// Consumes a line-oriented child-shell exit marker.
     pub(crate) fn take_agent_subshell_command_exit(&mut self, pane_id: &str) -> bool {
         self.agent.agent_subshell_command_exit_panes.remove(pane_id)

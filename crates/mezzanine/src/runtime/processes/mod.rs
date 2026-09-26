@@ -1189,6 +1189,12 @@ pub(crate) struct RuntimeProcessComponent {
     /// Test-only one-shot failure injected while interrupting a pane shell.
     #[cfg(test)]
     fail_next_pane_interrupt_write: bool,
+    /// Test-only one-shot failure injected for any pane input write.
+    #[cfg(test)]
+    fail_next_pane_input_write: bool,
+    /// Test-only one-shot failure after agent-subshell bootstrap registration.
+    #[cfg(test)]
+    fail_next_agent_subshell_entry_setup: bool,
     /// Test-only guard proving transaction ownership precedes pane delivery.
     #[cfg(test)]
     require_registered_transaction_on_next_write: bool,
@@ -1507,6 +1513,15 @@ impl RuntimeSessionService {
             .contains_key(pane_id)
     }
 
+    /// Reports whether a managed child exit remains dispatchable in tests.
+    #[cfg(test)]
+    pub(crate) fn managed_shell_child_exit_is_dispatchable_for_tests(&self, pane_id: &str) -> bool {
+        self.process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .is_some_and(ManagedShellHandoff::child_exit_is_dispatchable)
+    }
+
     /// Retains managed-shell ownership after one marker-scoped transport failure.
     pub(super) fn observe_managed_shell_transport_failure(
         &mut self,
@@ -1716,14 +1731,17 @@ impl RuntimeSessionService {
             );
             return Ok(transition.applied);
         }
-        let handoff = self
+        let Some(mut handoff_after_request) = self
             .process
             .pane_managed_shell_handoffs
-            .get_mut(pane_id)
-            .expect("managed shell handoff should remain owned during exit dispatch");
-        let shell = handoff.shell();
+            .get(pane_id)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        let shell = handoff_after_request.shell();
         let transition = reduce_managed_shell_handoff(
-            handoff,
+            &mut handoff_after_request,
             ManagedShellHandoffEvent::ExitRequested {
                 now_unix_ms: current_unix_millis(),
             },
@@ -1735,6 +1753,17 @@ impl RuntimeSessionService {
             .effects
             .contains(&ManagedShellHandoffEffect::CancelBeforePayload)
         {
+            if shell == ManagedShellKind::Bash || handoff_after_request.frame_admitted() {
+                if !self
+                    .complete_managed_shell_admission_cancellation(pane_id, handoff_after_request)?
+                {
+                    return Ok(false);
+                }
+            } else {
+                self.process
+                    .pane_managed_shell_handoffs
+                    .insert(pane_id.to_string(), handoff_after_request);
+            }
             self.process
                 .pane_agent_subshell_exit_echo_pending
                 .remove(pane_id);
@@ -1744,43 +1773,55 @@ impl RuntimeSessionService {
             self.process
                 .pane_agent_subshell_parent_return_pending
                 .insert(pane_id.to_string());
-            if shell == ManagedShellKind::Bash {
-                self.complete_managed_shell_admission_cancellation(pane_id)?;
-            }
             return Ok(true);
         }
         if transition
             .effects
             .contains(&ManagedShellHandoffEffect::ExitChild)
         {
-            self.process
-                .pane_agent_subshell_parent_return_pending
-                .insert(pane_id.to_string());
-            let cancelled_bootstrap = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
-            if cancelled_bootstrap.is_none() && self.pane_has_running_shell_transaction(pane_id) {
+            let pending_bootstrap_payload = self.agent_subshell_bootstrap_payload_for_exit(pane_id);
+            if pending_bootstrap_payload.is_none()
+                && self.pane_has_running_shell_transaction(pane_id)
+            {
                 return Ok(false);
             }
-            self.remember_hidden_shell_render_suppression(pane_id);
-            self.remember_agent_subshell_exit_echo(pane_id);
-            let mut input = cancelled_bootstrap.unwrap_or_default();
+            let mut input = pending_bootstrap_payload.clone().unwrap_or_default();
             if shell == ManagedShellKind::Fish {
                 input.extend_from_slice(mez_agent::fish_agent_subshell_exit_input());
             } else {
                 input.extend_from_slice(b"exit\n");
             }
             self.write_runtime_pane_input(pane_id, &input)?;
+            self.process
+                .pane_managed_shell_handoffs
+                .insert(pane_id.to_string(), handoff_after_request);
+            if pending_bootstrap_payload.is_some() {
+                let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
+            }
+            self.process
+                .pane_agent_subshell_parent_return_pending
+                .insert(pane_id.to_string());
+            self.remember_hidden_shell_render_suppression(pane_id);
+            self.remember_agent_subshell_exit_echo(pane_id);
             if self.agent_subshell_is_active(pane_id) {
                 self.leave_agent_subshell(pane_id);
                 self.invalidate_agent_subshell_environment_after_exit(pane_id);
             }
+        } else {
+            // Waiting for child installation or its first editable prompt is
+            // a committed exit intent, even though no pane input is sent yet.
+            self.process
+                .pane_managed_shell_handoffs
+                .insert(pane_id.to_string(), handoff_after_request);
         }
         Ok(true)
     }
 
     /// Sends authenticated cancellation selected by a prior exit request.
-    pub(super) fn complete_managed_shell_admission_cancellation(
+    pub(in crate::runtime::processes) fn complete_managed_shell_admission_cancellation(
         &mut self,
         pane_id: &str,
+        mut handoff_after_request: ManagedShellHandoff,
     ) -> Result<bool> {
         let Some(handoff) = self.process.pane_managed_shell_handoffs.get(pane_id) else {
             return Ok(false);
@@ -1822,11 +1863,8 @@ impl RuntimeSessionService {
                 mez_agent::zsh_private_source_cancel_input(&token, &marker)
             }
         };
-        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
-            return Ok(false);
-        };
         let transition = reduce_managed_shell_handoff(
-            handoff,
+            &mut handoff_after_request,
             ManagedShellHandoffEvent::CancellationSent {
                 now_unix_ms: current_unix_millis(),
             },
@@ -1834,9 +1872,12 @@ impl RuntimeSessionService {
         if !transition.applied {
             return Ok(false);
         }
+        self.write_runtime_pane_input(pane_id, cancellation.as_bytes())?;
+        self.process
+            .pane_managed_shell_handoffs
+            .insert(pane_id.to_string(), handoff_after_request);
         let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
         self.process.shell_receiver_pending_payloads.remove(&marker);
-        self.write_runtime_pane_input(pane_id, cancellation.as_bytes())?;
         Ok(true)
     }
 
@@ -3106,6 +3147,23 @@ impl RuntimeSessionService {
     /// Injects one failure while sending Ctrl-C to a pane shell.
     pub(crate) fn fail_next_pane_interrupt_write_for_tests(&mut self) {
         self.process.fail_next_pane_interrupt_write = true;
+    }
+
+    /// Injects one failure while writing any input to a pane shell.
+    pub(crate) fn fail_next_pane_input_write_for_tests(&mut self) {
+        self.process.fail_next_pane_input_write = true;
+    }
+
+    /// Injects one setup failure after agent-subshell bootstrap registration.
+    #[cfg(test)]
+    pub(crate) fn fail_next_agent_subshell_entry_setup_for_tests(&mut self) {
+        self.process.fail_next_agent_subshell_entry_setup = true;
+    }
+
+    /// Returns whether the next agent-subshell setup should fail.
+    #[cfg(test)]
+    pub(crate) fn take_agent_subshell_entry_setup_failure_for_tests(&mut self) -> bool {
+        std::mem::take(&mut self.process.fail_next_agent_subshell_entry_setup)
     }
 
     /// Reports whether a transaction still requires a start marker.
@@ -5543,6 +5601,13 @@ impl RuntimeSessionService {
         {
             return Err(MezError::invalid_state(
                 "pane transaction must be registered before delivery",
+            ));
+        }
+        #[cfg(test)]
+        if std::mem::take(&mut self.process.fail_next_pane_input_write) {
+            return Err(MezError::new(
+                crate::error::MezErrorKind::Io,
+                "injected pane input write failure",
             ));
         }
         #[cfg(test)]

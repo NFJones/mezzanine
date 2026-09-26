@@ -1225,6 +1225,73 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Rolls back one agent-subshell handoff that failed before shell input was accepted.
+    pub(crate) fn rollback_agent_subshell_shell_handoff(
+        &mut self,
+        pane_id: &str,
+        bootstrap_marker: Option<&str>,
+        previous_readiness: PaneReadinessState,
+        bootstrap_was_pending: bool,
+    ) {
+        if let Some(marker) = bootstrap_marker
+            && self
+                .process
+                .running_shell_transactions
+                .get(marker)
+                .is_some_and(|transaction| {
+                    transaction.pane_id == pane_id
+                        && transaction.kind == super::RunningShellTransactionKind::Bootstrap
+                })
+        {
+            self.cancel_runtime_pane_shell_delivery(pane_id, marker);
+            self.remove_running_shell_transaction(marker);
+            self.clear_shell_transaction_protocol_state(marker);
+            self.process
+                .bootstrap_shell_certification_evidence
+                .remove(marker);
+            if self
+                .process
+                .pane_managed_shell_handoffs
+                .get(pane_id)
+                .is_some_and(|handoff| handoff.identity().marker == marker)
+            {
+                self.process.pane_managed_shell_handoffs.remove(pane_id);
+            }
+            if self
+                .process
+                .pane_shell_handoffs
+                .get(pane_id)
+                .is_some_and(|handoff| handoff.bootstrap_marker.as_deref() == Some(marker))
+            {
+                self.process.pane_shell_handoffs.remove(pane_id);
+            }
+            if self
+                .process
+                .pending_agent_subshell_start_observations
+                .get(pane_id)
+                .is_some_and(|pending| pending.marker == marker)
+            {
+                self.process
+                    .pending_agent_subshell_start_observations
+                    .remove(pane_id);
+            }
+        }
+        if bootstrap_was_pending {
+            self.process
+                .pane_bootstrap_pending
+                .insert(pane_id.to_string());
+        } else {
+            self.process.pane_bootstrap_pending.remove(pane_id);
+        }
+        self.clear_agent_subshell_shell_identity(pane_id);
+        if previous_readiness == PaneReadinessState::Unknown {
+            self.process.pane_readiness_states.remove(pane_id);
+        } else {
+            self.set_pane_readiness(pane_id, previous_readiness);
+        }
+        self.clear_shell_output_filters_for_foreground_input(pane_id);
+    }
+
     /// Captures or requests persistent-receiver evidence before payload release.
     ///
     /// The wrapper is blocked in its payload read loop at this boundary, so the
@@ -2225,6 +2292,33 @@ impl RuntimeSessionService {
                 self.process.next_shell_interaction_generation,
             );
             self.clear_pane_shell_identity_epoch_settlement(pane_id);
+        }
+    }
+
+    /// Previews the payload needed to cancel an unstarted bootstrap on exit.
+    ///
+    /// This read-only step lets shell exit construct its input before committing
+    /// cancellation, so a failed pane write leaves the bootstrap retryable.
+    pub(crate) fn agent_subshell_bootstrap_payload_for_exit(
+        &self,
+        pane_id: &str,
+    ) -> Option<Vec<u8>> {
+        let handoff = self.process.pane_shell_handoffs.get(pane_id)?;
+        let marker = handoff.bootstrap_marker.as_deref()?;
+        let transaction = self.process.running_shell_transactions.get(marker)?;
+        if transaction.pane_id != pane_id
+            || transaction.kind != super::RunningShellTransactionKind::Bootstrap
+            || transaction.pending_input_payload.is_none()
+        {
+            return None;
+        }
+        if handoff.deferred_bootstrap_wrapper.is_some() {
+            Some(Vec::new())
+        } else {
+            transaction
+                .pending_input_payload
+                .as_ref()
+                .map(|delivery| delivery.bytes.clone())
         }
     }
 
