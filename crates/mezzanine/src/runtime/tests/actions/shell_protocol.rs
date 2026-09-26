@@ -1554,7 +1554,7 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
     let mut child_confirmed = false;
     let child_confirmation_deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < child_confirmation_deadline {
-        let _ = service.poll_pane_outputs(8192).unwrap();
+        let _ = service.poll_pane_outputs(1).unwrap();
         // Managed bootstrap ends are recorded by the pane-output frame and
         // settled by the reconciliation pump, so a direct service driver must
         // run that pass itself.
@@ -1608,16 +1608,24 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
         }
         if service.agent_subshell_is_active("%1")
             && !service.pane_bootstrap_is_pending_for_tests("%1")
+            && service.pane_environment_authority_is_certified_for_tests("%1")
         {
             child_confirmed = true;
+            break;
+        }
+        if service
+            .pane_agent_subshell_certification_rejection("%1")
+            .is_some()
+        {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
     assert!(
         child_confirmed,
-        "dirty Fish admission did not confirm a child shell; authority={:?}; readiness={:?}; transactions={:?}",
+        "dirty Fish admission did not confirm a certified child shell; authority={:?}; rejection={:?}; readiness={:?}; transactions={:?}",
         service.pane_environment_authority("%1"),
+        service.pane_agent_subshell_certification_rejection("%1"),
         service.pane_readiness_state("%1"),
         service.running_shell_transactions_for_tests()
     );
