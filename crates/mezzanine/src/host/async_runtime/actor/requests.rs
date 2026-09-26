@@ -1541,7 +1541,17 @@ impl AsyncRuntimeSessionActor {
                             }
                         };
                         dispatch.claim_generation = generation;
-                        self.queue_runtime_side_effects(transition.side_effects)?;
+                        if let Err(error) = self.queue_runtime_side_effects(transition.side_effects)
+                        {
+                            // The worker has not received the dispatch. Without its
+                            // claim timer this lease would otherwise be treated as
+                            // progress forever, so settle the exact turn instead.
+                            self.service
+                                .fail_configured_agent_provider_task(&turn_id, &error)?;
+                            self.queue_deferred_pane_io_side_effects_from_service()?;
+                            self.queue_shell_transaction_timer_side_effects()?;
+                            return Ok(None);
+                        }
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         Ok(Some(dispatch))
                     } else {

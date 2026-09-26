@@ -170,6 +170,98 @@ model = "invalid-model"
         .unwrap();
 }
 
+/// A full non-droppable side-effect lane must not leave a provider claim with
+/// neither a worker dispatch nor a timer to settle it.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_provider_claim_timer_admission_failure_settles_turn() {
+    let mut service = test_service();
+    let auth_root = std::env::temp_dir().join(format!(
+        "mez-claim-pressure-auth-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    service.set_auth_store(crate::security::auth::AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&auth_root),
+    ));
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "provider-claim-pressure".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "default"
+shell_mode = "pane"
+[permissions]
+sandbox = "policy-only"
+[providers.runtime-batch]
+kind = "openai"
+models = ["invalid-model"]
+default_model = "invalid-model"
+[model_profiles.default]
+provider = "runtime-batch"
+model = "invalid-model"
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "exercise saturated claim")
+        .unwrap();
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let agent_id = AgentId::opaque(task.agent_id.clone()).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 1,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: agent_id.clone(),
+                turn_id: "unrelated-turn".to_string(),
+            }])
+            .await
+            .unwrap();
+        let result = handle
+            .claim_configured_agent_provider_task(agent_id, task.turn_id.clone())
+            .await;
+        assert!(
+            result.is_ok(),
+            "claim failure should settle the turn: {result:?}"
+        );
+        assert!(result.unwrap().is_none());
+        let queued = handle.drain_runtime_side_effects(8).await.unwrap();
+        assert!(queued.iter().any(|effect| matches!(effect, RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } if turn_id == "unrelated-turn")));
+        assert!(!queued.iter().any(|effect| matches!(effect, RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::ProviderClaim)));
+        handle.shutdown().await.unwrap();
+    };
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(!exit.service.agent_provider_task_is_owned(&task.turn_id));
+    assert_eq!(
+        exit.service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == task.turn_id)
+            .unwrap()
+            .state,
+        mez_agent::AgentTurnState::Failed
+    );
+}
+
 /// Verifies that render workers can drain only render invalidations while
 /// leaving provider dispatches queued for provider workers. This protects the
 /// side-effect queue from family-specific workers stealing unrelated work as
