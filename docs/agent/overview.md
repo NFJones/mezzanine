@@ -35,6 +35,10 @@ turns until configuration changes; runtime validation still decides integration
 availability, permissions, and arguments when an action executes. Results
 become bounded conversation evidence, allowing the agent to repair recoverable
 failures without repeating already successful work.
+Complete `list_agents` and `wait` actions can display static headers while a
+provider response streams. These are provisional intentions, not discovery
+results or proof that the turn parked; only accepted actions and their settled
+results establish authoritative state.
 
 Permission decisions remain runtime-owned. A model cannot grant itself host
 access, filesystem authority, credentials, or a hidden local executor. Review

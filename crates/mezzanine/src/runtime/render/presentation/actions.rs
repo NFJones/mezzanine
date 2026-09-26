@@ -50,6 +50,12 @@ pub(crate) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
             }
             header
         }
+        AgentActionPayload::ListAgents { agent_type, scope } => format!(
+            "list agents: type={} scope={}",
+            agent_action_display_preview(agent_type.as_deref().unwrap_or("primary")),
+            agent_action_display_preview(scope.as_deref().unwrap_or("project"))
+        ),
+        AgentActionPayload::Wait => "wait: peer reply requested".to_string(),
         AgentActionPayload::MemoryStore {
             kind,
             priority,
@@ -587,6 +593,38 @@ pub(crate) fn truncate_to_utf8_boundary(value: &str, max_bytes: usize) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Complete streamed and settled discovery/wait actions share bounded
+    /// static headers without asserting discovery or parking succeeded.
+    #[test]
+    fn discovery_and_wait_headers_match_streamed_headers() {
+        for (payload, expected) in [
+            (
+                AgentActionPayload::ListAgents {
+                    agent_type: Some("subagent".to_string()),
+                    scope: Some("project".to_string()),
+                },
+                "list agents: type=subagent scope=project",
+            ),
+            (AgentActionPayload::Wait, "wait: peer reply requested"),
+        ] {
+            let action = AgentAction {
+                id: "header-test".to_string(),
+                payload,
+            };
+            assert_eq!(
+                agent_action_execution_display_header(&action).as_deref(),
+                Some(expected)
+            );
+            let streamed = mez_agent::StreamingActionHeader::Action {
+                action: Box::new(action),
+            };
+            assert_eq!(
+                streaming_action_execution_display_header(&streamed),
+                expected
+            );
+        }
+    }
 
     /// Verifies spawn action headers expose explicit subagent session and
     /// initial model controls without omitting the existing placement fields.

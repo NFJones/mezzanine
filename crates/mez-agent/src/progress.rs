@@ -586,6 +586,8 @@ fn streaming_action_has_safe_header(payload: &AgentActionPayload) -> bool {
     matches!(
         payload,
         AgentActionPayload::ApplyPatch { .. }
+            | AgentActionPayload::ListAgents { .. }
+            | AgentActionPayload::Wait
             | AgentActionPayload::ConfigChange { .. }
             | AgentActionPayload::MemorySearch { .. }
             | AgentActionPayload::MemoryStore { .. }
@@ -1338,6 +1340,29 @@ mod tests {
                 },
                 StreamingPresentationEvent::MessagePayloadComplete { action_index: 2 },
             ]
+        );
+    }
+
+    /// List and wait headers appear only after a full parsed action closes,
+    /// retaining their exact sibling indexes without implying execution.
+    #[test]
+    fn streaming_list_agents_and_wait_require_complete_actions() {
+        let mut extractor = StreamingPresentationExtractor::default();
+        assert!(
+            extractor
+                .push_delta(
+                    r#"{"actions":[{"type":"list_agents","agent_type":"subagent","scope":"project""#
+                )
+                .is_empty()
+        );
+        let events = extractor.push_delta(r#"},{"type":"wait""#);
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(&events[0], StreamingPresentationEvent::ActionHeader { action_index: 0, header } if matches!(&**header, StreamingActionHeader::Action { action } if matches!(&action.payload, AgentActionPayload::ListAgents { agent_type: Some(kind), scope: Some(scope) } if kind == "subagent" && scope == "project")))
+        );
+        let events = extractor.push_delta(r#"}]}"#);
+        assert!(
+            matches!(&events[..], [StreamingPresentationEvent::ActionHeader { action_index: 1, header }] if matches!(&**header, StreamingActionHeader::Action { action } if matches!(&action.payload, AgentActionPayload::Wait)))
         );
     }
 

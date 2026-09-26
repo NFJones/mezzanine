@@ -2642,10 +2642,13 @@ character. Direct rationale and shell-summary source MUST append only through
 the existing `thinking: ` renderer, shell command source only through the
 existing `$ ` renderer, and provisional headers only through the ordinary
 action-header renderer; their prefixes and styles MUST match complete
-presentation. Complete action previews MUST remain presentation-only and MUST
-NOT authorize, admit, or dispatch an action. Removed metadata fields, nested
-lookalikes, capability/skill controls, private message payloads, and every
-other raw provider field or action payload MUST NOT enter this streaming path.
+presentation. Complete `list_agents` and `wait` actions MAY display their
+bounded static headers provisionally, but a wait preview MUST NOT claim the
+turn is parked or that a peer replied. Complete action previews MUST remain
+presentation-only and MUST NOT authorize, admit, or dispatch an action. Removed
+metadata fields, nested lookalikes, capability/skill controls, private message
+payloads, and every other raw provider field or action payload MUST NOT enter
+this streaming path.
 
 For every allowlisted source, Mezzanine MUST decode and apply every source
 character exactly once and in order without dropping or truncating deltas.
