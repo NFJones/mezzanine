@@ -153,6 +153,12 @@ their original order. On restart or resume, Mez loads this committed projection;
 optional pane memory is not needed to recover the summary. Corrupt epoch data
 or unreadable required history stops context construction rather than silently
 dropping older context.
+If an initial model summary leaves the complete next request oversized, Mez can
+retry the same frozen source with a smaller summary-output ceiling or summarize
+another eligible closed range beyond an exact barrier. Earlier summaries remain
+provisional until one combined epoch fits the refreshed request. A non-reducing
+or exhausted retry fails without replacing the previous transcript projection;
+its diagnostic reports component estimates, not task content.
 The compacted block carries only a short lossy-context warning and the
 model-authored summary; pane, model, entry counts, and other audit metadata
 are not repeated in the next model-visible summary.

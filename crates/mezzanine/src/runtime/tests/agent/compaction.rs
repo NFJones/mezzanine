@@ -722,6 +722,17 @@ fn queue_observed_input_compaction_with_exact_history() -> (
     AgentTranscriptStore,
     String,
 ) {
+    queue_observed_input_compaction_with_second_group(None)
+}
+
+/// Builds the same exact-barrier fixture with an optional second typed range.
+fn queue_observed_input_compaction_with_second_group(
+    second_group: Option<String>,
+) -> (
+    crate::runtime::RuntimeSessionService,
+    AgentTranscriptStore,
+    String,
+) {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -782,8 +793,12 @@ max_input_tokens = 20000
             "historical-turn-2",
         ),
         (
-            mez_agent::transcript::TranscriptRole::Assistant,
-            "Historical answer two. ".repeat(80),
+            if second_group.is_some() {
+                mez_agent::transcript::TranscriptRole::System
+            } else {
+                mez_agent::transcript::TranscriptRole::Assistant
+            },
+            second_group.unwrap_or_else(|| "Historical answer two. ".repeat(80)),
             "historical-turn-2",
         ),
         (
@@ -1057,6 +1072,257 @@ fn runtime_observed_compaction_retains_unsummarized_exact_history_for_replay() {
     );
 }
 
+/// A still-oversized refreshed request retries a smaller model-authored
+/// summary without publishing the first candidate or repeating settled work.
+#[test]
+fn runtime_observed_compaction_retries_oversized_final_request() {
+    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let initial_budget = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap()
+        .request
+        .max_output_tokens;
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "17000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    complete_runtime_test_compaction(&mut service, "%1", &"large-summary ".repeat(900));
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|turn| { turn.turn_id == turn_id && turn.state == AgentTurnState::Running }),
+        "budget={initial_budget:?} pane={}",
+        service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+    );
+    let retry = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("oversized final request must queue another model summary");
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        final_request_retry,
+        ..
+    } = &retry.target
+    else {
+        panic!("expected active turn retry")
+    };
+    assert_eq!(final_request_retry.attempts, 1);
+    assert!(retry.request.max_output_tokens.unwrap() < initial_budget.unwrap());
+    complete_runtime_test_compaction(&mut service, "%1", "shorter final summary");
+    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
+    assert_eq!(epoch.ranges.len(), 1);
+    assert_eq!(epoch.ranges[0].summary, "shorter final summary");
+    assert!(service.agent_provider_task_is_pending(&turn_id));
+    let next = service
+        .agent_context_for_pane_prompt("%1", "next prompt", 0)
+        .unwrap();
+    assert!(
+        !next
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("TYPED_OLD_WORK"))
+    );
+}
+
+/// A second closed segment remains provisional until both anchored summaries
+/// fit the complete refreshed request and can publish as one epoch.
+#[test]
+fn runtime_observed_compaction_stages_second_range_before_publication() {
+    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        ContextSourceKind::TranscriptAssistant,
+        "second answer",
+        "SECOND_RANGE_SOURCE ".repeat(1_200),
+        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
+        1,
+        None,
+    )
+    .unwrap()
+    .to_transcript_content();
+    let (mut service, store, turn_id) =
+        queue_observed_input_compaction_with_second_group(Some(second));
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "17000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    complete_runtime_test_compaction(&mut service, "%1", "first summary");
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    let retry = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("a second closed range should be queued");
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        staged, plan, ..
+    } = &retry.target
+    else {
+        panic!("expected staged active-turn compaction")
+    };
+    assert_eq!(staged.as_ref().unwrap().attempts, 1);
+    assert!(
+        plan.replacement_blocks()
+            .iter()
+            .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
+    );
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn_id)
+        .unwrap()
+        .append_user_event("user steering 1", "EXACT_STAGED_STEERING")
+        .unwrap();
+    complete_runtime_test_compaction(&mut service, "%1", "second summary");
+    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
+    assert_eq!(epoch.ranges.len(), 2);
+    assert_eq!(epoch.ranges[0].summary, "first summary");
+    assert_eq!(epoch.ranges[1].summary, "second summary");
+    assert!(service.agent_provider_task_is_pending(&turn_id));
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&turn_id)
+            .unwrap()
+            .blocks()
+            .iter()
+            .any(|block| { block.content == "EXACT_STAGED_STEERING" })
+    );
+    let next = service
+        .agent_context_for_pane_prompt("%1", "next", 0)
+        .unwrap();
+    assert!(
+        !next
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
+    );
+}
+
+/// An oversized second range cannot publish the earlier staged summary or
+/// leave a shortened raw replay suffix after recovery fails.
+#[test]
+fn runtime_observed_compaction_second_range_failure_keeps_original_epoch() {
+    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        ContextSourceKind::TranscriptAssistant,
+        "second answer",
+        "SECOND_RANGE_SOURCE ".repeat(1_200),
+        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
+        1,
+        None,
+    )
+    .unwrap()
+    .to_transcript_content();
+    let (mut service, store, turn_id) =
+        queue_observed_input_compaction_with_second_group(Some(second));
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "17000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    complete_runtime_test_compaction(&mut service, "%1", "first summary");
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    let source = "second oversized summary ".repeat(850);
+    let steering = "EXACT_OVERSIZED_STAGED_STEERING ".repeat(2_000);
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn_id)
+        .unwrap()
+        .append_user_event("user steering 1", steering.clone())
+        .unwrap();
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&turn_id)
+            .unwrap()
+            .blocks()
+            .iter()
+            .any(|block| block.content == steering)
+    );
+    complete_runtime_test_compaction(&mut service, "%1", &source);
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    if service
+        .pending_agent_compaction_task_for_tests("%1")
+        .is_some()
+    {
+        complete_runtime_test_compaction(&mut service, "%1", &source);
+    }
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|turn| { turn.turn_id == turn_id && turn.state == AgentTurnState::Failed })
+    );
+    assert!(
+        store
+            .inspect(&conversation_id)
+            .unwrap()
+            .iter()
+            .any(|row| { row.content.contains("SECOND_RANGE_SOURCE") })
+    );
+    assert!(service.agent_turn_contexts().get(&turn_id).is_none());
+}
+
+/// A second summary that makes no progress cannot cause an unbounded loop or
+/// publish either oversized candidate to durable replay.
+#[test]
+fn runtime_observed_compaction_rejects_non_reducing_final_retry() {
+    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "17000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    let oversized = "large-summary ".repeat(900);
+    complete_runtime_test_compaction(&mut service, "%1", &oversized);
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+    );
+    complete_runtime_test_compaction(&mut service, "%1", &oversized);
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_none()
+    );
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|turn| { turn.turn_id == turn_id && turn.state == AgentTurnState::Failed })
+    );
+}
+
 /// Verifies transcript rows appended after compaction planning stay in raw
 /// replay without displacing exact history that the plan deliberately retained.
 #[test]
@@ -1112,6 +1378,76 @@ fn runtime_observed_compaction_preserves_history_when_transcript_arrives_after_q
     assert!(replay.contains("EXACT_OLDER_USER_INSTRUCTION"), "{replay}");
     assert!(replay.contains("EXACT_SECOND_USER_INSTRUCTION"), "{replay}");
     assert!(replay.contains("EXACT_THIRD_USER_INSTRUCTION"), "{replay}");
+}
+
+/// A late raw transcript row can overfill only the refreshed projection; the
+/// first summary must not commit while a shorter summary can still recover.
+#[test]
+fn runtime_observed_compaction_retries_refreshed_only_overflow() {
+    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let sequence = store
+        .inspect(&conversation_id)
+        .unwrap()
+        .last()
+        .unwrap()
+        .sequence
+        + 1;
+    store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence,
+            created_at_unix_seconds: sequence,
+            role: mez_agent::transcript::TranscriptRole::Assistant,
+            turn_id: "late-raw".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "late raw evidence ".repeat(200),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "17000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    complete_runtime_test_compaction(&mut service, "%1", &"large-summary ".repeat(600));
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some(),
+        "pane={}",
+        service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+    );
+    complete_runtime_test_compaction(&mut service, "%1", "shorter summary");
+    assert!(service.agent_provider_task_is_pending(&turn_id));
+    let next = service
+        .agent_context_for_pane_prompt("%1", "next", 0)
+        .unwrap();
+    assert!(
+        next.blocks()
+            .iter()
+            .any(|block| block.content.contains("late raw evidence"))
+    );
+    assert!(
+        !next
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("TYPED_OLD_WORK"))
+    );
 }
 
 /// Verifies oversized transcript history arriving after observed-input
@@ -2232,6 +2568,7 @@ default_model = "test"
 provider = "runtime-batch"
 model = "test"
 context_window_tokens = 40000
+max_input_tokens = 20000
 "#
             .to_string(),
         }])
@@ -2433,6 +2770,104 @@ context_window_tokens = 40000
     assert!(!final_text.contains("older-backoff-marker"));
     assert!(!final_text.contains("newer-exact-marker"));
     assert!(service.agent_provider_task_is_pending("turn-1"));
+}
+
+/// A viable whole-group walk-back leaves the newest selected group raw and
+/// summarizes only the older source after a compactor context-limit rejection.
+#[test]
+fn runtime_compactor_walkback_preserves_newest_group() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "walkback".to_string(), path: None, format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"walkback\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.walkback]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"walkback","method":"agent/shell/command","params":{"idempotency_key":"walkback","input":"continue"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    for (label, marker) in [("older", "OLDER_WALKBACK"), ("newer", "NEWER_WALKBACK")] {
+        insert_test_context_block(
+            context,
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: label.to_string(),
+                content: format!("{marker} {}", "evidence ".repeat(3_000)),
+            },
+        );
+    }
+    let error = MezError::invalid_state("provider context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+        );
+    service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            mez_agent::ProviderErrorRetryClass::ContextLimit,
+            &error,
+        )
+        .unwrap()
+        .expect("context-limit transition");
+    let initial = service.take_pending_agent_compaction_task("%1").unwrap();
+    service.claim_agent_compaction_task_state("%1", initial);
+    service
+        .apply_agent_compaction_failed_event(
+            "%1",
+            "invalid_state",
+            "provider context length exceeded",
+            Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
+        )
+        .unwrap();
+    let retry = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        plan,
+        pending_blocks,
+        ..
+    } = &retry.target
+    else {
+        panic!("expected active-turn retry");
+    };
+    assert!(
+        plan.replacement_blocks()
+            .iter()
+            .any(|block| block.content.contains("OLDER_WALKBACK"))
+    );
+    assert!(
+        !plan
+            .replacement_blocks()
+            .iter()
+            .any(|block| block.content.contains("NEWER_WALKBACK"))
+    );
+    assert!(pending_blocks.is_empty());
+    complete_runtime_test_compaction(&mut service, "%1", "older work summarized");
+    let blocks = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks();
+    assert!(
+        blocks
+            .iter()
+            .any(|block| block.content.contains("NEWER_WALKBACK"))
+    );
+    assert!(
+        !blocks
+            .iter()
+            .any(|block| block.content.contains("OLDER_WALKBACK"))
+    );
 }
 
 /// Verifies a rebuilt provider request that is not smaller fails closed.
@@ -4208,6 +4643,77 @@ fn runtime_manual_compaction_rejects_oversized_post_summary_request() {
     assert!(service.memory_records().iter().all(|record| {
         record.id != mez_agent::memory::canonical_memory_uuid("compact-manual-final-fit")
     }));
+}
+
+/// A configured input cap splits the frozen manual source before dispatch,
+/// without publishing a partial conversation summary.
+/// A manual candidate over its final-request cap retries the frozen source
+/// with a smaller output ceiling and publishes only the accepted summary.
+#[test]
+fn runtime_manual_compaction_retries_oversized_final_request() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "manual-final-retry".to_string(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"manual-final-retry\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.manual-final-retry]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 15000\n".to_string(),
+    }]).unwrap();
+    let store = AgentTranscriptStore::new(temp_root("manual-final-retry"));
+    store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "manual-final-retry".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::Assistant,
+            turn_id: "old-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "old decision ".repeat(800),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "manual-final-retry", 1)
+        .unwrap();
+    let queued = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"manual-retry","method":"agent/shell/command","params":{"idempotency_key":"manual-retry","input":"/compact"}}"#,
+        &primary,
+    );
+    assert!(queued.contains("state=queued"), "{queued}");
+    complete_runtime_test_compaction(&mut service, "%1", &"long summary ".repeat(700));
+    assert!(
+        store
+            .compaction_epoch("manual-final-retry")
+            .unwrap()
+            .is_none()
+    );
+    let retry = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap_or_else(|| {
+            panic!(
+                "manual retry queued: {}",
+                service
+                    .pane_screen("%1")
+                    .unwrap()
+                    .normal_content_lines()
+                    .join("\n")
+            )
+        });
+    assert!(retry.manual_final_retry.is_some());
+    complete_runtime_test_compaction(&mut service, "%1", "short manual summary");
+    assert!(
+        store
+            .compaction_epoch("manual-final-retry")
+            .unwrap()
+            .is_some()
+    );
 }
 
 /// A configured input cap splits the frozen manual source before dispatch,

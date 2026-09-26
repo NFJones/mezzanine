@@ -591,6 +591,10 @@ pub struct RuntimeAgentCompactionTask {
     pub request: ModelRequest,
     /// Keep the plan-derived summary output ceiling unchanged on provider retry.
     pub preserve_summary_output_budget: bool,
+    /// Original manual-compactor source, retained across temporary chunk/synthesis work.
+    pub manual_retry_source: Option<String>,
+    /// Last complete manual candidate estimate and bounded final-output retry count.
+    pub manual_final_retry: Option<(usize, u32)>,
     /// Stable non-transcript context captured for pre-commit manual candidate sizing.
     pub candidate_context: Option<AgentContext>,
     /// Running turn to requeue after this compaction completes.
@@ -640,6 +644,30 @@ pub enum RuntimeActiveTurnCompactionTrigger {
     },
 }
 
+/// Unpublished ordered recovery state, committed only after the full request fits.
+#[derive(Debug, Clone)]
+pub struct RuntimeStagedCompaction {
+    /// Prospective live context after earlier summaries.
+    pub context: super::AgentContext,
+    /// Prospective durable replay projection.
+    pub projection: crate::storage::transcript::AgentCompactionEpoch,
+    /// Number of additional closed ranges attempted.
+    pub attempts: u32,
+    /// Last authoritative chronology sequence captured before staging.
+    pub source_high_water: u64,
+}
+
+/// Bounded complete-request retry accounting across compactor rebuilds.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeFinalRequestRetry {
+    /// Number of shorter-summary attempts for this selected range.
+    pub attempts: u32,
+    /// Last complete candidate estimate; retries must strictly reduce it.
+    pub last_input_tokens: Option<usize>,
+    /// Output ceiling retained through temporary chunk and synthesis rebuilds.
+    pub summary_ceiling: Option<usize>,
+}
+
 /// Durable target for one model-backed compaction request.
 #[derive(Debug, Clone)]
 pub enum RuntimeAgentCompactionTarget {
@@ -653,6 +681,10 @@ pub enum RuntimeAgentCompactionTarget {
         trigger: RuntimeActiveTurnCompactionTrigger,
         /// Provider retry attempt deferred while model compaction runs.
         recovery_attempt: u32,
+        /// Bounded shorter-summary retries after an oversized final request.
+        final_request_retry: Box<RuntimeFinalRequestRetry>,
+        /// Unpublished context and ordered ranges for a bounded staged pass.
+        staged: Option<Box<RuntimeStagedCompaction>>,
         /// Number of provider context-limit backoff attempts already applied.
         compaction_backoff_attempt: u32,
         /// Complete rejected OpenAI Responses body bytes, when applicable.

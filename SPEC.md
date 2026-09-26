@@ -6859,6 +6859,15 @@ unambiguously to durable rows without losing exact user or task barriers. In
 that case, the model-authored summary MAY be added to compact memory while the
 raw replay window remains unchanged. Legacy transcript user rows are exact
 barriers even when their imported block retention metadata is summarizable.
+If the complete candidate after a model-authored summary exceeds the safe input
+allowance, compaction MAY request a shorter model-authored summary of the same
+frozen source in bounded passes. If that summary cannot cover the excess,
+compaction MAY summarize another eligible closed range beyond an exact barrier;
+all earlier summaries MUST remain provisional until the combined replay passes
+the complete request check and publishes one atomic epoch. Each attempted
+complete candidate MUST make bounded progress; no failed candidate may publish
+an epoch or resume the provider turn. Exhaustion MUST fail visibly with
+content-free component-size estimates without dropping the original context.
 Provider-limit and manual compaction MUST expose at most one model-visible
 compaction block per eligible exact-barrier-delimited segment. A prior
 summary-only segment MUST NOT prevent selecting later closed, consumed history
