@@ -2386,15 +2386,13 @@ fn runtime_streaming_say_projection_preserves_agent_copy_mode() {
     assert!(service.presented_surface_uses_scrollback_copy_mode("%1"));
 }
 
-/// Verifies streamed rationale and command source use the existing prefixes,
-/// converge through the ordinary static renderers, and remain provisional.
+/// Verifies a matching streamed rationale survives when its command sibling
+/// falls back to ordinary completion presentation.
 ///
-/// The completed worker projection must equal direct static thinking and
-/// command-preview output at the same geometry. Validated completion then
-/// restores the shared baseline so normal response presentation and shell
-/// dispatch remain the only durable, executable authority.
+/// The rationale must remain visible and durable exactly once, while the
+/// unpromotable command preview is rolled back and never presented as executed.
 #[test]
-fn runtime_streaming_rationale_and_command_match_static_projection_and_restore() {
+fn runtime_streaming_rationale_and_command_fallback_retains_only_rationale() {
     let mut streaming = test_runtime_service();
     let mut static_render = test_runtime_service();
     for service in [&mut streaming, &mut static_render] {
@@ -2414,7 +2412,14 @@ fn runtime_streaming_rationale_and_command_match_static_projection_and_restore()
             .append_agent_status_text_to_terminal_buffer("%1", "baseline")
             .unwrap();
     }
-    let baseline = streaming.agent_pane_screen("%1").unwrap().clone();
+    let transcript_store = AgentTranscriptStore::new(temp_root("streaming-rationale-fallback"));
+    streaming.set_agent_transcript_store(transcript_store.clone());
+    let conversation_id = streaming
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
     let rationale = "Inspect the current files";
     let command = "printf 'alpha beta\\n'";
 
@@ -2512,7 +2517,136 @@ fn runtime_streaming_rationale_and_command_match_static_projection_and_restore()
             .unwrap()
             .is_empty()
     );
-    assert_eq!(streaming.agent_pane_screen("%1").unwrap(), &baseline);
+    let retained = streaming.agent_pane_screen("%1").unwrap().clone();
+    let retained_lines = retained.normal_content_lines();
+    assert!(retained_lines.iter().any(|line| line.contains(rationale)));
+    assert!(retained_lines.iter().any(|line| line.contains("baseline")));
+    assert!(!retained_lines.iter().any(|line| line.contains(command)));
+    streaming
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    assert_eq!(streaming.agent_pane_screen("%1").unwrap(), &retained);
+    assert_eq!(
+        retained_lines
+            .iter()
+            .filter(|line| line.contains(rationale))
+            .count(),
+        1
+    );
+    let entries = transcript_store
+        .inspect_presentation(&conversation_id)
+        .unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.source_text.as_deref() == Some(rationale))
+            .count(),
+        1,
+        "the fallback rationale must be persisted exactly once"
+    );
+}
+
+/// Verifies a sibling fallback cannot restore or promote streamed rationale
+/// after an intervening pane generation takes ownership of the screen.
+#[test]
+fn runtime_streaming_rationale_fallback_preserves_stale_lineage_write() {
+    let mut service = test_runtime_service();
+    let transcript_store =
+        AgentTranscriptStore::new(temp_root("streaming-rationale-stale-lineage"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "baseline")
+        .unwrap();
+    let rationale = "owned only while its screen lineage remains current";
+    let command = "printf 'stale sibling'";
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: rationale.to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+        mez_agent::StreamingSayEvent::ShellCommandStarted { action_index: 0 },
+        mez_agent::StreamingSayEvent::ShellCommandTextDelta {
+            action_index: 0,
+            text: command.to_string(),
+        },
+        mez_agent::StreamingSayEvent::ShellCommandTextComplete { action_index: 0 },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+            .unwrap();
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-1")
+        .unwrap()
+        .expect("completed rationale and command should be projected");
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+
+    let mut intervening = service.agent_pane_screen("%1").unwrap().clone();
+    intervening.feed(b"\r\nnewer pane owner\r\n");
+    service.set_agent_pane_screen("%1".to_string(), conversation_id.clone(), intervening);
+    let intervening = service.agent_pane_screen("%1").unwrap().clone();
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-1"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: rationale.to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "stale-shell".to_string(),
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
+                        summary: rationale.to_string(),
+                        command: command.to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: None,
+                    },
+                }],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    service
+        .reconcile_agent_streaming_say_completion("%1", "turn-1", &execution)
+        .unwrap();
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &intervening);
+    assert!(!service.agent_streaming_rationale_is_promoted("%1", "turn-1"));
+    assert!(
+        transcript_store
+            .inspect_presentation(&conversation_id)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.source_text.as_deref() != Some(rationale))
+    );
+    let text = intervening.normal_content_lines().join("\n");
+    assert!(text.contains("newer pane owner"), "{text}");
 }
 
 /// Verifies validated rationale-only output remains on the pane through

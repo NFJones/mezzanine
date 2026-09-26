@@ -3503,6 +3503,96 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Retains only an exact, currently owned rationale when a sibling falls
+    /// back to ordinary completion presentation.
+    fn retain_validated_streaming_rationale_for_fallback(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        presentation: &RuntimeStreamingSayPresentation,
+        batch: &mez_agent::MaapBatch,
+    ) -> Result<bool> {
+        let Some(rationale) = presentation.rationale.as_ref().filter(|source| {
+            source.complete && !source.text.trim().is_empty() && source.text == batch.rationale
+        }) else {
+            return Ok(false);
+        };
+        if presentation.turn_id != turn_id
+            || self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_none_or(|session| session.session_id != presentation.conversation_id)
+            || self.agent_pane_screen_lineage(pane_id, &presentation.conversation_id)
+                != Some(presentation.installed_lineage)
+            || presentation.projected_revision != Some(presentation.revision)
+            || presentation.projected_lineage != Some(presentation.installed_lineage)
+            || presentation.projected_rationale.is_none()
+        {
+            return Ok(false);
+        }
+        let Ok(context) = self.agent_streaming_say_projection_context(pane_id) else {
+            return Ok(false);
+        };
+        if presentation.projected_context.as_ref() != Some(&context) || !context.thinking_enabled {
+            return Ok(false);
+        }
+        let work = crate::runtime::RuntimeStreamingSayProjectionWork {
+            pane_id: pane_id.to_string(),
+            turn_id: turn_id.to_string(),
+            response_index: presentation.response_index,
+            conversation_id: presentation.conversation_id.clone(),
+            revision: presentation.revision,
+            installed_lineage: presentation.installed_lineage,
+            baseline_screen: presentation.baseline_screen.clone(),
+            rationale: Some(rationale.clone()),
+            actions: std::collections::BTreeMap::new(),
+            outbound_messages: std::collections::BTreeMap::new(),
+            shell_commands: std::collections::BTreeMap::new(),
+            shell_summaries: std::collections::BTreeMap::new(),
+            action_headers: std::collections::BTreeMap::new(),
+            thinking_enabled: context.thinking_enabled,
+            shell_classification: context.shell_classification,
+            presentation_columns: context.presentation_columns,
+            frame_width: context.frame_width,
+            table_width: context.table_width,
+            ui_theme: context.ui_theme,
+            screen_size: context.screen_size,
+        };
+        let projection = Self::build_agent_streaming_say_projection(work)?;
+        let Some(row) = projection.projected_rationale else {
+            return Ok(false);
+        };
+        self.update_agent_streaming_screen(
+            pane_id,
+            &presentation.conversation_id,
+            projection.screen,
+        )?;
+        self.persist_agent_presentation_entry(
+            pane_id,
+            vec![row.style.clone(); row.rendered_lines.len()],
+            row.rendered_lines,
+            row.copy_lines,
+            String::new(),
+            Some((
+                rationale.text.as_str(),
+                AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
+            )),
+        );
+        self.presentation
+            .agent_promoted_streaming_say_actions
+            .insert(
+                (pane_id.to_string(), turn_id.to_string()),
+                std::collections::BTreeSet::from([STREAMED_RATIONALE_PRESENTED_MARKER]),
+            );
+        self.integration
+            .runtime_metrics_mut()
+            .record_agent_streaming_settlement_screen_change(true);
+        self.integration
+            .runtime_metrics_mut()
+            .record_agent_streaming_settled_component("rationale");
+        Ok(true)
+    }
+
     /// Builds a private generation with deferred final says after accepted siblings.
     /// The synthetic projection positions affect only screen order; action ids,
     /// source indices, and durable records keep their validated identities.
@@ -5364,10 +5454,22 @@ impl RuntimeSessionService {
             || (!presentation.action_headers.is_empty() && !command_can_promote)
             || (!presentation.shell_commands.is_empty() && !command_can_promote)
         {
-            self.presentation
-                .agent_promoted_streaming_say_actions
-                .remove(&(pane_id.to_string(), turn_id.to_string()));
-            if screen_is_owned {
+            let retained_rationale = if let Some(batch) = batch {
+                self.retain_validated_streaming_rationale_for_fallback(
+                    pane_id,
+                    turn_id,
+                    &presentation,
+                    batch,
+                )?
+            } else {
+                false
+            };
+            if !retained_rationale {
+                self.presentation
+                    .agent_promoted_streaming_say_actions
+                    .remove(&(pane_id.to_string(), turn_id.to_string()));
+            }
+            if screen_is_owned && !retained_rationale {
                 self.update_agent_streaming_screen(
                     pane_id,
                     &presentation.conversation_id,
@@ -5381,7 +5483,22 @@ impl RuntimeSessionService {
         }
 
         let Some(projected_actions) = current_projected_actions else {
-            if screen_is_owned {
+            let retained_rationale = if let Some(batch) = batch {
+                self.retain_validated_streaming_rationale_for_fallback(
+                    pane_id,
+                    turn_id,
+                    &presentation,
+                    batch,
+                )?
+            } else {
+                false
+            };
+            if !retained_rationale {
+                self.presentation
+                    .agent_promoted_streaming_say_actions
+                    .remove(&(pane_id.to_string(), turn_id.to_string()));
+            }
+            if screen_is_owned && !retained_rationale {
                 self.update_agent_streaming_screen(
                     pane_id,
                     &presentation.conversation_id,
