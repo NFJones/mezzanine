@@ -2223,7 +2223,27 @@ impl RuntimeSessionService {
                 };
                 if let Some((turn_id, mut candidate)) = walkback {
                     while candidate.exclude_newest_replacement_group() {
-                        if !self.compaction_walkback_candidate_fits(&task, &turn_id, &candidate)? {
+                        let fits = match self
+                            .compaction_walkback_candidate_fits(&task, &turn_id, &candidate)
+                        {
+                            Ok(fits) => fits,
+                            Err(error) => {
+                                self.fail_running_turn_after_compaction_failure(
+                                    &turn_id,
+                                    &task.source,
+                                    error.message(),
+                                )?;
+                                let _ = self.append_agent_status_text_to_terminal_buffer(
+                                    pane_id,
+                                    &format!(
+                                        "agent: compact walk-back validation failed: {}",
+                                        error.message()
+                                    ),
+                                );
+                                return Ok(true);
+                            }
+                        };
+                        if !fits {
                             continue;
                         }
                         let blocks =

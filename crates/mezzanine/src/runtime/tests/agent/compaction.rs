@@ -2870,6 +2870,73 @@ fn runtime_compactor_walkback_preserves_newest_group() {
     );
 }
 
+/// A walk-back validation error after the compaction claim is retired must
+/// fail the waiting turn rather than leave it running without an owner.
+#[test]
+fn runtime_compactor_walkback_validation_failure_settles_turn() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "walkback-error".to_string(), path: None, format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"walkback\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.walkback]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"walkback-error","method":"agent/shell/command","params":{"idempotency_key":"walkback-error","input":"continue"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    for label in ["older", "newer"] {
+        insert_test_context_block(
+            context,
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: label.to_string(),
+                content: format!("{label} {}", "evidence ".repeat(3_000)),
+            },
+        );
+    }
+    let error = MezError::invalid_state("provider context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+        );
+    service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            mez_agent::ProviderErrorRetryClass::ContextLimit,
+            &error,
+        )
+        .unwrap()
+        .expect("context-limit transition");
+    let initial = service.take_pending_agent_compaction_task("%1").unwrap();
+    service.claim_agent_compaction_task_state("%1", initial);
+    let mut profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
+    profile.provider = "missing-walkback-provider".to_string();
+    service.set_agent_turn_model_profile("turn-1", profile);
+    let outcome = service.apply_agent_compaction_failed_event(
+        "%1",
+        "invalid_state",
+        "provider context length exceeded",
+        Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
+    );
+    assert!(outcome.is_ok(), "{outcome:?}");
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
+    assert_eq!(
+        service.agent_turn_ledger().turn("turn-1").unwrap().state,
+        AgentTurnState::Failed
+    );
+}
+
 /// Verifies a rebuilt provider request that is not smaller fails closed.
 ///
 /// The compactor summary must not mutate durable context or automatically
