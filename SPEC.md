@@ -6841,8 +6841,10 @@ summary. Every retained entry MUST remain byte-for-byte identical and preserve
 its author role and order; compaction MUST NOT omit middle entries from the
 selected closed prefix. The retained raw tail MUST cover approximately the
 configured `agents.compaction_raw_retention_percent` of the active model context
-budget by estimated replay word count, rounded to execution-group boundaries.
-At least the newest complete group MUST be retained when it fits that budget.
+budget by estimated replay token count, rounded to execution-group boundaries.
+Only whole closed groups whose cumulative estimated cost is strictly below
+the optional tail reservation MAY be retained; equality does not fit.
+At least the newest complete group MUST be retained when it strictly fits that budget.
 The raw tail MAY be empty when the newest group alone exceeds the budget and
 must be summarized to recover from a provider context-limit rejection. The raw
 tail MUST preserve author roles and exact visible assistant/user text so terse
@@ -8301,8 +8303,11 @@ retained in its place; that group MUST enter validated summary input when it
 is safely recoverable. Exact and unconsumed groups remain raw and cannot be
 split to fit the budget.
 The raw tail size MUST follow `agents.compaction_raw_retention_percent`, which
-defaults to retaining approximately the newest 10% of the active model context
-budget by estimated replay word count.
+defaults to retaining approximately the newest 10% of the available context-block
+allowance after fixed request overhead and protected exact blocks, by estimated
+replay tokens. Provider-invisible blocks have zero cost. These are local estimates,
+not provider-reported per-block token counts; the complete request is checked
+before publication.
 After an authoritative provider context-limit rejection, an unchanged plan
 under that ordinary reservation MUST NOT be treated as global exhaustion.
 Recovery MAY replan locally with progressively smaller optional raw-tail

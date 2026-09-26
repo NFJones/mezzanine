@@ -3903,7 +3903,7 @@ max_output_tokens = 256
                     "old-word ".repeat(28)
                 ),
             ),
-            8 => (
+            11 => (
                 mez_agent::transcript::TranscriptRole::Assistant,
                 format!(
                     "Recent targets:\n1. Preserve raw tail after compaction.\n2. Keep memory summary. {}",
@@ -3958,7 +3958,7 @@ max_output_tokens = 256
     );
 
     assert!(compact.contains("state=queued"), "{compact}");
-    assert!(compact.contains("summarized_entries=7"), "{compact}");
+    assert!(compact.contains("summarized_entries=9"), "{compact}");
     transcript_store
         .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "as-tail".to_string(),
@@ -4003,7 +4003,7 @@ max_output_tokens = 256
             .get("%1")
             .unwrap()
             .transcript_entries,
-        8
+        6
     );
 
     let prompt = service.dispatch_runtime_control_body(
@@ -4620,6 +4620,54 @@ fn runtime_manual_compaction_partial_chunk_failure_preserves_history() {
             .transcript_entries,
         3
     );
+}
+
+/// The configured model token limit, rather than its word-scaled fallback,
+/// determines which complete recent turn stays raw during manual compaction.
+#[test]
+fn runtime_manual_compaction_tail_uses_configured_token_allowance() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "manual-token-tail".to_string(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"manual-token-tail\"\ncompaction_raw_retention_percent = 10\n[providers.openai]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.manual-token-tail]\nprovider = \"openai\"\nmodel = \"test\"\ncontext_window_tokens = 20000\n".to_string(),
+    }]).unwrap();
+    let store = AgentTranscriptStore::new(temp_root("manual-token-tail"));
+    for (sequence, content) in [(1, "old work".to_string()), (2, "x".repeat(6_000))] {
+        store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: "manual-token-tail".to_string(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: mez_agent::transcript::TranscriptRole::Assistant,
+                turn_id: format!("turn-{sequence}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content,
+            })
+            .unwrap();
+    }
+    service.set_agent_transcript_store(store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "manual-token-tail", 2)
+        .unwrap();
+    let queued = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"manual-token-tail","method":"agent/shell/command","params":{"idempotency_key":"manual-token-tail","input":"/compact"}}"#,
+        &primary,
+    );
+    assert!(queued.contains("summarized_entries=1"), "{queued}");
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    assert_eq!(task.retained_transcript_entries, 1);
 }
 
 /// Manual compaction may absorb a prior selective range only after summarizing

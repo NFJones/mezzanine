@@ -314,8 +314,10 @@ fn plan_model_context_compaction_with_projection(
             consumed_sequence_high_water,
         ));
     }
-    let tail_budget =
-        model_context_retained_tail_budget_words(context_budget_words, retained_tail_percent);
+    let tail_budget = model_context_retained_tail_budget_words(
+        context_budget_words.saturating_sub(protected_words),
+        retained_tail_percent,
+    );
     let retained_groups = model_context_retained_group_indexes(
         &immutable_chronology,
         &chronology_visible,
@@ -755,7 +757,7 @@ fn model_context_retained_group_indexes(
                     .fold(0usize, usize::saturating_add)
             },
         );
-        if retained_words.saturating_add(group_words) > tail_budget_words {
+        if retained_words.saturating_add(group_words) >= tail_budget_words {
             break;
         }
         retained_words = retained_words.saturating_add(group_words);
@@ -1048,7 +1050,7 @@ mod tests {
         ];
         let groups = vec![0..1, 1..2, 2..3];
         let eligible = vec![0usize, 1, 2];
-        let budget = model_context_total_words(&blocks[0..1]);
+        let budget = model_context_total_words(&blocks[0..1]) + 1;
 
         let all_rendered = model_context_retained_group_indexes(
             &blocks,
@@ -1077,6 +1079,51 @@ mod tests {
             vec![1, 2],
             "an unrendered group must not displace a rendered group from the tail"
         );
+    }
+
+    /// Equality does not fit a strict tail reservation, even when the
+    /// provider-specific estimated cost is supplied directly.
+    #[test]
+    fn model_context_retained_tail_excludes_equal_token_cost() {
+        let blocks = vec![
+            ContextBlock::assistant_event("older", "older"),
+            ContextBlock::assistant_event("newer", "newer"),
+        ];
+        let costs = [4, 6];
+        assert_eq!(
+            model_context_retained_group_indexes(
+                &blocks,
+                &[true, true],
+                &[0..1, 1..2],
+                &[0, 1],
+                6,
+                Some(&costs),
+            ),
+            Vec::<usize>::new()
+        );
+    }
+
+    /// Protected exact context reduces the optional tail allowance rather
+    /// than consuming a share of the raw suffix itself.
+    #[test]
+    fn model_context_tail_budget_excludes_protected_context() {
+        let context = AgentContext::new_durable(vec![
+            ContextBlock::user_event("user prompt", "exact ".repeat(50)),
+            ContextBlock::assistant_event("older", "older ".repeat(30)),
+            ContextBlock::assistant_event("newer", "newer ".repeat(30)),
+        ])
+        .unwrap();
+        let protected = model_context_total_words(&context.blocks()[..1]);
+        let newer = model_context_total_words(&context.blocks()[2..]);
+        let plan = plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            protected + newer * 2,
+            50,
+            context.event_sequence_high_water_mark(),
+        )
+        .unwrap();
+        assert!(plan.retained_tail().is_empty());
+        assert_eq!(plan.replacement_blocks().len(), 1);
     }
 
     /// A newer closed group that cannot fit ends the retained suffix; older

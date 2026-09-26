@@ -536,7 +536,7 @@ context_window_tokens = 20000
         compact.contains("previous_transcript_entries=12"),
         "{compact}"
     );
-    assert!(compact.contains("summarized_entries=7"), "{compact}");
+    assert!(compact.contains("summarized_entries=9"), "{compact}");
     assert!(compact.contains("source=model-compact"), "{compact}");
     assert!(!compact.contains("requires_runtime"), "{compact}");
     assert!(service.agent_is_compacting("%1"));
@@ -588,7 +588,7 @@ context_window_tokens = 20000
             .get("%1")
             .unwrap()
             .transcript_entries,
-        7
+        5
     );
     let compacted = service
         .memory_records()

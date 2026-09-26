@@ -127,6 +127,10 @@ budget reports a failure instead of discarding source history.
 
 Active-context recovery selects a contiguous recent suffix of complete groups
 within an eligible segment, not a best-fit collection of older small groups.
+Only a suffix whose estimated rendered token cost is strictly below its optional
+tail reservation remains raw; equal cost does not fit. The active-provider block
+allowance excludes fixed request overhead and protected exact context. Invisible
+provider-owned blocks cost zero, while local estimates are not provider counts.
 When the newest closed group cannot fit the raw-tail budget, it is summarized
 instead of retaining an older group in its place; exact user and task barriers
 and incomplete or unconsumed groups remain raw.
@@ -149,6 +153,9 @@ their original order. On restart or resume, Mez loads this committed projection;
 optional pane memory is not needed to recover the summary. Corrupt epoch data
 or unreadable required history stops context construction rather than silently
 dropping older context.
+The compacted block carries only a short lossy-context warning and the
+model-authored summary; pane, model, entry counts, and other audit metadata
+are not repeated in the next model-visible summary.
 
 Observed-input compaction also protects exact historical user instructions,
 including legacy transcript user rows. A selected closed durable execution

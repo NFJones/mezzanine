@@ -2029,7 +2029,19 @@ mod tests {
 
         let retained = runtime_compact_retained_transcript_entries(12, &entries, 20_000, 10);
 
-        assert_eq!(retained, 8);
+        assert_eq!(retained, 2);
+    }
+
+    /// A complete newest turn whose estimated replay tokens exactly exhaust
+    /// the optional tail budget is summarized rather than retained raw.
+    #[test]
+    fn runtime_compact_tail_excludes_equal_estimated_token_cost() {
+        let entries = runtime_compact_test_entries(1, 1);
+        let cost = super::compaction::runtime_compact_transcript_entry_context_words(&entries[0]);
+        assert_eq!(
+            runtime_compact_retained_transcript_entries(1, &entries, cost, 100),
+            0
+        );
     }
 
     /// Verifies the retained compaction tail percentage is configurable.
@@ -2057,7 +2069,7 @@ mod tests {
         let retained = runtime_compact_forced_retained_transcript_entries(12, &entries, 20_000, 10);
         let summarized = runtime_compact_transcript_entries_for_summary(12, &entries, retained);
 
-        assert_eq!(retained, 8);
+        assert_eq!(retained, 2);
         assert_eq!(summarized.first().map(|entry| entry.sequence), Some(1));
 
         let single_entry = runtime_compact_test_entries(1, 230);

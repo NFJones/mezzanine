@@ -285,7 +285,11 @@ impl RuntimeSessionService {
         let (model_profile_name, model_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
         let retained_tail_percent = self.agent_compaction_raw_retention_percent();
-        let context_budget_words = model_profile.context_window_budget_words().ok_or_else(|| {
+        let context_budget_tokens = model_profile
+            .max_input_tokens()
+            .or_else(|| model_profile.context_window_tokens())
+            .map(|limit| limit.min(model_profile.context_window_tokens().unwrap_or(limit)))
+            .ok_or_else(|| {
             MezError::invalid_state(
                 "model context compaction requires configured context_window_tokens or max_input_tokens",
             )
@@ -294,14 +298,14 @@ impl RuntimeSessionService {
             runtime_compact_forced_retained_transcript_entries(
                 transcript_entries,
                 &transcript_records,
-                context_budget_words,
+                context_budget_tokens,
                 retained_tail_percent,
             )
         } else {
             runtime_compact_retained_transcript_entries(
                 transcript_entries,
                 &transcript_records,
-                context_budget_words,
+                context_budget_tokens,
                 retained_tail_percent,
             )
         };
@@ -320,7 +324,7 @@ impl RuntimeSessionService {
         .unwrap_or(u64::MAX);
         if compactable_transcript_records.is_empty() {
             let retained_tail_budget_words = runtime_compact_retained_context_tail_budget_words(
-                context_budget_words,
+                context_budget_tokens,
                 retained_tail_percent,
             );
             let retained_tail_words = runtime_compact_retained_transcript_tail_context_words(
@@ -2034,7 +2038,7 @@ pub(super) fn runtime_model_compaction_request(
                 role: ModelMessageRole::Developer,
                 source: ContextSourceKind::DeveloperInstruction,
                 placement: mez_agent::ContextPlacement::StablePrefix,
-                content: "Return exactly one `say` action with `status` set to `final` and `content_type` set to `text/markdown; charset=utf-8`. The text must summarize the conversation for a future agent turn. Preserve user goals, current plan, decisions, file paths, commands, test results, blockers, and pending follow-up. Do not claim work was completed unless the transcript proves it. Redact credentials and secrets."
+                content: "Return exactly one `say` action with `status` set to `final` and `content_type` set to `text/markdown; charset=utf-8`. Summarize only essential user goals, current decisions and state, blockers, pending work, and usable references for the next turn. Omit audit identities, counts, repeated history, and unsupported completion claims. Redact credentials and secrets."
                     .to_string(),
             },
             ModelMessage {
@@ -2401,25 +2405,16 @@ pub(super) fn runtime_model_compaction_summary_from_response(
 
 /// Formats the durable memory record stored after model-authored compaction.
 pub(super) fn runtime_model_compact_memory_content(
-    pane_id: &str,
-    conversation_id: &str,
-    transcript_entries: u64,
-    summarized_entries: usize,
-    model_profile_name: &str,
-    profile: &ModelProfile,
+    _pane_id: &str,
+    _conversation_id: &str,
+    _transcript_entries: u64,
+    _summarized_entries: usize,
+    _model_profile_name: &str,
+    _profile: &ModelProfile,
     summary: &str,
 ) -> String {
     [
-        format!("Model-generated compacted conversation summary for {conversation_id}."),
-        "Older durable transcript entries were summarized into this compact memory, and only the retained recent raw tail remains exact. Treat this summary as lossy; use targeted shell, search, or capture actions if older exact details are needed."
-            .to_string(),
-        format!("Pane: {pane_id}."),
-        format!("Transcript entries before compaction: {transcript_entries}."),
-        format!("Durable entries supplied to model: {summarized_entries}."),
-        format!("Model profile: {model_profile_name}."),
-        format!("Provider: {}.", profile.provider),
-        format!("Model: {}.", profile.model),
-        String::new(),
+        "Older durable transcript entries were summarized; this summary is lossy and only the retained recent raw tail is exact. Reinspect source when exact details matter.".to_string(),
         summary.trim().to_string(),
     ]
     .join("\n")
@@ -2496,7 +2491,7 @@ pub(super) fn runtime_compact_retained_transcript_entries(
             .map(runtime_compact_transcript_entry_context_words)
             .fold(0usize, usize::saturating_add);
         let must_retain = group_index >= closed_group_count;
-        if !must_retain && retained_words.saturating_add(group_words) > tail_budget {
+        if !must_retain && retained_words.saturating_add(group_words) >= tail_budget {
             break;
         }
         retained_words = retained_words.saturating_add(group_words);
@@ -2701,11 +2696,9 @@ pub(super) fn runtime_compact_retained_tail_percent(retained_tail_percent: usize
 /// # Parameters
 /// - `entry`: The transcript entry being estimated.
 pub(super) fn runtime_compact_transcript_entry_context_words(entry: &TranscriptEntry) -> usize {
-    AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS
-        .saturating_add(model_context_text_word_count(&entry.content))
-        .saturating_add(model_context_text_word_count(&entry.turn_id))
-        .saturating_add(model_context_text_word_count(&entry.agent_id))
-        .saturating_add(model_context_text_word_count(&entry.pane_id))
+    AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS.saturating_add(
+        mez_agent::provider_text_input_token_estimate(&entry.content),
+    )
 }
 
 /// Runs the runtime compact redact sensitive token operation for this subsystem.
