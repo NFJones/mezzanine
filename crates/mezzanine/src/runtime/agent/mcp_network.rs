@@ -439,9 +439,6 @@ impl RuntimeSessionService {
                 Ok(None)
             }
             Err(error) => {
-                self.agent
-                    .claimed_approved_external_actions
-                    .remove(&identity);
                 self.complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
                     turn_id: turn_id.to_string(),
                     action_id: action_id.to_string(),

@@ -245,9 +245,8 @@ async fn live_mcp_schema_drift_settles_only_the_unexecuted_call() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies an unrelated tool schema change leaves the approved call's binding
-/// intact: revalidation passes and the call fails later at transport acquisition
-/// instead of being reported as stale approval.
+/// Verifies an unrelated tool schema change leaves the approved binding intact,
+/// while a missing transport settles as a visible preparation failure.
 #[tokio::test]
 async fn unrelated_mcp_schema_change_leaves_the_approval_binding_intact() {
     let list_schema =
@@ -284,25 +283,36 @@ async fn unrelated_mcp_schema_change_leaves_the_approval_binding_intact() {
         .claim_approved_external_action(&turn.turn_id, &running.id)
         .unwrap();
     assert!(dispatch.is_none());
-    let execution = service
-        .agent_turn_executions()
-        .get(&turn.turn_id)
-        .cloned()
-        .unwrap();
-    let revalidated = execution
-        .action_results
-        .iter()
-        .find(|result| result.action_id == running.id)
-        .unwrap();
-    // The call passed schema revalidation and reached transport acquisition, so
-    // it is neither reported as stale approval nor permanently failed: the claim
-    // is released so the worker can retry once a transport exists.
-    assert_eq!(revalidated.status, ActionStatus::Running);
-    assert!(revalidated.error.is_none());
-    assert_eq!(
-        service.pending_approved_external_actions(),
-        vec![(turn.turn_id.clone(), running.id.clone())]
+    let context = retained_turn_context_text(&service, &turn.turn_id);
+    assert!(
+        context.contains("[action_result list-drift mcp_call failed]"),
+        "{context}"
     );
+    assert_eq!(
+        context
+            .matches("[action_result list-drift mcp_call failed]")
+            .count(),
+        1,
+        "{context}"
+    );
+    assert!(context.contains("no owned runtime transport"), "{context}");
+    assert!(
+        context.contains("[action_result list-sibling mcp_call succeeded]"),
+        "{context}"
+    );
+    assert!(service.pending_approved_external_actions().is_empty());
+    assert!(
+        !service
+            .approved_external_action_progress_turn_ids()
+            .contains(&turn.turn_id)
+    );
+    assert!(
+        service
+            .claim_approved_external_action(&turn.turn_id, &running.id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
     service.terminate_all_pane_processes().unwrap();
 }
 
