@@ -641,8 +641,8 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
-    /// Reports whether a pane-local agent shell currently owns interruptible work.
-    pub(crate) fn agent_shell_pane_has_active_turn(&self, pane_id: &str) -> bool {
+    /// Reports whether a pane-local agent shell currently owns a live turn.
+    pub(crate) fn agent_shell_pane_has_live_turn(&self, pane_id: &str) -> bool {
         self.agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
@@ -654,6 +654,11 @@ impl RuntimeSessionService {
                         AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
                     )
             })
+    }
+
+    /// Reports whether a pane-local agent shell currently owns interruptible work.
+    pub(crate) fn agent_shell_pane_has_active_turn(&self, pane_id: &str) -> bool {
+        self.agent_shell_pane_has_live_turn(pane_id) || self.agent_is_compacting(pane_id)
     }
 
     /// Builds dynamic primary command prompt selector candidates.

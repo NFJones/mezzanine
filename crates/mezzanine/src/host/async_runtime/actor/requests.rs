@@ -12,6 +12,49 @@ use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::host::terminal::AttachedTerminalClientStepPlan;
 
 impl AsyncRuntimeSessionActor {
+    /// Starts worker preparation for every prompt-history dispatch currently owned by the service.
+    pub(super) fn dispatch_pending_agent_prompt_history(&mut self) {
+        for dispatch in self.service.take_pending_agent_prompt_history() {
+            if !self
+                .service
+                .claim_agent_prompt_history_preparation(&dispatch)
+            {
+                continue;
+            }
+            let sender = self.sender.clone();
+            let join_handle = tokio::spawn(async move {
+                #[cfg(test)]
+                if let (Some(started), Some(release)) = (
+                    dispatch.prompt_history_preparation_started.as_ref(),
+                    dispatch.prompt_history_preparation_release.as_ref(),
+                ) {
+                    started.notify_one();
+                    release.notified().await;
+                }
+                let history_work = dispatch.history_work.clone();
+                let history = tokio::task::spawn_blocking(move || {
+                    crate::runtime::execute_runtime_agent_prompt_history_work(history_work)
+                })
+                .await
+                .map_err(|error| {
+                    crate::error::MezError::invalid_state(format!(
+                        "prompt history worker failed: {error}"
+                    ))
+                })
+                .and_then(|history| history);
+                let _ = sender
+                    .send(AsyncRuntimeRequestEnvelope::new(
+                        AsyncRuntimeRequest::CompleteAgentPromptHistoryPreparation {
+                            dispatch,
+                            history,
+                        },
+                    ))
+                    .await;
+            });
+            std::mem::drop(join_handle);
+        }
+    }
+
     /// Removes one clipboard route only when the requesting event-stream
     /// generation still owns it.
     pub(super) fn cleanup_client_clipboard_route(
@@ -1151,47 +1194,7 @@ impl AsyncRuntimeSessionActor {
                         });
                         std::mem::drop(join_handle);
                     }
-                    for dispatch in self.service.take_pending_agent_prompt_history() {
-                        if !self
-                            .service
-                            .claim_agent_prompt_history_preparation(&dispatch)
-                        {
-                            continue;
-                        }
-                        let sender = self.sender.clone();
-                        let join_handle = tokio::spawn(async move {
-                            #[cfg(test)]
-                            if let (Some(started), Some(release)) = (
-                                dispatch.prompt_history_preparation_started.as_ref(),
-                                dispatch.prompt_history_preparation_release.as_ref(),
-                            ) {
-                                started.notify_one();
-                                release.notified().await;
-                            }
-                            let history_work = dispatch.history_work.clone();
-                            let history = tokio::task::spawn_blocking(move || {
-                                crate::runtime::execute_runtime_agent_prompt_history_work(
-                                    history_work,
-                                )
-                            })
-                            .await
-                            .map_err(|error| {
-                                crate::error::MezError::invalid_state(format!(
-                                    "prompt history worker failed: {error}"
-                                ))
-                            })
-                            .and_then(|history| history);
-                            let _ = sender
-                                .send(AsyncRuntimeRequestEnvelope::new(
-                                    AsyncRuntimeRequest::CompleteAgentPromptHistoryPreparation {
-                                        dispatch,
-                                        history,
-                                    },
-                                ))
-                                .await;
-                        });
-                        std::mem::drop(join_handle);
-                    }
+                    self.dispatch_pending_agent_prompt_history();
                     // Deferred slash commands queued by this prompt submission
                     // become worker-claimed effects in the same drain, so the
                     // actor request that applied the input never performs the
@@ -1365,6 +1368,7 @@ impl AsyncRuntimeSessionActor {
                         self.queue_shell_lifecycle_timer_side_effects()?;
                         self.queue_pending_provider_dispatch_side_effects()?;
                         self.queue_pending_deferred_agent_command_side_effects()?;
+                        self.dispatch_pending_agent_prompt_history();
                         Ok(output)
                     });
                 let should_notify = result.is_ok();
@@ -1394,6 +1398,7 @@ impl AsyncRuntimeSessionActor {
                         self.queue_shell_lifecycle_timer_side_effects()?;
                         self.queue_pending_provider_dispatch_side_effects()?;
                         self.queue_pending_deferred_agent_command_side_effects()?;
+                        self.dispatch_pending_agent_prompt_history();
                         Ok(output)
                     });
                 let should_notify = result.is_ok();

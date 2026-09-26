@@ -4368,6 +4368,38 @@ fn runtime_prompt_history_stale_preclaim_releases_pane_command_lifecycle() {
     );
 }
 
+/// Verifies a prompt-history worker admitted before compaction cannot claim
+/// against the old replay epoch once compaction takes ownership of its pane.
+#[test]
+fn runtime_prompt_history_preclaim_is_invalidated_by_compaction_epoch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .begin_agent_prompt_history_preparation(primary, "%1", "old replay prompt")
+        .unwrap();
+    let dispatch = service
+        .take_pending_agent_prompt_history()
+        .pop()
+        .expect("prompt submission must queue one history dispatch");
+    service.mark_agent_compacting_for_tests("%1", 1);
+
+    assert!(
+        !service.claim_agent_prompt_history_preparation(&dispatch),
+        "a history worker captured before compaction must not start"
+    );
+    assert!(
+        !service.agent_command_is_active("%1"),
+        "rejecting old-epoch history must release the pane command lifecycle"
+    );
+}
+
 /// Verifies a failed prompt-history worker result settles the accepted prompt
 /// lifecycle and emits an error in the owning terminal, so the user can retry
 /// instead of seeing a permanent preparing state without feedback.

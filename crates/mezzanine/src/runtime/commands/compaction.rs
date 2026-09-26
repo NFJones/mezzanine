@@ -207,6 +207,7 @@ impl RuntimeSessionService {
         )?;
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             task_generation: 0,
+            compaction_epoch: 0,
             pane_id: pane_id.to_string(),
             conversation_id: conversation_id.clone(),
             source: source.to_string(),
@@ -348,6 +349,7 @@ impl RuntimeSessionService {
         }
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             task_generation: 0,
+            compaction_epoch: 0,
             pane_id: turn.pane_id.clone(),
             conversation_id,
             source: match trigger {
@@ -646,6 +648,9 @@ impl RuntimeSessionService {
                 )?,
             ),
         };
+        if applied && !self.agent_is_compacting(&pane_id) {
+            self.resume_agent_compaction_steering(&pane_id)?;
+        }
         Ok(self.runtime_pane_transition_with_render(
             &pane_id,
             applied,

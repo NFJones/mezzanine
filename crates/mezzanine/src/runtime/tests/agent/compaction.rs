@@ -3220,6 +3220,7 @@ context_window_tokens = 5000
         .unwrap();
     let mut replacement_task = old_task;
     replacement_task.task_generation = 0;
+    replacement_task.compaction_epoch = 0;
     replacement_task.conversation_id = replacement_conversation_id.clone();
     service.queue_agent_compaction_task(replacement_task);
     let replacement_generation = service
@@ -3468,7 +3469,194 @@ fn runtime_agent_shell_compact_rejects_overlapping_pane_compaction() {
         &primary,
     );
 
-    assert!(response.contains("already compacting"), "{response}");
+    assert!(response.contains("cannot mutate pane state"), "{response}");
+}
+
+/// Verifies manual compaction owns the pane: plain text is retained for the
+/// post-compaction epoch and conversation replacement is rejected meanwhile.
+#[test]
+fn runtime_manual_compaction_queues_steering_and_blocks_conversation_mutation() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.mark_agent_compacting_for_tests("%1", 1);
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+
+    let prompt = service
+        .execute_agent_shell_command(&primary, "first steering prompt")
+        .unwrap();
+    assert!(prompt.contains("\"command\":\"compacting\""), "{prompt}");
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    service
+        .execute_agent_shell_command(&primary, "second steering prompt")
+        .unwrap();
+
+    let blocked = service
+        .execute_agent_shell_command(&primary, "/new")
+        .unwrap();
+    assert!(blocked.contains("cannot mutate pane state"), "{blocked}");
+    assert_eq!(
+        service.agent_shell_store().get("%1").unwrap().session_id,
+        conversation_id
+    );
+    let stopped = service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    assert!(stopped.contains("compaction_cancelled=true"), "{stopped}");
+    assert!(!service.agent_is_compacting("%1"));
+    let resumed = service.take_pending_agent_prompt_history();
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(
+        resumed[0].prompt,
+        "first steering prompt\n\nsecond steering prompt"
+    );
+    assert!(service.agent_command_is_active("%1"));
+    assert!(service.take_agent_compaction_steering("%1").is_empty());
+}
+
+/// Verifies cancelling a real queued compaction releases manual steering on
+/// the unchanged replay epoch and ignores a late result from that generation.
+#[test]
+fn runtime_manual_compaction_cancellation_ignores_late_provider_result() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "manual-compaction-cancel".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "openai"
+default_model_profile = "manual-cancel-test"
+[providers.openai]
+kind = "openai"
+models = ["gpt-manual-cancel-test"]
+default_model = "gpt-manual-cancel-test"
+[model_profiles.manual-cancel-test]
+provider = "openai"
+model = "gpt-manual-cancel-test"
+context_window_tokens = 5000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let transcript_store = AgentTranscriptStore::new(temp_root("manual-compaction-cancel"));
+    for sequence in 1..=3 {
+        transcript_store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: "manual-cancel".to_string(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: mez_agent::transcript::TranscriptRole::Assistant,
+                turn_id: format!("turn-{sequence}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("cancel source {sequence}"),
+            })
+            .unwrap();
+    }
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "manual-cancel", 3)
+        .unwrap();
+
+    let compact = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"manual-cancel","method":"agent/shell/command","params":{"idempotency_key":"manual-cancel","input":"/compact"}}"#,
+        &primary,
+    );
+    assert!(compact.contains("state=queued"), "{compact}");
+    let generation = service
+        .pending_agent_compaction_task_generation("%1")
+        .expect("queued compaction generation");
+    let steering = service
+        .execute_agent_shell_command(&primary, "continue after cancellation")
+        .unwrap();
+    assert!(
+        steering.contains("\"command\":\"compacting\""),
+        "{steering}"
+    );
+
+    let stopped = service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    assert!(stopped.contains("compaction_cancelled=true"), "{stopped}");
+    assert!(!service.agent_is_compacting("%1"));
+    let resumed = service.take_pending_agent_prompt_history();
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].prompt, "continue after cancellation");
+
+    let late = service
+        .apply_agent_compaction_transition(crate::runtime::AgentCompactionEvent::Completed {
+            pane_id: "%1".to_string(),
+            task_generation: generation,
+            response: Box::new(runtime_test_compaction_response("must be ignored")),
+        })
+        .unwrap();
+    assert!(!late.applied);
+    assert!(!service.agent_is_compacting("%1"));
+    assert_eq!(service.take_pending_agent_prompt_history().len(), 0);
+    assert_eq!(service.agent_turn_ledger().turns().len(), 0);
+}
+
+/// Verifies prompts retained for one conversation are discarded when the pane
+/// is rebound, rather than being resumed in a later conversation's compaction.
+#[test]
+fn runtime_manual_compaction_steering_does_not_cross_conversation_rebind() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let original_conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service.queue_agent_compaction_steering(
+        "%1",
+        primary.clone(),
+        original_conversation.clone(),
+        service.agent_compaction_epoch("%1"),
+        "private old-conversation instruction".to_string(),
+    );
+
+    let rebound = service
+        .execute_agent_shell_command(&primary, "/new")
+        .unwrap();
+    assert!(rebound.contains("\"command\":\"new\""), "{rebound}");
+    assert_ne!(
+        service.agent_shell_store().get("%1").unwrap().session_id,
+        original_conversation
+    );
+    assert!(service.take_agent_compaction_steering("%1").is_empty());
+
+    service.mark_agent_compacting_for_tests("%1", 1);
+    service.cancel_current_agent_compaction_task("%1");
+    assert!(!service.resume_agent_compaction_steering("%1").unwrap());
+    assert!(service.take_pending_agent_prompt_history().is_empty());
 }
 
 /// Verifies pane compaction is a dispatch barrier for ordinary model work.
@@ -3808,7 +3996,16 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
     );
     let mut fragments = Vec::new();
     let mut current = dispatch.task;
+    let logical_epoch = current.compaction_epoch;
+    let steering = service
+        .execute_agent_shell_command(&primary, "keep steering across chunks")
+        .unwrap();
+    assert!(
+        steering.contains("\"command\":\"compacting\""),
+        "{steering}"
+    );
     for attempt in 0..32 {
+        assert_eq!(current.compaction_epoch, logical_epoch);
         let source = current.request.messages.last().unwrap().content.clone();
         let synthesis = source.contains("Chunk 1 summary:");
         if !synthesis {
@@ -3821,11 +4018,15 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
         };
         assert!(
             service
-                .apply_agent_compaction_completed_event(
-                    "%1",
-                    runtime_test_compaction_response(summary)
+                .apply_agent_compaction_transition(
+                    crate::runtime::AgentCompactionEvent::Completed {
+                        pane_id: "%1".to_string(),
+                        task_generation: current.task_generation,
+                        response: Box::new(runtime_test_compaction_response(summary)),
+                    }
                 )
                 .unwrap()
+                .applied
         );
         if synthesis {
             break;
@@ -3854,6 +4055,9 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
             .summary
             .contains("FINAL_CAP_SUMMARY")
     );
+    let resumed = service.take_pending_agent_prompt_history();
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].prompt, "keep steering across chunks");
 }
 
 /// A rejected manual compactor request must queue smaller temporary input
@@ -3902,29 +4106,53 @@ fn runtime_manual_compaction_recovers_provider_context_limit() {
     );
     assert!(compact.contains("state=queued"), "{compact}");
     let task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let logical_epoch = task.compaction_epoch;
+    let task_generation = task.task_generation;
     let previous_bytes = mez_agent::openai_responses_request_body_with_stream(&task.request, false)
         .unwrap()
         .len();
     service.claim_agent_compaction_task_state("%1", task);
+    let first_steering = service
+        .execute_agent_shell_command(&primary, "steer before context retry")
+        .unwrap();
+    assert!(
+        first_steering.contains("\"command\":\"compacting\""),
+        "{first_steering}"
+    );
     assert!(
         service
-            .apply_agent_compaction_failed_event(
-                "%1",
-                "invalid_state",
-                "provider context length exceeded",
-                Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
-            )
+            .apply_agent_compaction_transition(crate::runtime::AgentCompactionEvent::Failed {
+                pane_id: "%1".to_string(),
+                task_generation,
+                kind: "invalid_state".to_string(),
+                message: "provider context length exceeded".to_string(),
+                provider_failure_json: Some(
+                    r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#.to_string(),
+                ),
+                provider_raw_text: None,
+            })
             .unwrap()
+            .applied
     );
-    let retry = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("smaller manual compactor request");
-    let retry_bytes = mez_agent::openai_responses_request_body_with_stream(&retry.request, false)
-        .unwrap()
-        .len();
+    let retry_bytes = {
+        let retry = service
+            .pending_agent_compaction_task_for_tests("%1")
+            .expect("smaller manual compactor request");
+        assert_eq!(retry.compaction_epoch, logical_epoch);
+        mez_agent::openai_responses_request_body_with_stream(&retry.request, false)
+            .unwrap()
+            .len()
+    };
     assert!(
         retry_bytes < previous_bytes,
         "{retry_bytes} >= {previous_bytes}"
+    );
+    let retry_steering = service
+        .execute_agent_shell_command(&primary, "steer between compaction chunks")
+        .unwrap();
+    assert!(
+        retry_steering.contains("\"command\":\"compacting\""),
+        "{retry_steering}"
     );
     assert_eq!(store.inspect("manual-context-limit").unwrap().len(), 3);
     assert!(
@@ -3939,6 +4167,8 @@ fn runtime_manual_compaction_recovers_provider_context_limit() {
         let pending = service
             .take_pending_agent_compaction_task("%1")
             .expect("each temporary chunk and final synthesis is queued");
+        assert_eq!(pending.compaction_epoch, logical_epoch);
+        let task_generation = pending.task_generation;
         let source = pending.request.messages.last().unwrap().content.clone();
         let is_synthesis = source.contains("Chunk 1 summary:");
         chunk_sources.push(source);
@@ -3950,11 +4180,15 @@ fn runtime_manual_compaction_recovers_provider_context_limit() {
         };
         assert!(
             service
-                .apply_agent_compaction_completed_event(
-                    "%1",
-                    runtime_test_compaction_response(summary),
+                .apply_agent_compaction_transition(
+                    crate::runtime::AgentCompactionEvent::Completed {
+                        pane_id: "%1".to_string(),
+                        task_generation,
+                        response: Box::new(runtime_test_compaction_response(summary)),
+                    }
                 )
                 .unwrap()
+                .applied
         );
         if is_synthesis {
             synthesized = true;
@@ -3984,6 +4218,12 @@ fn runtime_manual_compaction_recovers_provider_context_limit() {
             .unwrap()
             .summary
             .contains("FINAL_MANUAL_SUMMARY")
+    );
+    let resumed = service.take_pending_agent_prompt_history();
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(
+        resumed[0].prompt,
+        "steer before context retry\n\nsteer between compaction chunks"
     );
 }
 
@@ -4132,6 +4372,13 @@ context_window_tokens = 128000
         &primary,
     );
     assert!(compact.contains("state=queued"), "{compact}");
+    let steering = service
+        .execute_agent_shell_command(&primary, "continue after compaction")
+        .unwrap();
+    assert!(
+        steering.contains("\"command\":\"compacting\""),
+        "{steering}"
+    );
     let task = service
         .take_pending_agent_compaction_task("%1")
         .expect("manual compaction task");
@@ -4150,6 +4397,10 @@ context_window_tokens = 128000
             .unwrap()
             .applied
     );
+    let resumed = service.take_pending_agent_prompt_history();
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].prompt, "continue after compaction");
+    assert_eq!(resumed[0].transcript_entries, 4);
     let session_snapshot = service.session().clone();
 
     let mut restored = RuntimeServiceFixture::new().build_with_session(session_snapshot);

@@ -1548,6 +1548,7 @@ fn runtime_routed_child_malformed_compaction_completion_recovers_parent() {
         worker_turn.pane_id.clone(),
         RuntimeAgentCompactionTask {
             task_generation: 0,
+            compaction_epoch: 0,
             pane_id: worker_turn.pane_id.clone(),
             conversation_id,
             source: "provider-output-limit".to_string(),
@@ -1625,6 +1626,7 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
         worker_turn.pane_id.clone(),
         RuntimeAgentCompactionTask {
             task_generation: 0,
+            compaction_epoch: 0,
             pane_id: worker_turn.pane_id.clone(),
             conversation_id,
             source: "provider-output-limit".to_string(),

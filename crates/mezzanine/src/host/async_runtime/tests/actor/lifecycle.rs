@@ -925,6 +925,12 @@ context_window_tokens = 128000
             .unwrap();
     }
     service.set_agent_transcript_store(transcript_store);
+    let history_started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let history_release = std::sync::Arc::new(tokio::sync::Notify::new());
+    service.set_prompt_history_preparation_probe_for_tests(
+        history_started.clone(),
+        history_release.clone(),
+    );
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
@@ -942,7 +948,7 @@ context_window_tokens = 128000
 
     let client = async {
         let response = handle
-            .execute_agent_shell_command(primary, "/compact".to_string())
+            .execute_agent_shell_command(primary.clone(), "/compact".to_string())
             .await
             .unwrap();
         assert!(response.contains("state=queued"), "{response}");
@@ -954,6 +960,37 @@ context_window_tokens = 128000
             effect,
             RuntimeSideEffect::DispatchAgentCompaction { pane_id, .. } if pane_id == "%1"
         )));
+        let steering = handle
+            .execute_agent_shell_command(primary.clone(), "continue after cancellation".to_string())
+            .await
+            .unwrap();
+        assert!(
+            steering.contains("\"command\":\"compacting\""),
+            "{steering}"
+        );
+        let stopped = handle
+            .execute_agent_shell_command(primary.clone(), "/stop".to_string())
+            .await
+            .unwrap();
+        assert!(stopped.contains("compaction_cancelled=true"), "{stopped}");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            history_started.notified(),
+        )
+        .await
+        .expect("actor must dispatch resumed prompt history without more input");
+        history_release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let pending = handle.pending_agent_provider_tasks().await.unwrap();
+                if !pending.is_empty() {
+                    break pending;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("resumed history preparation must reach provider dispatch");
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
@@ -971,7 +1008,7 @@ context_window_tokens = 128000
             .panes
             .get("%1")
             .and_then(|pane| pane.agent_status.as_deref()),
-        Some("compacting")
+        Some("thinking")
     );
     exit.service.terminate_all_pane_processes().unwrap();
 }

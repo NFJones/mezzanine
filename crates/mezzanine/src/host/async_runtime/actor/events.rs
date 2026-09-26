@@ -419,6 +419,7 @@ impl AsyncRuntimeSessionActor {
                     transition
                         .side_effects
                         .extend(self.pending_provider_dispatch_side_effects()?);
+                    self.dispatch_pending_agent_prompt_history();
                 }
                 Ok(transition)
             }

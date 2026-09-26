@@ -1399,6 +1399,7 @@ impl RuntimeSessionService {
                 pane_id: pane_id.to_string(),
                 conversation_id,
                 config_generation: self.session.config_generation,
+                compaction_epoch: self.agent_compaction_epoch(pane_id),
                 transcript_entries,
                 claim_generation,
                 prompt: prompt.to_string(),
@@ -1413,6 +1414,53 @@ impl RuntimeSessionService {
             pane_id,
             "agent: preparing conversation history",
         )
+    }
+
+    /// Resumes authenticated prompts retained while manual compaction owned a pane.
+    ///
+    /// Prompts are submitted as one ordered turn against the settled transcript
+    /// epoch; stale compaction generations never call this path while a newer
+    /// compaction still owns the pane.
+    pub(crate) fn resume_agent_compaction_steering(&mut self, pane_id: &str) -> Result<bool> {
+        if self.agent_is_compacting(pane_id) {
+            return Ok(false);
+        }
+        let steering = self.take_agent_compaction_steering(pane_id);
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
+            return Ok(false);
+        };
+        let conversation_id = session.session_id.clone();
+        let compaction_epoch = self.agent_compaction_epoch(pane_id);
+        let steering = steering
+            .into_iter()
+            .filter(|(_, _, queued_conversation_id, queued_epoch)| {
+                queued_conversation_id == &conversation_id && *queued_epoch == compaction_epoch
+            })
+            .collect::<Vec<_>>();
+        let Some((primary_client_id, _, _, _)) = steering.first() else {
+            return Ok(false);
+        };
+        let primary_client_id = primary_client_id.clone();
+        let prompt = steering
+            .iter()
+            .map(|(_, prompt, _, _)| prompt.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if let Err(error) =
+            self.begin_agent_prompt_history_preparation(primary_client_id, pane_id, &prompt)
+        {
+            for (client_id, prompt, queued_conversation_id, queued_epoch) in steering {
+                self.queue_agent_compaction_steering(
+                    pane_id,
+                    client_id,
+                    queued_conversation_id,
+                    queued_epoch,
+                    prompt,
+                );
+            }
+            return Err(error);
+        }
+        Ok(true)
     }
 
     /// Claims a queued prompt-history preparation while its actor snapshot remains current.
@@ -1431,7 +1479,9 @@ impl RuntimeSessionService {
         let current_conversation = current.map(|session| session.session_id.as_str());
         let current = current_conversation == Some(dispatch.conversation_id.as_str())
             && transcript_entries == Some(dispatch.transcript_entries)
-            && self.session.config_generation == dispatch.config_generation;
+            && self.session.config_generation == dispatch.config_generation
+            && self.agent_compaction_epoch(&dispatch.pane_id) == dispatch.compaction_epoch
+            && !self.agent_is_compacting(&dispatch.pane_id);
         if !current {
             self.agent.cancel_matching_agent_command(
                 &dispatch.pane_id,
@@ -1473,6 +1523,8 @@ impl RuntimeSessionService {
         if current_conversation != Some(dispatch.conversation_id.as_str())
             || current_entries != Some(dispatch.transcript_entries)
             || self.session.config_generation != dispatch.config_generation
+            || self.agent_compaction_epoch(&dispatch.pane_id) != dispatch.compaction_epoch
+            || self.agent_is_compacting(&dispatch.pane_id)
             || !self.agent.agent_command_is_claimed(
                 &dispatch.pane_id,
                 &dispatch.conversation_id,

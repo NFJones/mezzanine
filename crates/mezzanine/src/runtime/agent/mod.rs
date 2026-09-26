@@ -502,6 +502,12 @@ pub(crate) struct RuntimeAgentComponent {
     next_agent_compaction_task_generation: u64,
     /// Current compaction task generation and originating conversation by pane.
     agent_compaction_task_owners: BTreeMap<String, (u64, String)>,
+    /// Monotonic compaction epoch used to invalidate prompt history captured
+    /// before a compaction operation began.
+    agent_compaction_epochs: BTreeMap<String, u64>,
+    /// Authenticated plain-text prompts accepted during manual compaction.
+    agent_compaction_steering:
+        BTreeMap<String, Vec<(mez_core::ids::ClientId, String, String, u64)>>,
     /// Model-backed compaction tasks waiting for provider dispatch.
     pending_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
     /// In-flight compaction tasks retained by pane and generation until each
@@ -2470,6 +2476,42 @@ impl RuntimeSessionService {
         self.agent.agent_compacting_panes.contains_key(pane_id)
     }
 
+    /// Returns the pane's latest compaction epoch, including settled operations.
+    pub(crate) fn agent_compaction_epoch(&self, pane_id: &str) -> u64 {
+        self.agent
+            .agent_compaction_epochs
+            .get(pane_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Retains one accepted user prompt until manual compaction settles.
+    pub(crate) fn queue_agent_compaction_steering(
+        &mut self,
+        pane_id: &str,
+        primary_client_id: mez_core::ids::ClientId,
+        conversation_id: String,
+        compaction_epoch: u64,
+        prompt: String,
+    ) {
+        self.agent
+            .agent_compaction_steering
+            .entry(pane_id.to_string())
+            .or_default()
+            .push((primary_client_id, prompt, conversation_id, compaction_epoch));
+    }
+
+    /// Takes prompts retained during compaction in their accepted order.
+    pub(crate) fn take_agent_compaction_steering(
+        &mut self,
+        pane_id: &str,
+    ) -> Vec<(mez_core::ids::ClientId, String, String, u64)> {
+        self.agent
+            .agent_compaction_steering
+            .remove(pane_id)
+            .unwrap_or_default()
+    }
+
     /// Reports whether one pane is generating durable memories.
     pub(crate) fn agent_is_remembering(&self, pane_id: &str) -> bool {
         self.agent.agent_remembering_panes.contains_key(pane_id)
@@ -2500,6 +2542,17 @@ impl RuntimeSessionService {
             .max(1);
         task.task_generation = self.agent.next_agent_compaction_task_generation;
         let pane_id = task.pane_id.clone();
+        let current_epoch = self
+            .agent
+            .agent_compaction_epochs
+            .entry(pane_id.clone())
+            .or_default();
+        if task.compaction_epoch == 0 {
+            *current_epoch = current_epoch.saturating_add(1);
+            task.compaction_epoch = *current_epoch;
+        } else {
+            *current_epoch = (*current_epoch).max(task.compaction_epoch);
+        }
         self.agent.agent_compaction_task_owners.insert(
             pane_id.clone(),
             (task.task_generation, task.conversation_id.clone()),
@@ -2628,6 +2681,38 @@ impl RuntimeSessionService {
             self.agent.agent_compacting_panes.remove(pane_id);
         }
         task
+    }
+
+    /// Cancels the exact pending or claimed compaction generation currently owning one pane.
+    pub(crate) fn cancel_current_agent_compaction_task(
+        &mut self,
+        pane_id: &str,
+    ) -> RuntimeAgentCompactionFailureState {
+        let generation = self
+            .pending_agent_compaction_task_generation(pane_id)
+            .or_else(|| {
+                self.agent
+                    .claimed_agent_compaction_tasks
+                    .keys()
+                    .filter(|(claimed_pane_id, _)| claimed_pane_id == pane_id)
+                    .map(|(_, generation)| *generation)
+                    .max()
+            })
+            .or_else(|| {
+                self.agent
+                    .agent_compaction_task_owners
+                    .get(pane_id)
+                    .map(|(generation, _)| *generation)
+            });
+        if let Some(generation) = generation {
+            let state = self.fail_agent_compaction_task(pane_id, generation);
+            self.agent.cancel_agent_command(pane_id);
+            return state;
+        }
+        RuntimeAgentCompactionFailureState {
+            had_task: self.agent.agent_compacting_panes.remove(pane_id).is_some(),
+            ..Default::default()
+        }
     }
 
     /// Re-arms observed-input compaction after a successful context replacement.
@@ -2771,7 +2856,14 @@ impl RuntimeSessionService {
     /// Marks one pane as compacting in rendering regression tests.
     #[cfg(test)]
     pub(crate) fn mark_agent_compacting_for_tests(&mut self, pane_id: impl Into<String>, at: u64) {
-        self.agent.agent_compacting_panes.insert(pane_id.into(), at);
+        let pane_id = pane_id.into();
+        let epoch = self
+            .agent
+            .agent_compaction_epochs
+            .entry(pane_id.clone())
+            .or_default();
+        *epoch = epoch.saturating_add(1);
+        self.agent.agent_compacting_panes.insert(pane_id, at);
     }
 
     /// Returns one queued compaction task to crate-local regression tests.

@@ -574,6 +574,8 @@ pub(crate) struct RuntimeAgentPromptHistoryDispatch {
     pub conversation_id: String,
     /// Configuration and trust epoch that admitted the prompt.
     pub config_generation: u64,
+    /// Compaction epoch that admitted the prompt-history worker.
+    pub compaction_epoch: u64,
     /// Retained transcript count visible when history work was captured.
     pub transcript_entries: u64,
     /// Pane-local claim generation used to discard stale worker completion.

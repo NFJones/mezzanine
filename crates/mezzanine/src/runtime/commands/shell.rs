@@ -437,6 +437,37 @@ impl RuntimeSessionService {
             ));
         }
         let slash_invocation = parse_slash_command(input).ok().flatten();
+        if self.agent_is_compacting(&pane_id)
+            && slash_invocation.as_ref().is_some_and(|invocation| {
+                !matches!(
+                    invocation.name.as_str(),
+                    "help"
+                        | "status"
+                        | "show-context"
+                        | "show-memories"
+                        | "show-approvals"
+                        | "show-issues"
+                        | "list-macros"
+                        | "list-skills"
+                        | "list-modified-files"
+                        | "list-mcp"
+                        | "list-personalities"
+                        | "auth-status"
+                        | "debug-config"
+                        | "copy-context"
+                        | "copy-trace-log"
+                        | "copy-patches"
+                        | "stop"
+                )
+            })
+        {
+            let error = MezError::conflict(format!(
+                "cannot mutate pane state while pane {pane_id} is compacting"
+            ));
+            return Ok(agent_shell_invalid_command_response_json(
+                &pane_id, input, &error,
+            ));
+        }
         let replaced_conversation_id = slash_invocation
             .as_ref()
             .filter(|invocation| matches!(invocation.name.as_str(), "new" | "clear"))
@@ -459,6 +490,35 @@ impl RuntimeSessionService {
         )?;
         if is_prompt {
             self.append_agent_user_prompt_to_terminal_buffer(&pane_id, display_input)?;
+        }
+        if is_prompt
+            && origin.is_authenticated_primary_input()
+            && self.agent_is_compacting(&pane_id)
+            && self
+                .agent_shell_store()
+                .get(&pane_id)
+                .and_then(|session| session.running_turn_id.as_ref())
+                .is_none()
+        {
+            let conversation_id = self
+                .agent_shell_store()
+                .get(&pane_id)
+                .map(|session| session.session_id.clone())
+                .ok_or_else(|| {
+                    MezError::invalid_state("agent shell session disappeared during compaction")
+                })?;
+            self.queue_agent_compaction_steering(
+                &pane_id,
+                primary_client_id.clone(),
+                conversation_id,
+                self.agent_compaction_epoch(&pane_id),
+                input.to_string(),
+            );
+            return Ok(runtime_agent_shell_deferred_command_response_json(
+                &pane_id,
+                input,
+                "compacting",
+            ));
         }
         if is_prompt
             && defer_prompt_history_to_worker
@@ -559,8 +619,32 @@ impl RuntimeSessionService {
                     outcome.as_ref()
                     && command == "stop"
                 {
-                    let stopped = self.stop_agent_turn_for_pane(&pane_id)?;
-                    runtime_agent_shell_stop_response_json(&pane_id, input, &stopped)
+                    if self.agent_is_compacting(&pane_id) {
+                        let cancelled = self.cancel_current_agent_compaction_task(&pane_id);
+                        if self.agent_shell_pane_has_live_turn(&pane_id) {
+                            let stopped = self.stop_agent_turn_for_pane(&pane_id)?;
+                            runtime_agent_shell_stop_response_json(&pane_id, input, &stopped)
+                        } else {
+                            self.resume_agent_compaction_steering(&pane_id)?;
+                            let stop_outcome = AgentShellCommandOutcome::Mutated {
+                                command: "stop".to_string(),
+                                body: format!(
+                                    "pane={} compaction_cancelled={}",
+                                    pane_id,
+                                    cancelled.had_task()
+                                ),
+                                visibility: self.agent_shell_visibility_for_pane(&pane_id)?,
+                            };
+                            runtime_agent_shell_command_response_json(
+                                &pane_id,
+                                input,
+                                Some(&stop_outcome),
+                            )
+                        }
+                    } else {
+                        let stopped = self.stop_agent_turn_for_pane(&pane_id)?;
+                        runtime_agent_shell_stop_response_json(&pane_id, input, &stopped)
+                    }
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
                     && command == "model"
@@ -1021,6 +1105,7 @@ impl RuntimeSessionService {
         if let Some(AgentShellCommandOutcome::Mutated { command, .. }) = outcome.as_ref()
             && matches!(command.as_str(), "new" | "clear")
         {
+            let _ = self.take_agent_compaction_steering(&pane_id);
             self.agent.cancel_agent_command(&pane_id);
             if let Some(conversation_id) = replaced_conversation_id.as_deref() {
                 self.clear_agent_conversation_provider_request_chain(conversation_id);

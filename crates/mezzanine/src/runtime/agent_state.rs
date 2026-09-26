@@ -567,6 +567,8 @@ pub enum RuntimeAgentLoopSettlement {
 pub struct RuntimeAgentCompactionTask {
     /// Unique queued/claimed task generation used to reject stale worker outcomes.
     pub task_generation: u64,
+    /// Logical compaction epoch retained across recursive and retry generations.
+    pub compaction_epoch: u64,
     /// Pane whose visible status should remain `compacting`.
     pub pane_id: String,
     /// Conversation being summarized.
