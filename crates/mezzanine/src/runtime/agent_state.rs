@@ -6,10 +6,10 @@
 //! describe queued or claimed work across async boundaries.
 
 use super::{
-    AgentTurnExecution, AgentTurnRecord, DeepSeekChatCompletionsProvider, MemoryScope,
-    ModelProfile, ModelRequest, OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider,
-    PathScopes, PermissionPolicy, ReqwestProviderHttpTransport, RuntimeAutoSizingDispatch,
-    SessionApprovalStore, SubagentScopeDeclaration,
+    AgentContext, AgentTurnExecution, AgentTurnRecord, DeepSeekChatCompletionsProvider,
+    MemoryScope, ModelProfile, ModelRequest, OpenAiCompatibleChatCompletionsProvider,
+    OpenAiResponsesProvider, PathScopes, PermissionPolicy, ReqwestProviderHttpTransport,
+    RuntimeAutoSizingDispatch, SessionApprovalStore, SubagentScopeDeclaration,
 };
 use crate::integrations::agent::provider::AnthropicMessagesProvider;
 use crate::runtime::processes::NativeShellContext;
@@ -589,6 +589,10 @@ pub struct RuntimeAgentCompactionTask {
     pub model_profile: ModelProfile,
     /// Provider request submitted by the async compaction worker.
     pub request: ModelRequest,
+    /// Keep the plan-derived summary output ceiling unchanged on provider retry.
+    pub preserve_summary_output_budget: bool,
+    /// Stable non-transcript context captured for pre-commit manual candidate sizing.
+    pub candidate_context: Option<AgentContext>,
     /// Running turn to requeue after this compaction completes.
     pub resume_turn_id: Option<String>,
     /// Exact compaction target retained across the provider worker boundary.
@@ -661,6 +665,8 @@ pub enum RuntimeAgentCompactionTarget {
         pending_blocks: Vec<Vec<super::ContextBlock>>,
         /// Completed chunk summaries awaiting one final synthesis request.
         completed_summaries: Vec<String>,
+        /// Total provider responses consumed across recursive compaction rounds.
+        completed_responses: usize,
         /// Deterministic selection and application contract.
         plan: Box<ModelContextCompactionPlan>,
     },

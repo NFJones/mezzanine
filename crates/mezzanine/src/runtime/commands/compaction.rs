@@ -8,9 +8,9 @@
 
 use super::{
     AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS, AgentActionPayload, AgentContext,
-    AgentShellCommandOutcome, AgentTurnState, AllowedActionSet, ContextBlock, ContextSourceKind,
-    DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord, MemoryScope, MemorySource, MezError,
-    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest,
+    AgentShellCommandOutcome, AgentTurnRecord, AgentTurnState, AllowedActionSet, ContextBlock,
+    ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord, MemoryScope, MemorySource,
+    MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest,
     ModelResponse, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
     RuntimeAgentProviderDispatchProvider, RuntimeSessionService, TranscriptEntry, TranscriptRole,
@@ -31,7 +31,10 @@ use crate::runtime::agent_state::{
     RuntimeActiveTurnCompactionTrigger, RuntimeConversationCompactionChunks,
 };
 use crate::runtime::config::runtime_effective_provider_options;
-use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
+use crate::runtime::{
+    AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition,
+    runtime_agent_transcript_context_blocks,
+};
 use crate::security::auth::AuthProfileCredentialSource;
 use mez_agent::{
     DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorRetryClass, apply_model_context_compaction_plan,
@@ -165,14 +168,34 @@ impl RuntimeSessionService {
         )
         .unwrap_or(u64::MAX);
         if compactable_transcript_records.is_empty() {
-            self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                "agent: compact skipped; recent transcript tail already fits the active context budget",
-            )?;
+            let retained_tail_budget_words = runtime_compact_retained_context_tail_budget_words(
+                context_budget_words,
+                retained_tail_percent,
+            );
+            let retained_tail_words = runtime_compact_retained_transcript_tail_context_words(
+                transcript_entries,
+                &transcript_records,
+                retained_transcript_entries,
+            );
+            let irreducible_tail = retained_tail_words > retained_tail_budget_words;
+            let (status, reason) = if irreducible_tail {
+                (
+                    format!(
+                        "agent: compaction skipped; exact unfinished transcript tail exceeds retention budget retained_tail_words={retained_tail_words} retained_tail_budget_words={retained_tail_budget_words}"
+                    ),
+                    "irreducible-exact-retained-tail",
+                )
+            } else {
+                (
+                    "agent: compact skipped; recent transcript tail already fits the active context budget".to_string(),
+                    "within-retained-context-tail",
+                )
+            };
+            self.append_agent_status_text_to_terminal_buffer(pane_id, &status)?;
             return Ok(AgentShellCommandOutcome::Display {
                 command: "compact".to_string(),
                 body: format!(
-                    "pane={} conversation={} previous_transcript_entries={} summarized_entries=0 remaining_transcript_entries={} compacted=false reason=within-retained-context-tail retained_context_tail_percent={} source=model-compact trigger={}",
+                    "pane={} conversation={} previous_transcript_entries={} summarized_entries=0 remaining_transcript_entries={} compacted=false reason={reason} retained_tail_words={retained_tail_words} retained_tail_budget_words={retained_tail_budget_words} retained_context_tail_percent={} source=model-compact trigger={}",
                     json_escape(pane_id),
                     json_escape(&conversation_id),
                     transcript_entries,
@@ -196,7 +219,7 @@ impl RuntimeSessionService {
             .last()
             .map(|entry| entry.sequence);
         let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
-        let request = runtime_model_compaction_request(
+        let mut request = runtime_model_compaction_request(
             &model_profile,
             pane_id,
             &conversation_id,
@@ -205,6 +228,13 @@ impl RuntimeSessionService {
             &compaction_context,
             allowed_actions,
         )?;
+        let summary_budget_words = request
+            .messages
+            .last()
+            .map(|message| model_context_text_word_count(&message.content))
+            .unwrap_or_default()
+            .max(1);
+        runtime_limit_compaction_summary_output(&mut request, summary_budget_words);
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             task_generation: 0,
             compaction_epoch: 0,
@@ -218,6 +248,8 @@ impl RuntimeSessionService {
             model_profile_name: model_profile_name.clone(),
             model_profile: model_profile.clone(),
             request,
+            preserve_summary_output_budget: true,
+            candidate_context: Some(compaction_context),
             resume_turn_id: resume_turn_id.map(str::to_string),
             target: RuntimeAgentCompactionTarget::Conversation,
             conversation_chunks: None,
@@ -381,6 +413,8 @@ impl RuntimeSessionService {
             model_profile_name,
             model_profile,
             request,
+            preserve_summary_output_budget: true,
+            candidate_context: None,
             resume_turn_id: Some(turn.turn_id.clone()),
             target: RuntimeAgentCompactionTarget::ActiveTurn {
                 turn_id: turn.turn_id.clone(),
@@ -392,6 +426,7 @@ impl RuntimeSessionService {
                 current_blocks,
                 pending_blocks,
                 completed_summaries: Vec::new(),
+                completed_responses: 0,
                 plan: Box::new(plan),
             },
             conversation_chunks: None,
@@ -742,11 +777,18 @@ impl RuntimeSessionService {
                         current_blocks: _,
                         pending_blocks,
                         completed_summaries,
+                        completed_responses,
                         ..
                     } = &mut task.target
                     else {
                         unreachable!("active-turn target was matched above");
                     };
+                    *completed_responses = completed_responses.saturating_add(1);
+                    if *completed_responses > 32 {
+                        return Err(MezError::invalid_state(
+                            "active-turn compactor exceeded recursive response limit",
+                        ));
+                    }
                     completed_summaries.push(summary);
                     if let Some(blocks) = pending_blocks.pop() {
                         (Some(blocks), None)
@@ -826,56 +868,77 @@ impl RuntimeSessionService {
                 let (compacted, report) =
                     apply_model_context_compaction_plan(context, plan.as_ref(), &final_summary)
                         .map_err(|error| MezError::invalid_state(error.message()))?;
+                let model_profile = self
+                    .agent_turn_model_profile(&turn_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "active-turn compaction model profile is unavailable",
+                        )
+                    })?;
+                let mcp_summary = self.mcp_registry().prompt_summary();
+                let (prepared, available_mcp_tools) = self.prepare_agent_turn_model_context(
+                    &turn,
+                    compacted.clone(),
+                    &mcp_summary,
+                    &model_profile,
+                )?;
+                let provider_config = self
+                    .provider_registry()
+                    .provider(&model_profile.provider)
+                    .ok_or_else(|| {
+                        MezError::config(format!(
+                            "provider `{}` for active model profile is not configured",
+                            model_profile.provider
+                        ))
+                    })?;
+                let api =
+                    resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+                let provider_options =
+                    runtime_effective_provider_options(provider_config, &model_profile);
+                let mut retry_request = assemble_model_request(
+                    &model_profile,
+                    api,
+                    &turn,
+                    &prepared.to_agent_context(),
+                )?;
+                let (allowed_actions, interaction_kind) =
+                    self.agent_provider_request_control_for_turn(&turn)?;
+                mez_agent::apply_model_request_control(
+                    &mut retry_request,
+                    allowed_actions,
+                    interaction_kind,
+                );
+                mez_agent::apply_default_action_gates(
+                    &mut retry_request,
+                    &available_mcp_tools,
+                    self.runtime_persistent_memory_enabled(),
+                    super::runtime_issues_enabled(self),
+                );
+                // In the observed-input path the original transport stream mode is not
+                // retained. Use streaming for conservative wire accounting; configured
+                // chat-completions adapters still honor their own streaming option.
+                let estimate_stream = rejected_request_stream.unwrap_or(true);
+                let retry_estimate = mez_agent::provider_request_input_estimate(
+                    &retry_request,
+                    api,
+                    &provider_options,
+                    estimate_stream,
+                )?;
+                if let Some(input_limit) = runtime_compaction_safe_input_limit(
+                    model_profile.max_input_tokens(),
+                    model_profile.context_window_tokens(),
+                    model_profile.max_output_tokens(),
+                ) && retry_estimate.input_tokens > input_limit
+                {
+                    return Err(MezError::invalid_state(format!(
+                        "context compaction candidate exceeds safe input allowance: estimated_input_tokens={} safe_input_tokens={input_limit}",
+                        retry_estimate.input_tokens,
+                    )));
+                }
                 if let (Some(rejected_bytes), Some(stream)) =
                     (rejected_request_bytes, rejected_request_stream)
                 {
-                    let model_profile = self
-                        .agent_turn_model_profile(&turn_id)
-                        .cloned()
-                        .ok_or_else(|| {
-                            MezError::invalid_state(
-                                "active-turn compaction model profile is unavailable",
-                            )
-                        })?;
-                    let mcp_summary = self.mcp_registry().prompt_summary();
-                    let (prepared, available_mcp_tools) = self.prepare_agent_turn_model_context(
-                        &turn,
-                        compacted.clone(),
-                        &mcp_summary,
-                        &model_profile,
-                    )?;
-                    let provider_config = self
-                        .provider_registry()
-                        .provider(&model_profile.provider)
-                        .ok_or_else(|| {
-                            MezError::config(format!(
-                                "provider `{}` for active model profile is not configured",
-                                model_profile.provider
-                            ))
-                        })?;
-                    let api = resolve_provider_api(
-                        &provider_config.kind,
-                        provider_config.api.as_deref(),
-                    )?;
-                    let mut retry_request = assemble_model_request(
-                        &model_profile,
-                        api,
-                        &turn,
-                        &prepared.to_agent_context(),
-                    )?;
-                    let (allowed_actions, interaction_kind) =
-                        self.agent_provider_request_control_for_turn(&turn)?;
-                    mez_agent::apply_model_request_control(
-                        &mut retry_request,
-                        allowed_actions,
-                        interaction_kind,
-                    );
-                    mez_agent::apply_default_action_gates(
-                        &mut retry_request,
-                        &available_mcp_tools,
-                        self.runtime_persistent_memory_enabled(),
-                        super::runtime_issues_enabled(self),
-                    );
                     let retry_bytes = mez_agent::openai_responses_request_body_with_stream(
                         &retry_request,
                         stream,
@@ -894,10 +957,22 @@ impl RuntimeSessionService {
                         ),
                     )?;
                 }
-                if matches!(
-                    trigger,
-                    RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. }
-                ) {
+                if let RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                    observed_input_tokens,
+                    ..
+                } = trigger
+                {
+                    self.validate_observed_input_compaction_refresh_candidate(
+                        &task,
+                        &turn,
+                        compacted.clone(),
+                        &final_summary,
+                        observed_input_tokens,
+                        &model_profile,
+                        &provider_options,
+                        api,
+                        estimate_stream,
+                    )?;
                     self.agent_turn_contexts_mut()
                         .insert(turn_id.clone(), compacted.clone());
                     self.persist_agent_compaction_epoch(pane_id, &task, &final_summary)?;
@@ -972,6 +1047,11 @@ impl RuntimeSessionService {
                 self.checkpoint_agent_session_metadata()?;
                 return Ok(());
             }
+            if matches!(task.target, RuntimeAgentCompactionTarget::Conversation)
+                && task.candidate_context.is_some()
+            {
+                self.validate_manual_compaction_candidate(&task, &summary)?;
+            }
             self.persist_agent_compaction_epoch(pane_id, &task, &summary)?;
             if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
                 let refreshed = self
@@ -1018,6 +1098,296 @@ impl RuntimeSessionService {
             }
         }
         Ok(true)
+    }
+
+    /// Validates the full refreshed request, including transcript entries added
+    /// while observed-input compaction was running, before the durable epoch is committed.
+    #[allow(clippy::too_many_arguments)]
+    fn validate_observed_input_compaction_refresh_candidate(
+        &mut self,
+        task: &RuntimeAgentCompactionTask,
+        turn: &AgentTurnRecord,
+        compacted: AgentContext,
+        summary: &str,
+        observed_input_tokens: u64,
+        model_profile: &ModelProfile,
+        provider_options: &std::collections::BTreeMap<String, String>,
+        api: ProviderApiCompatibility,
+        stream: bool,
+    ) -> Result<()> {
+        let memory_id =
+            mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
+        let summary_block = ContextBlock::reference_event(
+            ContextSourceKind::Memory,
+            format!("memory {memory_id} (conversation)"),
+            runtime_model_compact_memory_content(
+                &task.pane_id,
+                &task.conversation_id,
+                task.transcript_entries,
+                task.summarized_entries,
+                &task.model_profile_name,
+                model_profile,
+                summary,
+            ),
+        );
+        let mut mcp_epoch_blocks = Vec::new();
+        if let Some(catalog) = mez_agent::configured_mcp_catalog_snapshot_content(
+            &self.mcp_registry().prompt_summary(),
+            self.integration.always_exposed_mcp_servers(),
+        ) {
+            mcp_epoch_blocks.push(ContextBlock::reference_event(
+                ContextSourceKind::McpCatalogSnapshot,
+                mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,
+                catalog,
+            ));
+        }
+        mcp_epoch_blocks.push(ContextBlock {
+            source: ContextSourceKind::Configuration,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "MCP compaction re-retrieval guidance".to_string(),
+            content: "Conversation compaction cleared previously retrieved MCP tool contracts. Before using mcp_call, retrieve the needed server again with mcp_server_get; existing directory, reference, and search evidence may still make a server referencable.".to_string(),
+        });
+        let Some(candidate) = self.preview_running_turn_context_after_conversation_compaction(
+            &turn.turn_id,
+            compacted,
+            summary_block,
+            mcp_epoch_blocks,
+        )?
+        else {
+            return Err(MezError::invalid_state(
+                "observed-input compaction refreshed context is unavailable",
+            ));
+        };
+        let mcp_summary = self.mcp_registry().prompt_summary();
+        let (prepared, available_mcp_tools) =
+            self.prepare_agent_turn_model_context(turn, candidate, &mcp_summary, model_profile)?;
+        let mut request =
+            assemble_model_request(model_profile, api, turn, &prepared.to_agent_context())?;
+        let (allowed_actions, interaction_kind) =
+            self.agent_provider_request_control_for_turn(turn)?;
+        mez_agent::apply_model_request_control(&mut request, allowed_actions, interaction_kind);
+        mez_agent::apply_default_action_gates(
+            &mut request,
+            &available_mcp_tools,
+            self.runtime_persistent_memory_enabled(),
+            super::runtime_issues_enabled(self),
+        );
+        let estimate =
+            mez_agent::provider_request_input_estimate(&request, api, provider_options, stream)?;
+        let safe_limit = runtime_compaction_safe_input_limit(
+            model_profile.max_input_tokens(),
+            model_profile.context_window_tokens(),
+            model_profile.max_output_tokens(),
+        )
+        .ok_or_else(|| {
+            MezError::invalid_state(
+                "active-turn compaction refresh has no configured provider input allowance",
+            )
+        })?;
+        if estimate.input_tokens > safe_limit {
+            return Err(MezError::invalid_state(format!(
+                "active-turn compaction refreshed candidate exceeds safe input allowance: estimated_input_tokens={} safe_input_tokens={safe_limit}",
+                estimate.input_tokens,
+            )));
+        }
+        let estimated_input_tokens = u64::try_from(estimate.input_tokens).unwrap_or(u64::MAX);
+        if estimated_input_tokens >= observed_input_tokens {
+            return Err(MezError::invalid_state(format!(
+                "observed-input compaction refreshed candidate did not reduce the triggering request: estimated_input_tokens={estimated_input_tokens} observed_input_tokens={observed_input_tokens}",
+            )));
+        }
+        Ok(())
+    }
+
+    /// Validates the provider request that would follow a manual compaction.
+    ///
+    /// This runs before durable epoch mutation. It reconstructs the active
+    /// summary, retained raw tail (including entries written while the
+    /// compactor was running), current MCP catalog, and accepted steering.
+    fn validate_manual_compaction_candidate(
+        &mut self,
+        task: &RuntimeAgentCompactionTask,
+        summary: &str,
+    ) -> Result<()> {
+        let summary_words = model_context_text_word_count(summary);
+        let summary_budget_words = task.request.max_output_tokens.unwrap_or(usize::MAX);
+        if summary_words > summary_budget_words {
+            return Err(MezError::invalid_state(format!(
+                "manual compaction summary exceeds its frozen output budget: summary_words={summary_words} summary_budget_words={summary_budget_words}"
+            )));
+        }
+        let Some(base_context) = task.candidate_context.as_ref() else {
+            return Err(MezError::invalid_state(
+                "manual compaction candidate context is unavailable",
+            ));
+        };
+        let session = self
+            .agent_shell_store()
+            .get(&task.pane_id)
+            .filter(|session| session.session_id == task.conversation_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("manual compaction session is unavailable"))?;
+        let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
+            MezError::invalid_state("manual compaction candidate requires transcript storage")
+        })?;
+        let mut entries = store.inspect(&task.conversation_id)?;
+        entries.extend(
+            self.persistence
+                .pending_transcript_entries(&task.conversation_id),
+        );
+        entries.sort_by_key(|entry| entry.sequence);
+        entries.dedup_by_key(|entry| entry.sequence);
+        entries.retain(|entry| entry.conversation_id == task.conversation_id);
+        let post_plan_entries = session
+            .transcript_entries
+            .saturating_sub(task.transcript_entries);
+        let retained_count = task
+            .retained_transcript_entries
+            .saturating_add(post_plan_entries);
+        let retained_count = usize::try_from(retained_count).unwrap_or(usize::MAX);
+        let first_retained = entries.len().saturating_sub(retained_count);
+        let retained_entries = &entries[first_retained..];
+        let compact_memory_id =
+            mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
+        let mut blocks = base_context
+            .blocks()
+            .iter()
+            .filter(|block| {
+                !(block.source == ContextSourceKind::Memory
+                    && block
+                        .label
+                        .starts_with(&format!("memory {compact_memory_id} ")))
+                    && !(block.source == ContextSourceKind::UserInstruction
+                        && block.label == "user prompt")
+                    && block.source != ContextSourceKind::McpCatalogSnapshot
+                    && !runtime_context_block_is_transcript_replay(block)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        blocks.push(ContextBlock::reference_event(
+            ContextSourceKind::Memory,
+            format!("memory {compact_memory_id} (conversation)"),
+            runtime_model_compact_memory_content(
+                &task.pane_id,
+                &task.conversation_id,
+                task.transcript_entries,
+                task.summarized_entries,
+                &task.model_profile_name,
+                &task.model_profile,
+                summary,
+            ),
+        ));
+        blocks.extend(
+            runtime_agent_transcript_context_blocks(&task.pane_id, retained_entries)
+                .into_iter()
+                .filter(|block| block.source != ContextSourceKind::McpRetrievedManifest),
+        );
+        let steering = self.agent_compaction_steering_for_candidate(
+            &task.pane_id,
+            &task.conversation_id,
+            task.compaction_epoch,
+        );
+        let prompt = if steering.is_empty() {
+            "Continue after conversation compaction.".to_string()
+        } else {
+            steering.join("\n\n")
+        };
+        for block in mez_agent::mcp_server_reference_blocks_for_prompt(
+            &prompt,
+            &self.mcp_registry().prompt_summary(),
+        ) {
+            mez_agent::insert_context_block_by_placement(&mut blocks, block);
+        }
+        blocks.push(ContextBlock::user_event("user prompt", prompt));
+        if let Some(catalog) = mez_agent::configured_mcp_catalog_snapshot_content(
+            &self.mcp_registry().prompt_summary(),
+            self.integration.always_exposed_mcp_servers(),
+        ) {
+            blocks.push(ContextBlock::reference_event(
+                ContextSourceKind::McpCatalogSnapshot,
+                mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,
+                catalog,
+            ));
+        }
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::Configuration,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "MCP compaction re-retrieval guidance".to_string(),
+            content: "Conversation compaction cleared previously retrieved MCP tool contracts. Before using mcp_call, retrieve the needed server again with mcp_server_get; existing directory, reference, and search evidence may still make a server referencable.".to_string(),
+        });
+        let candidate_context = AgentContext::import_durable_blocks(blocks)?
+            .with_metadata(base_context.metadata().clone());
+        let mcp_summary = self.mcp_registry().prompt_summary();
+        let configured_servers = self.integration.always_exposed_mcp_servers().to_vec();
+        let candidate_context = mez_agent::append_mcp_context_with_configured(
+            candidate_context,
+            &mcp_summary,
+            &configured_servers,
+        )?;
+        let available_mcp_tools = mez_agent::invoked_mcp_tools_for_context_with_configured(
+            &candidate_context,
+            &mcp_summary,
+            &configured_servers,
+        );
+        let turn = AgentTurnRecord {
+            turn_id: format!("compact-candidate-{}", task.compaction_epoch),
+            conversation_id: task.conversation_id.clone(),
+            agent_id: format!("agent-{}", task.pane_id),
+            pane_id: task.pane_id.clone(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: current_unix_seconds(),
+            deadline_at_unix_millis: 0,
+            policy_profile: "runtime".to_string(),
+            model_profile: task.model_profile_name.clone(),
+            parent_turn_id: None,
+            state: AgentTurnState::Queued,
+            cooperation_mode: None,
+            initial_capability: None,
+        };
+        let provider_config = self
+            .provider_registry()
+            .provider(&task.model_profile.provider)
+            .ok_or_else(|| {
+                MezError::config(format!(
+                    "provider `{}` for manual compaction candidate is not configured",
+                    task.model_profile.provider
+                ))
+            })?;
+        let api = resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        let provider_options =
+            runtime_effective_provider_options(provider_config, &task.model_profile);
+        let mut request =
+            assemble_model_request(&task.model_profile, api, &turn, &candidate_context)?;
+        mez_agent::apply_model_request_control(
+            &mut request,
+            Some(task.request.allowed_actions.clone()),
+            Some(ModelInteractionKind::ActionExecution),
+        );
+        mez_agent::apply_default_action_gates(
+            &mut request,
+            &available_mcp_tools,
+            self.runtime_persistent_memory_enabled(),
+            super::runtime_issues_enabled(self),
+        );
+        let estimate =
+            mez_agent::provider_request_input_estimate(&request, api, &provider_options, true)?;
+        let safe_limit = runtime_compaction_safe_input_limit(
+            task.model_profile.max_input_tokens(),
+            task.model_profile.context_window_tokens(),
+            task.model_profile.max_output_tokens(),
+        )
+        .ok_or_else(|| {
+            MezError::invalid_state(
+                "manual compaction candidate has no configured provider input allowance",
+            )
+        })?;
+        if estimate.input_tokens > safe_limit {
+            return Err(MezError::invalid_state(format!(
+                "manual compaction candidate exceeds safe input allowance: estimated_input_tokens={} safe_input_tokens={safe_limit}",
+                estimate.input_tokens,
+            )));
+        }
+        Ok(())
     }
 
     /// Persists one compacted conversation epoch and removes its summarized raw replay prefix.
@@ -1488,6 +1858,29 @@ fn runtime_openai_compaction_request_bytes(
         .transpose()
 }
 
+/// Derives a conservative input allowance from configured provider limits.
+///
+/// Explicit input caps already account for provider output reservations. When
+/// only a context window is configured, reserve the profile's output cap first.
+/// Keep five percent headroom for deterministic-estimator and provider tokenizer
+/// drift. `Some(0)` deliberately means that no request can safely fit.
+pub(super) fn runtime_compaction_safe_input_limit(
+    max_input_tokens: Option<usize>,
+    context_window_tokens: Option<usize>,
+    max_output_tokens: Option<usize>,
+) -> Option<usize> {
+    let context_input_limit = context_window_tokens
+        .map(|window| window.saturating_sub(max_output_tokens.unwrap_or_default()));
+    let configured_limit = match (max_input_tokens, context_input_limit) {
+        (Some(input), Some(context)) => Some(input.min(context)),
+        (Some(input), None) => Some(input),
+        (None, Some(context)) => Some(context),
+        (None, None) => None,
+    }?;
+    let headroom = configured_limit / 20 + usize::from(configured_limit % 20 != 0);
+    Some(configured_limit.saturating_sub(headroom))
+}
+
 /// Replaces only the temporary manual-compactor source, keeping its system and
 /// developer instructions and the frozen durable selection unchanged.
 fn runtime_rebuild_conversation_compaction_request(
@@ -1877,21 +2270,42 @@ pub(super) fn runtime_compact_retained_transcript_entries(
         retained_tail_percent,
     );
     let mut retained_words = 0usize;
-    let mut tail_group_start = groups.len();
+    let mut tail_start = active_count;
     for (group_index, group) in groups.iter().enumerate().rev() {
         let group_words = active_entries[group.clone()]
             .iter()
             .map(runtime_compact_transcript_entry_context_words)
             .fold(0usize, usize::saturating_add);
-        let must_retain = group_index >= closed_group_count || tail_group_start == groups.len();
+        let must_retain = group_index >= closed_group_count;
         if !must_retain && retained_words.saturating_add(group_words) > tail_budget {
             break;
         }
         retained_words = retained_words.saturating_add(group_words);
-        tail_group_start = group_index;
+        tail_start = group.start;
     }
-    let retained_entries = active_count.saturating_sub(groups[tail_group_start].start);
+    let retained_entries = active_count.saturating_sub(tail_start);
     u64::try_from(retained_entries).unwrap_or(u64::MAX)
+}
+
+/// Estimates the context words in the raw suffix that would remain after
+/// compaction. This is used to distinguish a fitting tail from exact unfinished
+/// transcript material that cannot be safely summarized as a complete group.
+fn runtime_compact_retained_transcript_tail_context_words(
+    transcript_entries: u64,
+    durable_entries: &[TranscriptEntry],
+    retained_transcript_entries: u64,
+) -> usize {
+    let active_count =
+        runtime_compact_active_transcript_entry_count(transcript_entries, durable_entries.len());
+    let active_start = durable_entries.len().saturating_sub(active_count);
+    let retained_count = usize::try_from(retained_transcript_entries)
+        .unwrap_or(usize::MAX)
+        .min(active_count);
+    let retained_start = active_start.saturating_add(active_count.saturating_sub(retained_count));
+    durable_entries[retained_start..active_start.saturating_add(active_count)]
+        .iter()
+        .map(runtime_compact_transcript_entry_context_words)
+        .fold(0usize, usize::saturating_add)
 }
 
 /// Returns the raw tail count for an explicit user-forced compaction.

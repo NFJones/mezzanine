@@ -2118,12 +2118,46 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let retained = runtime_compact_retained_transcript_entries(8, &entries, 10, 10);
+        let retained = runtime_compact_retained_transcript_entries(8, &entries, 1_000, 10);
         let summarized = runtime_compact_transcript_entries_for_summary(8, &entries, retained);
 
         assert_eq!(retained, 4);
         assert_eq!(summarized, &entries[..4]);
         assert_eq!(&entries[entries.len() - retained as usize..], &entries[4..]);
+    }
+
+    /// Verifies an oversized newest completed execution group is summarized
+    /// rather than bypassing the configured exact-tail budget.
+    #[test]
+    fn runtime_compact_retained_tail_does_not_exempt_oversized_newest_group() {
+        let entries = [
+            TranscriptEntry {
+                conversation_id: "oversized-newest-group".to_string(),
+                sequence: 1,
+                created_at_unix_seconds: 1,
+                role: TranscriptRole::User,
+                turn_id: "large-turn".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: "oversized request ".repeat(20),
+            },
+            TranscriptEntry {
+                conversation_id: "oversized-newest-group".to_string(),
+                sequence: 2,
+                created_at_unix_seconds: 1,
+                role: TranscriptRole::Assistant,
+                turn_id: "large-turn".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: "oversized response ".repeat(20),
+            },
+        ];
+
+        let retained = runtime_compact_retained_transcript_entries(2, &entries, 10, 10);
+        let summarized = runtime_compact_transcript_entries_for_summary(2, &entries, retained);
+
+        assert_eq!(retained, 0);
+        assert_eq!(summarized, &entries);
     }
 
     /// Verifies an incomplete durable turn remains entirely raw and cannot be

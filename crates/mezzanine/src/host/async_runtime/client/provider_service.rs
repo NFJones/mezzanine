@@ -1763,6 +1763,7 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &provider,
                 task.request,
                 &task.model_profile,
+                task.preserve_summary_output_budget,
                 &provider_options,
                 stream,
             )
@@ -1778,6 +1779,7 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &provider,
                 task.request,
                 &task.model_profile,
+                task.preserve_summary_output_budget,
                 &provider_options,
                 stream,
             )
@@ -1793,6 +1795,7 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &provider,
                 task.request,
                 &task.model_profile,
+                task.preserve_summary_output_budget,
                 &provider_options,
                 stream,
             )
@@ -1808,6 +1811,7 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &provider,
                 task.request,
                 &task.model_profile,
+                task.preserve_summary_output_budget,
                 &provider_options,
                 stream,
             )
@@ -2027,6 +2031,7 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
     provider: &P,
     mut request: ModelRequest,
     model_profile: &ModelProfile,
+    preserve_summary_output_budget: bool,
     provider_options: &std::collections::BTreeMap<String, String>,
     stream: bool,
 ) -> Result<ModelResponse> {
@@ -2038,8 +2043,11 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
                 ProviderErrorRetryClass::OutputLimit
             ) =>
         {
-            request =
-                runtime_agent_compaction_request_with_output_limit_retry(request, model_profile);
+            request = runtime_agent_compaction_request_with_output_limit_retry(
+                request,
+                model_profile,
+                preserve_summary_output_budget,
+            );
             request.messages.push(ModelMessage {
                 role: ModelMessageRole::Developer,
                 source: ContextSourceKind::Configuration,
@@ -2079,8 +2087,12 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
 fn runtime_agent_compaction_request_with_output_limit_retry(
     mut request: ModelRequest,
     model_profile: &ModelProfile,
+    preserve_summary_output_budget: bool,
 ) -> ModelRequest {
-    request.max_output_tokens = model_profile.output_limit_retry_tokens();
+    let retry_output_limit = model_profile.output_limit_retry_tokens();
+    if !preserve_summary_output_budget {
+        request.max_output_tokens = retry_output_limit;
+    }
     request
 }
 
@@ -2379,6 +2391,7 @@ mod tests {
             &provider,
             request,
             &ModelProfile::default(),
+            false,
             &options,
             false,
         )
@@ -2394,6 +2407,99 @@ mod tests {
             ProviderErrorRetryClass::ContextLimit
         );
         assert_eq!(provider.0.load(Ordering::SeqCst), 1);
+    }
+
+    /// A plan-derived compaction output ceiling is frozen across provider
+    /// output-limit retry, while an ordinary profile-sized request may still
+    /// use the configured retry escalation.
+    #[test]
+    fn compactor_output_limit_retry_preserves_frozen_summary_ceiling() {
+        let profile = ModelProfile {
+            provider_options: std::collections::BTreeMap::from([(
+                "max_output_tokens".to_string(),
+                "4096".to_string(),
+            )]),
+            ..ModelProfile::default()
+        };
+        let request = ModelRequest {
+            provider: "openai".into(),
+            model: "test".into(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: Some(512),
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "compact-test".into(),
+            agent_id: "agent-%1".into(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: mez_agent::ModelInteractionKind::Compaction,
+            allowed_actions: mez_agent::AllowedActionSet::default(),
+            stop: None,
+            messages: vec![ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::Transcript,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                content: "compact the source".into(),
+            }]
+            .into(),
+        };
+
+        assert_eq!(
+            runtime_agent_compaction_request_with_output_limit_retry(
+                request.clone(),
+                &profile,
+                true,
+            )
+            .max_output_tokens,
+            Some(512)
+        );
+
+        let uncapped_profile = ModelProfile::default();
+        assert_eq!(
+            runtime_agent_compaction_request_with_output_limit_retry(
+                request.clone(),
+                &uncapped_profile,
+                true,
+            )
+            .max_output_tokens,
+            Some(512)
+        );
+
+        let equal_cap_profile = ModelProfile {
+            provider_options: std::collections::BTreeMap::from([(
+                "max_output_tokens".to_string(),
+                "512".to_string(),
+            )]),
+            ..ModelProfile::default()
+        };
+        assert_eq!(
+            runtime_agent_compaction_request_with_output_limit_retry(
+                request.clone(),
+                &equal_cap_profile,
+                true,
+            )
+            .max_output_tokens,
+            Some(512)
+        );
+
+        let mut ordinary_request = request;
+        ordinary_request.max_output_tokens = Some(4096);
+        assert_eq!(
+            runtime_agent_compaction_request_with_output_limit_retry(
+                ordinary_request,
+                &profile,
+                false,
+            )
+            .max_output_tokens,
+            Some(8192)
+        );
     }
 
     /// Verifies title failure reasons come from the typed error, not its text.

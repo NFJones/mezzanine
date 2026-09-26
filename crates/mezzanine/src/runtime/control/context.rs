@@ -458,6 +458,14 @@ pub(super) fn runtime_agent_transcript_context(
     }
 }
 
+/// Projects durable transcript entries into the canonical provider-visible blocks.
+pub(crate) fn runtime_agent_transcript_context_blocks(
+    pane_id: &str,
+    entries: &[TranscriptEntry],
+) -> Vec<ContextBlock> {
+    runtime_agent_transcript_context(pane_id, entries).blocks
+}
+
 /// Maps a stored transcript role to a model-context source that preserves the
 /// role across request assembly.
 fn runtime_transcript_context_source_kind(entry: &TranscriptEntry) -> ContextSourceKind {

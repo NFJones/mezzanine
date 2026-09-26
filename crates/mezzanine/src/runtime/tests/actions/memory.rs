@@ -422,6 +422,7 @@ fn runtime_agent_shell_compact_summarizes_transcript_into_memory_context() {
             text: r#"[agents]
 default_provider = "openai"
 default_model_profile = "compact-test"
+compaction_raw_retention_percent = 2
 [providers.openai]
 kind = "openai"
 models = ["gpt-compact-test"]
@@ -429,7 +430,7 @@ default_model = "gpt-compact-test"
 [model_profiles.compact-test]
 provider = "openai"
 model = "gpt-compact-test"
-context_window_tokens = 4500
+context_window_tokens = 20000
 "#
             .to_string(),
         }])
@@ -548,7 +549,12 @@ context_window_tokens = 4500
     complete_runtime_test_compaction(&mut service, "%1", "summarize release plan\n[redacted]");
     assert!(
         service.agent_latest_request_usage("as1").is_none(),
-        "manual context replacement must leave execution usage unknown"
+        "manual context replacement must leave execution usage unknown: {}",
+        service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
     );
     assert!(
         service.agent_context_usage_snapshot("as1").is_none(),

@@ -2512,6 +2512,23 @@ impl RuntimeSessionService {
             .unwrap_or_default()
     }
 
+    /// Copies steering still owned by one conversation and compaction epoch.
+    pub(crate) fn agent_compaction_steering_for_candidate(
+        &self,
+        pane_id: &str,
+        conversation_id: &str,
+        compaction_epoch: u64,
+    ) -> Vec<String> {
+        self.agent
+            .agent_compaction_steering
+            .get(pane_id)
+            .into_iter()
+            .flatten()
+            .filter(|(_, _, owner, epoch)| owner == conversation_id && *epoch == compaction_epoch)
+            .map(|(_, prompt, _, _)| prompt.clone())
+            .collect()
+    }
+
     /// Reports whether one pane is generating durable memories.
     pub(crate) fn agent_is_remembering(&self, pane_id: &str) -> bool {
         self.agent.agent_remembering_panes.contains_key(pane_id)

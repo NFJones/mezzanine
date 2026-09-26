@@ -126,7 +126,7 @@ fn runtime_context_limit_recovery_skips_earlier_summary_only_segment() {
         format: ConfigFormat::Toml,
         scope: ConfigScope::Primary,
         trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"segment-recovery\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.segment-recovery]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 3000\n".to_string(),
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"segment-recovery\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.segment-recovery]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
     }]).unwrap();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -151,11 +151,11 @@ fn runtime_context_limit_recovery_skips_earlier_summary_only_segment() {
                 "[context compacted]\nEarlier decision summarized.",
             ),
             ContextBlock::user_event("steering", "preserve this instruction exactly"),
-            ContextBlock::assistant_event("later decision", "later decision ".repeat(300)),
+            ContextBlock::assistant_event("later decision", "later decision ".repeat(15_000)),
             ContextBlock::evidence_event(
                 ContextSourceKind::ActionResult,
                 "later result",
-                "later result ".repeat(300),
+                "later result ".repeat(15_000),
             ),
         ])
         .unwrap();
@@ -741,7 +741,7 @@ default_model = "test"
 provider = "runtime-batch"
 model = "test"
 context_window_tokens = 40000
-max_input_tokens = 800
+max_input_tokens = 20000
 "#
             .to_string(),
         }])
@@ -830,7 +830,7 @@ max_input_tokens = 800
             source: ContextSourceKind::ActionResult,
             placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "observed input evidence".to_string(),
-            content: "observed-input-exact-history-evidence ".repeat(500),
+            content: "observed-input-exact-history-evidence ".repeat(40),
         },
     );
     let response = runtime_say_response(&task.turn_id, "continue", false);
@@ -849,7 +849,7 @@ max_input_tokens = 800
                 request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
                 response,
                 latest_response_usage: mez_agent::ModelTokenUsage {
-                    input_tokens: 800,
+                    input_tokens: 20000,
                     output_tokens: 1,
                     reasoning_tokens: 0,
                     cached_input_tokens: Some(20),
@@ -923,7 +923,16 @@ fn runtime_observed_compaction_refresh_preserves_current_user_prompt() {
     let context = service
         .agent_turn_contexts()
         .get(&turn_id)
-        .expect("the running turn retains its refreshed context");
+        .unwrap_or_else(|| {
+            panic!(
+                "the running turn retains its refreshed context; pane status: {}",
+                service
+                    .pane_screen("%1")
+                    .unwrap()
+                    .normal_content_lines()
+                    .join("\\n")
+            )
+        });
     assert!(
         context.blocks().iter().any(|block| {
             block.label == "user prompt"
@@ -1036,15 +1045,108 @@ fn runtime_observed_compaction_preserves_history_when_transcript_arrives_after_q
     assert!(replay.contains("EXACT_THIRD_USER_INSTRUCTION"), "{replay}");
 }
 
-/// Verifies an execution response at the configured input threshold defers its
-/// continuation into model-backed active-turn compaction.
-///
-/// The first request must reach the provider even when its local byte-derived
-/// estimate would be larger than the configured threshold. Once the provider
-/// reports a concrete input count, the safe continuation boundary queues one
-/// compaction instead of replaying already-settled actions.
+/// Verifies oversized transcript history arriving after observed-input
+/// compaction was queued is included in the final request check before commit.
 #[test]
-fn runtime_observed_input_limit_compacts_at_provider_execution_boundary() {
+fn runtime_observed_input_limit_rejects_late_oversized_transcript_without_commit() {
+    let (mut service, transcript_store, turn_id) =
+        queue_observed_input_compaction_with_exact_history();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .expect("active agent shell session")
+        .session_id
+        .clone();
+    let sequence = transcript_store
+        .inspect(&conversation_id)
+        .unwrap()
+        .last()
+        .expect("seeded transcript history")
+        .sequence
+        .saturating_add(1);
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence,
+            created_at_unix_seconds: 2,
+            role: mez_agent::transcript::TranscriptRole::Assistant,
+            turn_id: "late-oversized-transcript-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "late-oversized-transcript-token ".repeat(21_000),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+
+    complete_runtime_test_compaction(&mut service, "%1", "small observed input summary");
+
+    assert_eq!(
+        transcript_store.compaction_epoch(&conversation_id).unwrap(),
+        None
+    );
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Failed)
+    );
+}
+
+/// Verifies observed-input compaction rejects a candidate that fits the cap
+/// but does not strictly shrink the triggering request estimate.
+#[test]
+fn runtime_observed_input_limit_rejects_non_reducing_candidate_without_commit() {
+    let (mut service, transcript_store, turn_id) =
+        queue_observed_input_compaction_with_exact_history();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .expect("active agent shell session")
+        .session_id
+        .clone();
+    let queued = service
+        .pending_agent_compaction_task_mut_for_tests("%1")
+        .expect("observed-input compaction task");
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        trigger:
+            crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                observed_input_tokens,
+                ..
+            },
+        ..
+    } = &mut queued.target
+    else {
+        panic!("expected observed-input-limit active-turn compaction");
+    };
+    *observed_input_tokens = 1;
+
+    complete_runtime_test_compaction(&mut service, "%1", "small observed input summary");
+
+    assert_eq!(
+        transcript_store.compaction_epoch(&conversation_id).unwrap(),
+        None
+    );
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Failed)
+    );
+    assert!(service.agent_turn_contexts().get(&turn_id).is_none());
+}
+
+/// Verifies observed-input compaction refuses an oversized exact next request.
+///
+/// A provider-reported threshold queues compaction, but the summary and retained
+/// context must still fit the configured cap before either the live turn context
+/// or durable transcript epoch is committed.
+#[test]
+fn runtime_observed_input_limit_rejects_over_cap_candidate_without_commit() {
     let mut service = test_runtime_service();
     let store = AgentTranscriptStore::new(temp_root("observed-input-deferred-first-turn"));
     service.set_agent_transcript_store(store.clone());
@@ -1158,42 +1260,29 @@ max_input_tokens = 100
     assert_eq!(*max_input_tokens, 100);
 
     complete_runtime_test_compaction(&mut service, "%1", "observed input summary");
-    assert!(service.agent_provider_task_is_pending(&task.turn_id));
+    assert!(!service.agent_provider_task_is_pending(&task.turn_id));
     assert!(
         service
             .agent_turn_ledger()
             .turns()
             .iter()
-            .any(|turn| { turn.turn_id == task.turn_id && turn.state == AgentTurnState::Running })
+            .any(|turn| { turn.turn_id == task.turn_id && turn.state == AgentTurnState::Failed })
     );
     let conversation_id = &turn.conversation_id;
-    assert!(store.transcript_path(conversation_id).unwrap().exists());
-    assert!(store.inspect(conversation_id).unwrap().is_empty());
-    let pending = service
+    assert_eq!(store.compaction_epoch(conversation_id).unwrap(), None);
+    let pending_transcript = service
         .persistence
         .pending_transcript_entries(conversation_id);
     assert!(
-        pending
+        !pending_transcript
+            .iter()
+            .any(|entry| entry.content.contains("observed input summary"))
+    );
+    assert!(
+        !pending_transcript
             .iter()
             .any(|entry| entry.content.contains("mcp_compaction_epoch"))
     );
-    let context = service.agent_turn_contexts().get(&task.turn_id).unwrap();
-    assert!(
-        context
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("observed input summary"))
-    );
-    let events = service
-        .event_log()
-        .unwrap()
-        .replay_for(&EventAudience::AllPrimaries);
-    assert!(events.iter().any(|event| {
-        event.kind == EventKind::AgentStatus
-            && event
-                .payload
-                .contains(r#""recovery":"observed_input_limit_compaction""#)
-    }));
 }
 
 /// Verifies an observed-input recovery failure identifies its actual trigger.
@@ -3721,6 +3810,7 @@ fn runtime_agent_shell_compact_retains_bounded_recent_transcript_tail() {
             text: r#"[agents]
 default_provider = "openai"
 default_model_profile = "compact-tail-test"
+compaction_raw_retention_percent = 2
 [providers.openai]
 kind = "openai"
 models = ["gpt-compact-tail-test"]
@@ -3728,7 +3818,8 @@ default_model = "gpt-compact-tail-test"
 [model_profiles.compact-tail-test]
 provider = "openai"
 model = "gpt-compact-tail-test"
-context_window_tokens = 5000
+context_window_tokens = 20000
+max_output_tokens = 256
 "#
             .to_string(),
         }])
@@ -3798,7 +3889,7 @@ context_window_tokens = 5000
     );
 
     assert!(compact.contains("state=queued"), "{compact}");
-    assert!(compact.contains("summarized_entries=5"), "{compact}");
+    assert!(compact.contains("summarized_entries=7"), "{compact}");
     transcript_store
         .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "as-tail".to_string(),
@@ -3822,7 +3913,12 @@ context_window_tokens = 5000
             mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
             Some(mez_agent::TranscriptContextEvent::McpCompactionEpoch)
         )),
-        "{persisted:#?}"
+        "{persisted:#?}\n{}",
+        service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
     );
     assert!(
         persisted.iter().any(|entry| matches!(
@@ -3838,7 +3934,7 @@ context_window_tokens = 5000
             .get("%1")
             .unwrap()
             .transcript_entries,
-        10
+        8
     );
 
     let prompt = service.dispatch_runtime_control_body(
@@ -3900,6 +3996,151 @@ context_window_tokens = 5000
     );
 }
 
+/// Verifies manual compaction reports an oversized unfinished exact tail instead
+/// of silently claiming it fits or summarizing a partial execution group.
+#[test]
+fn runtime_manual_compaction_reports_irreducible_oversized_unfinished_tail() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "manual-unfinished-tail".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"manual-unfinished-tail\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.manual-unfinished-tail]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 10000\nmax_input_tokens = 2000\n".to_string(),
+        }])
+        .unwrap();
+    let store = AgentTranscriptStore::new(temp_root("manual-unfinished-tail"));
+    store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "manual-unfinished-tail".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "unfinished-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: format!(
+                "EXACT_UNFINISHED_USER_REQUEST {}",
+                "protected ".repeat(2_000)
+            ),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "manual-unfinished-tail", 1)
+        .unwrap();
+
+    let compact = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"manual-unfinished-tail","method":"agent/shell/command","params":{"idempotency_key":"manual-unfinished-tail","input":"/compact"}}"#,
+        &primary,
+    );
+
+    assert!(
+        compact.contains("reason=irreducible-exact-retained-tail"),
+        "{compact}"
+    );
+    assert!(compact.contains("summarized_entries=0"), "{compact}");
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_none()
+    );
+    assert_eq!(
+        store.compaction_epoch("manual-unfinished-tail").unwrap(),
+        None
+    );
+    assert_eq!(store.inspect("manual-unfinished-tail").unwrap().len(), 1);
+}
+
+/// Verifies an oversized manual summary is rejected before the transcript
+/// replay epoch or retained raw history is mutated.
+#[test]
+fn runtime_manual_compaction_rejects_oversized_post_summary_request() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "manual-final-fit".to_string(),
+        path: None,
+        format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary,
+        trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"manual-final-fit\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.manual-final-fit]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 10000\nmax_input_tokens = 2000\n".to_string(),
+    }]).unwrap();
+    let store = AgentTranscriptStore::new(temp_root("manual-final-fit"));
+    store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "manual-final-fit".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::Assistant,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "compact this short durable history".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "manual-final-fit", 1)
+        .unwrap();
+
+    let compact = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"manual-final-fit","method":"agent/shell/command","params":{"idempotency_key":"manual-final-fit","input":"/compact"}}"#,
+        &primary,
+    );
+    assert!(compact.contains("state=queued"), "{compact}");
+    let queued = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("manual compaction task");
+    let source_words = queued
+        .request
+        .messages
+        .last()
+        .map(|message| mez_agent::model_context_text_word_count(&message.content))
+        .unwrap_or_default()
+        .max(1);
+    assert!(queued.preserve_summary_output_budget);
+    assert!(
+        queued
+            .request
+            .max_output_tokens
+            .is_some_and(|limit| limit <= source_words)
+    );
+    complete_runtime_test_compaction(
+        &mut service,
+        "%1",
+        &"oversized summary ".repeat(source_words),
+    );
+
+    assert!(
+        store
+            .compaction_epoch("manual-final-fit")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.inspect("manual-final-fit").unwrap().len(), 1);
+    assert!(service.memory_records().iter().all(|record| {
+        record.id != mez_agent::memory::canonical_memory_uuid("compact-manual-final-fit")
+    }));
+}
+
 /// A configured input cap splits the frozen manual source before dispatch,
 /// without publishing a partial conversation summary.
 #[test]
@@ -3923,7 +4164,7 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
                 pane_id: "%1".to_string(),
                 content: format!(
                     "SOURCE_{sequence} {} FINAL_SOURCE_SENTINEL",
-                    "word ".repeat(200)
+                    "word ".repeat(if sequence == 3 { 10 } else { 25_000 })
                 ),
             })
             .unwrap();
@@ -3958,8 +4199,8 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
         false,
     )
     .unwrap();
-    let cap = estimate.input_tokens.saturating_sub(1);
-    assert!(cap > 0);
+    let cap = 25_000;
+    assert!(estimate.input_tokens > cap, "{estimate:?}");
     service
         .pending_agent_compaction_task_mut_for_tests("%1")
         .unwrap()
