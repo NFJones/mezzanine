@@ -9207,9 +9207,14 @@ The baseline command capabilities are:
 - `/compact`: Ask the active model to summarize older conversation content
   outside the retained raw tail when model-backed command execution is
   available, commit the summary with its replay boundary in conversation
-  storage, optionally project it as pane-scoped memory, and
-  retain only a bounded raw recent transcript tail plus the compacted summary
-  for model context. The raw tail MUST cover approximately
+  storage, optionally project it as pane-scoped memory, and retain only a
+  bounded raw recent transcript tail plus the compacted summary for model
+  context. The first epoch sidecar MUST be durable before metadata requires it.
+  An interruption before first sidecar publication MUST leave the original
+  append-only transcript replayable; an interruption after publication MUST
+  leave the complete sidecar readable. Once metadata requires an epoch, a
+  missing or corrupt sidecar MUST fail visibly rather than silently replay a
+  shortened transcript. The raw tail MUST cover approximately
   `agents.compaction_raw_retention_percent` of the active model context budget
   by estimated replay size, defaulting to 10%. Non-model
   runtime command paths MAY produce an implementation summary, but an explicit

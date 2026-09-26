@@ -346,6 +346,12 @@ pub struct AgentTranscriptStore {
     pub(super) fail_agent_session_metadata_write: Arc<AtomicBool>,
     #[cfg(test)]
     pub(super) fail_compaction_epoch_write: Arc<AtomicBool>,
+    /// One-shot failure at the first-epoch rename boundary.
+    #[cfg(test)]
+    pub(super) fail_compaction_epoch_before_rename: Arc<AtomicBool>,
+    /// One-shot interruption after the epoch directory sync and before its metadata marker.
+    #[cfg(test)]
+    pub(super) fail_compaction_epoch_before_marker: Arc<AtomicBool>,
     /// One-shot failure before any transcript row is appended.
     #[cfg(test)]
     pub(super) fail_next_transcript_append: Arc<AtomicBool>,

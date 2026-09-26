@@ -499,6 +499,10 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            fail_compaction_epoch_before_rename: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_compaction_epoch_before_marker: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
             fail_next_transcript_append: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
@@ -524,6 +528,8 @@ impl AgentTranscriptStore {
             fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
+            fail_compaction_epoch_before_rename: Arc::new(AtomicBool::new(false)),
+            fail_compaction_epoch_before_marker: Arc::new(AtomicBool::new(false)),
             fail_next_transcript_append: Arc::new(AtomicBool::new(false)),
             fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
             fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
@@ -589,6 +595,20 @@ impl AgentTranscriptStore {
     #[cfg(test)]
     pub fn fail_next_compaction_epoch_write(&self) {
         self.fail_compaction_epoch_write
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Simulates an interrupted publication immediately before the epoch rename.
+    #[cfg(test)]
+    pub fn fail_next_compaction_epoch_before_rename(&self) {
+        self.fail_compaction_epoch_before_rename
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Simulates interruption after durable sidecar publication, before its marker.
+    #[cfg(test)]
+    pub fn fail_next_compaction_epoch_before_marker(&self) {
+        self.fail_compaction_epoch_before_marker
             .store(true, Ordering::SeqCst);
     }
 
@@ -1118,14 +1138,36 @@ impl AgentTranscriptStore {
                     "injected compaction epoch replacement failure",
                 ));
             }
-            let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
-            if !metadata.compaction_epoch_required {
-                metadata.compaction_epoch_required = true;
-                self.write_conversation_metadata_locked(conversation_id, &metadata)?;
+            #[cfg(test)]
+            if self
+                .fail_compaction_epoch_before_rename
+                .swap(false, Ordering::SeqCst)
+            {
+                return Err(MezError::invalid_state(
+                    "injected compaction epoch failure before rename",
+                ));
             }
             std_fs::rename(&temp_path, &path)?;
             set_private_file_permissions(&path)?;
             std_fs::File::open(&session_dir)?.sync_all()?;
+            #[cfg(test)]
+            if self
+                .fail_compaction_epoch_before_marker
+                .swap(false, Ordering::SeqCst)
+            {
+                return Err(MezError::invalid_state(
+                    "injected compaction epoch failure before marker",
+                ));
+            }
+            // The first sidecar must be durable before metadata can require it.
+            // A crash before the marker then leaves either the raw archive or
+            // this complete epoch available for replay, never a missing claim.
+            let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+            if !metadata.compaction_epoch_required {
+                metadata.compaction_epoch_required = true;
+                self.write_conversation_metadata_locked(conversation_id, &metadata)?;
+                std_fs::File::open(&session_dir)?.sync_all()?;
+            }
             Ok(())
         })();
         if write_result.is_err() {

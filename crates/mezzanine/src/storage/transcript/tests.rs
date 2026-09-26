@@ -256,6 +256,77 @@ fn compaction_ranges_failed_publication_keeps_previous_epoch() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A failed first publication before sidecar rename must leave the original
+/// transcript replayable after reopening, with no required epoch marker.
+#[test]
+fn compaction_epoch_first_publication_before_rename_is_recoverable() {
+    let root = temp_root("compaction-epoch-first-rename");
+    let store = AgentTranscriptStore::new(root.clone());
+    let rows = (1..=3)
+        .map(|sequence| entry("first-epoch", sequence, TranscriptRole::User))
+        .collect::<Vec<_>>();
+    for row in &rows {
+        store.append(row).unwrap();
+    }
+    store.fail_next_compaction_epoch_before_rename();
+    assert!(
+        store
+            .save_compaction_epoch("first-epoch", 1, "summary")
+            .is_err()
+    );
+    let reopened = AgentTranscriptStore::new(root.clone());
+    assert_eq!(reopened.compaction_epoch("first-epoch").unwrap(), None);
+    assert_eq!(reopened.inspect("first-epoch").unwrap(), rows);
+    reopened
+        .save_compaction_epoch("first-epoch", 1, "summary")
+        .unwrap();
+    assert_eq!(
+        reopened
+            .compaction_epoch("first-epoch")
+            .unwrap()
+            .unwrap()
+            .through_sequence,
+        1
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A crash after the durable first sidecar rename but before metadata marking
+/// still exposes the complete epoch and exact append-only source on restart.
+#[test]
+fn compaction_epoch_first_publication_before_marker_is_readable() {
+    let root = temp_root("compaction-epoch-first-marker");
+    let store = AgentTranscriptStore::new(root.clone());
+    let rows = (1..=3)
+        .map(|sequence| entry("first-marker", sequence, TranscriptRole::User))
+        .collect::<Vec<_>>();
+    for row in &rows {
+        store.append(row).unwrap();
+    }
+    store.fail_next_compaction_epoch_before_marker();
+    assert!(
+        store
+            .save_compaction_epoch("first-marker", 1, "summary")
+            .is_err()
+    );
+    let reopened = AgentTranscriptStore::new(root.clone());
+    assert_eq!(
+        reopened
+            .compaction_epoch("first-marker")
+            .unwrap()
+            .unwrap()
+            .summary,
+        "summary"
+    );
+    assert_eq!(reopened.inspect("first-marker").unwrap(), rows);
+    reopened
+        .save_compaction_epoch("first-marker", 1, "summary")
+        .unwrap();
+    fs::remove_file(root.join("first-marker/compaction-epoch.json")).unwrap();
+    assert!(reopened.compaction_epoch("first-marker").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A failed epoch replacement must leave the previous summary and boundary
 /// together, while the append-only archive and later exact suffix remain intact.
 #[test]
