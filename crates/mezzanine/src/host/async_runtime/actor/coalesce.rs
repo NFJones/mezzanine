@@ -256,7 +256,11 @@ pub(super) fn registry_update_session_id(
 /// Returns whether applying an event can change the session registry record.
 pub(super) fn runtime_event_requires_registry_persistence(event: &RuntimeEvent) -> bool {
     match event {
-        RuntimeEvent::Pane(
+        RuntimeEvent::AgentProvider(
+            super::AgentProviderEvent::StreamingSay { .. }
+            | super::AgentProviderEvent::WireRequestObserved { .. },
+        )
+        | RuntimeEvent::Pane(
             PaneEvent::Output { .. }
             | PaneEvent::InputWritten { .. }
             | PaneEvent::WriteFailed { .. }

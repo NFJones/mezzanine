@@ -52,8 +52,12 @@ fn runtime_event_queue_error_after_service_drain(error: MezError, applied: usize
 fn runtime_event_requires_global_reconciliation(event: &RuntimeEvent) -> bool {
     !matches!(
         event,
-        RuntimeEvent::Client(ClientEvent::ResizeSignal { .. } | ClientEvent::OutputReady { .. })
-            | RuntimeEvent::Pane(PaneEvent::Output { .. })
+        RuntimeEvent::AgentProvider(
+            AgentProviderEvent::StreamingSay { .. }
+                | AgentProviderEvent::WireRequestObserved { .. }
+        ) | RuntimeEvent::Client(
+            ClientEvent::ResizeSignal { .. } | ClientEvent::OutputReady { .. }
+        ) | RuntimeEvent::Pane(PaneEvent::Output { .. })
             | RuntimeEvent::PaneProcess {
                 event: PaneProcessEvent::Pane(PaneEvent::Output { .. }),
                 ..
@@ -176,6 +180,20 @@ impl AsyncRuntimeSessionActor {
         batch: RuntimeEventBatch,
     ) -> Result<RuntimeEventIngressReport> {
         let batch_started = std::time::Instant::now();
+        // Provisional provider events update presentation or wire accounting,
+        // not the ownership of unrelated deferred work. Leave that work with
+        // its service owner for the next authoritative event instead of taking
+        // it into an optional ingress batch that may be rejected under pressure.
+        let provisional_provider_batch = !batch.events.is_empty()
+            && batch.events.iter().all(|event| {
+                matches!(
+                    event,
+                    RuntimeEvent::AgentProvider(
+                        AgentProviderEvent::StreamingSay { .. }
+                            | AgentProviderEvent::WireRequestObserved { .. }
+                    )
+                )
+            });
         let mut report = batch.ingress_report();
         let mut registry_persistence_queued = false;
         let mut registry_persistence_required = false;
@@ -233,7 +251,9 @@ impl AsyncRuntimeSessionActor {
                 .runtime_event_global_reconciliation_skipped
                 .saturating_add(1);
         }
-        batch_side_effects.extend(self.deferred_service_side_effects_from_service());
+        if !provisional_provider_batch {
+            batch_side_effects.extend(self.deferred_service_side_effects_from_service());
+        }
         registry_persistence_queued = registry_persistence_queued
             || side_effects_include_registry_persistence(&batch_side_effects);
         report.side_effects = report.side_effects.saturating_add(batch_side_effects.len());

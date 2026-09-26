@@ -21,7 +21,7 @@ use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::runtime::MAX_RUNTIME_EVENT_BATCH_EVENTS;
 use crate::runtime::RuntimeNativeShellDispatch;
 
-use super::queue::is_retryable_side_effect_queue_full_error;
+use super::queue::{is_retryable_side_effect_queue_full_error, is_side_effect_queue_full_error};
 
 /// Bounded retries for one chunk submitted into a transiently full effect queue.
 const SIDE_EFFECT_QUEUE_FULL_RETRIES: u32 = 5;
@@ -1213,6 +1213,26 @@ impl AsyncRuntimeSessionHandle {
         }
         report.families = families;
         Ok(report)
+    }
+
+    /// Submits presentation-only provider progress without allowing bounded
+    /// render-queue pressure to preempt the authoritative provider outcome.
+    /// A partially applied presentation batch is not replayed; other errors
+    /// still propagate rather than disguising actor or channel failure.
+    pub(in crate::host::async_runtime) async fn submit_optional_provider_progress(
+        &self,
+        batch: RuntimeEventBatch,
+    ) -> Result<Option<RuntimeEventIngressReport>> {
+        match self.submit_runtime_events(batch).await {
+            Ok(report) => Ok(Some(report)),
+            Err(error)
+                if is_side_effect_queue_full_error(&error)
+                    && !error.message().contains(" consumed=1") =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Submits one bounded runtime event chunk, retrying only the retryable

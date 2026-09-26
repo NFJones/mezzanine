@@ -1092,7 +1092,7 @@ async fn monitor_runtime_agent_provider_dispatch(
                         claim_generation,
                         events,
                     );
-                    handle.submit_runtime_events(batch).await?;
+                    let _ = handle.submit_optional_provider_progress(batch).await?;
                     tokio::task::yield_now().await;
                 }
                 while projection_workers.join_next().await.is_some() {}
@@ -1148,8 +1148,8 @@ async fn monitor_runtime_agent_provider_dispatch(
                     claim_generation,
                     events,
                 );
-                let report = handle.submit_runtime_events(batch).await?;
-                if projection_changed && report.applied > 0 {
+                let report = handle.submit_optional_provider_progress(batch).await?;
+                if projection_changed && report.is_some_and(|report| report.applied > 0) {
                     if projection_workers.is_empty() {
                         spawn_streaming_say_projection_worker(
                             &mut projection_workers,

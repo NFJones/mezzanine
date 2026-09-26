@@ -262,6 +262,234 @@ model = "invalid-model"
     );
 }
 
+/// Presentation pressure must not enqueue registry persistence or prevent a
+/// claimed provider from settling its authoritative failure.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_optional_provider_progress_pressure_preserves_failure() {
+    let mut service = test_service();
+    let registry_root = std::env::temp_dir().join(format!(
+        "mez-provider-progress-registry-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    service.set_session_registry(SessionRegistry::new(
+        registry_root.clone(),
+        current_effective_uid(),
+    ));
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "exercise progress pressure")
+        .unwrap();
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let agent_id = AgentId::opaque(task.agent_id.clone()).unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let sibling_pane = service
+        .split_pane_with_process(
+            &primary,
+            mez_mux::layout::SplitDirection::Vertical,
+            Some("cat >/dev/null"),
+        )
+        .unwrap()
+        .pane_id;
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&sibling_pane)
+        .unwrap();
+    let sibling = service
+        .execute_agent_shell_command(&primary, "independent provider request")
+        .unwrap();
+    assert!(sibling.contains(r#""state":"running""#), "{sibling}");
+    assert_eq!(service.pending_agent_provider_tasks().len(), 2);
+    let _sibling_process = service
+        .take_running_pane_process_for_adapter(&sibling_pane)
+        .unwrap();
+    service
+        .apply_pane_output_bytes(sibling_pane.clone(), b"\x1b[3;5H\x1b[6n".to_vec())
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 2,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(task.turn_id.clone(), 1)
+            .await
+            .unwrap();
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: agent_id.clone(),
+                turn_id: "unrelated-turn".to_string(),
+            }])
+            .await
+            .unwrap();
+        let mut progress = RuntimeEventBatch::new();
+        progress.push(RuntimeEvent::AgentProvider(
+            AgentProviderEvent::StreamingSay {
+                agent_id: agent_id.clone(),
+                turn_id: task.turn_id.clone(),
+                pane_id: task.pane_id.clone(),
+                claim_generation: 1,
+                event: mez_agent::StreamingSayEvent::Started {
+                    action_index: 0,
+                    status: mez_agent::SayStatus::Progress,
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                },
+            },
+        ));
+        let reconciliation_before = handle
+            .metrics()
+            .await
+            .unwrap()
+            .runtime_event_reconciliation_passes;
+        assert_eq!(
+            handle
+                .submit_optional_provider_progress(progress)
+                .await
+                .unwrap()
+                .unwrap()
+                .applied,
+            1
+        );
+        assert_eq!(
+            handle
+                .metrics()
+                .await
+                .unwrap()
+                .runtime_event_reconciliation_passes,
+            reconciliation_before
+        );
+        let mut observation = RuntimeEventBatch::new();
+        observation.push(RuntimeEvent::AgentProvider(
+            AgentProviderEvent::WireRequestObserved {
+                observation: Box::new(
+                    crate::integrations::agent::provider::ProviderWireRequestObservation {
+                        request_id: "wire-under-pressure".to_string(),
+                        attempt_index: 1,
+                        retry_reason: None,
+                        conversation_id,
+                        turn_id: task.turn_id.clone(),
+                        agent_id: task.agent_id.clone(),
+                        pane_id: task.pane_id.clone(),
+                        provider: "fixture".to_string(),
+                        cache_namespace: "fixture".to_string(),
+                        model: "test".to_string(),
+                        prompt_cache_lineage_id: None,
+                        interaction_kind: "action_execution".to_string(),
+                        allowed_actions: "say".to_string(),
+                        schema_digest: "fixture-schema".to_string(),
+                        max_output_tokens: None,
+                        output_limit_retry_override_tokens: None,
+                        continuity_warning: None,
+                        purpose:
+                            crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
+                        message_count: 1,
+                        message_bytes: 4,
+                        mcp_directory_bytes: 0,
+                        mcp_search_result_bytes: 0,
+                        mcp_retrieved_contract_bytes: 0,
+                        mcp_action_result_bytes: 0,
+                        action_result_bytes: 0,
+                        final_wire_diagnostics: None,
+                        response_diagnostics: None,
+                        openai_diagnostics: None,
+                        diagnostics_failed: false,
+                        usage: None,
+                        succeeded: true,
+                        failure_kind: None,
+                        elapsed_ms: None,
+                    },
+                ),
+            },
+        ));
+        assert_eq!(
+            handle
+                .submit_runtime_events(observation)
+                .await
+                .unwrap()
+                .applied,
+            1
+        );
+        assert_eq!(
+            handle
+                .metrics()
+                .await
+                .unwrap()
+                .runtime_event_reconciliation_passes,
+            reconciliation_before
+        );
+        assert!(
+            handle
+                .drain_persistence_side_effects(8)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let queued = handle.drain_runtime_side_effects(8).await.unwrap();
+        assert!(queued.iter().any(|effect| matches!(effect, RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } if turn_id == "unrelated-turn")));
+        let mut failed = RuntimeEventBatch::new();
+        failed.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+            agent_id,
+            turn_id: task.turn_id.clone(),
+            claim_generation: 1,
+            kind: "invalid_state".to_string(),
+            message: "provider failed after progress".to_string(),
+            provider_failure_json: None,
+            provider_raw_text: None,
+            provider_output_limit_state: None,
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(failed).await.unwrap().applied,
+            1
+        );
+        let deferred = handle.drain_runtime_side_effects(8).await.unwrap();
+        assert_eq!(
+            deferred
+                .iter()
+                .filter(|effect| matches!(effect, RuntimeSideEffect::PaneProcessIo {
+                    effect: crate::runtime::PaneProcessIoEffect::WriteInputPriority { bytes }, ..
+                } if bytes == b"\x1b[3;5R"))
+                .count(),
+            1,
+            "deferred pane reply must survive provisional ingress: {deferred:?}"
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(!exit.service.agent_provider_task_is_owned(&task.turn_id));
+    assert_eq!(
+        exit.service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == task.turn_id)
+            .unwrap()
+            .state,
+        mez_agent::AgentTurnState::Failed
+    );
+    assert!(
+        exit.service
+            .agent_pane_trace_log_text("%1")
+            .unwrap()
+            .contains("provider wire request id=wire-under-pressure")
+    );
+    let _ = std::fs::remove_dir_all(registry_root);
+}
+
 /// Verifies that render workers can drain only render invalidations while
 /// leaving provider dispatches queued for provider workers. This protects the
 /// side-effect queue from family-specific workers stealing unrelated work as
