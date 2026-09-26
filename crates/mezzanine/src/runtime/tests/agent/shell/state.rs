@@ -4662,6 +4662,41 @@ fn runtime_agent_subshell_certification_rejection_explains_bubblewrap_preflight(
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies certification rejection does not send an unauthenticated exit to
+/// an active child whose managed receiver installation was never proven.
+#[test]
+fn runtime_agent_subshell_certification_rejection_preserves_uninstalled_child() {
+    let mut service = test_runtime_service();
+    service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Pane));
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.enter_agent_subshell("%1");
+    service.set_pane_agent_subshell_certification_rejection_for_tests(
+        "%1",
+        RuntimeAgentSubshellCertificationRejection::ForegroundProcessGroupChanged,
+    );
+
+    service.resume_after_bootstrap_settlement("%1").unwrap();
+
+    assert!(service.agent_subshell_is_active("%1"));
+    assert_eq!(
+        service.agent_shell_store().get("%1").unwrap().visibility,
+        mez_agent::AgentShellVisibility::Visible
+    );
+    let effects = service.drain_pane_io_transition().side_effects;
+    assert!(
+        pane_input_effects(&effects).is_empty(),
+        "rejection must not send an unauthenticated exit to the uninstalled child"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies an ordinary missing primary-authority cache entry retains the
 /// Bubblewrap action behind a resolver instead of failing dispatch.
 #[test]

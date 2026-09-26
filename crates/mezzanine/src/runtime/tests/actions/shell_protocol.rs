@@ -1888,9 +1888,23 @@ fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
         service.mark_managed_fish_child_prompt_ready(pane_id, "fish-restoration-marker"),
         Some(false)
     );
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(pane_id)
+        .unwrap();
+    service.enter_agent_subshell(pane_id);
     service.remove_running_shell_transaction("fish-restoration-marker");
     service.clear_shell_transaction_protocol_state("fish-restoration-marker");
-    assert!(service.request_managed_shell_handoff_exit(pane_id).unwrap());
+    service.set_pane_agent_subshell_certification_rejection_for_tests(
+        pane_id,
+        crate::runtime::processes::RuntimeAgentSubshellCertificationRejection::ForegroundProcessGroupChanged,
+    );
+    service.resume_after_bootstrap_settlement(pane_id).unwrap();
+    assert!(!service.agent_subshell_is_active(pane_id));
+    assert_eq!(
+        service.agent_shell_store().get(pane_id).unwrap().visibility,
+        mez_agent::AgentShellVisibility::Hidden
+    );
     let exit_effects = service.drain_pane_io_transition().side_effects;
     assert_eq!(pane_input_effects(&exit_effects).len(), 1);
     assert_eq!(

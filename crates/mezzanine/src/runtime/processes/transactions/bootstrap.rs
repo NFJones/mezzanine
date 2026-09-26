@@ -921,6 +921,30 @@ impl RuntimeSessionService {
 
     /// Resumes deferred agent work only after bootstrap authority is settled.
     pub(crate) fn resume_after_bootstrap_settlement(&mut self, pane_id: &str) -> Result<()> {
+        let certification_rejected = self
+            .pane_agent_subshell_certification_rejection(pane_id)
+            .is_some();
+        let managed_child_is_installed = self
+            .process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .is_some_and(|handoff| handoff.child_is_installed());
+        let visible = self
+            .agent_shell_store()
+            .get(pane_id)
+            .is_some_and(|session| session.visibility == AgentShellVisibility::Visible);
+        if certification_rejected
+            && managed_child_is_installed
+            && self.agent_subshell_is_active(pane_id)
+            && visible
+        {
+            // A managed child is active before its completion proof settles.
+            // If that proof fails, stop agent work and return through the
+            // authenticated managed-shell handoff instead of leaving the
+            // rejected child active and making future entry a no-op.
+            let _ = self.request_agent_shell_exit_for_pane(pane_id)?;
+            return Ok(());
+        }
         if self.agent_subshell_entry_is_deferred(pane_id) {
             if !self.agent_subshell_is_active(pane_id)
                 && self.pane_readiness_state(pane_id) == PaneReadinessState::Ready
