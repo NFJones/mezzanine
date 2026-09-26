@@ -52,6 +52,7 @@ pub struct ModelContextCompactionPlan {
     replacement_group_lengths: Vec<usize>,
     retained_tail: Vec<ContextBlock>,
     summary_budget_words: usize,
+    summary_budget_is_tokens: bool,
     report: ModelContextCompactionReport,
 }
 
@@ -102,8 +103,21 @@ impl ModelContextCompactionPlan {
         let excluded_blocks = self.replacement_blocks.split_off(split_at);
         self.replacement_event_sequences.truncate(split_at);
         self.replacement_group_lengths.pop();
-        let excluded_words = model_context_total_words(&excluded_blocks);
-        self.summary_budget_words = self.summary_budget_words.saturating_sub(excluded_words);
+        let excluded_cost = if self.summary_budget_is_tokens {
+            excluded_blocks
+                .iter()
+                .map(|block| {
+                    crate::provider_text_input_token_estimate(&format!(
+                        "{}{}",
+                        model_context_block_header(block),
+                        block.content
+                    ))
+                })
+                .fold(0usize, usize::saturating_add)
+        } else {
+            model_context_total_words(&excluded_blocks)
+        };
+        self.summary_budget_words = self.summary_budget_words.saturating_sub(excluded_cost);
         self.retained_tail.splice(0..0, excluded_blocks);
         self.report.compacted_blocks = self.replacement_blocks.len();
         true
@@ -122,6 +136,7 @@ impl ModelContextCompactionPlan {
             replacement_group_lengths: Vec::new(),
             retained_tail: Vec::new(),
             summary_budget_words: 0,
+            summary_budget_is_tokens: false,
             report,
         }
     }
@@ -148,6 +163,7 @@ pub fn plan_model_context_compaction_at_consumed_sequence(
         retained_tail_percent,
         consumed_sequence_high_water,
         None,
+        false,
     )
 }
 
@@ -170,6 +186,29 @@ pub fn plan_model_context_compaction_for_provider(
         retained_tail_percent,
         consumed_sequence_high_water,
         Some(provider_projection),
+        false,
+    )
+}
+
+/// Plans against estimated rendered block tokens for a known provider.
+///
+/// `context_budget_tokens` excludes fixed provider-request overhead. The
+/// provider's reported usage is a whole-request measurement, never an
+/// independently measured cost for any one block.
+pub fn plan_model_context_compaction_for_provider_tokens(
+    context: &AgentContext,
+    context_budget_tokens: usize,
+    retained_tail_percent: usize,
+    consumed_sequence_high_water: u64,
+    provider_projection: ProviderBudgetProjection<'_>,
+) -> AgentContextResult<ModelContextCompactionPlan> {
+    plan_model_context_compaction_with_projection(
+        context,
+        context_budget_tokens,
+        retained_tail_percent,
+        consumed_sequence_high_water,
+        Some(provider_projection),
+        true,
     )
 }
 
@@ -180,11 +219,14 @@ fn plan_model_context_compaction_with_projection(
     retained_tail_percent: usize,
     consumed_sequence_high_water: u64,
     provider_projection: Option<ProviderBudgetProjection<'_>>,
+    token_costs: bool,
 ) -> AgentContextResult<ModelContextCompactionPlan> {
     context.validate_durable()?;
     let blocks = context.blocks();
     let retained_tail_percent =
         normalize_model_context_retained_tail_percent(retained_tail_percent);
+    let block_costs =
+        token_costs.then(|| projected_context_block_input_tokens(context, provider_projection));
     let mut stable_prefix_visible = Vec::new();
     let mut chronology_visible = Vec::new();
     for (index, block) in blocks.iter().enumerate() {
@@ -204,21 +246,38 @@ fn plan_model_context_compaction_with_projection(
         .filter(|block| block.placement == crate::ContextPlacement::ConversationAppend)
         .cloned()
         .collect::<Vec<_>>();
-    let protected_words = stable_prefix
+    let stable_costs = stable_prefix
         .iter()
-        .zip(stable_prefix_visible.iter())
-        .filter(|(_, visible)| **visible)
-        .map(|(block, _)| model_context_block_words(block))
-        .chain(
+        .enumerate()
+        .map(|(index, block)| {
+            block_costs.as_ref().map_or_else(
+                || usize::from(stable_prefix_visible[index]) * model_context_block_words(block),
+                |costs| costs[index],
+            )
+        })
+        .collect::<Vec<_>>();
+    let chronology_costs = immutable_chronology
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            block_costs.as_ref().map_or_else(
+                || usize::from(chronology_visible[index]) * model_context_block_words(block),
+                |costs| costs[stable_prefix.len() + index],
+            )
+        })
+        .collect::<Vec<_>>();
+    let protected_words = stable_costs
+        .iter()
+        .copied()
+        .fold(0usize, usize::saturating_add)
+        .saturating_add(
             immutable_chronology
                 .iter()
-                .zip(chronology_visible.iter())
-                .filter(|(block, visible)| {
-                    **visible && model_context_block_is_protected_barrier(block)
-                })
-                .map(|(block, _)| model_context_block_words(block)),
-        )
-        .fold(0usize, usize::saturating_add);
+                .zip(&chronology_costs)
+                .filter(|(block, _)| model_context_block_is_protected_barrier(block))
+                .map(|(_, cost)| *cost)
+                .fold(0usize, usize::saturating_add),
+        );
     if protected_words > context_budget_words {
         return Err(AgentContextError::new(format!(
             "unrecoverable model context overflow: protected exact context requires {protected_words} words but provider budget is {context_budget_words}; direct user and task instructions cannot be truncated or summarized"
@@ -255,6 +314,7 @@ fn plan_model_context_compaction_with_projection(
         &execution_groups,
         &eligible_groups,
         tail_budget,
+        block_costs.as_ref().map(|_| chronology_costs.as_slice()),
     );
     let eligible_replacements = eligible_groups
         .iter()
@@ -318,14 +378,27 @@ fn plan_model_context_compaction_with_projection(
         .iter()
         .map(|(index, _)| chronology_visible.get(*index).copied().unwrap_or(true))
         .collect::<Vec<_>>();
+    let retained_costs = retained_unsigned
+        .iter()
+        .map(|(index, _)| chronology_costs[*index])
+        .fold(0usize, usize::saturating_add);
     let retained_chronology = retained_unsigned
         .into_iter()
         .map(|(_, block)| block.clone())
         .collect::<Vec<_>>();
-    let stable_prefix_words =
-        model_context_visible_total_words(&stable_prefix, &stable_prefix_visible);
-    let retained_chronology_words =
-        model_context_visible_total_words(&retained_chronology, &retained_chronology_visible);
+    let stable_prefix_words = if token_costs {
+        stable_costs
+            .iter()
+            .copied()
+            .fold(0usize, usize::saturating_add)
+    } else {
+        model_context_visible_total_words(&stable_prefix, &stable_prefix_visible)
+    };
+    let retained_chronology_words = if token_costs {
+        retained_costs
+    } else {
+        model_context_visible_total_words(&retained_chronology, &retained_chronology_visible)
+    };
     let summary_budget_words = context_budget_words
         .saturating_sub(stable_prefix_words.saturating_add(retained_chronology_words));
     if summary_budget_words == 0 {
@@ -346,7 +419,18 @@ fn plan_model_context_compaction_with_projection(
         replacement_blocks: replacement_blocks.clone(),
         replacement_group_lengths: replacement_ranges.iter().map(Range::len).collect(),
         retained_tail,
-        summary_budget_words,
+        summary_budget_words: if token_costs {
+            summary_budget_words.min(
+                replacement_ranges
+                    .iter()
+                    .flat_map(|range| chronology_costs[range.clone()].iter())
+                    .copied()
+                    .fold(0usize, usize::saturating_add),
+            )
+        } else {
+            summary_budget_words
+        },
+        summary_budget_is_tokens: token_costs,
         report: ModelContextCompactionReport {
             compacted_blocks: replacement_blocks.len(),
             omitted_blocks: 0,
@@ -373,7 +457,11 @@ pub fn apply_model_context_compaction_plan(
     }
     if model_summary.trim().is_empty()
         || model_summary.len() > MODEL_CONTEXT_BLOCK_LIMIT_BYTES
-        || model_context_text_word_count(&model_summary) > plan.summary_budget_words
+        || if plan.summary_budget_is_tokens {
+            crate::provider_text_input_token_estimate(&model_summary) > plan.summary_budget_words
+        } else {
+            model_context_text_word_count(&model_summary) > plan.summary_budget_words
+        }
     {
         return Err(AgentContextError::new(
             "model compaction summary must be nonempty, bounded, and fit the planned summary budget",
@@ -540,6 +628,54 @@ pub fn provider_renders_context_block(
         .is_none_or(|owner| owner.matches_provider(projection.api, projection.provider_id))
 }
 
+/// Returns accounting-only block costs in canonical context order.
+///
+/// The active provider's invisible native records cost zero. These are
+/// deterministic estimates, not per-block measurements from provider usage.
+pub fn projected_context_block_input_tokens(
+    context: &AgentContext,
+    provider_projection: Option<ProviderBudgetProjection<'_>>,
+) -> Vec<usize> {
+    let native_groups = provider_projection.map(|projection| {
+        crate::context_assembly::provider_native_execution_groups(
+            context,
+            Some(projection.api),
+            projection.provider_id,
+        )
+    });
+    context
+        .block_metadata()
+        .iter()
+        .enumerate()
+        .map(|(index, metadata)| {
+            if !provider_renders_context_block(context, index, provider_projection)
+                || metadata.execution_group_id().is_some_and(|group| {
+                    metadata.provider_owner().is_some()
+                        && native_groups
+                            .as_ref()
+                            .is_some_and(|groups| !groups.contains(group))
+                        || metadata.provider_owner().is_none()
+                            && native_groups
+                                .as_ref()
+                                .is_some_and(|groups| groups.contains(group))
+                            && matches!(
+                                context.blocks()[index].source,
+                                ContextSourceKind::TranscriptAssistant
+                                    | ContextSourceKind::ActionResult
+                            )
+                })
+            {
+                return 0;
+            }
+            if metadata.provider_owner().is_some() {
+                crate::provider_text_input_token_estimate(&context.blocks()[index].content)
+            } else {
+                metadata.estimated_input_tokens()
+            }
+        })
+        .collect()
+}
+
 /// Returns the retained raw-tail word budget.
 fn model_context_retained_tail_budget_words(
     context_budget_words: usize,
@@ -571,6 +707,7 @@ fn model_context_retained_group_indexes(
     groups: &[Range<usize>],
     eligible_groups: &[usize],
     tail_budget_words: usize,
+    block_costs: Option<&[usize]>,
 ) -> Vec<usize> {
     let mut retained_words = 0usize;
     let mut retained = Vec::new();
@@ -595,9 +732,19 @@ fn model_context_retained_group_indexes(
         // Only rendered blocks consume the raw tail budget: a block the active
         // provider never receives must not displace a rendered group that the
         // next turn actually resumes from.
-        let group_words = model_context_visible_total_words(
-            &blocks[group.clone()],
-            &block_visible[group.clone()],
+        let group_words = block_costs.map_or_else(
+            || {
+                model_context_visible_total_words(
+                    &blocks[group.clone()],
+                    &block_visible[group.clone()],
+                )
+            },
+            |costs| {
+                costs[group.clone()]
+                    .iter()
+                    .copied()
+                    .fold(0usize, usize::saturating_add)
+            },
         );
         if retained_words.saturating_add(group_words) > tail_budget_words {
             break;
@@ -613,6 +760,44 @@ fn model_context_retained_group_indexes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dense context has few whitespace words but many estimated tokens. The
+    /// provider-token planner must summarize the newest closed group when its
+    /// rendered cost exceeds the optional tail budget.
+    #[test]
+    fn provider_token_plan_counts_dense_rendered_context() {
+        let context = AgentContext::new_durable(vec![
+            ContextBlock::assistant_event("dense decision", "x".repeat(4_000)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "dense outcome",
+                "y".repeat(4_000),
+            ),
+        ])
+        .unwrap();
+        let costs = projected_context_block_input_tokens(
+            &context,
+            Some(ProviderBudgetProjection::new(
+                ProviderApiCompatibility::OpenAiResponses,
+                "openai",
+            )),
+        );
+        assert!(costs.iter().sum::<usize>() > 1_900);
+        let plan = plan_model_context_compaction_for_provider_tokens(
+            &context,
+            2_500,
+            10,
+            context.event_sequence_high_water_mark(),
+            ProviderBudgetProjection::new(ProviderApiCompatibility::OpenAiResponses, "openai"),
+        )
+        .unwrap();
+        assert_eq!(plan.replacement_blocks().len(), 2);
+        assert!(plan.retained_tail().is_empty());
+        assert!(
+            plan.summary_budget_words() > 100,
+            "dense source must leave usable summary output capacity"
+        );
+    }
 
     /// Verifies the retained-tail clamp keeps the mandatory minimum suffix.
     ///
@@ -733,6 +918,17 @@ mod tests {
             )
             .unwrap();
 
+        let visible_costs = projected_context_block_input_tokens(
+            &context,
+            Some(ProviderBudgetProjection::new(
+                ProviderApiCompatibility::DeepSeekChatCompletions,
+                "configured-deepseek",
+            )),
+        );
+        assert_eq!(visible_costs.len(), context.blocks().len());
+        assert!(visible_costs[0] > 0);
+        assert_eq!(*visible_costs.last().unwrap(), 0);
+
         let without_projection = plan_model_context_compaction_at_consumed_sequence(
             &context,
             200,
@@ -765,6 +961,70 @@ mod tests {
         );
     }
 
+    /// Complete native history replaces neutral assistant and result messages
+    /// for its owner, while an unrelated provider retains the neutral view.
+    #[test]
+    fn provider_block_costs_follow_complete_native_group_projection() {
+        use crate::{ContextExecutionGroupId, ProviderContinuityOwner, ProviderTranscriptEvent};
+
+        let mut context = AgentContext::empty();
+        let group = ContextExecutionGroupId::new("native-cost-group").unwrap();
+        context
+            .append_assistant_event("assistant", "neutral assistant", group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "result",
+                "neutral result",
+                group.clone(),
+                None,
+                true,
+            )
+            .unwrap();
+        let native = ProviderTranscriptEvent::validated_openai_response_output(vec![
+            serde_json::json!({"type": "reasoning", "id": "reason-1", "text": "native"}),
+        ])
+        .unwrap()
+        .to_transcript_content();
+        context
+            .append_evidence_event(
+                ContextSourceKind::TranscriptTool,
+                "native output",
+                native,
+                group,
+                Some(
+                    ProviderContinuityOwner::new(
+                        ProviderApiCompatibility::OpenAiResponses,
+                        "openai",
+                    )
+                    .unwrap(),
+                ),
+                false,
+            )
+            .unwrap();
+
+        let owner = projected_context_block_input_tokens(
+            &context,
+            Some(ProviderBudgetProjection::new(
+                ProviderApiCompatibility::OpenAiResponses,
+                "openai",
+            )),
+        );
+        assert_eq!(owner.len(), 3);
+        assert_eq!(&owner[..2], &[0, 0]);
+        assert!(owner[2] > 0);
+        let foreign = projected_context_block_input_tokens(
+            &context,
+            Some(ProviderBudgetProjection::new(
+                ProviderApiCompatibility::DeepSeekChatCompletions,
+                "deepseek",
+            )),
+        );
+        assert!(foreign[0] > 0 && foreign[1] > 0);
+        assert_eq!(foreign[2], 0);
+    }
+
     /// Verifies the raw tail budget counts only blocks the active provider renders.
     ///
     /// A group whose blocks are all unrendered cannot consume the tail budget, so a
@@ -787,6 +1047,7 @@ mod tests {
             &groups,
             &eligible,
             budget,
+            None,
         );
         let with_unrendered = model_context_retained_group_indexes(
             &blocks,
@@ -794,6 +1055,7 @@ mod tests {
             &groups,
             &eligible,
             budget,
+            None,
         );
 
         assert_eq!(
@@ -817,8 +1079,14 @@ mod tests {
             ContextBlock::assistant_event("newer", "newer ".repeat(300)),
         ];
         let groups = vec![0..1, 1..2];
-        let retained =
-            model_context_retained_group_indexes(&blocks, &[true, true], &groups, &[0, 1], 100);
+        let retained = model_context_retained_group_indexes(
+            &blocks,
+            &[true, true],
+            &groups,
+            &[0, 1],
+            100,
+            None,
+        );
         assert!(
             retained.is_empty(),
             "retained groups must be a recent suffix: {retained:?}"
@@ -842,6 +1110,7 @@ mod tests {
                 &groups,
                 &[0, 1, 2],
                 100,
+                None,
             ),
             vec![2]
         );
@@ -852,6 +1121,7 @@ mod tests {
                 &groups,
                 &[0, 2],
                 100,
+                None,
             ),
             vec![2],
             "an ineligible causal group cannot be skipped to retain older history"

@@ -394,6 +394,7 @@ impl StableContextBlock {
             recoverable_for_compaction: false,
             stable_slot_id: Some(self.slot_id.clone()),
             stable_source_fingerprint: Some(self.source_fingerprint.clone()),
+            estimated_input_tokens: context_block_input_token_estimate(&self.block),
         }
     }
 }
@@ -598,6 +599,7 @@ pub struct ContextBlockMetadata {
     recoverable_for_compaction: bool,
     stable_slot_id: Option<StableContextSlotId>,
     stable_source_fingerprint: Option<StableContextSourceFingerprint>,
+    estimated_input_tokens: usize,
 }
 
 impl ContextBlockMetadata {
@@ -639,6 +641,14 @@ impl ContextBlockMetadata {
     /// Returns the source fingerprint for an explicitly slotted stable block.
     pub fn stable_source_fingerprint(&self) -> Option<&StableContextSourceFingerprint> {
         self.stable_source_fingerprint.as_ref()
+    }
+
+    /// Returns a deterministic, unmeasured token estimate for this rendered block.
+    ///
+    /// Provider-reported usage covers whole requests, not individual blocks.
+    /// This value is accounting-only and never enters provider messages.
+    pub fn estimated_input_tokens(&self) -> usize {
+        self.estimated_input_tokens
     }
 }
 
@@ -756,6 +766,7 @@ impl ConversationEvent {
             recoverable_for_compaction: self.recoverable_for_compaction,
             stable_slot_id: None,
             stable_source_fingerprint: None,
+            estimated_input_tokens: context_block_input_token_estimate(&self.block),
         }
     }
 }
@@ -2795,6 +2806,18 @@ pub fn model_context_block_header(block: &ContextBlock) -> String {
     format!("[{}{}]\n", block.label, domain_annotation)
 }
 
+/// Estimates the framed token cost of one context block for accounting only.
+///
+/// This is not provider-reported usage: providers report whole-request totals,
+/// and wire-level role and schema overhead must be accounted for separately.
+fn context_block_input_token_estimate(block: &ContextBlock) -> usize {
+    crate::provider_text_input_token_estimate(&format!(
+        "{}{}",
+        model_context_block_header(block),
+        block.content
+    ))
+}
+
 /// Provider-independent role of one model message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelMessageRole {
@@ -3443,6 +3466,82 @@ mod tests {
         assert_eq!(reference.retention(), ContextRetention::Exact);
         assert_eq!(runtime.semantic_kind(), ContextSemanticKind::ReferenceEvent);
         assert_eq!(runtime.retention(), ContextRetention::Exact);
+    }
+
+    /// Verifies accounting metadata follows the typed block projection without
+    /// changing rendered input and refreshes after a replacement of stable text.
+    #[test]
+    fn context_block_accounting_is_not_model_visible_and_rebuilds_with_content() {
+        let stable = ContextBlock::stable_instruction(ContextSourceKind::Policy, "policy", "small");
+        let mut context = AgentContext::new_durable(vec![stable.clone()]).unwrap();
+        let original = context
+            .metadata_for_block(0)
+            .unwrap()
+            .estimated_input_tokens();
+        assert_eq!(
+            original,
+            crate::provider_text_input_token_estimate(&format!(
+                "{}{}",
+                super::model_context_block_header(&stable),
+                stable.content
+            ))
+        );
+        let original_messages = context.blocks().to_vec();
+        assert_eq!(original_messages, vec![stable]);
+        context
+            .append_user_event("user prompt", "new task")
+            .unwrap();
+        assert_eq!(
+            context
+                .metadata_for_block(0)
+                .unwrap()
+                .estimated_input_tokens(),
+            original
+        );
+        let user = &context.blocks()[1];
+        assert_eq!(
+            context
+                .metadata_for_block(1)
+                .unwrap()
+                .estimated_input_tokens(),
+            crate::provider_text_input_token_estimate(&format!(
+                "{}{}",
+                super::model_context_block_header(user),
+                user.content
+            ))
+        );
+        assert!(
+            !context.blocks()[0]
+                .content
+                .contains("estimated_input_tokens")
+        );
+        assert!(
+            !context.blocks()[1]
+                .content
+                .contains("estimated_input_tokens")
+        );
+        context
+            .replace_stable_slots(vec![
+                StableContextBlock::new(
+                    StableContextSlotId::new("policy").unwrap(),
+                    StableContextSourceFingerprint::new("a".repeat(64)).unwrap(),
+                    ContextBlock::stable_instruction(
+                        ContextSourceKind::Policy,
+                        "policy",
+                        "a much longer replacement policy",
+                    ),
+                )
+                .unwrap(),
+            ])
+            .unwrap();
+        assert!(
+            context
+                .metadata_for_block(0)
+                .unwrap()
+                .estimated_input_tokens()
+                > original
+        );
+        assert_eq!(context.blocks()[1].content, "new task");
     }
 
     /// Verifies semantic validation accepts one complete canonical request

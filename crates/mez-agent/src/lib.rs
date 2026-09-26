@@ -285,6 +285,7 @@ pub use context_compaction::{
     DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, ModelContextCompactionPlan,
     ProviderBudgetProjection, apply_model_context_compaction_plan, model_context_text_word_count,
     plan_model_context_compaction_at_consumed_sequence, plan_model_context_compaction_for_provider,
+    plan_model_context_compaction_for_provider_tokens, projected_context_block_input_tokens,
     provider_renders_context_block,
 };
 pub use context_continuity::{
@@ -492,7 +493,8 @@ pub use readiness::{
     ReadinessResult, decide_bootstrap_before_user_prompt, readiness_decision,
 };
 pub use request_accounting::{
-    ProviderRequestInputEstimate, provider_request_input_estimate,
+    ProviderContextInputAttribution, ProviderRequestInputEstimate,
+    provider_context_input_attribution, provider_request_input_estimate,
     provider_request_input_estimate_from_body, provider_text_input_token_estimate,
 };
 pub use response_progress::ProviderResponseProgress;

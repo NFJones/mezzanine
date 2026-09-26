@@ -11,10 +11,77 @@ use std::collections::BTreeMap;
 
 use crate::deepseek::prepare_deepseek_chat_completions_request;
 use crate::{
-    AnthropicMessagesOptions, ModelRequest, OpenAiChatCompletionsOptions, ProviderApiCompatibility,
-    ProviderRequestAssemblyResult, anthropic_messages_request_body,
-    openai_chat_completions_request_body_with_stream, openai_responses_request_body_with_stream,
+    AgentContext, AnthropicMessagesOptions, ModelRequest, OpenAiChatCompletionsOptions,
+    ProviderApiCompatibility, ProviderBudgetProjection, ProviderRequestAssemblyResult,
+    anthropic_messages_request_body, openai_chat_completions_request_body_with_stream,
+    openai_responses_request_body_with_stream, projected_context_block_input_tokens,
 };
+
+/// Accounting-only attribution of context blocks against one complete request.
+///
+/// Block values are deterministic estimates; `reported_input_tokens` is an
+/// independent provider observation of the entire request when available.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderContextInputAttribution {
+    /// Estimated rendered size of each canonical context block, in block order.
+    pub block_estimates: Vec<usize>,
+    /// Estimated block cost present in the accepted request, excluding later events.
+    pub accepted_block_estimate: usize,
+    /// Estimated input tokens in the full serialized request.
+    pub complete_request_estimate: usize,
+    /// Remaining estimated request framing, prompt, and schema cost.
+    pub non_block_estimate: usize,
+    /// Provider-reported whole-request input tokens, never apportioned to blocks.
+    pub reported_input_tokens: Option<u64>,
+}
+
+/// Attributes one assembled request without changing its wire representation.
+///
+/// A cached provider response still reports total input, including cache reads.
+/// Unrendered provider-owned blocks have zero cost in this projection. Some
+/// native groups replace neutral messages, so the residual is diagnostic, not
+/// a proof that block estimates exactly sum to the provider's tokenization.
+pub fn provider_context_input_attribution(
+    context: &AgentContext,
+    projection: Option<ProviderBudgetProjection<'_>>,
+    accepted_request: &ModelRequest,
+    complete_request: ProviderRequestInputEstimate,
+    reported_input_tokens: Option<u64>,
+) -> ProviderContextInputAttribution {
+    let block_estimates = projected_context_block_input_tokens(context, projection);
+    // The live context may already contain this response and its action results.
+    // Match only exact framed messages present in the accepted request; never
+    // subtract newly appended blocks from the older request's fixed overhead.
+    let mut available = accepted_request.messages.iter().collect::<Vec<_>>();
+    let mut accepted_block_estimate = 0usize;
+    for (block, cost) in context.blocks().iter().zip(&block_estimates) {
+        if *cost == 0 {
+            continue;
+        }
+        let framed = format!(
+            "{}{}",
+            crate::model_context_block_header(block),
+            block.content
+        );
+        if let Some(index) = available.iter().position(|message| {
+            message.source == block.source
+                && message.placement == block.placement
+                && (message.content == framed || message.content == block.content)
+        }) {
+            available.remove(index);
+            accepted_block_estimate = accepted_block_estimate.saturating_add(*cost);
+        }
+    }
+    ProviderContextInputAttribution {
+        block_estimates,
+        accepted_block_estimate,
+        complete_request_estimate: complete_request.input_tokens,
+        non_block_estimate: complete_request
+            .input_tokens
+            .saturating_sub(accepted_block_estimate),
+        reported_input_tokens,
+    }
+}
 
 /// Conservative number of canonical wire bytes represented by one estimated
 /// provider input token.
@@ -137,6 +204,79 @@ mod tests {
             ]
             .into(),
         }
+    }
+
+    /// Verifies whole-request provider usage is not falsely apportioned to
+    /// blocks and framing remains a distinct estimated cost.
+    #[test]
+    fn context_attribution_separates_reported_total_from_estimated_blocks() {
+        let mut context = crate::AgentContext::new_durable(vec![
+            crate::ContextBlock::stable_instruction(
+                ContextSourceKind::Policy,
+                "policy",
+                "keep exact instructions",
+            ),
+            crate::ContextBlock::user_event("user prompt", "inspect the source"),
+        ])
+        .unwrap();
+        let estimate = ProviderRequestInputEstimate {
+            wire_bytes: 4_000,
+            input_tokens: 1_000,
+        };
+        let mut accepted = complete_test_request("openai");
+        accepted.messages = context
+            .blocks()
+            .iter()
+            .map(|block| ModelMessage {
+                role: ModelMessageRole::User,
+                source: block.source,
+                placement: block.placement,
+                content: format!(
+                    "{}{}",
+                    crate::model_context_block_header(block),
+                    block.content
+                ),
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let attribution =
+            provider_context_input_attribution(&context, None, &accepted, estimate, Some(823));
+        assert_eq!(attribution.block_estimates.len(), 2);
+        assert!(attribution.block_estimates.iter().all(|cost| *cost > 0));
+        assert_eq!(attribution.reported_input_tokens, Some(823));
+        assert_eq!(attribution.complete_request_estimate, 1_000);
+        assert_eq!(
+            attribution.accepted_block_estimate,
+            attribution.block_estimates.iter().sum::<usize>()
+        );
+        assert_eq!(
+            attribution.non_block_estimate,
+            1_000 - attribution.block_estimates.iter().sum::<usize>()
+        );
+        assert_eq!(
+            provider_context_input_attribution(&context, None, &accepted, estimate, None)
+                .reported_input_tokens,
+            None
+        );
+        let prior_overhead = attribution.non_block_estimate;
+        context
+            .append_assistant_event(
+                "later response",
+                "z".repeat(8_000),
+                crate::ContextExecutionGroupId::new("later-result").unwrap(),
+            )
+            .unwrap();
+        let later =
+            provider_context_input_attribution(&context, None, &accepted, estimate, Some(823));
+        assert_eq!(later.non_block_estimate, prior_overhead);
+        assert_eq!(
+            later.accepted_block_estimate,
+            attribution.accepted_block_estimate
+        );
+        assert!(
+            later.block_estimates.iter().sum::<usize>()
+                > attribution.block_estimates.iter().sum::<usize>()
+        );
     }
 
     #[test]

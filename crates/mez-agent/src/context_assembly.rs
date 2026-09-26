@@ -197,7 +197,7 @@ fn assemble_model_request_from_context_for_api(
 /// Completeness checks must see every event in a candidate group because an
 /// incompatible provider event invalidates native replay. Grouping first keeps
 /// those fail-closed checks while avoiding one complete-context scan per group.
-fn provider_native_execution_groups(
+pub(crate) fn provider_native_execution_groups(
     context: &AgentContext,
     api: Option<ProviderApiCompatibility>,
     provider_id: &str,

@@ -111,6 +111,12 @@ summarizes only closed older execution groups, retains a recent exact raw tail,
 and protects active prompts and steering instructions from summarization. A
 summary is intentionally lossy; start `/new` when old context should not affect
 a new task, or use `/resume` to choose a saved conversation.
+Provider-reported input tokens describe a complete request, including cache
+reads; they are not counts for its individual context blocks. Block-size
+metadata is excluded from model-visible context and currently uses a local
+estimate. The full request also includes instructions, action schemas, and
+transport framing. A provider rejection remains authoritative when an estimate
+understates the actual context size.
 
 If the manual compactor request is too large for its configured input cap or
 is rejected for context length, Mez splits only temporary, redacted source

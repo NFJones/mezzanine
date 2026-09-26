@@ -6910,6 +6910,12 @@ MUST wait for a safe continuation boundary, preserve any settled action group,
 and compact eligible durable context before queuing the continuation. It MUST
 fence the triggering response sample so it queues at most one compaction, and
 invalidate that fence after a successful replacement or when the turn ends.
+Provider usage is a whole-request measurement, including cached input. Per-block
+accounting metadata MUST remain outside provider messages and transcript text;
+without a provider-supported block counting operation, block costs are labeled
+estimates and MUST NOT be presented as provider-measured usage. Accounting for
+the full request MUST separately retain prompt, schema, and wire overhead and
+MUST NOT apportion reported request usage to individual blocks as fact.
 Auxiliary router, compactor, and memory-operation requests use owner-specific
 bounded handling and MUST NOT compact unrelated active-turn context. The
 provider context-limit recovery path remains available for authoritative

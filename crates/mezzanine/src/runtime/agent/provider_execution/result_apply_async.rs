@@ -516,6 +516,7 @@ impl RuntimeSessionService {
                     turn,
                     model_profile,
                     execution.latest_response_usage,
+                    &execution.request,
                 )?
             {
                 self.agent

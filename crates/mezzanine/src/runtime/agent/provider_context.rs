@@ -424,13 +424,14 @@ impl RuntimeSessionService {
     /// execution response reports input at or above its configured threshold.
     ///
     /// The response sample is authoritative for the triggering decision. The
-    /// planner's word budget is only a bounded summary-sizing heuristic; it is
+    /// planner's token budget is only a bounded summary-sizing heuristic; it is
     /// not a second request-submission gate.
     pub(crate) fn defer_agent_provider_for_observed_input_limit(
         &mut self,
         turn: &AgentTurnRecord,
         model_profile: &ModelProfile,
         observed_usage: mez_agent::ModelTokenUsage,
+        accepted_request: &mez_agent::ModelRequest,
     ) -> Result<bool> {
         let Some(max_input_tokens) = model_profile.max_input_tokens() else {
             return Ok(false);
@@ -448,13 +449,69 @@ impl RuntimeSessionService {
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let plan = self.plan_agent_context_compaction(
-            self.agent_provider_budget_projection(model_profile),
+        let provider_projection = self.agent_provider_budget_projection(model_profile);
+        let block_estimates =
+            mez_agent::projected_context_block_input_tokens(&context, provider_projection);
+        let visible_block_estimate = block_estimates
+            .iter()
+            .copied()
+            .fold(0usize, usize::saturating_add);
+        let provider_config = self
+            .provider_registry()
+            .provider(&model_profile.provider)
+            .ok_or_else(|| {
+                MezError::invalid_state("observed-input provider configuration is unavailable")
+            })?;
+        let api =
+            mez_agent::resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        let options = crate::runtime::config::runtime_effective_provider_options(
+            provider_config,
+            model_profile,
+        );
+        let complete_estimate =
+            mez_agent::provider_request_input_estimate(accepted_request, api, &options, true)?;
+        let attribution = mez_agent::provider_context_input_attribution(
             &context,
-            max_input_tokens.saturating_mul(3).saturating_div(4).max(1),
-            0,
-            context.event_sequence_high_water_mark(),
-        )?;
+            provider_projection,
+            accepted_request,
+            complete_estimate,
+            Some(observed_usage.input_tokens),
+        );
+        let block_budget = max_input_tokens
+            .saturating_sub(attribution.non_block_estimate)
+            .saturating_mul(3)
+            .saturating_div(4)
+            .max(1);
+        let plan = if attribution.accepted_block_estimate == 0 {
+            // Legacy/test requests can carry no recognizable context snapshot.
+            // Do not charge their unrelated schema envelope against these blocks.
+            self.plan_agent_context_compaction(
+                provider_projection,
+                &context,
+                max_input_tokens.saturating_mul(3).saturating_div(4).max(1),
+                0,
+                context.event_sequence_high_water_mark(),
+            )?
+        } else {
+            match provider_projection {
+                Some(projection) => mez_agent::plan_model_context_compaction_for_provider_tokens(
+                    &context,
+                    block_budget,
+                    0,
+                    context.event_sequence_high_water_mark(),
+                    projection,
+                ),
+                None => mez_agent::plan_model_context_compaction_at_consumed_sequence(
+                    &context,
+                    model_profile
+                        .context_window_budget_words()
+                        .unwrap_or(block_budget),
+                    0,
+                    context.event_sequence_high_water_mark(),
+                ),
+            }
+            .map_err(|error| MezError::invalid_state(error.message()))?
+        };
         if !plan.changes_context()
             || !self.queue_agent_active_turn_compaction(
                 &turn.turn_id,
@@ -476,12 +533,16 @@ impl RuntimeSessionService {
             &turn.pane_id,
             &turn.turn_id,
             &format!(
-                "observed_input_limit queued trigger=observed_input_limit provider={} model={} observed_input_tokens={} max_input_tokens={} context_window_tokens={} displayed_usage_sample=prior_successful_request",
+                "observed_input_limit queued trigger=observed_input_limit provider={} model={} observed_input_tokens={} max_input_tokens={} context_window_tokens={} displayed_usage_sample=prior_successful_request estimated_visible_block_tokens={} accounted_blocks={} block_size_provenance=local_estimate estimated_complete_request_tokens={} estimated_non_block_tokens={}",
                 model_profile.provider,
                 model_profile.model,
                 observed_usage.input_tokens,
                 max_input_tokens,
                 model_profile.context_window_tokens().unwrap_or(0),
+                visible_block_estimate,
+                block_estimates.len(),
+                attribution.complete_request_estimate,
+                attribution.non_block_estimate,
             ),
         )?;
         Ok(true)

@@ -794,12 +794,13 @@ impl RuntimeSessionService {
             .agent_turn_executions()
             .get(turn_id)
             .filter(|execution| runtime_execution_ready_for_provider_continuation(execution))
-            .map(|execution| execution.latest_response_usage);
-        if let Some(observed_usage) = observed_usage
+            .map(|execution| (execution.latest_response_usage, execution.request.clone()));
+        if let Some((observed_usage, request)) = observed_usage
             && self.defer_agent_provider_for_observed_input_limit(
                 &turn,
                 &model_profile,
                 observed_usage,
+                &request,
             )?
         {
             return Ok(None);
