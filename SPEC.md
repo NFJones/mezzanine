@@ -7031,10 +7031,15 @@ bounded continuation when the failure is evidence the model can use to correct
 the current plan. Examples include failed MCP calls, local semantic action
 failures, runtime shell-dispatch or network-action loop guard failures, runtime
 network request or HTTP failures, config validation failures, local message
-payload validation failures, and subagent spawn validation failures. Non-zero
-`shell_command` exits are ordinary command results rather than semantic-action
-failures, and `apply_patch` failures are patch-context recovery rather than
-bounded retry events: Mezzanine MUST preserve the failed action result and
+payload validation failures, and subagent spawn validation failures. Deferred
+`fetch_url` and `web_search` failures MUST wait for still-running siblings to
+settle before bounded correction; settled successful siblings and the failed
+network result MUST reach model context once, without dispatching either action
+again. A warning emitted before correction admission MUST NOT claim the model
+has already received the result. Non-zero `shell_command` exits are ordinary
+command results rather than semantic-action failures, and `apply_patch`
+failures are patch-context recovery rather than bounded retry events:
+Mezzanine MUST preserve the failed action result and
 queue model continuation without consuming failure-feedback retry budget. The
 continuation context MUST include the failed action results and SHOULD include
 settled successful action results from the same batch so the model can avoid

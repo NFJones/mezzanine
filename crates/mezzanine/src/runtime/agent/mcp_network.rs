@@ -231,6 +231,27 @@ impl RuntimeSessionService {
             .collect()
     }
 
+    /// Reports whether a running result still has an approved external owner.
+    /// Inactive sequential shell siblings are not external work and must remain
+    /// eligible for the normal bounded failure-feedback path.
+    pub(crate) fn execution_has_running_external_sibling(
+        &self,
+        turn_id: &str,
+        execution: &AgentTurnExecution,
+    ) -> bool {
+        execution.action_results.iter().any(|result| {
+            result.status == ActionStatus::Running
+                && (self
+                    .agent
+                    .pending_approved_external_actions
+                    .contains_key(&(turn_id.to_string(), result.action_id.clone()))
+                    || self
+                        .agent
+                        .claimed_approved_external_actions
+                        .contains_key(&(turn_id.to_string(), result.action_id.clone())))
+        })
+    }
+
     /// Reports whether one approved external-worker attempt still owns an action.
     pub(crate) fn approved_external_action_attempt_is_current(
         &self,
@@ -798,14 +819,22 @@ impl RuntimeSessionService {
             &execution.action_results,
             execution.final_turn,
         );
+        let siblings_pending = execution.action_results.iter().any(|result| {
+            matches!(result.status, ActionStatus::Running | ActionStatus::Blocked)
+                && !self.action_result_is_inactive_pending_shell_sibling(&turn.turn_id, result)
+        });
         let failure_feedback_queued = if execution.terminal_state == AgentTurnState::Failed
-            && matches!(&action.payload, AgentActionPayload::McpCall { .. })
+            && !siblings_pending
+            && execution
+                .action_results
+                .iter()
+                .any(mez_agent::outcome::runtime_action_result_is_feedback_candidate)
         {
             self.append_runtime_agent_execution_failure_audit(&turn, &execution)?;
             self.queue_agent_failure_feedback_for_correction(
                 &turn,
                 &mut execution,
-                "approved_mcp_action_failed",
+                "approved_external_action_failed",
             )?
         } else {
             false
@@ -820,6 +849,11 @@ impl RuntimeSessionService {
         // repeats a call whose answer it never received.
         let observed_result = execution.action_results[result_index].clone();
         self.append_settled_external_action_context(&turn.turn_id, &observed_result)?;
+        if siblings_pending && execution.terminal_state == AgentTurnState::Failed {
+            self.agent_turn_executions_mut()
+                .insert(turn.turn_id.clone(), execution);
+            return Ok(true);
+        }
         let ready_for_provider_continuation =
             runtime_execution_ready_for_provider_continuation(&execution);
         if ready_for_provider_continuation && turn.state == AgentTurnState::Running {

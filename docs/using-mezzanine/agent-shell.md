@@ -46,6 +46,10 @@ visible. Provisional action previews do not prove execution; rejected source
 does not become an action result. Matching command previews and multiple headers
 can remain visible across acceptance; a final answer following pending actions
 stays provisional and is recorded only if those actions complete successfully.
+Failed deferred URL fetches and web searches can enter bounded model correction
+after their in-flight siblings settle. Their results become context rather than
+automatic retries of the same URL or query; policy denials and exhausted
+correction budgets remain terminal.
 
 Type a request and press Enter. Use `Ctrl+J` to insert a literal newline
 without submitting it. In native shell mode, `Ctrl+V` pastes host clipboard

@@ -221,8 +221,8 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
         "{pane_text}"
     );
     assert!(
-        pane_text.contains("model received the response")
-            && pane_text.contains("details for recovery"),
+        normalized_pane_log_text(&pane_text)
+            .contains("response details are available for correction"),
         "{pane_text}"
     );
     assert!(
@@ -612,5 +612,880 @@ async fn runtime_deferred_fetch_url_result_reaches_model_context() {
             .map(|block| block.content.as_str())
             .collect::<Vec<_>>()
     );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// A deferred HTTP 404 is model-correctable and must enter the provider
+/// continuation with its settled result, not terminate the research turn.
+#[tokio::test]
+async fn runtime_deferred_fetch_http_404_queues_model_correction() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"deferred-404","method":"agent/shell/command","params":{"idempotency_key":"deferred-404","input":"research the docs"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .unwrap()
+        .clone();
+    let action = mez_agent::AgentAction {
+        id: "fetch-missing".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/missing".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "read the source".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            vec!["queued".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    let dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &action.id)
+        .unwrap()
+        .unwrap();
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Failed,
+        "network_http_error",
+        "network request returned HTTP 404",
+    )
+    .unwrap();
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: action.id.clone(),
+                    attempt: dispatch.attempt,
+                    result: Ok(failed),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+    assert!(service.agent_turn_ledger().turns().iter().any(|record| record.turn_id == turn.turn_id && record.state == AgentTurnState::Running));
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert_eq!(
+        context
+            .blocks()
+            .iter()
+            .filter(|block| block.source == ContextSourceKind::ActionResult
+                && block.content.contains("network request returned HTTP 404"))
+            .count(),
+        1
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// A failed deferred search waits for its successful fetch sibling, then feeds
+/// both settled results to the model exactly once without replaying either.
+#[tokio::test]
+async fn runtime_deferred_search_failure_waits_for_network_sibling() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"mixed-network","method":"agent/shell/command","params":{"idempotency_key":"mixed-network","input":"research sources"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .unwrap()
+        .clone();
+    let search = mez_agent::AgentAction {
+        id: "search-failed".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: "missing source".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    let fetch = mez_agent::AgentAction {
+        id: "fetch-good".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/good".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "find sources".to_string(),
+                actions: vec![search.clone(), fetch.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: [&search, &fetch]
+            .into_iter()
+            .map(|action| {
+                mez_agent::ActionResult::running(&turn, action, vec!["queued".to_string()], None)
+            })
+            .collect(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    let search_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &search.id)
+        .unwrap()
+        .unwrap();
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &search,
+        ActionStatus::Failed,
+        "network_http_error",
+        "network request returned HTTP 503",
+    )
+    .unwrap();
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: search.id.clone(),
+                    attempt: search_dispatch.attempt.clone(),
+                    result: Ok(failed),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    assert!(!service.agent_provider_task_is_pending(&turn.turn_id));
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|row| row.turn_id == turn.turn_id && row.state == AgentTurnState::Running)
+    );
+    let fetch_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &fetch.id)
+        .unwrap()
+        .expect("sibling remains claimable");
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: fetch.id.clone(),
+                    attempt: fetch_dispatch.attempt.clone(),
+                    result: Ok(mez_agent::ActionResult::succeeded(
+                        &turn,
+                        &fetch,
+                        vec!["usable source".to_string()],
+                        None
+                    )),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    for marker in ["network request returned HTTP 503", "usable source"] {
+        assert_eq!(
+            context
+                .blocks()
+                .iter()
+                .filter(|block| block.source == ContextSourceKind::ActionResult
+                    && block.content.contains(marker))
+                .count(),
+            1
+        );
+    }
+    assert!(
+        !service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: search.id,
+                    attempt: search_dispatch.attempt,
+                    result: Err(MezError::invalid_state("stale result")),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// An exhausted deferred HTTP failure does not queue another provider request
+/// or silently discard the error when the shared correction budget is spent.
+#[tokio::test]
+async fn runtime_deferred_fetch_http_failure_exhausts_correction_budget() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"deferred-exhausted","method":"agent/shell/command","params":{"idempotency_key":"deferred-exhausted","input":"research docs"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|row| row.turn_id == "turn-1")
+        .unwrap()
+        .clone();
+    let action = mez_agent::AgentAction {
+        id: "fetch-exhausted".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/missing".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "inspect source".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            vec!["queued".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    let dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &action.id)
+        .unwrap()
+        .unwrap();
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Failed,
+        "network_http_error",
+        "network request returned HTTP 404",
+    )
+    .unwrap();
+    let key =
+        mez_agent::outcome::runtime_failure_feedback_attempt_key_for_result(&turn.turn_id, &failed);
+    service.set_agent_action_failure_retry_limit(1);
+    service
+        .agent_failure_feedback_attempts_mut_for_tests()
+        .insert(key, 1);
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: action.id.clone(),
+                    attempt: dispatch.attempt,
+                    result: Ok(failed),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    assert!(!service.agent_provider_task_is_pending(&turn.turn_id));
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|row| row.turn_id == turn.turn_id && row.state == AgentTurnState::Failed)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// A deferred policy denial remains terminal and never enters model correction.
+#[tokio::test]
+async fn runtime_deferred_fetch_denial_does_not_queue_correction() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"deferred-denial","method":"agent/shell/command","params":{"idempotency_key":"deferred-denial","input":"research docs"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|row| row.turn_id == "turn-1")
+        .unwrap()
+        .clone();
+    let action = mez_agent::AgentAction {
+        id: "fetch-denied".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/denied".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "inspect source".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            vec!["queued".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    let dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &action.id)
+        .unwrap()
+        .unwrap();
+    let denied = mez_agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Denied,
+        "policy_forbidden",
+        "network target denied",
+    )
+    .unwrap();
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: action.id.clone(),
+                    attempt: dispatch.attempt,
+                    result: Ok(denied),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    assert!(!service.agent_provider_task_is_pending(&turn.turn_id));
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|row| row.turn_id == turn.turn_id && row.state == AgentTurnState::Failed)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// A failed search followed by one successful shell command must keep the
+/// remaining fetch owned, while the next sequential shell stays inactive.
+#[tokio::test]
+async fn runtime_deferred_search_sequential_shell_and_fetch_settle_before_correction() {
+    let mut service = test_runtime_service();
+    configure_unmanaged_pane_shell_protocol_fixture(&mut service);
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "research sources")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|row| row.turn_id == started.turn_id)
+        .unwrap()
+        .clone();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    let search = mez_agent::AgentAction {
+        id: "search-missing".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: "missing source".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    let shell = mez_agent::AgentAction {
+        id: "shell-success".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect local evidence".to_string(),
+            command: "printf evidence".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let inactive_shell = mez_agent::AgentAction {
+        id: "shell-inactive".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect later evidence".to_string(),
+            command: "printf later".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let fetch = mez_agent::AgentAction {
+        id: "fetch-later".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/good".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "inspect sources".to_string(),
+                actions: vec![
+                    search.clone(),
+                    shell.clone(),
+                    inactive_shell.clone(),
+                    fetch.clone(),
+                ],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: [&search, &shell, &inactive_shell, &fetch]
+            .into_iter()
+            .map(|action| {
+                mez_agent::ActionResult::running(&turn, action, vec!["queued".to_string()], None)
+            })
+            .collect(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    let search_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &search.id)
+        .unwrap()
+        .unwrap();
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &search,
+        ActionStatus::Failed,
+        "network_http_error",
+        "network request returned HTTP 503",
+    )
+    .unwrap();
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: search.id.clone(),
+                    attempt: search_dispatch.attempt,
+                    result: Ok(failed),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    let marker = service.running_shell_transactions_for_tests().iter().find_map(|(marker, transaction)|
+        matches!(&transaction.kind, RunningShellTransactionKind::AgentAction { action_id } if action_id == &shell.id)
+            .then(|| marker.clone())
+    ).expect("shell sibling remains active");
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
+    transaction.observed_output_preview = "local evidence".to_string();
+    transaction.observed_output_bytes = transaction.observed_output_preview.len();
+    transaction.pending_input_payload = None;
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, &turn.turn_id, &turn.agent_id, "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, &turn.turn_id, &turn.agent_id, "%1", 0)
+        .unwrap();
+    assert!(!service.agent_provider_task_is_pending(&turn.turn_id));
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|row| row.turn_id == turn.turn_id && row.state == AgentTurnState::Running)
+    );
+    let fetch_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &fetch.id)
+        .unwrap()
+        .expect("fetch sibling retains ownership");
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: fetch.id.clone(),
+                    attempt: fetch_dispatch.attempt,
+                    result: Ok(mez_agent::ActionResult::succeeded(
+                        &turn,
+                        &fetch,
+                        vec!["usable source".to_string()],
+                        None
+                    )),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| !block.content.contains("printf later"))
+    );
+    for marker in [
+        "network request returned HTTP 503",
+        "local evidence",
+        "usable source",
+    ] {
+        assert_eq!(
+            context
+                .blocks()
+                .iter()
+                .filter(|block| block.source == ContextSourceKind::ActionResult
+                    && block.content.contains(marker))
+                .count(),
+            1,
+            "{marker}"
+        );
+    }
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Native redispatch must not terminate a failed search while the next native
+/// shell and a fetch still own their results; correction sees all results once.
+#[tokio::test]
+async fn runtime_deferred_search_native_shell_redispatch_waits_for_fetch() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Native));
+    service.permission_policy_mut().set_approval_bypass(true);
+    let started = service
+        .start_agent_prompt_turn("%1", "research sources")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|row| row.turn_id == started.turn_id)
+        .unwrap()
+        .clone();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    let search = mez_agent::AgentAction {
+        id: "search-missing".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: "missing source".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    let shell_actions = ["first", "second"].map(|label| mez_agent::AgentAction {
+        id: format!("shell-{label}"),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: format!("Inspect {label} source"),
+            command: format!("printf 'native-{label}\\n'"),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    });
+    let fetch = mez_agent::AgentAction {
+        id: "fetch-later".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/good".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let actions = vec![
+        search.clone(),
+        shell_actions[0].clone(),
+        shell_actions[1].clone(),
+        fetch.clone(),
+    ];
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "inspect sources".to_string(),
+                actions: actions.clone(),
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: actions
+            .iter()
+            .map(|action| {
+                mez_agent::ActionResult::running(&turn, action, vec!["queued".to_string()], None)
+            })
+            .collect(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    let search_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &search.id)
+        .unwrap()
+        .unwrap();
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &search,
+        ActionStatus::Failed,
+        "network_http_error",
+        "network request returned HTTP 503",
+    )
+    .unwrap();
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: search.id.clone(),
+                    attempt: search_dispatch.attempt,
+                    result: Ok(failed),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    let first = service
+        .claim_native_shell_action(&turn.turn_id, &shell_actions[0].id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        service
+            .complete_native_shell_action(crate::runtime::execute_native_shell_dispatch(first))
+            .unwrap()
+    );
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|row| row.turn_id == turn.turn_id && row.state == AgentTurnState::Running)
+    );
+    let second = service
+        .claim_native_shell_action(&turn.turn_id, &shell_actions[1].id)
+        .unwrap()
+        .expect("second native shell remains owned");
+    assert!(
+        service
+            .complete_native_shell_action(crate::runtime::execute_native_shell_dispatch(second))
+            .unwrap()
+    );
+    let fetch_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &fetch.id)
+        .unwrap()
+        .expect("fetch remains owned");
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: fetch.id.clone(),
+                    attempt: fetch_dispatch.attempt,
+                    result: Ok(mez_agent::ActionResult::succeeded(
+                        &turn,
+                        &fetch,
+                        vec!["usable source".to_string()],
+                        None
+                    )),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    for marker in [
+        "network request returned HTTP 503",
+        "native-first",
+        "native-second",
+        "usable source",
+    ] {
+        assert_eq!(
+            context
+                .blocks()
+                .iter()
+                .filter(|block| block.source == ContextSourceKind::ActionResult
+                    && block.content.contains(marker))
+                .count(),
+            1,
+            "{marker}"
+        );
+    }
     service.terminate_all_pane_processes().unwrap();
 }

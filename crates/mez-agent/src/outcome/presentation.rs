@@ -325,7 +325,7 @@ pub fn recoverable_network_warning_line(
         .map(|detail| format!(" ({detail})"))
         .unwrap_or_default();
     Some(format!(
-        "agent warning: URL fetch failed{detail}; model received the response details for recovery"
+        "agent warning: URL fetch failed{detail}; response details are available for correction"
     ))
 }
 

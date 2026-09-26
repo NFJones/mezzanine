@@ -3289,7 +3289,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
     );
     let normalized_pane_text = normalized_pane_log_text(&pane_text);
     assert!(
-        normalized_pane_text.contains("model received the response details for recovery"),
+        normalized_pane_text.contains("response details are available for correction"),
         "{pane_text}"
     );
     let audit = fs::read_to_string(&audit_path).unwrap();

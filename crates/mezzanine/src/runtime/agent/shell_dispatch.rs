@@ -621,6 +621,14 @@ impl RuntimeSessionService {
         settled_results: Vec<ActionResult>,
     ) -> Result<()> {
         self.record_runtime_agent_patch_results_for_turn(turn, &execution);
+        // A failed network sibling may have settled before this shell result.
+        // Keep the batch and its external worker alive until all owned results
+        // are available for one bounded correction decision.
+        if execution.terminal_state == AgentTurnState::Failed
+            && self.execution_has_running_external_sibling(&turn.turn_id, &execution)
+        {
+            execution.terminal_state = AgentTurnState::Running;
+        }
         let failed_native_apply_patch_ids = settled_results
             .iter()
             .filter(|result| result.is_error)
@@ -698,7 +706,11 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether a native worker owns one running action.
-    fn agent_action_has_native_shell_owner(&self, turn_id: &str, action_id: &str) -> bool {
+    pub(crate) fn agent_action_has_native_shell_owner(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> bool {
         let identity = (turn_id.to_string(), action_id.to_string());
         self.agent
             .pending_native_shell_dispatches
@@ -2071,6 +2083,11 @@ impl RuntimeSessionService {
                     execution.final_turn,
                 )
             };
+        if execution.terminal_state == AgentTurnState::Failed
+            && self.execution_has_running_external_sibling(&turn.turn_id, execution)
+        {
+            execution.terminal_state = AgentTurnState::Running;
+        }
         self.integration
             .runtime_metrics_mut()
             .record_shell_action_batch(dispatched);

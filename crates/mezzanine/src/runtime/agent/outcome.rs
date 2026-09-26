@@ -217,7 +217,7 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `turn_id`: The owning turn id.
     /// - `result`: The action result being classified.
-    fn action_result_is_inactive_pending_shell_sibling(
+    pub(crate) fn action_result_is_inactive_pending_shell_sibling(
         &self,
         turn_id: &str,
         result: &ActionResult,
@@ -226,6 +226,8 @@ impl RuntimeSessionService {
             && !result.is_error
             && runtime_action_type_is_shell_backed(result.action_type)
             && !self.agent_action_has_running_shell_transaction(turn_id, &result.action_id)
+            && !self.agent_action_has_native_shell_owner(turn_id, &result.action_id)
+            && !self.agent_action_has_pending_pre_shell_hook(turn_id, &result.action_id)
     }
 
     /// Removes all request-recovery attempt counters owned by one turn.

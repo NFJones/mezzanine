@@ -2831,6 +2831,19 @@ impl RuntimeSessionService {
         self.run_configured_completed_hooks(HookEvent::PostShellCommand, &post_shell_hook_payload)?;
 
         let mut transcript_entries = 0usize;
+        // A failed sibling can make the batch state Failed before an external
+        // action has settled. Inactive sequential shell siblings are instead
+        // handled by the normal bounded failure-feedback path.
+        if terminal_state == AgentTurnState::Failed
+            && self
+                .agent_turn_executions()
+                .get(turn_id)
+                .is_some_and(|execution| {
+                    self.execution_has_running_external_sibling(turn_id, execution)
+                })
+        {
+            terminal_state = AgentTurnState::Running;
+        }
         if matches!(
             terminal_state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
