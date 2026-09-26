@@ -61,6 +61,7 @@ pub(crate) enum CompareAndSwapTranscriptEntryResult {
 
 #[cfg(test)]
 pub use types::SavedSessionRetentionFailure;
+pub(crate) use types::{AgentCompactionEpoch, AgentCompactionRange};
 pub use types::{
     AgentPresentationEntry, AgentTranscriptStore, SavedAgentSession, SavedSessionCursor,
     SavedSessionLifecycleFilter, SavedSessionPageAnchor, SavedSessionQuery,

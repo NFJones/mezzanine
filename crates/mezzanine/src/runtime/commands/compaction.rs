@@ -36,11 +36,162 @@ use crate::runtime::{
     runtime_agent_transcript_context_blocks,
 };
 use crate::security::auth::AuthProfileCredentialSource;
+use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 use mez_agent::{
     DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorRetryClass, apply_model_context_compaction_plan,
 };
 
+/// Maps only an exact, contiguous frozen selection to durable execution rows.
+/// Unmatched or ambiguous selections retain the existing full raw replay window.
+fn selected_durable_compaction_range(
+    plan: &mez_agent::ModelContextCompactionPlan,
+    context: &AgentContext,
+    entries: &[TranscriptEntry],
+    summary: &str,
+) -> Option<AgentCompactionRange> {
+    let selected = plan.replacement_blocks();
+    if selected.is_empty() || selected.len() != plan.replacement_event_sequences().len() {
+        return None;
+    }
+    let selected_events = plan
+        .replacement_event_sequences()
+        .iter()
+        .zip(selected)
+        .map(|(sequence, block)| {
+            context
+                .chronology()
+                .iter()
+                .find(|event| event.sequence() == *sequence && event.block() == block)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if selected_events
+        .iter()
+        .any(|event| event.execution_group_id().is_none())
+    {
+        return None;
+    }
+    let matching = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| {
+            let Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
+                source,
+                label,
+                content,
+                execution_group_id: Some(_),
+                ordinal: Some(_),
+                ..
+            }) = mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content)
+            else {
+                return false;
+            };
+            selected[0].source == source
+                && selected[0].label == label
+                && selected[0].content == content
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if matching.len() != 1 {
+        return None;
+    }
+    let start = matching[0];
+    let rows = entries.get(start..start.checked_add(selected.len())?)?;
+    let mut selected_groups = std::collections::BTreeSet::new();
+    let mut prior_group = None;
+    let mut expected_ordinal = 0_u64;
+    if !rows
+        .iter()
+        .zip(selected)
+        .zip(&selected_events)
+        .all(|((entry, block), event)| {
+            matches!(mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+            Some(mez_agent::TranscriptContextEvent::ExecutionBlock { source, label, content,
+                execution_group_id: Some(group), ordinal: Some(ordinal), .. })
+                if block.source == source && block.label == label && block.content == content
+                    && event.execution_group_id() == Some(&group)
+                    && {
+                        if prior_group.as_ref() != Some(&group) {
+                            if !selected_groups.insert(group.clone()) { return false; }
+                            prior_group = Some(group.clone());
+                            expected_ordinal = 0;
+                        }
+                        expected_ordinal = expected_ordinal.saturating_add(1);
+                        ordinal == expected_ordinal
+                    })
+        })
+    {
+        return None;
+    }
+    if !rows
+        .windows(2)
+        .all(|pair| pair[0].sequence.checked_add(1) == Some(pair[1].sequence))
+    {
+        return None;
+    }
+    if entries.iter().enumerate().any(|(index, entry)| {
+        (index < start || index >= start + rows.len())
+            && matches!(mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
+                    execution_group_id: Some(candidate), ..
+                }) if selected_groups.contains(&candidate))
+    }) {
+        return None;
+    }
+    Some(AgentCompactionRange {
+        first_sequence: rows.first()?.sequence,
+        through_sequence: rows.last()?.sequence,
+        summary: summary.to_string(),
+    })
+}
+
 impl RuntimeSessionService {
+    /// Builds a selective epoch only when every selected row already exists durably.
+    /// Otherwise the existing raw replay boundary remains authoritative.
+    fn prospective_observed_compaction_epoch(
+        &self,
+        task: &RuntimeAgentCompactionTask,
+        context: &AgentContext,
+        plan: &mez_agent::ModelContextCompactionPlan,
+        summary: &str,
+    ) -> Result<Option<AgentCompactionEpoch>> {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
+            return Ok(None);
+        };
+        let previous = store.compaction_epoch(&task.conversation_id)?;
+        let boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
+        let entries = store.inspect(&task.conversation_id)?;
+        let Some(range) = selected_durable_compaction_range(plan, context, &entries, summary)
+        else {
+            return Ok(None);
+        };
+        if range.first_sequence <= boundary
+            || self
+                .persistence
+                .pending_transcript_entries(&task.conversation_id)
+                .iter()
+                .any(|entry| entry.sequence <= range.through_sequence)
+        {
+            return Ok(None);
+        }
+        let mut ranges = previous
+            .as_ref()
+            .map_or_else(Vec::new, |epoch| epoch.ranges.clone());
+        if ranges
+            .last()
+            .is_some_and(|last| last.through_sequence >= range.first_sequence)
+        {
+            return Ok(None);
+        }
+        ranges.push(range);
+        Ok(Some(AgentCompactionEpoch {
+            version: 2,
+            conversation_id: task.conversation_id.clone(),
+            through_sequence: boundary,
+            summary: previous.map_or_else(String::new, |epoch| epoch.summary),
+            ranges,
+        }))
+    }
+
     /// Executes `/compact` by queuing model-backed conversation compaction.
     pub(super) fn execute_agent_shell_compact_command(
         &mut self,
@@ -865,9 +1016,12 @@ impl RuntimeSessionService {
                     .ok_or_else(|| {
                         MezError::invalid_state("active-turn compaction context is unavailable")
                     })?;
-                let (compacted, report) =
-                    apply_model_context_compaction_plan(context, plan.as_ref(), &final_summary)
-                        .map_err(|error| MezError::invalid_state(error.message()))?;
+                let (compacted, report) = apply_model_context_compaction_plan(
+                    context.clone(),
+                    plan.as_ref(),
+                    &final_summary,
+                )
+                .map_err(|error| MezError::invalid_state(error.message()))?;
                 let model_profile = self
                     .agent_turn_model_profile(&turn_id)
                     .cloned()
@@ -962,20 +1116,32 @@ impl RuntimeSessionService {
                     ..
                 } = trigger
                 {
+                    let projection = self.prospective_observed_compaction_epoch(
+                        &task,
+                        &context,
+                        plan.as_ref(),
+                        &final_summary,
+                    )?;
                     self.validate_observed_input_compaction_refresh_candidate(
                         &task,
                         &turn,
                         compacted.clone(),
                         &final_summary,
+                        projection.clone(),
                         observed_input_tokens,
                         &model_profile,
                         &provider_options,
                         api,
                         estimate_stream,
                     )?;
+                    self.persist_agent_compaction_epoch(
+                        pane_id,
+                        &task,
+                        &final_summary,
+                        projection.as_ref(),
+                    )?;
                     self.agent_turn_contexts_mut()
                         .insert(turn_id.clone(), compacted.clone());
-                    self.persist_agent_compaction_epoch(pane_id, &task, &final_summary)?;
                     if self.refresh_running_turn_context_after_conversation_compaction(&turn_id)? {
                         self.clear_agent_turn_provider_request_chain(&turn_id);
                         self.queue_agent_provider_recovery_task_after_compaction(
@@ -1052,7 +1218,7 @@ impl RuntimeSessionService {
             {
                 self.validate_manual_compaction_candidate(&task, &summary)?;
             }
-            self.persist_agent_compaction_epoch(pane_id, &task, &summary)?;
+            self.persist_agent_compaction_epoch(pane_id, &task, &summary, None)?;
             if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
                 let refreshed = self
                     .refresh_running_turn_context_after_conversation_compaction(resume_turn_id)?;
@@ -1109,6 +1275,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         compacted: AgentContext,
         summary: &str,
+        projection: Option<AgentCompactionEpoch>,
         observed_input_tokens: u64,
         model_profile: &ModelProfile,
         provider_options: &std::collections::BTreeMap<String, String>,
@@ -1152,6 +1319,7 @@ impl RuntimeSessionService {
             compacted,
             summary_block,
             mcp_epoch_blocks,
+            projection,
         )?
         else {
             return Err(MezError::invalid_state(
@@ -1396,6 +1564,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         task: &RuntimeAgentCompactionTask,
         summary: &str,
+        projection: Option<&AgentCompactionEpoch>,
     ) -> Result<()> {
         let content = runtime_model_compact_memory_content(
             pane_id,
@@ -1407,11 +1576,61 @@ impl RuntimeSessionService {
             summary,
         );
         if let Some(store) = self.persistence.cloned_transcript_store() {
-            let previous_boundary = store
-                .compaction_epoch(&task.conversation_id)?
-                .map_or(0, |epoch| epoch.through_sequence);
+            let previous = store.compaction_epoch(&task.conversation_id)?;
+            let previous_boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
             let boundary = task.compacted_through_sequence.unwrap_or(previous_boundary);
-            store.save_compaction_epoch(&task.conversation_id, boundary, &content)?;
+            if let Some(projection) = projection {
+                let (new_range, prior_ranges) =
+                    projection.ranges.split_last().ok_or_else(|| {
+                        MezError::invalid_state("selective compaction has no new range")
+                    })?;
+                if projection.through_sequence != boundary
+                    || previous
+                        .as_ref()
+                        .map_or_else(String::new, |epoch| epoch.summary.clone())
+                        != projection.summary
+                    || previous
+                        .as_ref()
+                        .map_or(&[][..], |epoch| epoch.ranges.as_slice())
+                        != prior_ranges
+                    || new_range.first_sequence <= boundary
+                {
+                    return Err(MezError::invalid_state(
+                        "selective compaction boundary changed",
+                    ));
+                }
+                store.save_compaction_ranges(
+                    &task.conversation_id,
+                    boundary,
+                    &projection.summary,
+                    projection.ranges.clone(),
+                )?;
+            } else if let Some(previous) = previous.filter(|epoch| !epoch.ranges.is_empty()) {
+                if previous.ranges.iter().any(|range| {
+                    range.first_sequence <= boundary && boundary < range.through_sequence
+                }) {
+                    return Err(MezError::invalid_state(
+                        "prefix compaction cannot split a selective execution range",
+                    ));
+                }
+                let remaining = previous
+                    .ranges
+                    .into_iter()
+                    .filter(|range| range.first_sequence > boundary)
+                    .collect::<Vec<_>>();
+                if remaining.is_empty() {
+                    store.save_compaction_epoch(&task.conversation_id, boundary, &content)?;
+                } else {
+                    store.save_compaction_ranges(
+                        &task.conversation_id,
+                        boundary,
+                        &content,
+                        remaining,
+                    )?;
+                }
+            } else {
+                store.save_compaction_epoch(&task.conversation_id, boundary, &content)?;
+            }
         } else if task.compacted_through_sequence.is_some() {
             return Err(MezError::invalid_state(
                 "durable compaction requires a transcript store",

@@ -143,6 +143,119 @@ fn entry(conversation_id: &str, sequence: u64, role: TranscriptRole) -> Transcri
     }
 }
 
+/// Selective epochs must never replace direct user text or only half of one
+/// typed execution group, and rejected writes leave the previous epoch intact.
+#[test]
+fn compaction_ranges_reject_protected_and_split_history() {
+    let root = temp_root("compaction-ranges-protected");
+    let store = AgentTranscriptStore::new(root.clone());
+    let group = mez_agent::ContextExecutionGroupId::new("old-group").unwrap();
+    let mut user = entry("ranges", 1, TranscriptRole::User);
+    user.content = "keep this user instruction exact".to_string();
+    store.append(&user).unwrap();
+    for (sequence, source) in [
+        (2, mez_agent::ContextSourceKind::TranscriptAssistant),
+        (3, mez_agent::ContextSourceKind::ActionResult),
+    ] {
+        let mut row = entry("ranges", sequence, TranscriptRole::System);
+        row.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+            source,
+            format!("block {sequence}"),
+            format!("content {sequence}"),
+            group.clone(),
+            sequence - 1,
+            None,
+        )
+        .unwrap()
+        .to_transcript_content();
+        store.append(&row).unwrap();
+    }
+    store
+        .save_compaction_epoch("ranges", 0, "older summary")
+        .unwrap();
+    let previous = store.compaction_epoch("ranges").unwrap().unwrap();
+    for (first_sequence, through_sequence) in [(1, 1), (2, 2), (1, 3)] {
+        assert!(
+            store
+                .save_compaction_ranges(
+                    "ranges",
+                    0,
+                    "older summary",
+                    vec![super::types::AgentCompactionRange {
+                        first_sequence,
+                        through_sequence,
+                        summary: "replacement summary".to_string(),
+                    }],
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store.compaction_epoch("ranges").unwrap(),
+            Some(previous.clone())
+        );
+    }
+    store
+        .save_compaction_ranges(
+            "ranges",
+            0,
+            "older summary",
+            vec![super::types::AgentCompactionRange {
+                first_sequence: 2,
+                through_sequence: 3,
+                summary: "replacement summary".to_string(),
+            }],
+        )
+        .unwrap();
+    assert_eq!(store.inspect("ranges").unwrap()[0].content, user.content);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// An interrupted selective epoch replacement leaves its previous projection
+/// and exact append-only source unchanged rather than exposing a partial range.
+#[test]
+fn compaction_ranges_failed_publication_keeps_previous_epoch() {
+    let root = temp_root("compaction-ranges-atomic");
+    let store = AgentTranscriptStore::new(root.clone());
+    let group = mez_agent::ContextExecutionGroupId::new("atomic-group").unwrap();
+    let mut row = entry("ranges-atomic", 1, TranscriptRole::System);
+    row.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        mez_agent::ContextSourceKind::TranscriptAssistant,
+        "assistant",
+        "exact original",
+        group,
+        1,
+        None,
+    )
+    .unwrap()
+    .to_transcript_content();
+    store.append(&row).unwrap();
+    store
+        .save_compaction_epoch("ranges-atomic", 0, "previous")
+        .unwrap();
+    let previous = store.compaction_epoch("ranges-atomic").unwrap().unwrap();
+    store.fail_next_compaction_epoch_write();
+    assert!(
+        store
+            .save_compaction_ranges(
+                "ranges-atomic",
+                0,
+                "previous",
+                vec![super::types::AgentCompactionRange {
+                    first_sequence: 1,
+                    through_sequence: 1,
+                    summary: "replacement".to_string(),
+                },]
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store.compaction_epoch("ranges-atomic").unwrap(),
+        Some(previous)
+    );
+    assert_eq!(store.inspect("ranges-atomic").unwrap(), vec![row]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A failed epoch replacement must leave the previous summary and boundary
 /// together, while the append-only archive and later exact suffix remain intact.
 #[test]

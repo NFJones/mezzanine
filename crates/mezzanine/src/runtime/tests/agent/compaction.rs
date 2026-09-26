@@ -763,8 +763,17 @@ max_input_tokens = 20000
             "historical-turn-1",
         ),
         (
-            mez_agent::transcript::TranscriptRole::Assistant,
-            "Historical answer one. ".repeat(80),
+            mez_agent::transcript::TranscriptRole::System,
+            mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                ContextSourceKind::TranscriptAssistant,
+                "historical answer",
+                "TYPED_OLD_WORK ".repeat(80),
+                mez_agent::ContextExecutionGroupId::new("historical-group-1").unwrap(),
+                1,
+                None,
+            )
+            .unwrap()
+            .to_transcript_content(),
             "historical-turn-1",
         ),
         (
@@ -887,6 +896,27 @@ max_input_tokens = 20000
 fn runtime_observed_compaction_refresh_preserves_current_user_prompt() {
     let (mut service, transcript_store, turn_id) =
         queue_observed_input_compaction_with_exact_history();
+    let queued = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } =
+        &queued.target
+    else {
+        panic!("expected active-turn compaction");
+    };
+    assert!(
+        plan.replacement_blocks()
+            .iter()
+            .any(|block| block.content.contains("TYPED_OLD_WORK")),
+        "selected={:?}",
+        plan.replacement_blocks()
+    );
+    assert_eq!(
+        plan.replacement_blocks().len(),
+        1,
+        "selected={:?}",
+        plan.replacement_blocks()
+    );
     let session = service
         .agent_shell_store()
         .get("%1")
@@ -901,7 +931,7 @@ fn runtime_observed_compaction_refresh_preserves_current_user_prompt() {
         .saturating_add(1);
     transcript_store
         .append(&mez_agent::transcript::TranscriptEntry {
-            conversation_id,
+            conversation_id: conversation_id.clone(),
             sequence: next_sequence,
             created_at_unix_seconds: 2,
             role: mez_agent::transcript::TranscriptRole::Assistant,
@@ -920,6 +950,21 @@ fn runtime_observed_compaction_refresh_preserves_current_user_prompt() {
         "%1",
         "observed input summary without exact user instructions",
     );
+    let epoch = transcript_store
+        .compaction_epoch(&conversation_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        epoch.version,
+        2,
+        "epoch={epoch:?}; pane={}",
+        service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+    );
+    assert_eq!(epoch.ranges.len(), 1);
     let context = service
         .agent_turn_contexts()
         .get(&turn_id)
@@ -933,6 +978,18 @@ fn runtime_observed_compaction_refresh_preserves_current_user_prompt() {
                     .join("\\n")
             )
         });
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| block.content == "observed input summary without exact user instructions")
+    );
+    assert!(
+        !context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("TYPED_OLD_WORK"))
+    );
     assert!(
         context.blocks().iter().any(|block| {
             block.label == "user prompt"
@@ -970,6 +1027,18 @@ fn runtime_observed_compaction_retains_unsummarized_exact_history_for_replay() {
     let next_context = service
         .agent_context_for_pane_prompt("%1", "NEXT_USER_PROMPT Continue.", 0)
         .unwrap();
+    assert!(
+        next_context
+            .blocks()
+            .iter()
+            .any(|block| block.content == "observed input summary without exact user instructions")
+    );
+    assert!(
+        !next_context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("TYPED_OLD_WORK"))
+    );
     assert!(
         [
             "EXACT_OLDER_USER_INSTRUCTION",
@@ -4550,6 +4619,114 @@ fn runtime_manual_compaction_partial_chunk_failure_preserves_history() {
             .unwrap()
             .transcript_entries,
         3
+    );
+}
+
+/// Manual compaction may absorb a prior selective range only after summarizing
+/// a complete prefix that contains it; its later raw tail stays available.
+#[test]
+fn runtime_manual_compaction_after_selective_epoch() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "manual-after-selective".to_string(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"selective-manual\"\n[providers.openai]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.selective-manual]\nprovider = \"openai\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
+    }]).unwrap();
+    let store = AgentTranscriptStore::new(temp_root("manual-after-selective"));
+    let group = mez_agent::ContextExecutionGroupId::new("manual-prior-group").unwrap();
+    for (sequence, content, turn_id, role) in [
+        (
+            1,
+            "display answer".to_string(),
+            "old",
+            mez_agent::transcript::TranscriptRole::Assistant,
+        ),
+        (
+            2,
+            mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                ContextSourceKind::TranscriptAssistant,
+                "answer",
+                "old typed work",
+                group,
+                1,
+                None,
+            )
+            .unwrap()
+            .to_transcript_content(),
+            "old",
+            mez_agent::transcript::TranscriptRole::System,
+        ),
+        (
+            3,
+            "recent exact answer".to_string(),
+            "recent",
+            mez_agent::transcript::TranscriptRole::Assistant,
+        ),
+    ] {
+        store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: "manual-selective".to_string(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role,
+                turn_id: turn_id.to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content,
+            })
+            .unwrap();
+    }
+    store
+        .save_compaction_ranges(
+            "manual-selective",
+            0,
+            "",
+            vec![crate::storage::transcript::AgentCompactionRange {
+                first_sequence: 2,
+                through_sequence: 2,
+                summary: "prior typed summary".to_string(),
+            }],
+        )
+        .unwrap();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "manual-selective", 3)
+        .unwrap();
+    let queued = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"manual-selective","method":"agent/shell/command","params":{"idempotency_key":"manual-selective","input":"/compact"}}"#,
+        &primary,
+    );
+    assert!(queued.contains("state=queued"), "{queued}");
+    complete_runtime_test_compaction(
+        &mut service,
+        "%1",
+        "new manual summary including prior typed summary",
+    );
+    let epoch = store.compaction_epoch("manual-selective").unwrap().unwrap();
+    assert!(epoch.through_sequence >= 2, "{epoch:?}");
+    assert!(epoch.ranges.is_empty(), "{epoch:?}");
+    let replay = service
+        .agent_context_for_pane_prompt("%1", "continue", 0)
+        .unwrap();
+    assert!(
+        replay
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("new manual summary"))
+    );
+    assert!(
+        replay
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("recent exact answer"))
     );
 }
 

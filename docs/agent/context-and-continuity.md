@@ -142,18 +142,20 @@ retention, and exact barriers and incomplete groups remain protected.
 
 A completed conversation compaction writes a versioned summary and the last
 summarized transcript sequence together to a private conversation-owned epoch
-file. The original transcript remains append-only. On restart or resume, Mez
-loads this committed epoch before replaying the exact subsequent transcript
-entries, including later appends; optional pane memory is not needed to recover
-the summary. Corrupt epoch data or unreadable required history stops context
-construction rather than silently dropping older context.
+file. Selective epochs can also anchor model-authored summaries at ordered,
+complete durable execution-group ranges between exact barriers. The original
+transcript remains append-only; uncovered entries and later appends replay in
+their original order. On restart or resume, Mez loads this committed projection;
+optional pane memory is not needed to recover the summary. Corrupt epoch data
+or unreadable required history stops context construction rather than silently
+dropping older context.
 
-Observed-input compaction also protects exact historical user instructions that
-the live context planner excludes from summary input. Until durable replay can
-represent the selected compaction ranges without losing those barriers, this
-path may add a compact-memory summary while leaving the raw transcript replay
-boundary unchanged. This is safer than silently discarding exact history, but
-does not reduce replayed transcript size.
+Observed-input compaction also protects exact historical user instructions,
+including legacy transcript user rows. A selected closed durable execution
+range can be replaced at its original position after validating the prospective
+refreshed request. When the frozen selection cannot be mapped unambiguously,
+Mez leaves the raw replay boundary unchanged rather than discard exact history;
+that fallback does not reduce replayed transcript size.
 
 Use `/status` for current-pane context and token information. Cache reuse is a
 provider observation, not proof that context is correct: provider/model changes

@@ -32,12 +32,13 @@ use super::encoding::{
 use super::fs::{set_private_dir_permissions, set_private_file_permissions};
 use super::history;
 use super::types::{
-    AgentPresentationEntry, AgentTranscriptStore, NamedAgentSession, SavedAgentSession,
-    SavedSessionCatalogStatus, SavedSessionPage, SavedSessionQuery, SavedSessionRetentionFailure,
-    SavedSessionRetentionPolicy, SavedSessionRetentionReport, SessionObjectiveMirror,
-    SessionObjectiveMirrorHandleState, SessionObjectiveMirrorStatus,
-    SessionObjectiveMirrorWriteRead, SessionTitleGenerationProbe, SessionTitleMirror,
-    SessionTitleMirrorHandleState, SessionTitleMirrorStatus, SessionTitleMirrorWriteRead,
+    AgentCompactionEpoch, AgentCompactionRange, AgentPresentationEntry, AgentTranscriptStore,
+    NamedAgentSession, SavedAgentSession, SavedSessionCatalogStatus, SavedSessionPage,
+    SavedSessionQuery, SavedSessionRetentionFailure, SavedSessionRetentionPolicy,
+    SavedSessionRetentionReport, SessionObjectiveMirror, SessionObjectiveMirrorHandleState,
+    SessionObjectiveMirrorStatus, SessionObjectiveMirrorWriteRead, SessionTitleGenerationProbe,
+    SessionTitleMirror, SessionTitleMirrorHandleState, SessionTitleMirrorStatus,
+    SessionTitleMirrorWriteRead,
 };
 use mez_agent::transcript::{
     AgentSessionMetadata, ConversationSummary, TranscriptEntry, bounded_summary_text,
@@ -64,6 +65,116 @@ const SESSION_METADATA_VERSION: u64 = 3;
 const COMPACTION_EPOCH_FILE_NAME: &str = "compaction-epoch.json";
 /// Maximum encoded size accepted for one durable compaction epoch.
 const COMPACTION_EPOCH_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Checks the ordering and bounds of selective replay ranges before publication or use.
+fn validate_compaction_ranges(
+    ranges: &[AgentCompactionRange],
+    prefix_boundary: u64,
+    next_sequence: u64,
+) -> Result<()> {
+    let mut previous_end = prefix_boundary;
+    for range in ranges {
+        if range.first_sequence <= previous_end
+            || range.through_sequence < range.first_sequence
+            || range.through_sequence >= next_sequence
+            || range.summary.trim().is_empty()
+            || range.summary.len() as u64 > COMPACTION_EPOCH_MAX_BYTES
+        {
+            return Err(MezError::invalid_args(
+                "compaction epoch contains an invalid or overlapping selective range",
+            ));
+        }
+        previous_end = range.through_sequence;
+    }
+    Ok(())
+}
+
+/// Refuses selective replacements that could erase user intent or tear one execution group.
+fn validate_compaction_range_sources(
+    ranges: &[AgentCompactionRange],
+    entries: &[TranscriptEntry],
+) -> Result<()> {
+    let mut previously_selected_groups = BTreeSet::new();
+    for range in ranges {
+        let selected = entries
+            .iter()
+            .filter(|entry| {
+                entry.sequence >= range.first_sequence && entry.sequence <= range.through_sequence
+            })
+            .collect::<Vec<_>>();
+        let consecutive = selected
+            .windows(2)
+            .all(|pair| pair[0].sequence.checked_add(1) == Some(pair[1].sequence));
+        let selected_groups = selected
+            .iter()
+            .filter_map(|entry| {
+                match mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content) {
+                    Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
+                        execution_group_id: Some(group),
+                        ..
+                    }) => Some(group),
+                    _ => None,
+                }
+            })
+            .collect::<BTreeSet<_>>();
+        let mut group_ordinals = BTreeMap::new();
+        let complete_groups = selected.iter().all(|entry| {
+            let Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
+                execution_group_id: Some(group),
+                ordinal: Some(ordinal),
+                ..
+            }) = mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content)
+            else {
+                return false;
+            };
+            let previous = group_ordinals.insert(group, ordinal).unwrap_or(0_u64);
+            ordinal == previous.saturating_add(1)
+        });
+        if selected.is_empty()
+            || !consecutive
+            || !complete_groups
+            || !selected_groups.is_disjoint(&previously_selected_groups)
+            || selected
+                .first()
+                .is_none_or(|entry| entry.sequence != range.first_sequence)
+            || selected
+                .last()
+                .is_none_or(|entry| entry.sequence != range.through_sequence)
+            || selected.iter().any(|entry| {
+                !matches!(
+                    (
+                        entry.role,
+                        mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content)
+                    ),
+                    (
+                        mez_agent::transcript::TranscriptRole::System,
+                        Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
+                            execution_group_id: Some(_),
+                            ordinal: Some(_),
+                            ..
+                        })
+                    )
+                )
+            })
+            || entries.iter().any(|entry| {
+                (entry.sequence < range.first_sequence || entry.sequence > range.through_sequence)
+                    && matches!(
+                        mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                        Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
+                            execution_group_id: Some(group),
+                            ..
+                        }) if selected_groups.contains(&group)
+                    )
+            })
+        {
+            return Err(MezError::invalid_args(
+                "compaction epoch selective range crosses exact or incomplete transcript history",
+            ));
+        }
+        previously_selected_groups.extend(selected_groups);
+    }
+    Ok(())
+}
 
 /// Versioned authoritative metadata for one durable conversation.
 ///
@@ -858,10 +969,12 @@ impl AgentTranscriptStore {
             serde_json::from_slice(&bytes).map_err(|error| {
                 MezError::invalid_args(format!("compaction epoch decode failed: {error}"))
             })?;
-        if epoch.version != 1
+        if !matches!(epoch.version, 1 | 2)
             || epoch.conversation_id != conversation_id
-            || epoch.summary.trim().is_empty()
+            || (epoch.version == 1 && epoch.summary.trim().is_empty())
+            || (epoch.version == 2 && epoch.summary.trim().is_empty() && epoch.ranges.is_empty())
             || epoch.summary.len() as u64 > COMPACTION_EPOCH_MAX_BYTES
+            || (epoch.version == 1 && !epoch.ranges.is_empty())
         {
             return Err(MezError::invalid_args(
                 "compaction epoch sidecar has invalid identity, version, or summary",
@@ -872,6 +985,10 @@ impl AgentTranscriptStore {
             return Err(MezError::invalid_state(
                 "compaction epoch replay boundary exceeds the durable transcript",
             ));
+        }
+        validate_compaction_ranges(&epoch.ranges, epoch.through_sequence, next_sequence)?;
+        if !epoch.ranges.is_empty() {
+            validate_compaction_range_sources(&epoch.ranges, &self.inspect(conversation_id)?)?;
         }
         Ok(Some(epoch))
     }
@@ -886,8 +1003,42 @@ impl AgentTranscriptStore {
         through_sequence: u64,
         summary: &str,
     ) -> Result<()> {
+        self.save_compaction_projection(AgentCompactionEpoch {
+            version: 1,
+            conversation_id: conversation_id.to_string(),
+            through_sequence,
+            summary: summary.to_string(),
+            ranges: Vec::new(),
+        })
+    }
+
+    /// Atomically publishes ordered selective replacements without altering the archive.
+    pub fn save_compaction_ranges(
+        &self,
+        conversation_id: &str,
+        through_sequence: u64,
+        summary: &str,
+        ranges: Vec<AgentCompactionRange>,
+    ) -> Result<()> {
+        self.save_compaction_projection(AgentCompactionEpoch {
+            version: 2,
+            conversation_id: conversation_id.to_string(),
+            through_sequence,
+            summary: summary.to_string(),
+            ranges,
+        })
+    }
+
+    /// Shares the crash-safe v1 and v2 publication boundary.
+    fn save_compaction_projection(&self, epoch: AgentCompactionEpoch) -> Result<()> {
+        let conversation_id = epoch.conversation_id.as_str();
+        let through_sequence = epoch.through_sequence;
+        let summary = epoch.summary.as_str();
         validate_conversation_id(conversation_id)?;
-        if summary.trim().is_empty() || summary.len() as u64 > COMPACTION_EPOCH_MAX_BYTES {
+        if (epoch.version == 1 && summary.trim().is_empty())
+            || (epoch.version == 2 && summary.trim().is_empty() && epoch.ranges.is_empty())
+            || summary.len() as u64 > COMPACTION_EPOCH_MAX_BYTES
+        {
             return Err(MezError::invalid_args(
                 "compaction epoch summary is empty or exceeds the accepted size limit",
             ));
@@ -909,6 +1060,14 @@ impl AgentTranscriptStore {
                 "compaction epoch boundary requires a durable transcript",
             ));
         }
+        validate_compaction_ranges(
+            &epoch.ranges,
+            through_sequence,
+            latest_sequence.unwrap_or(0).saturating_add(1),
+        )?;
+        if !epoch.ranges.is_empty() {
+            validate_compaction_range_sources(&epoch.ranges, &self.inspect(conversation_id)?)?;
+        }
         if let Some(previous) = self.compaction_epoch(conversation_id)?
             && through_sequence < previous.through_sequence
         {
@@ -916,12 +1075,6 @@ impl AgentTranscriptStore {
                 "compaction epoch replay boundary cannot move backwards",
             ));
         }
-        let epoch = super::types::AgentCompactionEpoch {
-            version: 1,
-            conversation_id: conversation_id.to_string(),
-            through_sequence,
-            summary: summary.to_string(),
-        };
         let session_dir = self.ensure_session_dir(conversation_id)?;
         let path = session_dir.join(COMPACTION_EPOCH_FILE_NAME);
         let temp_path = session_dir.join(".compaction-epoch.json.tmp");

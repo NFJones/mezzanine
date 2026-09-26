@@ -824,6 +824,7 @@ impl RuntimeSessionService {
         mut candidate_context: AgentContext,
         compact_summary: ContextBlock,
         mcp_epoch_blocks: Vec<ContextBlock>,
+        projection: Option<crate::storage::transcript::AgentCompactionEpoch>,
     ) -> Result<Option<AgentContext>> {
         let Some(turn) = self
             .agent_turn_ledger()
@@ -843,7 +844,33 @@ impl RuntimeSessionService {
             return Ok(None);
         }
 
-        let history = self.runtime_agent_history_epoch_context(&turn.pane_id)?;
+        let selective_projection = projection.is_some();
+        let history = if let Some(epoch) = projection {
+            let mut work = self.prepare_runtime_agent_prompt_history_work(&turn.pane_id);
+            let transcript_work = work.transcript_work.take().ok_or_else(|| {
+                MezError::invalid_state("selective compaction preview requires transcript history")
+            })?;
+            let transcript = context::execute_runtime_agent_history_epoch_with_projection(
+                transcript_work,
+                Some(epoch),
+            )?;
+            let mut blocks = work.memory_blocks;
+            if transcript
+                .blocks
+                .iter()
+                .any(|block| block.source == ContextSourceKind::Memory)
+            {
+                blocks.clear();
+            }
+            blocks.extend(transcript.blocks);
+            RuntimeAgentTranscriptContext {
+                blocks,
+                execution_events: transcript.execution_events,
+                provider_history_repair_identity: transcript.provider_history_repair_identity,
+            }
+        } else {
+            self.runtime_agent_history_epoch_context(&turn.pane_id)?
+        };
         let imported_history_sequence_high_water =
             self.agent_turn_imported_history_sequence_high_water(turn_id);
         if imported_history_sequence_high_water == 0 {
@@ -853,14 +880,17 @@ impl RuntimeSessionService {
             mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", session.session_id));
         let mut refreshed_blocks = history.blocks;
         refreshed_blocks.retain(|block| {
-            !(block.source == ContextSourceKind::Memory
+            !(!selective_projection
+                && block.source == ContextSourceKind::Memory
                 && block
                     .label
                     .starts_with(&format!("memory {compact_memory_id} ")))
                 && block.source != ContextSourceKind::McpRetrievedManifest
                 && block.source != ContextSourceKind::McpCatalogSnapshot
         });
-        refreshed_blocks.insert(0, compact_summary);
+        if !selective_projection {
+            refreshed_blocks.insert(0, compact_summary);
+        }
         refreshed_blocks.extend(mcp_epoch_blocks);
 
         if !self.agent_turn_has_new_environment_snapshot(turn_id)

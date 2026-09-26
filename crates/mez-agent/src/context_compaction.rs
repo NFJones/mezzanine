@@ -72,6 +72,14 @@ impl ModelContextCompactionPlan {
         &self.replacement_blocks
     }
 
+    /// Returns frozen identities of the selected chronological events in block order.
+    ///
+    /// These are context event sequences, not durable transcript row sequences;
+    /// callers must prove their own mapping before publishing a replay epoch.
+    pub fn replacement_event_sequences(&self) -> &[ContextEventSequence] {
+        &self.replacement_event_sequences
+    }
+
     /// Returns exact recent blocks intentionally retained outside model summary input.
     pub fn retained_tail(&self) -> &[ContextBlock] {
         &self.retained_tail
@@ -573,6 +581,7 @@ fn model_context_execution_group_ranges(context: &AgentContext) -> Vec<Range<usi
 /// Returns whether a block is an exact, non-crossable compaction barrier.
 fn model_context_block_is_protected_barrier(block: &ContextBlock) -> bool {
     block.retention() == ContextRetention::Exact
+        || block.source == ContextSourceKind::TranscriptUser
 }
 
 /// Returns the provider-request word cost of one block.

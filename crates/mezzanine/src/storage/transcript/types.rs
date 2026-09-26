@@ -274,6 +274,17 @@ pub struct AgentPresentationEntry {
 /// The summary and sequence boundary are stored in one atomically replaced
 /// sidecar so restart replay cannot observe one without the other.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentCompactionRange {
+    /// First transcript row represented by this summary, inclusive.
+    pub first_sequence: u64,
+    /// Last transcript row represented by this summary, inclusive.
+    pub through_sequence: u64,
+    /// Model-authored replacement at the first row's original position.
+    pub summary: String,
+}
+
+/// One versioned conversation-owned compaction projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentCompactionEpoch {
     /// Sidecar format version.
     pub version: u64,
@@ -283,6 +294,9 @@ pub struct AgentCompactionEpoch {
     pub through_sequence: u64,
     /// Complete model-visible summary block, including its explanatory framing.
     pub summary: String,
+    /// Ordered selective replacements in a v2 epoch; absent for v1 prefixes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ranges: Vec<AgentCompactionRange>,
 }
 
 /// Filesystem-backed transcript store.

@@ -67,6 +67,14 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
     work: RuntimeAgentHistoryEpochWork,
 ) -> Result<RuntimeAgentTranscriptContext> {
     let epoch = work.store.compaction_epoch(&work.inputs.conversation_id)?;
+    execute_runtime_agent_history_epoch_with_projection(work, epoch)
+}
+
+/// Projects a proposed epoch through the same replay path without publishing it.
+pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
+    work: RuntimeAgentHistoryEpochWork,
+    epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
+) -> Result<RuntimeAgentTranscriptContext> {
     if epoch.is_none()
         && work.inputs.active_entries == Some(0)
         && work.inputs.pending_entries.is_empty()
@@ -97,21 +105,37 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
         });
         entries.sort_by_key(|entry| entry.sequence);
         entries.dedup_by_key(|entry| entry.sequence);
-        let mut history = runtime_agent_transcript_context(&work.inputs.pane_id, &entries);
-        history.blocks.insert(
-            0,
-            ContextBlock::reference_event(
-                ContextSourceKind::Memory,
-                format!(
-                    "memory {} (conversation)",
-                    mez_agent::memory::canonical_memory_uuid(&format!(
-                        "compact-{}",
-                        work.inputs.conversation_id
-                    ))
-                ),
-                epoch.summary,
-            ),
+        let applicable_ranges = epoch
+            .ranges
+            .iter()
+            .filter(|range| {
+                work.inputs
+                    .ephemeral_source_entries
+                    .is_none_or(|limit| range.through_sequence <= limit)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut history = runtime_agent_transcript_context_with_ranges(
+            &work.inputs.pane_id,
+            &entries,
+            &applicable_ranges,
         );
+        if !epoch.summary.is_empty() {
+            history.blocks.insert(
+                0,
+                ContextBlock::reference_event(
+                    ContextSourceKind::Memory,
+                    format!(
+                        "memory {} (conversation)",
+                        mez_agent::memory::canonical_memory_uuid(&format!(
+                            "compact-{}",
+                            work.inputs.conversation_id
+                        ))
+                    ),
+                    epoch.summary,
+                ),
+            );
+        }
         return Ok(history);
     }
     let entries = match work.inputs.active_entries {
@@ -161,6 +185,9 @@ pub(crate) fn execute_runtime_agent_prompt_history_work(
         .blocks
         .first()
         .is_some_and(|block| block.source == ContextSourceKind::Memory)
+        || transcript.blocks.iter().any(|block| {
+            block.source == ContextSourceKind::Memory && block.label == "context compaction summary"
+        })
     {
         blocks.clear();
     }
@@ -203,6 +230,15 @@ pub(super) fn runtime_agent_history_epoch_from_entries(
 pub(super) fn runtime_agent_transcript_context(
     pane_id: &str,
     entries: &[TranscriptEntry],
+) -> RuntimeAgentTranscriptContext {
+    runtime_agent_transcript_context_with_ranges(pane_id, entries, &[])
+}
+
+/// Projects ordered selective summaries without splitting the canonical transcript scan.
+pub(super) fn runtime_agent_transcript_context_with_ranges(
+    pane_id: &str,
+    entries: &[TranscriptEntry],
+    ranges: &[crate::storage::transcript::AgentCompactionRange],
 ) -> RuntimeAgentTranscriptContext {
     let mut blocks = Vec::new();
     let mut execution_events = Vec::new();
@@ -287,6 +323,21 @@ pub(super) fn runtime_agent_transcript_context(
         last_execution_by_turn.insert(entry.turn_id.as_str(), index);
     }
     for (index, entry) in entries.iter().enumerate() {
+        if let Some(range) = ranges
+            .iter()
+            .find(|range| range.first_sequence == entry.sequence)
+        {
+            blocks.push(ContextBlock::reference_event(
+                ContextSourceKind::Memory,
+                "context compaction summary",
+                range.summary.clone(),
+            ));
+        }
+        if ranges.iter().any(|range| {
+            entry.sequence >= range.first_sequence && entry.sequence <= range.through_sequence
+        }) {
+            continue;
+        }
         if entry.role == TranscriptRole::System
             && let Some(TranscriptContextEvent::UserEvent { label, content, .. }) =
                 TranscriptContextEvent::from_transcript_content(&entry.content)
@@ -776,6 +827,359 @@ mod tests {
     };
     use crate::runtime::{TranscriptEntry, TranscriptRole};
     use crate::storage::transcript::AgentTranscriptStore;
+
+    /// Summarized typed events still own and suppress their duplicate display
+    /// rows, while exact raw rows in later turns retain their original role.
+    #[test]
+    fn selective_summary_suppresses_covered_display_row() {
+        let group = mez_agent::ContextExecutionGroupId::new("display-group").unwrap();
+        let rows = [
+            (
+                1,
+                TranscriptRole::Assistant,
+                "duplicate display".to_string(),
+                "old",
+            ),
+            (
+                2,
+                TranscriptRole::System,
+                mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                    mez_agent::ContextSourceKind::TranscriptAssistant,
+                    "assistant",
+                    "typed original",
+                    group,
+                    1,
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content(),
+                "old",
+            ),
+            (
+                3,
+                TranscriptRole::Assistant,
+                "later exact answer".to_string(),
+                "new",
+            ),
+        ]
+        .into_iter()
+        .map(|(sequence, role, content, turn_id)| TranscriptEntry {
+            conversation_id: "display-range".to_string(),
+            sequence,
+            created_at_unix_seconds: sequence,
+            role,
+            turn_id: turn_id.to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content,
+        })
+        .collect::<Vec<_>>();
+        let history = super::runtime_agent_transcript_context_with_ranges(
+            "%1",
+            &rows,
+            &[crate::storage::transcript::AgentCompactionRange {
+                first_sequence: 2,
+                through_sequence: 2,
+                summary: "typed summary".to_string(),
+            }],
+        );
+        assert_eq!(
+            history
+                .blocks
+                .iter()
+                .map(|block| block.content.as_str())
+                .collect::<Vec<_>>(),
+            ["typed summary", "later exact answer"]
+        );
+        assert!(history.execution_events.is_empty());
+    }
+
+    /// A selective epoch replaces only its validated closed execution group;
+    /// exact user rows and a later raw group retain their original order.
+    #[test]
+    fn history_epoch_replays_selective_summary_between_exact_rows() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-selective-epoch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        for (sequence, role, content, turn_id) in [
+            (
+                1,
+                TranscriptRole::User,
+                "exact earlier".to_string(),
+                "user-1",
+            ),
+            (
+                2,
+                TranscriptRole::System,
+                mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                    mez_agent::ContextSourceKind::TranscriptAssistant,
+                    "assistant",
+                    "old decision",
+                    mez_agent::ContextExecutionGroupId::new("old-group").unwrap(),
+                    1,
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content(),
+                "old-turn",
+            ),
+            (
+                3,
+                TranscriptRole::System,
+                mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                    mez_agent::ContextSourceKind::ActionResult,
+                    "result",
+                    "old evidence",
+                    mez_agent::ContextExecutionGroupId::new("old-group").unwrap(),
+                    2,
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content(),
+                "old-turn",
+            ),
+            (4, TranscriptRole::User, "exact later".to_string(), "user-2"),
+            (
+                5,
+                TranscriptRole::Assistant,
+                "newer answer".to_string(),
+                "new-turn",
+            ),
+        ] {
+            store
+                .append(&TranscriptEntry {
+                    conversation_id: "selective-epoch".to_string(),
+                    sequence,
+                    created_at_unix_seconds: sequence,
+                    role,
+                    turn_id: turn_id.to_string(),
+                    agent_id: "agent-%1".to_string(),
+                    pane_id: "%1".to_string(),
+                    content,
+                })
+                .unwrap();
+        }
+        store
+            .save_compaction_ranges(
+                "selective-epoch",
+                0,
+                "previous epoch",
+                vec![crate::storage::transcript::AgentCompactionRange {
+                    first_sequence: 2,
+                    through_sequence: 3,
+                    summary: "old work summarized".to_string(),
+                }],
+            )
+            .unwrap();
+        let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+            store,
+            inputs: RuntimeAgentHistoryEpochInputs {
+                pane_id: "%1".to_string(),
+                conversation_id: "selective-epoch".to_string(),
+                ephemeral_source_entries: None,
+                active_entries: Some(5),
+                pending_entries: Vec::new(),
+            },
+        })
+        .unwrap();
+        let contents = history
+            .blocks
+            .iter()
+            .map(|block| block.content.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            contents,
+            [
+                "previous epoch",
+                "exact earlier",
+                "old work summarized",
+                "exact later",
+                "newer answer"
+            ]
+        );
+        assert!(history.execution_events.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Fork replay stops at its captured high-water even when the parent later
+    /// appends rows and commits a selective range beyond that boundary.
+    #[test]
+    fn history_epoch_selective_ranges_respect_fork_high_water() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-selective-fork-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        for (sequence, content) in [(1, "captured instruction"), (3, "late instruction")] {
+            store
+                .append(&TranscriptEntry {
+                    conversation_id: "selective-fork".to_string(),
+                    sequence,
+                    created_at_unix_seconds: sequence,
+                    role: TranscriptRole::User,
+                    turn_id: format!("turn-{sequence}"),
+                    agent_id: "agent-%1".to_string(),
+                    pane_id: "%1".to_string(),
+                    content: content.to_string(),
+                })
+                .unwrap();
+            if sequence == 1 {
+                store
+                    .append(&TranscriptEntry {
+                        conversation_id: "selective-fork".to_string(),
+                        sequence: 2,
+                        created_at_unix_seconds: 2,
+                        role: TranscriptRole::System,
+                        turn_id: "turn-2".to_string(),
+                        agent_id: "agent-%1".to_string(),
+                        pane_id: "%1".to_string(),
+                        content: mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                            mez_agent::ContextSourceKind::TranscriptAssistant,
+                            "assistant",
+                            "archived work",
+                            mez_agent::ContextExecutionGroupId::new("fork-group").unwrap(),
+                            1,
+                            None,
+                        )
+                        .unwrap()
+                        .to_transcript_content(),
+                    })
+                    .unwrap();
+            }
+        }
+        store
+            .save_compaction_ranges(
+                "selective-fork",
+                0,
+                "",
+                vec![crate::storage::transcript::AgentCompactionRange {
+                    first_sequence: 2,
+                    through_sequence: 2,
+                    summary: "summarized work".to_string(),
+                }],
+            )
+            .unwrap();
+        let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+            store,
+            inputs: RuntimeAgentHistoryEpochInputs {
+                pane_id: "%1".to_string(),
+                conversation_id: "selective-fork".to_string(),
+                ephemeral_source_entries: Some(2),
+                active_entries: None,
+                pending_entries: Vec::new(),
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            history
+                .blocks
+                .iter()
+                .map(|block| block.content.as_str())
+                .collect::<Vec<_>>(),
+            ["captured instruction", "summarized work"]
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A parent range straddling a fork boundary cannot summarize source the
+    /// fork never captured, even if its first row is inside the snapshot.
+    #[test]
+    fn history_epoch_crossing_fork_range_keeps_captured_raw_group() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-crossing-fork-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let group = mez_agent::ContextExecutionGroupId::new("crossing-group").unwrap();
+        for (sequence, role, content) in [
+            (1, TranscriptRole::User, "captured instruction".to_string()),
+            (
+                2,
+                TranscriptRole::System,
+                mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                    mez_agent::ContextSourceKind::TranscriptAssistant,
+                    "assistant",
+                    "captured work",
+                    group.clone(),
+                    1,
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content(),
+            ),
+            (
+                3,
+                TranscriptRole::System,
+                mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                    mez_agent::ContextSourceKind::ActionResult,
+                    "result",
+                    "later evidence",
+                    group,
+                    2,
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content(),
+            ),
+        ] {
+            store
+                .append(&TranscriptEntry {
+                    conversation_id: "crossing-fork".to_string(),
+                    sequence,
+                    created_at_unix_seconds: sequence,
+                    role,
+                    turn_id: format!("turn-{sequence}"),
+                    agent_id: "agent-%1".to_string(),
+                    pane_id: "%1".to_string(),
+                    content,
+                })
+                .unwrap();
+        }
+        store
+            .save_compaction_ranges(
+                "crossing-fork",
+                0,
+                "",
+                vec![crate::storage::transcript::AgentCompactionRange {
+                    first_sequence: 2,
+                    through_sequence: 3,
+                    summary: "later-authored summary".to_string(),
+                }],
+            )
+            .unwrap();
+        let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+            store,
+            inputs: RuntimeAgentHistoryEpochInputs {
+                pane_id: "%1".to_string(),
+                conversation_id: "crossing-fork".to_string(),
+                ephemeral_source_entries: Some(2),
+                active_entries: None,
+                pending_entries: Vec::new(),
+            },
+        })
+        .unwrap();
+        let contents = history
+            .blocks
+            .iter()
+            .map(|block| block.content.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(contents, ["captured instruction", "captured work"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     /// Verifies worker-owned history preparation reads durable rows and merges
     /// the actor-captured persistence tail through the canonical projection.

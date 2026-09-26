@@ -6823,11 +6823,15 @@ compaction; oversized entries SHOULD use the same compact summary path as other
 oversized context blocks.
 The latest completed compaction summary and the transcript sequence through
 which it replaces older raw history MUST be persisted together as one versioned,
-conversation-owned atomic epoch. Prompt replay MUST prefer that committed epoch
-over pane-local replay counts or optional memory records and include every exact
-subsequent transcript entry. Epoch publication MUST NOT truncate the append-only
-transcript. A corrupt required epoch or failed publication MUST be reported
-visibly rather than presenting a shortened raw suffix without its summary.
+conversation-owned atomic epoch. A selective epoch MAY additionally replace
+ordered, non-overlapping ranges of complete durable execution groups with
+model-authored summaries at each range's original position. Uncovered entries,
+including exact user/task barriers and later appends, MUST remain in their
+original order and role. Prompt replay MUST prefer that committed epoch over
+pane-local replay counts or optional memory records. Epoch publication MUST
+NOT truncate the append-only transcript. A corrupt required epoch or failed
+publication MUST be reported visibly rather than presenting a shortened raw
+suffix without its summary.
 When conversation compaction runs, Mezzanine MUST summarize only a closed
 prefix of complete execution groups. It MUST NOT split request messages,
 provider-native events, assistant output, or terminal tool/action results that
@@ -6845,12 +6849,14 @@ tail MUST preserve author roles and exact visible assistant/user text so terse
 follow-up prompts can resolve recent references such as numbered list items.
 Older closed groups outside the raw tail SHOULD be represented by compact
 memory rather than replayed verbatim.
-Observed-input proactive compaction MUST preserve the active raw transcript
-replay boundary when its selected context ranges cannot be represented in the
-durable transcript projection without losing exact user or task barriers. In
+Observed-input proactive compaction MAY replace a selected closed range of
+durable execution groups only after the complete proposed replay and running
+turn request fit the provider budget before publication. It MUST preserve the
+active raw transcript replay boundary when selected context cannot be mapped
+unambiguously to durable rows without losing exact user or task barriers. In
 that case, the model-authored summary MAY be added to compact memory while the
-raw replay window remains unchanged; reducing that window requires a durable
-projection that preserves every unsummarized exact barrier and retained event.
+raw replay window remains unchanged. Legacy transcript user rows are exact
+barriers even when their imported block retention metadata is summarizable.
 Provider-limit and manual compaction MUST expose at most one model-visible
 compaction block per eligible exact-barrier-delimited segment. A prior
 summary-only segment MUST NOT prevent selecting later closed, consumed history
