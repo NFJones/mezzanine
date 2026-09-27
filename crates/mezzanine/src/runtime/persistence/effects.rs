@@ -460,6 +460,18 @@ impl RuntimePersistenceComponent {
 
     /// Settles only a matching worker-owned immutable append, not a replacement
     /// that happens to reuse its conversation and starting sequence.
+    pub(crate) fn owns_transcript_write(
+        &self,
+        conversation_id: &str,
+        first_sequence: u64,
+        entries: &[mez_agent::transcript::TranscriptEntry],
+    ) -> bool {
+        self.in_flight_transcript_entries
+            .get(&(conversation_id.to_string(), first_sequence))
+            .is_some_and(|pending| pending == entries)
+    }
+
+    /// Retires an exact worker-owned append after its completion is accepted.
     pub(crate) fn settle_transcript_write(
         &mut self,
         conversation_id: &str,
@@ -467,11 +479,7 @@ impl RuntimePersistenceComponent {
         entries: &[mez_agent::transcript::TranscriptEntry],
     ) -> bool {
         let key = (conversation_id.to_string(), first_sequence);
-        if self
-            .in_flight_transcript_entries
-            .get(&key)
-            .is_none_or(|pending| pending != entries)
-        {
+        if !self.owns_transcript_write(conversation_id, first_sequence, entries) {
             return false;
         }
         self.in_flight_transcript_entries.remove(&key);

@@ -80,6 +80,12 @@ impl RuntimeServiceFixture {
         self
     }
 
+    /// Sets the lifecycle event payload limit for failure-boundary tests.
+    pub(crate) fn max_payload_bytes(mut self, limit: usize) -> Self {
+        self.max_payload_bytes = limit;
+        self
+    }
+
     /// Overrides the control socket path.
     pub(crate) fn control_socket(mut self, path: impl Into<PathBuf>) -> Self {
         self.control_socket = path.into();

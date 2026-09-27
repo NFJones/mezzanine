@@ -66,6 +66,12 @@ impl RuntimeSessionService {
         self.persistence.enable_transcript_adapter();
     }
 
+    /// Queues a transcript append through the service-owned handoff in actor tests.
+    #[cfg(test)]
+    pub(crate) fn queue_transcript_for_tests(&mut self, effect: RuntimeSideEffect) {
+        self.persistence.queue_transcript(effect);
+    }
+
     /// Assigns durable provider token accounting to the external persistence adapter.
     pub(crate) fn use_token_usage_effect_adapter(&mut self) {
         self.persistence.enable_token_usage_adapter();

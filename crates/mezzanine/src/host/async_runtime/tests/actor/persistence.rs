@@ -27,20 +27,54 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
         pane_id: "%1".to_string(),
         content: "accepted".to_string(),
     };
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+    let mut service = test_service_with_event_log();
+    service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+        store: store.clone(),
+        path: path.clone(),
+        entries: vec![row.clone()],
+    });
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     let client = async {
-        handle
-            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
-                store: store.clone(),
-                path: path.clone(),
+        let mut queued_only = RuntimeEventBatch::new();
+        queued_only.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptCompleted {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: row.sequence,
                 entries: vec![row.clone()],
-            }])
-            .await
-            .unwrap();
+                path: path.clone(),
+                bytes: 1,
+            },
+        ));
+        assert_eq!(
+            handle
+                .submit_runtime_events(queued_only)
+                .await
+                .unwrap()
+                .applied,
+            0
+        );
         let claimed = handle.drain_persistence_side_effects(1).await.unwrap();
         assert_eq!(claimed.len(), 1);
+        let mut wrong_path = RuntimeEventBatch::new();
+        wrong_path.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptCompleted {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: row.sequence,
+                entries: vec![row.clone()],
+                path: path.with_extension("wrong"),
+                bytes: 1,
+            },
+        ));
+        assert_eq!(
+            handle
+                .submit_runtime_events(wrong_path)
+                .await
+                .unwrap()
+                .applied,
+            0
+        );
         store.append_many(std::slice::from_ref(&row)).unwrap();
         handle
             .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {

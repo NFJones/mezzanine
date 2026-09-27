@@ -1380,6 +1380,12 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         persistence_event: PersistenceEvent,
     ) -> Result<RuntimeTransition> {
+        let completed_claim = match &persistence_event {
+            PersistenceEvent::TranscriptCompleted { entries, path, .. } => {
+                Some((entries.clone(), path.clone()))
+            }
+            _ => None,
+        };
         if let PersistenceEvent::TranscriptCompleted {
             conversation_id,
             first_sequence,
@@ -1402,8 +1408,12 @@ impl AsyncRuntimeSessionActor {
         }
         match &persistence_event {
             PersistenceEvent::TranscriptCompleted { entries, path, .. } => {
-                self.side_effect_routes
-                    .settle_claimed_transcript(entries, path);
+                if !self
+                    .side_effect_routes
+                    .owns_claimed_transcript(entries, path)
+                {
+                    return Ok(RuntimeTransition::default());
+                }
             }
             PersistenceEvent::TranscriptFailed { entries, path, .. }
                 if self
@@ -1419,6 +1429,12 @@ impl AsyncRuntimeSessionActor {
         let transition = self
             .service
             .apply_persistence_transition(persistence_event)?;
+        if transition.applied
+            && let Some((entries, path)) = completed_claim
+        {
+            self.side_effect_routes
+                .settle_claimed_transcript(&entries, &path);
+        }
         self.queue_peer_message_delivery_timer_if_needed(async_runtime_current_unix_millis())?;
         Ok(transition)
     }

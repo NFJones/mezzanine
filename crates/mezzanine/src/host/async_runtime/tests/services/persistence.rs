@@ -26,18 +26,16 @@ async fn async_persistence_worker_recovers_lost_transcript_acknowledgment() {
         content: "accepted once".to_string(),
     };
     let path = store.transcript_path(&row.conversation_id).unwrap();
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+    let mut service = test_service_with_event_log();
+    service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+        store: store.clone(),
+        path,
+        entries: vec![row.clone()],
+    });
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     let client = async {
-        handle
-            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
-                store: store.clone(),
-                path,
-                entries: vec![row.clone()],
-            }])
-            .await
-            .unwrap();
         let abandoned = handle.drain_persistence_side_effects(1).await.unwrap();
         assert_eq!(abandoned.len(), 1);
         store.append_many(std::slice::from_ref(&row)).unwrap();
@@ -88,18 +86,16 @@ async fn async_persistence_worker_recovers_after_two_transcript_failures() {
     };
     let path = store.transcript_path(&row.conversation_id).unwrap();
     store.fail_transcript_append_attempts(2);
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+    let mut service = test_service_with_event_log();
+    service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+        store: store.clone(),
+        path,
+        entries: vec![row.clone()],
+    });
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     let client = async {
-        handle
-            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
-                store: store.clone(),
-                path,
-                entries: vec![row.clone()],
-            }])
-            .await
-            .unwrap();
         let report = run_async_persistence_side_effect_service(
             &handle,
             AsyncRuntimeSideEffectServiceConfig {

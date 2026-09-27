@@ -1040,7 +1040,13 @@ impl AgentTranscriptStore {
                     // Older receipts can precede arbitrarily many later rows.
                     // Scan off-actor rather than allocating from an untrusted
                     // sequence gap or silently dropping the older prefix.
-                    self.inspect(&conversation_id)?
+                    let archive = self.inspect(&conversation_id)?;
+                    if archive.first().is_some_and(|first| first.sequence != 1) {
+                        return Err(MezError::invalid_state(
+                            "transcript archive is missing its leading history",
+                        ));
+                    }
+                    archive
                 } else {
                     latest
                 }

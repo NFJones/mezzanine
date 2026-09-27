@@ -1513,6 +1513,20 @@ fn transcript_store_append_many_rejects_gapped_durable_history() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// An exact row in a suffix cannot prove that missing earlier archive rows
+/// survived an uncertain write.
+#[test]
+fn transcript_store_append_many_rejects_missing_durable_prefix() {
+    let root = temp_root("append-many-missing-prefix");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let second = entry("conv1", 2, TranscriptRole::User);
+    store.append(&second).unwrap();
+    assert!(store.append_many(std::slice::from_ref(&second)).is_err());
+    assert_eq!(store.inspect("conv1").unwrap(), vec![second]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// One worker receipt names one conversation; reject mixed batches before any
 /// archive can commit a prefix under a different conversation lock.
 #[test]

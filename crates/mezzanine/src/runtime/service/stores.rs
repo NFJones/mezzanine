@@ -102,6 +102,15 @@ impl RuntimeSessionService {
         &mut self,
         event: crate::runtime::PersistenceEvent,
     ) -> Result<crate::runtime::RuntimeTransition> {
+        let completed_transcript = match &event {
+            crate::runtime::PersistenceEvent::TranscriptCompleted {
+                conversation_id,
+                first_sequence,
+                entries,
+                ..
+            } => Some((conversation_id.clone(), *first_sequence, entries.clone())),
+            _ => None,
+        };
         let mut schedule_next_retention = false;
         let mut queued_retention_rerun = false;
         let mut queued_metadata_retry = false;
@@ -115,7 +124,7 @@ impl RuntimeSessionService {
                 path,
                 bytes,
             } => {
-                if !self.persistence.settle_transcript_write(
+                if !self.persistence.owns_transcript_write(
                     &conversation_id,
                     first_sequence,
                     &entries,
@@ -421,7 +430,18 @@ impl RuntimeSessionService {
                 .to_string()
             }
         };
-        self.append_runtime_diagnostic_event(payload)?;
+        // A completed transcript write is already durable. Diagnostic delivery
+        // must not strand its actor-owned receipt when the event log rejects a
+        // payload (for example because its configured byte limit is small).
+        if completed_transcript.is_some() {
+            let _ = self.append_runtime_diagnostic_event(payload);
+        } else {
+            self.append_runtime_diagnostic_event(payload)?;
+        }
+        if let Some((conversation_id, first_sequence, entries)) = completed_transcript {
+            self.persistence
+                .settle_transcript_write(&conversation_id, first_sequence, &entries);
+        }
         let mut transition = self.runtime_transition_with_render(
             true,
             render_overlay.then_some(crate::runtime::RenderInvalidationReason::Overlay),
@@ -886,6 +906,62 @@ mod transcript_settlement_tests {
         assert!(
             !transition.applied,
             "unowned completion must not settle a write"
+        );
+    }
+
+    /// Oversized diagnostics cannot prevent a durable completion from retiring
+    /// its exact logical rows; a duplicate receipt remains ignored afterward.
+    #[test]
+    fn transcript_completion_survives_diagnostic_limit() {
+        let mut service = crate::test_support::runtime::RuntimeServiceFixture::new()
+            .max_payload_bytes(128)
+            .build();
+        let store = crate::storage::transcript::AgentTranscriptStore::new(
+            std::env::temp_dir().join(format!("mez-transcript-diagnostic-{}", std::process::id())),
+        );
+        let row = TranscriptEntry {
+            conversation_id: "diagnostic-limit".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted text".to_string(),
+        };
+        let path = store.transcript_path(&row.conversation_id).unwrap();
+        service.persistence.queue_transcript(
+            crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
+                store,
+                path: path.clone(),
+                entries: vec![row.clone()],
+            },
+        );
+        service.persistence.take_transcript_effects();
+        let completed = crate::runtime::PersistenceEvent::TranscriptCompleted {
+            conversation_id: row.conversation_id.clone(),
+            first_sequence: row.sequence,
+            entries: vec![row.clone()],
+            path,
+            bytes: 1,
+        };
+        assert!(
+            service
+                .apply_persistence_transition(completed.clone())
+                .unwrap()
+                .applied
+        );
+        assert!(
+            service
+                .persistence
+                .pending_transcript_entries(&row.conversation_id)
+                .is_empty()
+        );
+        assert!(
+            !service
+                .apply_persistence_transition(completed)
+                .unwrap()
+                .applied
         );
     }
 }
