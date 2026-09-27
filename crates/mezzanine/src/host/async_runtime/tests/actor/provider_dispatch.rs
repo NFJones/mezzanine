@@ -490,6 +490,354 @@ async fn async_actor_optional_provider_progress_pressure_preserves_failure() {
     let _ = std::fs::remove_dir_all(registry_root);
 }
 
+/// A compaction preparation error with no delivered failure event retains a
+/// bounded claim, whose exact timer releases the marker and fails the turn.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_lost_compaction_failure_expires_claim() {
+    let mut service = test_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "compaction-claim-test".to_string(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"default\"\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.default]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "continue after compaction")
+        .unwrap();
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    for label in ["older", "newer"] {
+        let group = mez_agent::ContextExecutionGroupId::new(format!(
+            "compaction-claim-test:{}",
+            context.event_sequence_high_water_mark().saturating_add(1)
+        ))
+        .unwrap();
+        context
+            .append_assistant_event("synthetic evidence", "inspect evidence", group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                mez_agent::ContextSourceKind::ActionResult,
+                label.to_string(),
+                "evidence ".repeat(3_000),
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+    }
+    let error = MezError::invalid_state("provider context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+        );
+    service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            mez_agent::ProviderErrorRetryClass::ContextLimit,
+            &error,
+        )
+        .unwrap()
+        .expect("compaction queued");
+    let generation = service
+        .pending_agent_compaction_task_generation("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        assert!(
+            handle
+                .claim_agent_compaction_task("%1".to_string(), generation)
+                .await
+                .is_err()
+        );
+        let timers = handle.drain_timer_side_effects(16).await.unwrap();
+        let key = timers
+            .into_iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::CompactionClaim =>
+                {
+                    Some(key)
+                }
+                _ => None,
+            })
+            .expect("claimed compaction has a lease");
+        assert_eq!(key.generation, generation);
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Timer(TimerEvent {
+            key: key.clone(),
+            now_ms: 1,
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(batch).await.unwrap().applied,
+            1
+        );
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::Timer(TimerEvent { key, now_ms: 2 }));
+        assert_eq!(handle.submit_runtime_events(late).await.unwrap().applied, 0);
+        handle.shutdown().await.unwrap();
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert!(!exit.service.agent_is_compacting("%1"));
+    assert_eq!(
+        exit.service
+            .agent_turn_ledger()
+            .turn("turn-1")
+            .unwrap()
+            .state,
+        mez_agent::AgentTurnState::Failed
+    );
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
+/// Two claimed compaction generations on one pane retain independent leases.
+/// Expiring the superseded generation must not retire its replacement.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_compaction_replacement_keeps_old_claim_expiry() {
+    let mut service = test_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "compaction-replacement-lease".to_string(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n[providers.openai]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"test\"\ncontext_window_tokens = 5000\n".to_string(),
+    }]).unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "mez-compaction-replacement-lease-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    for sequence in 1..=12 {
+        store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: "old-lease".to_string(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: mez_agent::transcript::TranscriptRole::Assistant,
+                turn_id: format!("turn-{sequence}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("old {sequence} {}", "history ".repeat(1_500)),
+            })
+            .unwrap();
+    }
+    service.set_agent_transcript_store(store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "old-lease", 12)
+        .unwrap();
+    let queued = service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    assert!(queued.contains("state=queued"), "{queued}");
+    let old_task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let old_generation = old_task.task_generation;
+    service.claim_agent_compaction_task_state("%1", old_task.clone());
+    service
+        .agent_shell_store_mut()
+        .start_new_conversation("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "new-lease", 12)
+        .unwrap();
+    let mut new_task = old_task;
+    new_task.task_generation = 0;
+    new_task.compaction_epoch = 0;
+    new_task.conversation_id = "new-lease".to_string();
+    service.queue_agent_compaction_task(new_task);
+    let new_task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let new_generation = new_task.task_generation;
+    service.claim_agent_compaction_task_state("%1", new_task);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let old_key = RuntimeTimerKey::new(RuntimeTimerKind::CompactionClaim, "%1", old_generation);
+        let new_key = RuntimeTimerKey::new(RuntimeTimerKind::CompactionClaim, "%1", new_generation);
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::ScheduleTimer {
+                    key: old_key.clone(),
+                    delay_ms: 1,
+                },
+                RuntimeSideEffect::ScheduleTimer {
+                    key: new_key.clone(),
+                    delay_ms: 2,
+                },
+            ])
+            .await
+            .unwrap();
+        assert_eq!(handle.drain_timer_side_effects(8).await.unwrap().len(), 2);
+        let mut expired = RuntimeEventBatch::new();
+        expired.push(RuntimeEvent::Timer(TimerEvent {
+            key: old_key.clone(),
+            now_ms: 1,
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(expired).await.unwrap().applied,
+            1
+        );
+        let mut duplicate = RuntimeEventBatch::new();
+        duplicate.push(RuntimeEvent::Timer(TimerEvent {
+            key: old_key,
+            now_ms: 2,
+        }));
+        assert_eq!(
+            handle
+                .submit_runtime_events(duplicate)
+                .await
+                .unwrap()
+                .applied,
+            0
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert!(
+        !exit
+            .service
+            .agent_compaction_task_is_claimed("%1", old_generation)
+    );
+    assert!(
+        exit.service
+            .agent_compaction_task_is_claimed("%1", new_generation)
+    );
+    assert!(exit.service.agent_is_compacting("%1"));
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A delivered compaction failure cancels its lease, so a late expiry cannot
+/// settle a replacement generation or repeat the failure.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_compaction_failure_cancels_claim_lease() {
+    let mut service = test_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "compaction-lease-cancel".to_string(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"default\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.default]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "continue after compaction")
+        .unwrap();
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    for label in ["older", "newer"] {
+        let group = mez_agent::ContextExecutionGroupId::new(format!(
+            "lease-cancel:{}",
+            context.event_sequence_high_water_mark().saturating_add(1)
+        ))
+        .unwrap();
+        context
+            .append_assistant_event("synthetic evidence", "inspect evidence", group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                mez_agent::ContextSourceKind::ActionResult,
+                label.to_string(),
+                "evidence ".repeat(3_000),
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+    }
+    let error = MezError::invalid_state("provider context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+        );
+    service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            mez_agent::ProviderErrorRetryClass::ContextLimit,
+            &error,
+        )
+        .unwrap()
+        .expect("compaction queued");
+    let generation = service
+        .pending_agent_compaction_task_generation("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        assert!(
+            handle
+                .claim_agent_compaction_task("%1".to_string(), generation)
+                .await
+                .is_err()
+        );
+        let key = handle
+            .drain_timer_side_effects(16)
+            .await
+            .unwrap()
+            .into_iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::CompactionClaim =>
+                {
+                    Some(key)
+                }
+                _ => None,
+            })
+            .expect("compaction lease");
+        let mut failed = RuntimeEventBatch::new();
+        failed.push(RuntimeEvent::AgentCompaction(
+            crate::runtime::AgentCompactionEvent::Failed {
+                pane_id: "%1".to_string(),
+                task_generation: generation,
+                kind: "forbidden".to_string(),
+                message: "provider rejected request".to_string(),
+                provider_failure_json: None,
+                provider_raw_text: None,
+            },
+        ));
+        assert_eq!(
+            handle.submit_runtime_events(failed).await.unwrap().applied,
+            1
+        );
+        assert!(handle.drain_timer_side_effects(16).await.unwrap().iter().any(|effect| matches!(effect, RuntimeSideEffect::CancelTimer { key: cancelled } if cancelled == &key)));
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::Timer(TimerEvent { key, now_ms: 1 }));
+        assert_eq!(handle.submit_runtime_events(late).await.unwrap().applied, 0);
+        handle.shutdown().await.unwrap();
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert!(!exit.service.agent_is_compacting("%1"));
+    assert_eq!(
+        exit.service
+            .agent_turn_ledger()
+            .turn("turn-1")
+            .unwrap()
+            .state,
+        mez_agent::AgentTurnState::Failed
+    );
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that render workers can drain only render invalidations while
 /// leaving provider dispatches queued for provider workers. This protects the
 /// side-effect queue from family-specific workers stealing unrelated work as

@@ -960,6 +960,33 @@ impl RuntimeSessionService {
         }))
     }
 
+    /// Retires an exact claimed compaction whose worker result was not delivered.
+    /// Never retries an ambiguous provider request or publishes its summary.
+    pub(crate) fn expire_claimed_agent_compaction_task(
+        &mut self,
+        pane_id: &str,
+        task_generation: u64,
+    ) -> Result<bool> {
+        let claimed = self.agent_compaction_task_is_claimed(pane_id, task_generation);
+        if !claimed {
+            return Ok(false);
+        }
+        let current = self.agent_compaction_task_is_current(pane_id, task_generation);
+        let mut failed = self.fail_agent_compaction_task(pane_id, task_generation);
+        if current {
+            let diagnostic = "compaction worker result was not delivered before its claim deadline; provider execution outcome is unknown";
+            if let Some((turn_id, source)) = failed.take_resume_turn_and_source() {
+                self.fail_running_turn_after_compaction_failure(&turn_id, &source, diagnostic)?;
+            }
+            let _ = self.append_agent_status_text_to_terminal_buffer(
+                pane_id,
+                &format!("agent: {diagnostic}"),
+            );
+            self.resume_agent_compaction_steering(pane_id)?;
+        }
+        Ok(true)
+    }
+
     /// Applies one model-backed compaction result through the transport-neutral transition contract.
     pub(crate) fn apply_agent_compaction_transition(
         &mut self,

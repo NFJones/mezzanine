@@ -795,6 +795,8 @@ pub enum RuntimeTimerKind {
     ProviderRetry,
     /// Timeout for a provider task claimed by an async worker.
     ProviderClaim,
+    /// Timeout for a compaction task claimed by an async worker.
+    CompactionClaim,
     /// Short one-shot check for command-backed pane pipe completion or failure.
     PanePipeHealth,
     /// Bounded recovery for an unterminated pane synchronized-output transaction.

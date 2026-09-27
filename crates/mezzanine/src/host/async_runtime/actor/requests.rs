@@ -5,8 +5,9 @@ use super::{
     AsyncControlInputResult, AsyncIrohRenderSnapshot, AsyncMessageFanout, AsyncMessageInputResult,
     AsyncRenderedClientFrame, AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope,
     AsyncRuntimeSessionActor, AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
-    DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS, RuntimeSessionService, decode_control_frame,
-    delivery_batch_json, encode_control_body, encode_mmp_body,
+    DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS, MezError, RuntimeSessionService, RuntimeSideEffect,
+    RuntimeTimerKey, RuntimeTimerKind, decode_control_frame, delivery_batch_json,
+    encode_control_body, encode_mmp_body,
 };
 use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::host::terminal::AttachedTerminalClientStepPlan;
@@ -1708,6 +1709,32 @@ impl AsyncRuntimeSessionActor {
                 let result = self
                     .service
                     .claim_agent_compaction_task(&pane_id, task_generation);
+                if self
+                    .service
+                    .agent_compaction_task_is_claimed(&pane_id, task_generation)
+                {
+                    let timer = RuntimeSideEffect::ScheduleTimer {
+                        key: RuntimeTimerKey::new(
+                            RuntimeTimerKind::CompactionClaim,
+                            pane_id.clone(),
+                            task_generation,
+                        ),
+                        delay_ms: DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
+                    };
+                    if let Err(error) = self.queue_runtime_side_effects(vec![timer]) {
+                        let settled = self
+                            .service
+                            .expire_claimed_agent_compaction_task(&pane_id, task_generation);
+                        let _ = reply.send(settled.map(|_| None).map_err(|settlement_error| {
+                            MezError::invalid_state(format!(
+                                "compaction claim timer admission failed: {}; settlement failed: {}",
+                                error.message(), settlement_error.message()
+                            ))
+                        }));
+                        self.notify_event_delivery();
+                        return false;
+                    }
+                }
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);
                 if should_notify {

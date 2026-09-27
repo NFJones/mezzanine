@@ -2635,6 +2635,17 @@ impl RuntimeSessionService {
                 .is_none_or(|session| session.session_id == *conversation_id)
     }
 
+    /// Reports whether an exact compaction generation is still claimed.
+    pub(crate) fn agent_compaction_task_is_claimed(
+        &self,
+        pane_id: &str,
+        task_generation: u64,
+    ) -> bool {
+        self.agent
+            .claimed_agent_compaction_tasks
+            .contains_key(&(pane_id.to_string(), task_generation))
+    }
+
     /// Returns the generation currently claimed by a provider worker.
     #[cfg(test)]
     pub(crate) fn claimed_agent_compaction_task_generation(&self, pane_id: &str) -> Option<u64> {

@@ -14,6 +14,7 @@ use super::{
     provider_event_error_kind,
 };
 use crate::integrations::agent::actions::recovery::maap_provider_error_is_repairable;
+use crate::runtime::AgentCompactionEvent;
 use crate::runtime::PaneProcessEvent;
 
 /// Annotates a side-effect queue failure with the number of events already
@@ -432,9 +433,36 @@ impl AsyncRuntimeSessionActor {
                 ))
             }
             RuntimeEvent::AgentCompaction(compaction_event) => {
+                let (pane_id, generation) = match &compaction_event {
+                    AgentCompactionEvent::Completed {
+                        pane_id,
+                        task_generation,
+                        ..
+                    }
+                    | AgentCompactionEvent::Failed {
+                        pane_id,
+                        task_generation,
+                        ..
+                    } => (pane_id.clone(), *task_generation),
+                };
                 let mut transition = self
                     .service
                     .apply_agent_compaction_transition(compaction_event)?;
+                if !self
+                    .service
+                    .agent_compaction_task_is_claimed(&pane_id, generation)
+                {
+                    let key = RuntimeTimerKey::new(
+                        RuntimeTimerKind::CompactionClaim,
+                        &pane_id,
+                        generation,
+                    );
+                    if self.timers.compaction_claim.remove(&key) {
+                        transition
+                            .side_effects
+                            .push(RuntimeSideEffect::CancelTimer { key });
+                    }
+                }
                 if transition.applied {
                     transition
                         .side_effects
@@ -724,6 +752,29 @@ impl AsyncRuntimeSessionActor {
                     .provider_claim
                     .remove(timer.key.owner_id.as_str());
                 self.apply_provider_claim_timer_event(&timer.key)
+            }
+            RuntimeTimerKind::CompactionClaim => {
+                if !self.timers.compaction_claim.remove(&timer.key) {
+                    self.record_ignored_timer_event();
+                    return Ok(RuntimeTransition::default());
+                }
+                let applied = self.service.expire_claimed_agent_compaction_task(
+                    &timer.key.owner_id,
+                    timer.key.generation,
+                )?;
+                let mut side_effects = if applied {
+                    self.pending_provider_dispatch_side_effects()?
+                } else {
+                    Vec::new()
+                };
+                if applied {
+                    side_effects
+                        .extend(self.render_side_effects(RenderInvalidationReason::FullRedraw));
+                }
+                Ok(RuntimeTransition {
+                    applied,
+                    side_effects,
+                })
             }
             RuntimeTimerKind::SynchronizedOutput => {
                 if self

@@ -123,6 +123,13 @@ impl AsyncRuntimeSessionActor {
             RuntimeTimerKind::ProviderClaim => {
                 Self::track_owned_timer_key(&mut self.timers.provider_claim, key, scheduled);
             }
+            RuntimeTimerKind::CompactionClaim => {
+                if scheduled {
+                    self.timers.compaction_claim.insert(key.clone());
+                } else {
+                    self.timers.compaction_claim.remove(key);
+                }
+            }
             RuntimeTimerKind::PanePipeHealth => {
                 Self::track_owned_timer_key(&mut self.timers.pane_pipe_health, key, scheduled);
             }

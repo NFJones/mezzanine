@@ -3896,6 +3896,45 @@ context_window_tokens = 5000
     )
 }
 
+/// An expired old claim cannot clear a replacement conversation's compaction
+/// marker or publish a late summary into that replacement.
+#[test]
+fn runtime_compaction_claim_expiry_is_generation_and_conversation_fenced() {
+    let (mut service, _, old_generation, replacement_conversation, replacement_generation) =
+        runtime_service_with_replacement_compaction();
+    assert!(
+        service
+            .expire_claimed_agent_compaction_task("%1", old_generation)
+            .unwrap()
+    );
+    assert!(!service.agent_compaction_task_is_claimed("%1", old_generation));
+    assert!(service.agent_is_compacting("%1"));
+    assert_eq!(
+        service.pending_agent_compaction_task_generation("%1"),
+        Some(replacement_generation)
+    );
+    assert_eq!(
+        service.agent_shell_store().get("%1").unwrap().session_id,
+        replacement_conversation
+    );
+    assert!(
+        !service
+            .expire_claimed_agent_compaction_task("%1", old_generation)
+            .unwrap()
+    );
+    let late = service
+        .apply_agent_compaction_transition(crate::runtime::AgentCompactionEvent::Completed {
+            pane_id: "%1".to_string(),
+            task_generation: old_generation,
+            response: Box::new(runtime_test_compaction_response(
+                "late summary must not publish",
+            )),
+        })
+        .unwrap();
+    assert!(!late.applied);
+    assert!(service.agent_is_compacting("%1"));
+}
+
 /// Verifies a stale completion accounts usage to its original conversation
 /// without settling or clearing replacement-conversation compaction work.
 #[test]
