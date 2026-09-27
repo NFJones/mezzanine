@@ -1310,6 +1310,121 @@ fn runtime_observed_compaction_stages_second_range_before_publication() {
     );
 }
 
+/// A zero first-segment allowance must stage both durable ranges before the
+/// observed-input continuation, retaining exact steering in replay order.
+#[test]
+fn runtime_observed_zero_budget_stages_durable_ranges() {
+    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        ContextSourceKind::TranscriptAssistant,
+        "second answer",
+        "SECOND_RANGE_SOURCE ".repeat(1_200),
+        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
+        1,
+        None,
+    )
+    .unwrap()
+    .to_transcript_content();
+    let (mut service, store, turn_id) =
+        queue_observed_input_compaction_with_second_group(Some(second));
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let queued = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap()
+        .clone();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { trigger, .. } =
+        queued.target
+    else {
+        panic!("expected observed-input active turn")
+    };
+    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
+    let projection = mez_agent::ProviderBudgetProjection::new(
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        "runtime-batch",
+    );
+    let plan = (1..20_000)
+        .rev()
+        .find_map(|budget| {
+            mez_agent::plan_model_context_compaction_for_provider_tokens(
+                context,
+                budget,
+                1,
+                context.event_sequence_high_water_mark(),
+                projection,
+            )
+            .ok()
+            .filter(|plan| plan.requires_additional_segments())
+        })
+        .expect("two eligible durable segments must recover a zero first allowance");
+    let original = context.clone();
+    service.fail_current_agent_compaction_task("%1");
+    assert!(
+        service
+            .queue_agent_active_turn_compaction(
+                &turn_id,
+                queued.model_profile_name,
+                queued.model_profile,
+                trigger,
+                plan,
+            )
+            .unwrap()
+    );
+    complete_runtime_test_compaction(&mut service, "%1", "x");
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert_eq!(service.agent_turn_contexts().get(&turn_id), Some(&original));
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
+    let retry = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("later durable segment queued");
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        staged: Some(staged),
+        ..
+    } = &retry.target
+    else {
+        panic!("first summary must remain provisional")
+    };
+    assert_eq!(staged.attempts, 1);
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn_id)
+        .unwrap()
+        .append_user_event("late steering", "EXACT_LATE_STEERING")
+        .unwrap();
+    complete_runtime_test_compaction(&mut service, "%1", "x");
+    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
+    assert_eq!(epoch.ranges.len(), 2);
+    assert_eq!(epoch.ranges[0].summary, "x");
+    assert_eq!(epoch.ranges[1].summary, "x");
+    assert!(service.agent_provider_task_is_pending(&turn_id));
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&turn_id)
+            .unwrap()
+            .blocks()
+            .iter()
+            .any(|block| block.content == "EXACT_LATE_STEERING")
+    );
+    let next = service
+        .agent_context_for_pane_prompt("%1", "next", 0)
+        .unwrap();
+    assert!(
+        next.blocks()
+            .iter()
+            .any(|block| block.content.contains("EXACT_SECOND_USER_INSTRUCTION"))
+    );
+    assert!(
+        !next
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
+    );
+}
+
 /// An oversized second range cannot publish the earlier staged summary or
 /// leave a shortened raw replay suffix after recovery fails.
 #[test]

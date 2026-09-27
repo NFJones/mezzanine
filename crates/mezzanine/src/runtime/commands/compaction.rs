@@ -924,6 +924,7 @@ impl RuntimeSessionService {
                 let RuntimeAgentCompactionTarget::ActiveTurn {
                     current_blocks,
                     pending_blocks,
+                    completed_responses,
                     ..
                 } = &mut task.target
                 else {
@@ -932,6 +933,14 @@ impl RuntimeSessionService {
                         estimate.input_tokens
                     )));
                 };
+                if !runtime_active_turn_compaction_can_split(
+                    *completed_responses,
+                    pending_blocks.len(),
+                ) {
+                    return Err(MezError::invalid_state(
+                        "active-turn compactor exceeded temporary chunk limit",
+                    ));
+                }
                 let Some((first, second)) = runtime_split_compaction_blocks(current_blocks) else {
                     return Err(MezError::invalid_state(format!(
                         "active-turn compactor request cannot be split below configured input cap: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
@@ -2407,6 +2416,20 @@ impl RuntimeSessionService {
                 let mut queued_siblings = Vec::new();
                 let mut retry_ready = false;
                 while let Some((first, second)) = runtime_split_compaction_blocks(&blocks) {
+                    let can_split = match &task.target {
+                        RuntimeAgentCompactionTarget::ActiveTurn {
+                            pending_blocks,
+                            completed_responses,
+                            ..
+                        } => runtime_active_turn_compaction_can_split(
+                            *completed_responses,
+                            pending_blocks.len().saturating_add(queued_siblings.len()),
+                        ),
+                        RuntimeAgentCompactionTarget::Conversation => false,
+                    };
+                    if !can_split {
+                        break;
+                    }
                     queued_siblings.push(second);
                     runtime_rebuild_active_turn_compaction_request(&mut task, first.clone())?;
                     let candidate_bytes = {
@@ -2798,6 +2821,15 @@ fn runtime_model_compaction_request_for_blocks(
         &source_context,
         allowed_actions,
     )
+}
+
+/// Leaves one response for the current chunk and one for final synthesis.
+/// The same budget applies to configured-cap and provider-rejection splits.
+fn runtime_active_turn_compaction_can_split(completed_responses: usize, pending: usize) -> bool {
+    completed_responses
+        .saturating_add(pending)
+        .saturating_add(3)
+        <= 32
 }
 
 /// Splits only temporary compactor input while leaving the atomic source plan unchanged.
@@ -3308,6 +3340,39 @@ pub(super) fn runtime_transcript_role_name(role: TranscriptRole) -> &'static str
 #[cfg(test)]
 mod size_diagnostic_tests {
     use super::*;
+
+    /// Splitting reserves dispatches for every pending chunk plus one final
+    /// synthesis even when earlier model responses have used the budget.
+    #[test]
+    fn active_turn_chunk_limit_reserves_final_synthesis() {
+        assert!(runtime_active_turn_compaction_can_split(0, 29));
+        assert!(!runtime_active_turn_compaction_can_split(0, 30));
+        assert!(runtime_active_turn_compaction_can_split(12, 17));
+        assert!(!runtime_active_turn_compaction_can_split(12, 18));
+        assert!(!runtime_active_turn_compaction_can_split(usize::MAX, 0));
+    }
+
+    /// A single oversized source can be split repeatedly without cutting a
+    /// Unicode scalar or losing its final sentinel between temporary chunks.
+    #[test]
+    fn active_turn_chunk_split_preserves_unicode_and_tail() {
+        let source = format!("{}END_SENTINEL", "文🙂".repeat(1024));
+        let mut fragments = vec![ContextBlock::assistant_event("source", source.clone())];
+        for _ in 0..5 {
+            let first = fragments.remove(0);
+            let (left, right) = runtime_split_compaction_blocks(&[first]).unwrap();
+            fragments.insert(0, right.into_iter().next().unwrap());
+            fragments.insert(0, left.into_iter().next().unwrap());
+        }
+        assert_eq!(
+            fragments
+                .iter()
+                .map(|block| block.content.as_str())
+                .collect::<String>(),
+            source
+        );
+        assert!(fragments.last().unwrap().content.ends_with("END_SENTINEL"));
+    }
 
     /// Irreducible diagnostics report only estimated component sizes, never
     /// the protected instruction or recoverable source supplied by the user.

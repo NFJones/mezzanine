@@ -6879,6 +6879,9 @@ provisional summary may publish or resume a turn until the remaining required
 segments have been summarized and the complete next request fits. Exact,
 incomplete, unconsumed, and mandatory raw-tail context MUST remain protected;
 the number of additional segment attempts MUST be bounded.
+Temporary compactor-source splitting MUST preserve all frozen source bytes at
+UTF-8 boundaries and bound its total requests, including final synthesis.
+Exhaustion MUST NOT publish a partial summary or resume settled execution.
 Provider-limit and manual compaction MUST expose at most one model-visible
 compaction block per eligible exact-barrier-delimited segment. A prior
 summary-only segment MUST NOT prevent selecting later closed, consumed history

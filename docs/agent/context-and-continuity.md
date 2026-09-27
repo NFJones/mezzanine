@@ -164,6 +164,11 @@ history remains raw, planning accounts for those later segments before failing.
 Each segment is still summarized separately at its original anchor, with at most
 three additional provisional segment attempts; exact instructions and unfinished
 work stay raw. No intermediate summary resumes the turn or publishes an epoch.
+When the selected closed source exceeds the compactor's configured input cap,
+temporary chunks preserve all source bytes (including Unicode) and are summarized
+within a finite response budget that reserves a final synthesis response. An
+irreducibly large request or exhausted chunk budget fails without publishing a
+partial summary or restarting settled execution.
 The compacted block carries only a short lossy-context warning and the
 model-authored summary; pane, model, entry counts, and other audit metadata
 are not repeated in the next model-visible summary.
