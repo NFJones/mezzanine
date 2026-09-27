@@ -1544,6 +1544,29 @@ fn transcript_store_receipt_recovers_unwritten_batch_after_restart() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A damaged accepted receipt cannot be skipped or replayed as a different
+/// batch after restart; its archive remains unchanged for manual recovery.
+#[test]
+fn transcript_store_rejects_corrupt_append_receipt_without_mutation() {
+    let root = temp_root("corrupt-append-receipt");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("conv1", 1, TranscriptRole::User);
+    store
+        .accept_append_receipt(std::slice::from_ref(&row), 1)
+        .unwrap();
+    let path = root.join(".append-receipts/conv1-00000000000000000001-00000000000000000001.json");
+    let mut bytes = fs::read(&path).unwrap();
+    let position = bytes.iter().position(|byte| *byte == b'c').unwrap();
+    bytes[position] = b'x';
+    fs::write(&path, bytes).unwrap();
+
+    let restarted = AgentTranscriptStore::new(root.clone());
+    assert!(restarted.recover_append_receipts().is_err());
+    assert!(!store.transcript_path("conv1").unwrap().exists());
+    assert!(path.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A worker retry after a partial append must not duplicate its committed
 /// prefix or allow a conflicting sequence to replace that prefix.
 #[test]
