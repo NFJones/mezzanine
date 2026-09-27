@@ -6,7 +6,8 @@
 //! control request dispatcher from also owning model-context shaping details.
 
 use super::super::{ContextBlock, ContextSourceKind, Envelope, TranscriptEntry, TranscriptRole};
-use crate::error::{MezErrorKind, Result};
+use crate::error::Result;
+use crate::storage::transcript::ConversationTranscriptRead;
 use mez_agent::{
     AGENT_LIST_MAX_CAPABILITIES, ProviderTranscriptEvent, TranscriptContextEvent,
     agent_list_bounded_text,
@@ -93,8 +94,13 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
     {
         let mut entries = work
             .store
-            .inspect_after_sequence(&work.inputs.conversation_id, epoch.through_sequence)?;
-        entries.extend(work.inputs.pending_entries);
+            .conversation_transcript_view(
+                &work.inputs.conversation_id,
+                ConversationTranscriptRead::After(epoch.through_sequence),
+                true,
+                &work.inputs.pending_entries,
+            )?
+            .logical;
         entries.retain(|entry| {
             entry.conversation_id == work.inputs.conversation_id
                 && entry.sequence > epoch.through_sequence
@@ -138,21 +144,24 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
         }
         return Ok(history);
     }
-    let entries = match work.inputs.active_entries {
-        Some(active_entries) => work
-            .store
-            .inspect_latest_entries(&work.inputs.conversation_id, active_entries),
-        None => work.store.inspect(&work.inputs.conversation_id),
-    };
-    let entries = match entries {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == MezErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(error),
-    };
-    Ok(runtime_agent_history_epoch_from_entries(
-        work.inputs,
-        entries,
-    ))
+    let read = work.inputs.active_entries.map_or(
+        ConversationTranscriptRead::All,
+        ConversationTranscriptRead::Latest,
+    );
+    let required = work.inputs.ephemeral_source_entries.unwrap_or_default() > 0
+        || work.inputs.active_entries.unwrap_or_default() > work.inputs.pending_entries.len();
+    let entries = work
+        .store
+        .conversation_transcript_view(
+            &work.inputs.conversation_id,
+            read,
+            required,
+            &work.inputs.pending_entries,
+        )?
+        .logical;
+    let mut inputs = work.inputs;
+    inputs.pending_entries.clear();
+    Ok(runtime_agent_history_epoch_from_entries(inputs, entries))
 }
 
 /// Immutable compact-memory and durable-transcript inputs for one prompt epoch.

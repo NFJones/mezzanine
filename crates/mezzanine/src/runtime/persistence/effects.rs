@@ -384,16 +384,24 @@ impl RuntimePersistenceComponent {
         &self,
         conversation_id: &str,
     ) -> Vec<mez_agent::transcript::TranscriptEntry> {
-        self.queued_transcript_effects
+        let mut entries = self
+            .in_flight_transcript_entries
             .iter()
-            .filter_map(|effect| match effect {
-                RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => Some(entries),
-                _ => None,
-            })
-            .flatten()
-            .filter(|entry| entry.conversation_id == conversation_id)
-            .cloned()
-            .collect()
+            .filter(|((owner, _), _)| owner == conversation_id)
+            .flat_map(|(_, entries)| entries.iter().cloned())
+            .collect::<Vec<_>>();
+        entries.extend(
+            self.queued_transcript_effects
+                .iter()
+                .filter_map(|effect| match effect {
+                    RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => Some(entries),
+                    _ => None,
+                })
+                .flatten()
+                .filter(|entry| entry.conversation_id == conversation_id)
+                .cloned(),
+        );
+        entries
     }
 
     /// Queues one presentation append in transcript/archive ordering.
@@ -436,7 +444,24 @@ impl RuntimePersistenceComponent {
 
     /// Drains queued transcript and prompt-history effects.
     pub(crate) fn take_transcript_effects(&mut self) -> Vec<RuntimeSideEffect> {
-        std::mem::take(&mut self.queued_transcript_effects)
+        let effects = std::mem::take(&mut self.queued_transcript_effects);
+        for effect in &effects {
+            if let RuntimeSideEffect::PersistTranscriptEntries { entries, .. } = effect
+                && let Some(first) = entries.first()
+            {
+                self.in_flight_transcript_entries.insert(
+                    (first.conversation_id.clone(), first.sequence),
+                    entries.clone(),
+                );
+            }
+        }
+        effects
+    }
+
+    /// Settles only the matching worker-owned append, never another conversation's rows.
+    pub(crate) fn settle_transcript_write(&mut self, conversation_id: &str, first_sequence: u64) {
+        self.in_flight_transcript_entries
+            .remove(&(conversation_id.to_string(), first_sequence));
     }
 
     /// Returns the newest queued metadata checkpoint record count for tests and
@@ -500,5 +525,59 @@ impl RuntimePersistenceComponent {
     /// Drains queued non-blocking program-hook effects.
     pub(crate) fn take_program_hook_effects(&mut self) -> Vec<RuntimeSideEffect> {
         std::mem::take(&mut self.queued_program_hook_effects)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drained rows remain logically visible until their exact write settles;
+    /// a different conversation's settlement cannot retire them.
+    #[test]
+    fn transcript_write_visibility_across_drain_and_settlement() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-in-flight-transcript-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let row = mez_agent::transcript::TranscriptEntry {
+            conversation_id: "drained-write".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "exact queued text".to_string(),
+        };
+        let mut component = RuntimePersistenceComponent::default();
+        component.queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+            path: store.transcript_path("drained-write").unwrap(),
+            store,
+            entries: vec![row.clone()],
+        });
+        assert_eq!(
+            component.pending_transcript_entries("drained-write"),
+            vec![row.clone()]
+        );
+        assert_eq!(component.take_transcript_effects().len(), 1);
+        assert_eq!(
+            component.pending_transcript_entries("drained-write"),
+            vec![row]
+        );
+        component.settle_transcript_write("other-conversation", 1);
+        assert_eq!(
+            component.pending_transcript_entries("drained-write").len(),
+            1
+        );
+        component.settle_transcript_write("drained-write", 1);
+        assert!(
+            component
+                .pending_transcript_entries("drained-write")
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

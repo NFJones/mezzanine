@@ -143,6 +143,54 @@ fn entry(conversation_id: &str, sequence: u64, role: TranscriptRole) -> Transcri
     }
 }
 
+/// An absent first archive can expose queued rows logically, but cannot prove
+/// that those rows are committed for a selective compaction epoch.
+#[test]
+fn transcript_view_separates_first_write_from_committed_rows() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("logical-first-write");
+    let store = AgentTranscriptStore::new(root.clone());
+    let pending = entry("first-write", 1, TranscriptRole::User);
+    let view = store
+        .conversation_transcript_view(
+            "first-write",
+            ConversationTranscriptRead::All,
+            false,
+            std::slice::from_ref(&pending),
+        )
+        .unwrap();
+    assert!(view.committed.is_empty());
+    assert_eq!(view.logical, vec![pending.clone()]);
+    assert!(
+        store
+            .conversation_transcript_view(
+                "first-write",
+                ConversationTranscriptRead::All,
+                true,
+                std::slice::from_ref(&pending)
+            )
+            .is_err()
+    );
+    store.append(&pending).unwrap();
+    let view = store
+        .conversation_transcript_view(
+            "first-write",
+            ConversationTranscriptRead::Latest(1),
+            true,
+            &[pending],
+        )
+        .unwrap();
+    assert_eq!(view.committed, view.logical);
+    fs::remove_file(store.transcript_path("first-write").unwrap()).unwrap();
+    assert!(
+        store
+            .conversation_transcript_view("first-write", ConversationTranscriptRead::All, true, &[])
+            .is_err()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Selective epochs must never replace direct user text or only half of one
 /// typed execution group, and rejected writes leave the previous epoch intact.
 #[test]
@@ -207,6 +255,125 @@ fn compaction_ranges_reject_protected_and_split_history() {
         )
         .unwrap();
     assert_eq!(store.inspect("ranges").unwrap()[0].content, user.content);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// An editor may replace a still-valid typed execution row after compaction
+/// planning. Publication compares the entire frozen row under the conversation
+/// lock and leaves the previous epoch authoritative on a mismatch.
+#[test]
+fn selective_publication_rejects_changed_frozen_source() {
+    let root = temp_root("frozen-selective-source");
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut row = entry("frozen-source", 1, TranscriptRole::System);
+    row.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        mez_agent::ContextSourceKind::TranscriptAssistant,
+        "assistant",
+        "original",
+        mez_agent::ContextExecutionGroupId::new("frozen-group").unwrap(),
+        1,
+        None,
+    )
+    .unwrap()
+    .to_transcript_content();
+    store.append(&row).unwrap();
+    store
+        .save_compaction_epoch("frozen-source", 0, "prior")
+        .unwrap();
+    let prior = store.compaction_epoch("frozen-source").unwrap();
+    let epoch = super::AgentCompactionEpoch {
+        version: 2,
+        conversation_id: "frozen-source".to_string(),
+        through_sequence: 0,
+        summary: "prior".to_string(),
+        ranges: vec![super::AgentCompactionRange {
+            first_sequence: 1,
+            through_sequence: 1,
+            summary: "model summary".to_string(),
+        }],
+    };
+    let changed = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        mez_agent::ContextSourceKind::TranscriptAssistant,
+        "assistant",
+        "changed",
+        mez_agent::ContextExecutionGroupId::new("frozen-group").unwrap(),
+        1,
+        None,
+    )
+    .unwrap()
+    .to_transcript_content();
+    store
+        .compare_and_swap_entry_content(
+            "frozen-source",
+            1,
+            "%1",
+            &store.transcript_entry_revision(&row).unwrap(),
+            changed,
+        )
+        .unwrap();
+    assert!(
+        store
+            .save_compaction_ranges_with_proof(epoch, &[row])
+            .is_err()
+    );
+    assert_eq!(store.compaction_epoch("frozen-source").unwrap(), prior);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A later independent compaction task proves only its newly selected rows;
+/// the already published range is validated as part of the existing epoch,
+/// but its source is not part of the new task's frozen selection.
+#[test]
+fn selective_publication_extends_prior_range_with_new_source_proof() {
+    let root = temp_root("successive-selective-source");
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut rows = Vec::new();
+    for sequence in [1, 3] {
+        let mut row = entry("successive-source", sequence, TranscriptRole::System);
+        row.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+            mez_agent::ContextSourceKind::TranscriptAssistant,
+            format!("assistant {sequence}"),
+            format!("source {sequence}"),
+            mez_agent::ContextExecutionGroupId::new(format!("group-{sequence}")).unwrap(),
+            1,
+            None,
+        )
+        .unwrap()
+        .to_transcript_content();
+        if sequence == 3 {
+            store
+                .append(&entry("successive-source", 2, TranscriptRole::User))
+                .unwrap();
+        }
+        store.append(&row).unwrap();
+        rows.push(row);
+    }
+    let mut epoch = super::AgentCompactionEpoch {
+        version: 2,
+        conversation_id: "successive-source".to_string(),
+        through_sequence: 0,
+        summary: String::new(),
+        ranges: vec![super::AgentCompactionRange {
+            first_sequence: 1,
+            through_sequence: 1,
+            summary: "first summary".to_string(),
+        }],
+    };
+    store
+        .save_compaction_ranges_with_proof(epoch.clone(), &rows[..1])
+        .unwrap();
+    epoch.ranges.push(super::AgentCompactionRange {
+        first_sequence: 3,
+        through_sequence: 3,
+        summary: "second summary".to_string(),
+    });
+    store
+        .save_compaction_ranges_with_proof(epoch.clone(), &rows[1..])
+        .unwrap();
+    assert_eq!(
+        store.compaction_epoch("successive-source").unwrap(),
+        Some(epoch)
+    );
     let _ = fs::remove_dir_all(root);
 }
 

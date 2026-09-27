@@ -6812,6 +6812,14 @@ Compact action/audit summaries MUST NOT replace visible assistant text when that
 text is needed for later references.
 Normal provider-context construction MUST replay the complete active transcript
 projection in sequence order without applying a recent-entry or byte-tail limit.
+Transcript replay MAY merge actor-queued and worker-owned append rows with the
+committed archive in exact sequence order. Those logical rows MUST remain
+visible until their keyed write settles, but MUST NOT prove durability for a
+compaction epoch. An absent first archive MAY represent an empty committed
+prefix only when no previously committed history or required epoch exists;
+missing older history MUST fail visibly. Selective publication MUST revalidate
+frozen committed source rows under the conversation write lock before replacing
+the epoch, even if more rows were appended while summarization ran.
 For an ordinary conversation, the active projection is the exact retained raw
 suffix committed by the latest successful compaction plus every subsequently
 appended record. For a forked, routed, or ephemeral conversation, replay MUST

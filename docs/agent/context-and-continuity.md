@@ -29,6 +29,13 @@ shell, patch, MCP, web, fetch, and skill output, so transcripts and context
 exports can contain sensitive task data. Later results append after earlier
 ones; they do not move or replace prior output. Only explicit conversation
 compaction may summarize complete older execution groups.
+Prompt replay combines committed transcript rows with actor-queued and
+worker-owned appends in sequence order. The latter remain logically visible
+until their keyed write settles, but cannot authorize a durable compaction
+range. A missing first archive is empty only before any committed history or
+required epoch; missing older history fails visibly. Selective publication
+checks frozen committed source under the conversation lock before writing an
+epoch, even if subsequent entries arrived during summarization.
 The complete model-facing result, including shell observation fields, is bounded
 before first exposure. Control characters such as NUL remain part of the exact
 model-visible content: typed execution blocks JSON-escape them and NUL-bearing

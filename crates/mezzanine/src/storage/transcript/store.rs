@@ -47,6 +47,22 @@ use mez_agent::transcript::{
 use mez_agent::{AgentConversationKind, AllowedActionSet};
 use mez_mux::readline::ReadlineHistoryEntry;
 
+/// Captured logical transcript with a separate committed prefix for publication.
+/// Queued and worker-owned entries may be replayed but never prove durability.
+#[derive(Debug, Clone)]
+pub(crate) struct ConversationTranscriptView {
+    pub(crate) committed: Vec<TranscriptEntry>,
+    pub(crate) logical: Vec<TranscriptEntry>,
+}
+
+/// Bounded read shape for a captured conversation history snapshot.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ConversationTranscriptRead {
+    All,
+    Latest(usize),
+    After(u64),
+}
+
 /// Defines the SESSION TRANSCRIPT FILE NAME const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -1023,13 +1039,16 @@ impl AgentTranscriptStore {
         through_sequence: u64,
         summary: &str,
     ) -> Result<()> {
-        self.save_compaction_projection(AgentCompactionEpoch {
-            version: 1,
-            conversation_id: conversation_id.to_string(),
-            through_sequence,
-            summary: summary.to_string(),
-            ranges: Vec::new(),
-        })
+        self.save_compaction_projection(
+            AgentCompactionEpoch {
+                version: 1,
+                conversation_id: conversation_id.to_string(),
+                through_sequence,
+                summary: summary.to_string(),
+                ranges: Vec::new(),
+            },
+            None,
+        )
     }
 
     /// Atomically publishes ordered selective replacements without altering the archive.
@@ -1040,17 +1059,34 @@ impl AgentTranscriptStore {
         summary: &str,
         ranges: Vec<AgentCompactionRange>,
     ) -> Result<()> {
-        self.save_compaction_projection(AgentCompactionEpoch {
-            version: 2,
-            conversation_id: conversation_id.to_string(),
-            through_sequence,
-            summary: summary.to_string(),
-            ranges,
-        })
+        self.save_compaction_projection(
+            AgentCompactionEpoch {
+                version: 2,
+                conversation_id: conversation_id.to_string(),
+                through_sequence,
+                summary: summary.to_string(),
+                ranges,
+            },
+            None,
+        )
+    }
+
+    /// Publishes selected ranges only if their frozen committed source still
+    /// matches the archive under the same conversation lock as epoch writing.
+    pub(crate) fn save_compaction_ranges_with_proof(
+        &self,
+        epoch: AgentCompactionEpoch,
+        frozen_rows: &[TranscriptEntry],
+    ) -> Result<()> {
+        self.save_compaction_projection(epoch, Some(frozen_rows))
     }
 
     /// Shares the crash-safe v1 and v2 publication boundary.
-    fn save_compaction_projection(&self, epoch: AgentCompactionEpoch) -> Result<()> {
+    fn save_compaction_projection(
+        &self,
+        epoch: AgentCompactionEpoch,
+        frozen_rows: Option<&[TranscriptEntry]>,
+    ) -> Result<()> {
         let conversation_id = epoch.conversation_id.as_str();
         let through_sequence = epoch.through_sequence;
         let summary = epoch.summary.as_str();
@@ -1085,10 +1121,37 @@ impl AgentTranscriptStore {
             through_sequence,
             latest_sequence.unwrap_or(0).saturating_add(1),
         )?;
+        let previous = self.compaction_epoch(conversation_id)?;
         if !epoch.ranges.is_empty() {
-            validate_compaction_range_sources(&epoch.ranges, &self.inspect(conversation_id)?)?;
+            let committed = self.inspect(conversation_id)?;
+            validate_compaction_range_sources(&epoch.ranges, &committed)?;
+            if let Some(frozen_rows) = frozen_rows {
+                let prior_ranges = previous
+                    .as_ref()
+                    .map_or(&[][..], |old| old.ranges.as_slice());
+                if !epoch.ranges.starts_with(prior_ranges)
+                    || epoch.ranges.len() <= prior_ranges.len()
+                {
+                    return Err(MezError::conflict(
+                        "compaction publication no longer extends its prior ranges",
+                    ));
+                }
+                let selected = committed
+                    .into_iter()
+                    .filter(|row| {
+                        epoch.ranges[prior_ranges.len()..].iter().any(|range| {
+                            (range.first_sequence..=range.through_sequence).contains(&row.sequence)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                if selected != frozen_rows {
+                    return Err(MezError::conflict(
+                        "compaction source changed before durable publication",
+                    ));
+                }
+            }
         }
-        if let Some(previous) = self.compaction_epoch(conversation_id)?
+        if let Some(previous) = previous
             && through_sequence < previous.through_sequence
         {
             return Err(MezError::invalid_state(
@@ -1958,6 +2021,74 @@ impl AgentTranscriptStore {
             .filter(|line| !line.trim().is_empty())
             .map(decode_transcript_entry)
             .collect()
+    }
+
+    /// Reads a bounded durable projection and merges captured queued or worker-owned
+    /// rows for replay. Only `committed` may justify a selective publication.
+    /// An absent archive is an empty first write only if no committed prefix was
+    /// previously observed; missing historical archives remain integrity errors.
+    pub(crate) fn conversation_transcript_view(
+        &self,
+        conversation_id: &str,
+        read: ConversationTranscriptRead,
+        committed_prefix_required: bool,
+        pending: &[TranscriptEntry],
+    ) -> Result<ConversationTranscriptView> {
+        validate_conversation_id(conversation_id)?;
+        let committed = match read {
+            ConversationTranscriptRead::All => self.inspect(conversation_id),
+            ConversationTranscriptRead::Latest(count) => {
+                self.inspect_latest_entries(conversation_id, count)
+            }
+            ConversationTranscriptRead::After(sequence) => {
+                self.inspect_after_sequence(conversation_id, sequence)
+            }
+        };
+        let committed = match committed {
+            Ok(rows) => rows,
+            Err(error) if error.kind() == MezErrorKind::NotFound && !committed_prefix_required => {
+                if matches!(read, ConversationTranscriptRead::After(sequence) if sequence > 0)
+                    || pending.first().is_some_and(|entry| entry.sequence != 1)
+                    || pending
+                        .windows(2)
+                        .any(|pair| pair[0].sequence.checked_add(1) != Some(pair[1].sequence))
+                {
+                    return Err(MezError::invalid_state(
+                        "missing transcript cannot be an empty first-write prefix",
+                    ));
+                }
+                Vec::new()
+            }
+            Err(error) => return Err(error),
+        };
+        let mut logical = committed.clone();
+        for entry in pending {
+            if entry.conversation_id != conversation_id {
+                return Err(MezError::invalid_state(
+                    "transcript snapshot contains a foreign conversation",
+                ));
+            }
+            if let ConversationTranscriptRead::After(sequence) = read
+                && entry.sequence <= sequence
+            {
+                continue;
+            }
+            if let Some(existing) = logical.iter().find(|row| row.sequence == entry.sequence) {
+                if existing != entry {
+                    return Err(MezError::invalid_state(
+                        "transcript snapshot sequence has conflicting contents",
+                    ));
+                }
+            } else {
+                logical.push(entry.clone());
+            }
+        }
+        logical.sort_by_key(|entry| entry.sequence);
+        if let ConversationTranscriptRead::Latest(count) = read {
+            let first = logical.len().saturating_sub(count);
+            logical.drain(..first);
+        }
+        Ok(ConversationTranscriptView { committed, logical })
     }
 
     /// Returns a canonical SHA-256 revision covering every persisted entry field.

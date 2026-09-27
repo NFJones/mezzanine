@@ -573,6 +573,28 @@ pub enum AsyncHookEvent {
 /// Event emitted by an async persistence worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PersistenceEvent {
+    /// One ordered transcript append completed and can leave the in-flight view.
+    TranscriptCompleted {
+        /// Conversation owning the immutable append.
+        conversation_id: String,
+        /// First sequence of the settled append.
+        first_sequence: u64,
+        /// Destination path written by the worker.
+        path: PathBuf,
+        /// Number of durable bytes written.
+        bytes: usize,
+    },
+    /// One ordered transcript append failed; its rows remain non-durable.
+    TranscriptFailed {
+        /// Conversation owning the immutable append.
+        conversation_id: String,
+        /// First sequence of the failed append.
+        first_sequence: u64,
+        /// Destination path attempted by the worker.
+        path: PathBuf,
+        /// Human-readable write failure.
+        error: String,
+    },
     /// A persistence write completed.
     Completed {
         /// Persistence family that handled the write.

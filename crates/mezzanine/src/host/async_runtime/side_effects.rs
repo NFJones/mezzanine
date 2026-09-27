@@ -1064,25 +1064,37 @@ where
                     store,
                     path,
                     entries,
-                } => match persist_transcript_entries(store, entries).await {
-                    Ok(bytes) => {
-                        report.completed = report.completed.saturating_add(1);
-                        report.bytes_written = report.bytes_written.saturating_add(bytes);
-                        batch.push(RuntimeEvent::Persistence(PersistenceEvent::Completed {
-                            target: PersistenceTarget::Transcript,
-                            path,
-                            bytes,
-                        }));
+                } => {
+                    let conversation_id = entries
+                        .first()
+                        .map_or(String::new(), |entry| entry.conversation_id.clone());
+                    let first_sequence = entries.first().map_or(0, |entry| entry.sequence);
+                    match persist_transcript_entries(store, entries).await {
+                        Ok(bytes) => {
+                            report.completed = report.completed.saturating_add(1);
+                            report.bytes_written = report.bytes_written.saturating_add(bytes);
+                            batch.push(RuntimeEvent::Persistence(
+                                PersistenceEvent::TranscriptCompleted {
+                                    conversation_id,
+                                    first_sequence,
+                                    path,
+                                    bytes,
+                                },
+                            ));
+                        }
+                        Err(error) => {
+                            report.failed = report.failed.saturating_add(1);
+                            batch.push(RuntimeEvent::Persistence(
+                                PersistenceEvent::TranscriptFailed {
+                                    conversation_id,
+                                    first_sequence,
+                                    path,
+                                    error: error.message().to_string(),
+                                },
+                            ));
+                        }
                     }
-                    Err(error) => {
-                        report.failed = report.failed.saturating_add(1);
-                        batch.push(RuntimeEvent::Persistence(PersistenceEvent::Failed {
-                            target: PersistenceTarget::Transcript,
-                            path,
-                            error: error.message().to_string(),
-                        }));
-                    }
-                },
+                }
                 RuntimeSideEffect::PersistAgentSessionMetadata {
                     store,
                     mezzanine_session_id,

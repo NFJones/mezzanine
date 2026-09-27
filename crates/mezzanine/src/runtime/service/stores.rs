@@ -108,6 +108,42 @@ impl RuntimeSessionService {
         let mut redispatch_presentation_resizes = false;
         let mut render_overlay = true;
         let payload = match event {
+            crate::runtime::PersistenceEvent::TranscriptCompleted {
+                conversation_id,
+                first_sequence,
+                path,
+                bytes,
+            } => {
+                self.persistence
+                    .settle_transcript_write(&conversation_id, first_sequence);
+                serde_json::json!({
+                    "worker": "async-persistence",
+                    "target": "transcript",
+                    "conversation_id": conversation_id,
+                    "path": path.to_string_lossy(),
+                    "state": "completed",
+                    "bytes": bytes,
+                })
+                .to_string()
+            }
+            crate::runtime::PersistenceEvent::TranscriptFailed {
+                conversation_id,
+                first_sequence,
+                path,
+                error,
+            } => {
+                self.persistence
+                    .settle_transcript_write(&conversation_id, first_sequence);
+                serde_json::json!({
+                    "worker": "async-persistence",
+                    "target": "transcript",
+                    "conversation_id": conversation_id,
+                    "path": path.to_string_lossy(),
+                    "state": "failed",
+                    "error": error,
+                })
+                .to_string()
+            }
             crate::runtime::PersistenceEvent::Completed {
                 target,
                 path,

@@ -583,6 +583,8 @@ pub struct RuntimeAgentCompactionTask {
     pub transcript_entries: u64,
     /// Last durable sequence actually supplied for prefix summarization.
     pub compacted_through_sequence: Option<u64>,
+    /// Committed rows captured for staged selective ranges before publication.
+    pub frozen_compaction_rows: Vec<mez_agent::transcript::TranscriptEntry>,
     /// Raw recent transcript entries to retain after summary insertion.
     pub retained_transcript_entries: u64,
     /// Durable entries supplied to the model compactor.

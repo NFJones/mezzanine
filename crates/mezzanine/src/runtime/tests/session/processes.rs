@@ -3631,7 +3631,7 @@ fn restored_agent_session_metadata(
         visibility: "visible".to_string(),
         running_turn_id: None,
         running_turn_kind: None,
-        transcript_entries: 1,
+        transcript_entries: 0,
         log_level: "normal".to_string(),
         pane_model_profile: None,
         pane_model_profile_selection: None,

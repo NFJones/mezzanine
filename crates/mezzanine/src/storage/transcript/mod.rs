@@ -75,6 +75,7 @@ pub use types::{
 mod tests;
 
 pub(crate) use store::AgentModelProfileSelection;
+pub(crate) use store::ConversationTranscriptRead;
 pub(crate) use store::saved_session_project_root;
 pub use store::{DEFAULT_SAVED_AGENT_SESSION_LIMIT, DEFAULT_SAVED_AGENT_SESSION_RETENTION_DAYS};
 

@@ -292,8 +292,17 @@ impl RuntimeSessionService {
         }) {
             return Err(MezError::invalid_state("staged compaction epoch is stale"));
         }
-        let entries = store.inspect(&task.conversation_id)?;
-        let Some(range) = selected_durable_compaction_range(plan, context, &entries, summary)
+        let pending = self
+            .persistence
+            .pending_transcript_entries(&task.conversation_id);
+        let view = store.conversation_transcript_view(
+            &task.conversation_id,
+            crate::storage::transcript::ConversationTranscriptRead::All,
+            boundary > 0 || task.transcript_entries > pending.len() as u64,
+            &pending,
+        )?;
+        let Some(range) =
+            selected_durable_compaction_range(plan, context, &view.committed, summary)
         else {
             if staged.is_some() {
                 return Err(MezError::invalid_state(
@@ -303,9 +312,7 @@ impl RuntimeSessionService {
             return Ok(None);
         };
         if range.first_sequence <= boundary
-            || self
-                .persistence
-                .pending_transcript_entries(&task.conversation_id)
+            || pending
                 .iter()
                 .any(|entry| entry.sequence <= range.through_sequence)
         {
@@ -338,6 +345,39 @@ impl RuntimeSessionService {
             summary: previous.map_or_else(String::new, |epoch| epoch.summary),
             ranges,
         }))
+    }
+
+    /// Freezes only the newly selected committed rows, retaining the source
+    /// identity of earlier provisional ranges across subsequent model calls.
+    fn frozen_observed_compaction_rows(
+        &self,
+        task: &RuntimeAgentCompactionTask,
+        context: &AgentContext,
+        plan: &mez_agent::ModelContextCompactionPlan,
+        summary: &str,
+        projection: &AgentCompactionEpoch,
+    ) -> Result<Vec<TranscriptEntry>> {
+        let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
+            MezError::invalid_state("selective compaction requires transcript storage")
+        })?;
+        let committed = store
+            .conversation_transcript_view(
+                &task.conversation_id,
+                crate::storage::transcript::ConversationTranscriptRead::All,
+                true,
+                &[],
+            )?
+            .committed;
+        let range = selected_durable_compaction_range(plan, context, &committed, summary)
+            .ok_or_else(|| MezError::conflict("selective compaction source changed"))?;
+        if projection.ranges.last() != Some(&range) {
+            return Err(MezError::conflict("selective compaction source changed"));
+        }
+        let mut frozen = task.frozen_compaction_rows.clone();
+        frozen.extend(committed.into_iter().filter(|entry| {
+            (range.first_sequence..=range.through_sequence).contains(&entry.sequence)
+        }));
+        Ok(frozen)
     }
 
     /// Executes `/compact` by queuing model-backed conversation compaction.
@@ -550,6 +590,7 @@ impl RuntimeSessionService {
             source: source.to_string(),
             transcript_entries,
             compacted_through_sequence,
+            frozen_compaction_rows: Vec::new(),
             retained_transcript_entries,
             summarized_entries,
             model_profile_name: model_profile_name.clone(),
@@ -710,6 +751,7 @@ impl RuntimeSessionService {
                 RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => transcript_entries,
             },
             compacted_through_sequence: None,
+            frozen_compaction_rows: Vec::new(),
             // The live context planner can omit exact transcript user events
             // from summary input because they are protected barriers. Until
             // durable replay can represent the same selected event ranges,
@@ -1367,6 +1409,15 @@ impl RuntimeSessionService {
                         .agent_turn_contexts()
                         .get(&turn_id)
                         .map_or(0, AgentContext::event_sequence_high_water_mark);
+                    if let Some(projection) = projection.as_ref() {
+                        task.frozen_compaction_rows = self.frozen_observed_compaction_rows(
+                            &task,
+                            &context,
+                            plan.as_ref(),
+                            &final_summary,
+                            projection,
+                        )?;
+                    }
                     if let RuntimeAgentCompactionTarget::ActiveTurn {
                         plan,
                         staged,
@@ -1563,6 +1614,19 @@ impl RuntimeSessionService {
                                     )?
                                     .is_some();
                             if next_range_is_durable {
+                                let projection_ref = projection.as_ref().ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "durable compaction range projection is unavailable",
+                                    )
+                                })?;
+                                task.frozen_compaction_rows = self
+                                    .frozen_observed_compaction_rows(
+                                        &task,
+                                        &context,
+                                        plan.as_ref(),
+                                        &final_summary,
+                                        projection_ref,
+                                    )?;
                                 let RuntimeAgentCompactionTarget::ActiveTurn {
                                     plan,
                                     staged,
@@ -1625,6 +1689,7 @@ impl RuntimeSessionService {
                         &task,
                         &final_summary,
                         projection.as_ref(),
+                        Some((&context, plan.as_ref())),
                     )?;
                     self.agent_turn_contexts_mut()
                         .insert(turn_id.clone(), compacted.clone());
@@ -1731,7 +1796,7 @@ impl RuntimeSessionService {
                     )));
                 }
             }
-            self.persist_agent_compaction_epoch(pane_id, &task, &summary, None)?;
+            self.persist_agent_compaction_epoch(pane_id, &task, &summary, None, None)?;
             if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
                 let refreshed = self
                     .refresh_running_turn_context_after_conversation_compaction(resume_turn_id)?;
@@ -1914,14 +1979,17 @@ impl RuntimeSessionService {
         let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
             MezError::invalid_state("manual compaction candidate requires transcript storage")
         })?;
-        let mut entries = store.inspect(&task.conversation_id)?;
-        entries.extend(
-            self.persistence
-                .pending_transcript_entries(&task.conversation_id),
-        );
-        entries.sort_by_key(|entry| entry.sequence);
-        entries.dedup_by_key(|entry| entry.sequence);
-        entries.retain(|entry| entry.conversation_id == task.conversation_id);
+        let pending = self
+            .persistence
+            .pending_transcript_entries(&task.conversation_id);
+        let entries = store
+            .conversation_transcript_view(
+                &task.conversation_id,
+                crate::storage::transcript::ConversationTranscriptRead::All,
+                task.transcript_entries > pending.len() as u64,
+                &pending,
+            )?
+            .logical;
         let post_plan_entries = session
             .transcript_entries
             .saturating_sub(task.transcript_entries);
@@ -2084,6 +2152,7 @@ impl RuntimeSessionService {
         task: &RuntimeAgentCompactionTask,
         summary: &str,
         projection: Option<&AgentCompactionEpoch>,
+        final_range: Option<(&AgentContext, &mez_agent::ModelContextCompactionPlan)>,
     ) -> Result<()> {
         let content = runtime_model_compact_memory_content(
             pane_id,
@@ -2114,12 +2183,12 @@ impl RuntimeSessionService {
                         "selective compaction boundary changed",
                     ));
                 }
-                store.save_compaction_ranges(
-                    &task.conversation_id,
-                    boundary,
-                    &projection.summary,
-                    projection.ranges.clone(),
-                )?;
+                let (context, plan) = final_range.ok_or_else(|| {
+                    MezError::invalid_state("selective compaction source proof is unavailable")
+                })?;
+                let frozen =
+                    self.frozen_observed_compaction_rows(task, context, plan, summary, projection)?;
+                store.save_compaction_ranges_with_proof(projection.clone(), &frozen)?;
             } else if let Some(previous) = previous.filter(|epoch| !epoch.ranges.is_empty()) {
                 if previous.ranges.iter().any(|range| {
                     range.first_sequence <= boundary && boundary < range.through_sequence

@@ -1310,6 +1310,68 @@ fn runtime_observed_compaction_stages_second_range_before_publication() {
     );
 }
 
+/// A second independently queued observed-input compaction extends a prior
+/// selective epoch without requiring the previous task's frozen source rows.
+/// Each completion publishes only its newly selected durable range.
+#[test]
+fn runtime_observed_compaction_extends_previous_selective_epoch() {
+    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        ContextSourceKind::TranscriptAssistant,
+        "second answer",
+        "SECOND_RANGE_SOURCE ".repeat(80),
+        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
+        1,
+        None,
+    )
+    .unwrap()
+    .to_transcript_content();
+    let (mut service, store, turn_id) =
+        queue_observed_input_compaction_with_second_group(Some(second));
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    complete_runtime_test_compaction(&mut service, "%1", "first summary");
+    let first = store.compaction_epoch(&conversation_id).unwrap().unwrap();
+    assert_eq!(first.ranges.len(), 1);
+    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
+    let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
+        context,
+        10_000,
+        1,
+        context.event_sequence_high_water_mark(),
+        mez_agent::ProviderBudgetProjection::new(
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            "runtime-batch",
+        ),
+    )
+    .unwrap();
+    assert!(
+        plan.replacement_blocks()
+            .iter()
+            .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
+    );
+    let profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    assert!(service.queue_agent_active_turn_compaction(
+        &turn_id,
+        "observed-input-exact-history".to_string(),
+        profile,
+        crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+            observed_input_tokens: 20_000,
+            max_input_tokens: 20_000,
+        },
+        plan,
+    ).unwrap());
+    complete_runtime_test_compaction(&mut service, "%1", "second summary");
+    let final_epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
+    assert_eq!(final_epoch.ranges.len(), 2);
+    assert_eq!(final_epoch.ranges[0], first.ranges[0]);
+    assert_eq!(final_epoch.ranges[1].summary, "second summary");
+    assert!(service.agent_provider_task_is_pending(&turn_id));
+}
+
 /// A zero first-segment allowance must stage both durable ranges before the
 /// observed-input continuation, retaining exact steering in replay order.
 #[test]
