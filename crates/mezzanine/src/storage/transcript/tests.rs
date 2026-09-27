@@ -1497,6 +1497,23 @@ fn transcript_store_append_many_reconciles_partial_commit() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// One worker receipt names one conversation; reject mixed batches before any
+/// archive can commit a prefix under a different conversation lock.
+#[test]
+fn transcript_store_append_many_rejects_mixed_conversations() {
+    let root = temp_root("append-many-mixed");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let rows = [
+        entry("conv1", 1, TranscriptRole::User),
+        entry("conv2", 1, TranscriptRole::Assistant),
+    ];
+    assert!(store.append_many(&rows).is_err());
+    assert!(store.inspect("conv1").is_err());
+    assert!(store.inspect("conv2").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A failure after the first durable row has an uncertain outcome; a subsequent
 /// identical batch must reconcile the prefix without duplicating its sequence.
 #[test]

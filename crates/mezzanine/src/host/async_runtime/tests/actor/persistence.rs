@@ -64,6 +64,18 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
             matches!(&replay[1], RuntimeSideEffect::PersistTranscriptEntries { entries, .. } if entries[0].sequence == 2)
         );
         store.append_many(std::slice::from_ref(&row)).unwrap();
+        let mut malformed = RuntimeEventBatch::new();
+        malformed.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptCompleted {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: 2,
+                entries: vec![row.clone()],
+                path: path.clone(),
+                bytes: 0,
+            },
+        ));
+        handle.submit_runtime_events(malformed).await.unwrap();
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 2);
         let mut events = RuntimeEventBatch::new();
         events.push(RuntimeEvent::Persistence(
             crate::runtime::PersistenceEvent::TranscriptCompleted {

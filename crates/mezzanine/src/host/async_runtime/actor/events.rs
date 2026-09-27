@@ -1380,6 +1380,26 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         persistence_event: PersistenceEvent,
     ) -> Result<RuntimeTransition> {
+        if let PersistenceEvent::TranscriptCompleted {
+            conversation_id,
+            first_sequence,
+            entries,
+            ..
+        }
+        | PersistenceEvent::TranscriptFailed {
+            conversation_id,
+            first_sequence,
+            entries,
+            ..
+        } = &persistence_event
+            && (entries.first().is_none_or(|first| {
+                first.conversation_id != *conversation_id || first.sequence != *first_sequence
+            }) || entries
+                .iter()
+                .any(|entry| entry.conversation_id != *conversation_id))
+        {
+            return Ok(RuntimeTransition::default());
+        }
         match &persistence_event {
             PersistenceEvent::TranscriptCompleted { entries, path, .. } => {
                 self.side_effect_routes

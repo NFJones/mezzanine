@@ -967,6 +967,14 @@ impl AgentTranscriptStore {
     /// giving async persistence workers a single call that can report a useful
     /// byte count after executing off the runtime actor.
     pub fn append_many(&self, entries: &[TranscriptEntry]) -> Result<usize> {
+        if entries
+            .windows(2)
+            .any(|pair| pair[0].conversation_id != pair[1].conversation_id)
+        {
+            return Err(MezError::invalid_args(
+                "transcript append batch must contain one conversation",
+            ));
+        }
         #[cfg(test)]
         if self
             .fail_transcript_append_attempts
