@@ -1614,6 +1614,33 @@ fn transcript_store_append_many_recovers_before_summary() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A synced transcript and published summary still need an exact catalog
+/// repair before the uncertain batch can be acknowledged.
+#[test]
+fn transcript_store_append_many_recovers_before_catalog() {
+    let root = temp_root("append-many-fault-before-catalog");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+    let row = entry("conv1", 1, TranscriptRole::User);
+    store.fail_transcript_append_before_catalog();
+    assert!(store.append_many(std::slice::from_ref(&row)).is_err());
+    assert_eq!(store.inspect("conv1").unwrap(), vec![row.clone()]);
+    assert!(store.catalog_saved_session("conv1").unwrap().is_none());
+    assert_eq!(store.append_many(std::slice::from_ref(&row)).unwrap(), 0);
+    assert_eq!(
+        store
+            .catalog_saved_session("conv1")
+            .unwrap()
+            .unwrap()
+            .summary
+            .entries,
+        1
+    );
+    assert_eq!(store.inspect("conv1").unwrap(), vec![row]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A delayed acknowledgement for an older batch must not confuse newer rows
 /// with the missing prefix or duplicate an already committed sequence.
 #[test]

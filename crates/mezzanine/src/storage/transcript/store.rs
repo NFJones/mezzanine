@@ -529,6 +529,8 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_transcript_append_before_summary: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            fail_transcript_append_before_catalog: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
             fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
@@ -559,6 +561,7 @@ impl AgentTranscriptStore {
             fail_transcript_append_after_first: Arc::new(AtomicBool::new(false)),
             fail_transcript_append_before_sync: Arc::new(AtomicBool::new(false)),
             fail_transcript_append_before_summary: Arc::new(AtomicBool::new(false)),
+            fail_transcript_append_before_catalog: Arc::new(AtomicBool::new(false)),
             fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
             fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
         }
@@ -672,6 +675,13 @@ impl AgentTranscriptStore {
     #[cfg(test)]
     pub fn fail_transcript_append_before_summary(&self) {
         self.fail_transcript_append_before_summary
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Injects one failure after publishing a row's summary but before catalog update.
+    #[cfg(test)]
+    pub fn fail_transcript_append_before_catalog(&self) {
+        self.fail_transcript_append_before_catalog
             .store(true, Ordering::SeqCst);
     }
 
@@ -2083,6 +2093,16 @@ impl AgentTranscriptStore {
             )));
         }
         self.update_summary_after_append(entry)?;
+        #[cfg(test)]
+        if self
+            .fail_transcript_append_before_catalog
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(MezError::from(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "injected transcript append failure before catalog",
+            )));
+        }
         self.upsert_catalog_from_files(&entry.conversation_id, None)?;
         Ok(encoded.len().saturating_add(1))
     }
