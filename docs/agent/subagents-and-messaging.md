@@ -23,6 +23,9 @@ future child spawns: `nonhuman` (the default), `human`, or `literal`. A reload
 or live config change is prospective and never renames a child that already has
 runtime lineage or a persisted conversation. The setting does not change the
 canonical `agent-%…` identity, routing, authorization, or persistence format.
+New nonhuman and human displays are lowercase ASCII, with active names compared
+without regard to ASCII case; literal mode and exhausted-corpus fallback retain
+the exact canonical id. The embedded source corpora remain capitalized.
 
 Use the `explorer` role for read-heavy investigation and `worker` for bounded
 implementation. A cooperation mode constrains the intended work: `explore-only`

@@ -47,6 +47,30 @@ fn spawn_subagent_for_display_name_test(service: &mut RuntimeSessionService) -> 
         )
         .unwrap();
     let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let child_id = spawned["agent"]["id"].as_str().unwrap();
+    let display_name = spawned["agent"]["display_name"].as_str().unwrap();
+    let pane_id = child_id.strip_prefix("agent-").unwrap();
+    let window = service
+        .session()
+        .windows()
+        .iter()
+        .find(|window| {
+            window
+                .panes()
+                .iter()
+                .any(|pane| pane.id.as_str() == pane_id)
+        })
+        .unwrap();
+    assert_eq!(
+        window
+            .panes()
+            .iter()
+            .find(|pane| pane.id.as_str() == pane_id)
+            .unwrap()
+            .title,
+        display_name
+    );
+    assert_eq!(window.name, display_name);
     (
         spawned["agent"]["id"].as_str().unwrap().to_string(),
         spawned["agent"]["display_name"]
@@ -65,11 +89,20 @@ fn spawn_subagent_for_display_name_test(service: &mut RuntimeSessionService) -> 
 #[test]
 fn runtime_subagent_spawn_applies_configured_display_name_mode() {
     let mut nonhuman_service = test_runtime_service();
-    let (_child_id, nonhuman_name) = spawn_subagent_for_display_name_test(&mut nonhuman_service);
+    let (child_id, nonhuman_name) = spawn_subagent_for_display_name_test(&mut nonhuman_service);
     assert!(
         crate::integrations::agent::subagent::SUBAGENT_NONHUMAN_NAMES
-            .contains(&nonhuman_name.as_str()),
+            .iter()
+            .any(|name| name.to_ascii_lowercase() == nonhuman_name),
         "default mode must use the nonhuman corpus: {nonhuman_name}"
+    );
+    assert_eq!(nonhuman_name, nonhuman_name.to_ascii_lowercase());
+    assert_eq!(
+        nonhuman_service
+            .subagent_lineage(&child_id)
+            .unwrap()
+            .display_name,
+        nonhuman_name
     );
     nonhuman_service.terminate_all_pane_processes().unwrap();
 
@@ -77,9 +110,12 @@ fn runtime_subagent_spawn_applies_configured_display_name_mode() {
     human_service.set_subagent_name_mode(crate::runtime::config::SubagentNameMode::Human);
     let (_child_id, human_name) = spawn_subagent_for_display_name_test(&mut human_service);
     assert!(
-        crate::integrations::agent::subagent::SUBAGENT_HUMAN_NAMES.contains(&human_name.as_str()),
+        crate::integrations::agent::subagent::SUBAGENT_HUMAN_NAMES
+            .iter()
+            .any(|name| name.to_ascii_lowercase() == human_name),
         "human mode must use the human corpus: {human_name}"
     );
+    assert_eq!(human_name, human_name.to_ascii_lowercase());
     human_service.terminate_all_pane_processes().unwrap();
 
     let mut literal_service = test_runtime_service();

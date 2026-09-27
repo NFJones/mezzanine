@@ -51,13 +51,17 @@ fn select_subagent_display_name_from_corpus<R: rand::Rng + ?Sized>(
 ) -> String {
     let available_names = corpus
         .iter()
-        .copied()
-        .filter(|name| !active_names.contains(*name))
+        .map(|name| name.to_ascii_lowercase())
+        .filter(|name| {
+            !active_names
+                .iter()
+                .any(|active| active.eq_ignore_ascii_case(name))
+        })
         .collect::<Vec<_>>();
     if available_names.is_empty() {
         child_agent_id.to_string()
     } else {
-        available_names[rng.random_range(0..available_names.len())].to_string()
+        available_names[rng.random_range(0..available_names.len())].clone()
     }
 }
 
@@ -1970,7 +1974,7 @@ mod tests {
     /// any secondary counter or non-deterministic state outside its RNG input.
     fn corpus_selection_excludes_active_names_and_is_seeded_deterministic() {
         let corpus = ["Aster", "Beryl", "Cinder"];
-        let active_names = BTreeSet::from(["Aster".to_string()]);
+        let active_names = BTreeSet::from(["aStEr".to_string()]);
         let mut first_rng = rand::rngs::StdRng::seed_from_u64(41);
         let mut second_rng = rand::rngs::StdRng::seed_from_u64(41);
 
@@ -1987,8 +1991,9 @@ mod tests {
             &mut second_rng,
         );
 
-        assert_ne!(first, "Aster");
-        assert!(corpus.contains(&first.as_str()));
+        assert_ne!(first, "aster");
+        assert!(corpus.iter().any(|name| name.to_ascii_lowercase() == first));
+        assert_eq!(first, first.to_ascii_lowercase());
         assert_eq!(first, second);
     }
 
@@ -2007,6 +2012,19 @@ mod tests {
         assert_eq!(
             select_subagent_display_name_from_corpus(&corpus, &active_names, "agent-%27", &mut rng,),
             "agent-%27"
+        );
+    }
+
+    /// Mixed-case legacy names and duplicate corpus entries cannot reallocate
+    /// an active display; exhaustion preserves the canonical child identity.
+    #[test]
+    fn normalized_corpus_collisions_fall_back_to_child_id() {
+        let corpus = ["Aster", "ASTER", "Beryl"];
+        let active_names = BTreeSet::from(["aStEr".to_string(), "BERYL".to_string()]);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(41);
+        assert_eq!(
+            select_subagent_display_name_from_corpus(&corpus, &active_names, "agent-%42", &mut rng),
+            "agent-%42"
         );
     }
 }

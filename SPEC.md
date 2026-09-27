@@ -8507,8 +8507,11 @@ window or otherwise move the primary user's active window or pane.
 
 Each spawned subagent MUST receive a human-readable display name according to
 the prospective `agents.subagent_name_mode` policy in effect when it is
-spawned. The display name MUST be unique among currently active subagents when
-the subagent is spawned. The canonical agent id MUST remain the stable protocol
+spawned. Product-generated nonhuman and human display names MUST be lowercase
+ASCII; literal names retain the canonical agent id. The display name MUST be
+unique among currently active subagents ignoring ASCII case when the subagent
+is spawned. Existing live or persisted names MUST NOT be renamed by a policy
+change. The canonical agent id MUST remain the stable protocol
 identity, and protocol responses and parent coordination messages that expose a
 display name MUST also expose the canonical agent id.
 
