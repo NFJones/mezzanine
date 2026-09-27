@@ -115,11 +115,13 @@ impl RuntimeSessionService {
                 path,
                 bytes,
             } => {
-                self.persistence.settle_transcript_write(
+                if !self.persistence.settle_transcript_write(
                     &conversation_id,
                     first_sequence,
                     &entries,
-                );
+                ) {
+                    return Ok(crate::runtime::RuntimeTransition::default());
+                }
                 serde_json::json!({
                     "worker": "async-persistence",
                     "target": "transcript",
@@ -855,5 +857,35 @@ mod transcript_settlement_tests {
                 .is_empty()
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A duplicate completion must not claim that an unowned transcript write
+    /// was settled after its exact batch has already left the in-flight view.
+    #[test]
+    fn duplicate_transcript_completion_reports_ignored_settlement() {
+        let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+        let row = TranscriptEntry {
+            conversation_id: "duplicate-write".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted text".to_string(),
+        };
+        let transition = service
+            .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptCompleted {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: row.sequence,
+                entries: vec![row],
+                path: std::path::PathBuf::from("/tmp/unowned-transcript"),
+                bytes: 1,
+            })
+            .unwrap();
+        assert!(
+            !transition.applied,
+            "unowned completion must not settle a write"
+        );
     }
 }
