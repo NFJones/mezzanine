@@ -253,19 +253,29 @@ impl RuntimeSessionService {
                 Err(error) => return Err(error),
             };
             let presentation_entries = store.inspect_presentation(&conversation_id)?;
+            if metadata.transcript_entries > 0 {
+                match store.next_sequence(&conversation_id) {
+                    Ok(sequence) if sequence > 1 => {}
+                    Ok(_) => {
+                        return Err(MezError::invalid_state(
+                            "restored conversation has no required transcript history",
+                        ));
+                    }
+                    Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {
+                        return Err(MezError::invalid_state(
+                            "restored conversation is missing required transcript history",
+                        ));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
             let transcript_fallback_entries =
                 if presentation_entries.is_empty() && metadata.transcript_entries > 0 {
-                    match store.inspect_recent(
+                    store.inspect_recent(
                         &conversation_id,
                         AGENT_RESTART_TRANSCRIPT_REPLAY_ENTRIES,
                         AGENT_RESTART_TRANSCRIPT_REPLAY_BYTES,
-                    ) {
-                        Ok(entries) => entries,
-                        Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {
-                            Vec::new()
-                        }
-                        Err(error) => return Err(error),
-                    }
+                    )?
                 } else {
                     Vec::new()
                 };

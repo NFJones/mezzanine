@@ -1137,6 +1137,34 @@ fn runtime_agent_loop_checkpoint_restart_restores_parent_catalog() {
     );
 }
 
+/// A restored nonzero transcript count cannot turn a missing historical
+/// archive into an empty conversation, even when presentation is absent.
+#[test]
+fn runtime_restore_rejects_missing_counted_transcript() {
+    let store = AgentTranscriptStore::new(temp_root("missing-counted-transcript"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+
+    let mut restarted = test_runtime_service();
+    restarted.session.id = service.session().id.clone();
+    restarted.set_agent_transcript_store(store);
+    assert!(
+        restarted
+            .restore_agent_sessions_from_transcript_store()
+            .is_err()
+    );
+    assert!(restarted.agent_shell_store().get("%1").is_none());
+}
+
 /// Verifies that `/clear` follows the spec-level behavior of clearing the live
 /// viewport while preserving pane logs and starting a fresh visible
 /// conversation.

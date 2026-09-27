@@ -1922,7 +1922,7 @@ fn runtime_restored_agent_bound_pane_clears_daemon_environment_while_unbound_res
                 visibility: "visible".to_string(),
                 running_turn_id: None,
                 running_turn_kind: None,
-                transcript_entries: 1,
+                transcript_entries: 0,
                 log_level: "normal".to_string(),
                 pane_model_profile: None,
                 pane_model_profile_selection: None,
