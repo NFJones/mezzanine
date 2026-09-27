@@ -184,7 +184,11 @@ Observed-input compaction also protects exact historical user instructions,
 including legacy transcript user rows. A selected closed durable execution
 range can be replaced at its original position after validating the prospective
 refreshed request. When the frozen selection cannot be mapped unambiguously,
-Mez leaves the raw replay boundary unchanged rather than discard exact history;
+Mez can keep a bounded summary only in the running turn after its complete next
+request fits. It leaves the raw replay boundary unchanged rather than invent a
+durable range or discard exact history; staged first-turn summaries remain
+provisional until all required segments fit. On restart, the original raw
+transcript remains authoritative;
 that fallback does not reduce replayed transcript size.
 
 Use `/status` for current-pane context and token information. Cache reuse is a

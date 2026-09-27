@@ -1965,6 +1965,247 @@ max_input_tokens = 100
     );
 }
 
+/// An observed first-turn input overflow can summarize closed live work even
+/// before the transcript worker commits its first archive. Recovery queues one
+/// continuation but leaves the original append-only history authoritative.
+#[test]
+fn runtime_observed_first_turn_without_archive_recovers_turn_locally() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("observed-first-turn-local"));
+    service.set_agent_transcript_store(store.clone());
+    service.use_transcript_effect_adapter();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "observed-first-turn-local".to_string(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"first-turn-local\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.first-turn-local]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 20000\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"first-local","method":"agent/shell/command","params":{"idempotency_key":"first-local","input":"continue with the collected evidence"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == task.turn_id)
+        .unwrap()
+        .clone();
+    insert_test_context_block(
+        service
+            .agent_turn_contexts_mut()
+            .get_mut(&task.turn_id)
+            .unwrap(),
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "first-turn evidence".to_string(),
+            content: "first-turn-evidence ".repeat(500),
+        },
+    );
+    let response = runtime_say_response(&task.turn_id, "continue", false);
+    let action = response
+        .action_batch
+        .as_ref()
+        .unwrap()
+        .actions
+        .first()
+        .unwrap()
+        .clone();
+    service
+        .apply_agent_provider_execution(
+            &turn,
+            &task.model_profile,
+            "runtime-batch",
+            mez_agent::AgentTurnExecution {
+                request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
+                response,
+                latest_response_usage: mez_agent::ModelTokenUsage {
+                    input_tokens: 20_000,
+                    output_tokens: 1,
+                    reasoning_tokens: 0,
+                    cached_input_tokens: Some(20),
+                    cache_write_input_tokens: None,
+                },
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                action_results: vec![mez_agent::ActionResult::succeeded(
+                    &turn,
+                    &action,
+                    vec!["continue".to_string()],
+                    None,
+                )],
+                final_turn: false,
+                terminal_state: AgentTurnState::Running,
+            },
+        )
+        .unwrap();
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+    );
+    assert!(
+        !store
+            .transcript_path(&turn.conversation_id)
+            .unwrap()
+            .exists()
+    );
+    complete_runtime_test_compaction(&mut service, "%1", "closed evidence summarized");
+    assert_eq!(store.compaction_epoch(&turn.conversation_id).unwrap(), None);
+    assert!(
+        !store
+            .transcript_path(&turn.conversation_id)
+            .unwrap()
+            .exists()
+    );
+    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .unwrap()
+            .blocks()
+            .iter()
+            .any(|block| block.content == "closed evidence summarized")
+    );
+    assert!(
+        service
+            .persistence
+            .pending_transcript_entries(&turn.conversation_id)
+            .iter()
+            .all(|entry| !entry.content.contains("closed evidence summarized"))
+    );
+}
+
+/// A first-turn zero-budget plan stages closed segments across exact steering
+/// without inventing durable ranges; only the final complete request resumes.
+#[test]
+fn runtime_observed_first_turn_stages_uncommitted_ranges_locally() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("first-turn-staged-local"));
+    service.set_agent_transcript_store(store.clone());
+    service.use_transcript_effect_adapter();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "first-turn-staged-local".to_string(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"first-turn-staged\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.first-turn-staged]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 20000\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"first-staged","method":"agent/shell/command","params":{"idempotency_key":"first-staged","input":"continue"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    context
+        .replace_after_compaction(vec![
+            ContextBlock::assistant_event("first decision", "first ".repeat(200)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "first outcome",
+                "outcome ".repeat(200),
+            ),
+            ContextBlock::user_event("steering", "preserve this exact instruction"),
+            ContextBlock::assistant_event("second decision", "second ".repeat(200)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "second outcome",
+                "result ".repeat(200),
+            ),
+        ])
+        .unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
+        context,
+        100,
+        1,
+        context.event_sequence_high_water_mark(),
+        mez_agent::ProviderBudgetProjection::new(
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            "runtime-batch",
+        ),
+    )
+    .unwrap();
+    assert!(plan.requires_additional_segments());
+    let original = context.clone();
+    let profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
+    assert!(service.queue_agent_active_turn_compaction(
+        "turn-1", "first-turn-staged".to_string(), profile,
+        crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+            observed_input_tokens: 20_000, max_input_tokens: 20_000,
+        }, plan,
+    ).unwrap());
+    complete_runtime_test_compaction(&mut service, "%1", "x");
+    assert!(
+        store
+            .compaction_epoch(
+                service
+                    .agent_shell_store()
+                    .get("%1")
+                    .unwrap()
+                    .session_id
+                    .as_str()
+            )
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(service.agent_turn_contexts().get("turn-1"), Some(&original));
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
+    let queued = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        staged: Some(staged),
+        ..
+    } = &queued.target
+    else {
+        panic!("second closed segment must be staged");
+    };
+    assert!(staged.projection.is_none());
+    complete_runtime_test_compaction(&mut service, "%1", "x");
+    assert!(service.agent_provider_task_is_pending("turn-1"));
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+    let chronology = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .chronology();
+    assert_eq!(chronology[0].block().content, "x");
+    assert_eq!(
+        chronology[1].block().content,
+        "preserve this exact instruction"
+    );
+    assert_eq!(chronology[2].block().content, "x");
+    assert!(
+        store
+            .compaction_epoch(
+                service
+                    .agent_shell_store()
+                    .get("%1")
+                    .unwrap()
+                    .session_id
+                    .as_str()
+            )
+            .unwrap()
+            .is_none()
+    );
+}
+
 /// Verifies an observed-input recovery failure identifies its actual trigger.
 ///
 /// A provider failure while producing the compaction summary must fail the
@@ -3142,6 +3383,142 @@ fn runtime_compactor_walkback_preserves_newest_group() {
         !blocks
             .iter()
             .any(|block| block.content.contains("OLDER_WALKBACK"))
+    );
+}
+
+/// An unmapped first-turn source uses the complete turn-local request when
+/// walking back after a compactor context-limit response. It must not require
+/// a nonexistent durable archive or publish a selective epoch on completion.
+#[test]
+fn runtime_observed_first_turn_compactor_walkback_is_turn_local() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("first-turn-walkback"));
+    service.set_agent_transcript_store(store.clone());
+    service.use_transcript_effect_adapter();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "first-turn-walkback".to_string(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"first-turn-walkback\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.first-turn-walkback]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 20000\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"first-walkback","method":"agent/shell/command","params":{"idempotency_key":"first-walkback","input":"continue"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    for (label, marker) in [
+        ("older", "OLDER_FIRST_WALKBACK"),
+        ("newer", "NEWER_FIRST_WALKBACK"),
+    ] {
+        insert_test_context_block(
+            context,
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: label.to_string(),
+                content: format!("{marker} {}", "evidence ".repeat(1_000)),
+            },
+        );
+    }
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
+        context,
+        18_000,
+        1,
+        context.event_sequence_high_water_mark(),
+        mez_agent::ProviderBudgetProjection::new(
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            "runtime-batch",
+        ),
+    )
+    .unwrap();
+    assert!(plan.replacement_blocks().len() >= 2);
+    let profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
+    assert!(service.queue_agent_active_turn_compaction(
+        "turn-1", "first-turn-walkback".to_string(), profile,
+        crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+            observed_input_tokens: 20_000, max_input_tokens: 20_000,
+        }, plan,
+    ).unwrap());
+    assert!(
+        !store
+            .transcript_path(
+                service
+                    .agent_shell_store()
+                    .get("%1")
+                    .unwrap()
+                    .session_id
+                    .as_str()
+            )
+            .unwrap()
+            .exists()
+    );
+    let initial = service.take_pending_agent_compaction_task("%1").unwrap();
+    service.claim_agent_compaction_task_state("%1", initial);
+    service
+        .apply_agent_compaction_failed_event(
+            "%1",
+            "invalid_state",
+            "provider context length exceeded",
+            Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
+        )
+        .unwrap();
+    let retry = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("walk-back queued");
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } =
+        &retry.target
+    else {
+        panic!("expected active-turn walk-back");
+    };
+    assert!(
+        plan.replacement_blocks()
+            .iter()
+            .any(|block| block.content.contains("OLDER_FIRST_WALKBACK"))
+    );
+    assert!(
+        !plan
+            .replacement_blocks()
+            .iter()
+            .any(|block| block.content.contains("NEWER_FIRST_WALKBACK"))
+    );
+    complete_runtime_test_compaction(&mut service, "%1", "older work summarized");
+    assert!(service.agent_provider_task_is_pending("turn-1"));
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+    let blocks = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks();
+    assert!(
+        blocks
+            .iter()
+            .any(|block| block.content.contains("NEWER_FIRST_WALKBACK"))
+    );
+    assert!(
+        !blocks
+            .iter()
+            .any(|block| block.content.contains("OLDER_FIRST_WALKBACK"))
+    );
+    assert!(
+        store
+            .compaction_epoch(
+                service
+                    .agent_shell_store()
+                    .get("%1")
+                    .unwrap()
+                    .session_id
+                    .as_str()
+            )
+            .unwrap()
+            .is_none()
     );
 }
 

@@ -214,19 +214,24 @@ impl RuntimeSessionService {
                 .ok_or_else(|| MezError::config("compaction walk-back provider is unavailable"))?;
             let api = resolve_provider_api(&provider.kind, provider.api.as_deref())?;
             let options = runtime_effective_provider_options(provider, &profile);
-            let (tokens, limit, _) = self.validate_observed_input_compaction_refresh_candidate(
-                task,
-                &turn,
-                candidate,
-                "x",
-                projection,
-                *observed_input_tokens,
-                &profile,
-                &options,
-                api,
-                true,
-            )?;
-            return Ok(tokens <= limit);
+            if let Some(projection) = projection {
+                let (tokens, limit, _) = self
+                    .validate_observed_input_compaction_refresh_candidate(
+                        task,
+                        &turn,
+                        candidate,
+                        "x",
+                        Some(projection),
+                        *observed_input_tokens,
+                        &profile,
+                        &options,
+                        api,
+                        true,
+                    )?;
+                return Ok(tokens <= limit);
+            }
+            // An uncommitted first-turn selection has no durable replay to
+            // preview. Measure the complete turn-local candidate below instead.
         }
         let mcp_summary = self.mcp_registry().prompt_summary();
         let (prepared, tools) =
@@ -254,10 +259,22 @@ impl RuntimeSessionService {
         ) else {
             return Ok(false);
         };
-        Ok(
-            mez_agent::provider_request_input_estimate(&request, api, &options, true)?.input_tokens
-                <= limit,
-        )
+        let tokens =
+            mez_agent::provider_request_input_estimate(&request, api, &options, true)?.input_tokens;
+        if let RuntimeAgentCompactionTarget::ActiveTurn {
+            trigger:
+                RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                    observed_input_tokens,
+                    ..
+                },
+            ..
+        } = &task.target
+            && tokens <= limit
+            && u64::try_from(tokens).unwrap_or(u64::MAX) >= *observed_input_tokens
+        {
+            return Ok(false);
+        }
+        Ok(tokens <= limit)
     }
 
     /// Builds a selective epoch only when every selected row already exists durably.
@@ -301,6 +318,15 @@ impl RuntimeSessionService {
             boundary > 0 || task.transcript_entries > pending.len() as u64,
             &pending,
         )?;
+        // A preceding provisional summary without a durable mapping cannot
+        // become an epoch merely because later rows committed. Still read the
+        // archive above: an absent required prefix is an integrity failure.
+        if matches!(&task.target, RuntimeAgentCompactionTarget::ActiveTurn {
+            staged: Some(state), ..
+        } if state.projection.is_none())
+        {
+            return Ok(None);
+        }
         let Some(range) =
             selected_durable_compaction_range(plan, context, &view.committed, summary)
         else {
@@ -1360,19 +1386,19 @@ impl RuntimeSessionService {
                             "pre-summary recovery exhausted its closed-segment limit",
                         ));
                     }
-                    let projection =
-                        if matches!(
-                            trigger,
-                            RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. }
-                        ) {
-                            self.prospective_observed_compaction_epoch(
-                            &task, &context, plan.as_ref(), &final_summary,
-                        )?.ok_or_else(|| MezError::invalid_state(
-                            "pre-summary recovery cannot map the first segment to durable rows",
-                        ))?.into()
-                        } else {
-                            None
-                        };
+                    let projection = if matches!(
+                        trigger,
+                        RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. }
+                    ) {
+                        self.prospective_observed_compaction_epoch(
+                            &task,
+                            &context,
+                            plan.as_ref(),
+                            &final_summary,
+                        )?
+                    } else {
+                        None
+                    };
                     let (budget, token_costs) = plan.planning_budget();
                     let provider =
                         mez_agent::ProviderBudgetProjection::new(api, &model_profile.provider);
@@ -1540,8 +1566,8 @@ impl RuntimeSessionService {
                         plan.as_ref(),
                         &final_summary,
                     )?;
-                    let (candidate_tokens, input_limit, diagnostic) = self
-                        .validate_observed_input_compaction_refresh_candidate(
+                    let (candidate_tokens, input_limit, diagnostic) = if projection.is_some() {
+                        self.validate_observed_input_compaction_refresh_candidate(
                             &task,
                             &turn,
                             compacted.clone(),
@@ -1552,7 +1578,42 @@ impl RuntimeSessionService {
                             &provider_options,
                             api,
                             estimate_stream,
-                        )?;
+                        )?
+                    } else {
+                        // Nothing selected is committed. The running turn can
+                        // use its compacted chronology, but durable replay must
+                        // keep every original row. Size the complete ordinary
+                        // request assembled above, not a speculative epoch.
+                        let limit = runtime_compaction_safe_input_limit(
+                            model_profile.max_input_tokens(),
+                            model_profile.context_window_tokens(),
+                            model_profile.max_output_tokens(),
+                        )
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "turn-local compaction has no provider input allowance",
+                            )
+                        })?;
+                        let estimate = retry_estimate.input_tokens;
+                        if estimate <= limit && (estimate as u64) >= observed_input_tokens {
+                            return Err(MezError::invalid_state(
+                                "turn-local compaction did not reduce the triggering request",
+                            ));
+                        }
+                        (
+                            estimate,
+                            limit,
+                            runtime_compaction_candidate_size_diagnostic(
+                                &prepared.to_agent_context(),
+                                Some(mez_agent::ProviderBudgetProjection::new(
+                                    api,
+                                    &model_profile.provider,
+                                )),
+                                estimate,
+                                limit,
+                            ),
+                        )
+                    };
                     if candidate_tokens > input_limit {
                         let summary_tokens =
                             mez_agent::provider_text_input_token_estimate(&final_summary);
@@ -1683,6 +1744,24 @@ impl RuntimeSessionService {
                             "active-turn compaction refreshed candidate exceeds safe input allowance: {}",
                             diagnostic,
                         )));
+                    }
+                    if projection.is_none() {
+                        // Keep the original transcript authoritative: the
+                        // selected source is visible to this turn but has no
+                        // committed rows an epoch may reference. The complete
+                        // retry request was checked above before this mutation.
+                        self.agent_turn_contexts_mut()
+                            .insert(turn_id.clone(), compacted);
+                        self.clear_agent_turn_provider_request_chain(&turn_id);
+                        self.queue_agent_provider_recovery_task_after_compaction(
+                            &turn_id,
+                            "observed_input_limit_turn_local_compaction",
+                        )?;
+                        self.append_agent_status_text_to_terminal_buffer(
+                            pane_id,
+                            "agent: observed input recovery applied turn-local model summary; raw transcript remains authoritative",
+                        )?;
+                        return Ok(());
                     }
                     self.persist_agent_compaction_epoch(
                         pane_id,

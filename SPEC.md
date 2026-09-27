@@ -6867,8 +6867,11 @@ durable execution groups only after the complete proposed replay and running
 turn request fit the provider budget before publication. It MUST preserve the
 active raw transcript replay boundary when selected context cannot be mapped
 unambiguously to durable rows without losing exact user or task barriers. In
-that case, the model-authored summary MAY be added to compact memory while the
-raw replay window remains unchanged. Legacy transcript user rows are exact
+that case, a bounded model-authored summary MAY replace closed history only in
+the running turn after the complete next request fits; no selective epoch may
+reference uncommitted rows, and the raw replay window remains authoritative.
+Provisional summaries across exact barriers MUST remain unpublished until the
+combined turn-local request fits. Legacy transcript user rows are exact
 barriers even when their imported block retention metadata is summarizable.
 If the complete candidate after a model-authored summary exceeds the safe input
 allowance, compaction MAY request a shorter model-authored summary of the same
