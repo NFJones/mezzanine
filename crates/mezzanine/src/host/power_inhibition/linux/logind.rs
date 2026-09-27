@@ -54,34 +54,40 @@ impl PowerInhibitionLease for LogindLease {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::os::fd::{AsRawFd, OwnedFd};
+    use std::io::Read;
+    use std::os::fd::OwnedFd;
     use std::os::unix::net::UnixStream;
 
     use super::*;
 
     /// Verifies the received logind descriptor remains owned for the complete
-    /// lease lifetime and is closed by explicit release.
+    /// lease lifetime and is closed by explicit release. Peer EOF is stable
+    /// even when other tests reuse the closed descriptor's numeric value.
     #[test]
     fn logind_descriptor_lifetime_matches_lease_lifetime() {
-        let file = File::open("/dev/null").unwrap();
-        let raw_fd = file.as_raw_fd();
-        let mut lease = LogindLease::new(OwnedFd::from(file));
+        let (owned, mut peer) = UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let mut lease = LogindLease::new(OwnedFd::from(owned));
+        let mut byte = [0_u8; 1];
 
-        assert!(unsafe { libc::fcntl(raw_fd, libc::F_GETFD) } >= 0);
+        assert_eq!(
+            peer.read(&mut byte).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         lease.release().unwrap();
-        assert_eq!(unsafe { libc::fcntl(raw_fd, libc::F_GETFD) }, -1);
+        assert_eq!(peer.read(&mut byte).unwrap(), 0);
     }
 
     /// Verifies dropping an unreleased logind lease closes its owned
     /// descriptor, which is the protocol operation that removes the inhibitor.
+    /// Observe EOF rather than the reusable process-wide descriptor number.
     #[test]
     fn logind_descriptor_drop_closes_owned_fd() {
-        let (owned, _peer) = UnixStream::pair().unwrap();
-        let raw_fd = owned.as_raw_fd();
+        let (owned, mut peer) = UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
 
         drop(LogindLease::new(OwnedFd::from(owned)));
 
-        assert_eq!(unsafe { libc::fcntl(raw_fd, libc::F_GETFD) }, -1);
+        assert_eq!(peer.read(&mut [0_u8; 1]).unwrap(), 0);
     }
 }
