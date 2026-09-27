@@ -110,21 +110,24 @@ impl RuntimePersistenceComponent {
         self.session_registry.clone()
     }
 
-    /// Returns a reserved next transcript sequence.
+    /// Returns the reserved high-water after queued, worker-owned, or settled rows.
     pub(crate) fn deferred_transcript_next_sequence(&self, conversation_id: &str) -> Option<u64> {
         self.deferred_transcript_next_sequences
             .get(conversation_id)
             .copied()
     }
 
-    /// Reserves the next transcript sequence after queued writes.
+    /// Reserves the next transcript sequence before the queued write is handed off.
     pub(crate) fn set_deferred_transcript_next_sequence(
         &mut self,
         conversation_id: impl Into<String>,
         sequence: u64,
     ) {
-        self.deferred_transcript_next_sequences
-            .insert(conversation_id.into(), sequence);
+        let reserved = self
+            .deferred_transcript_next_sequences
+            .entry(conversation_id.into())
+            .or_insert(sequence);
+        *reserved = (*reserved).max(sequence);
     }
 
     /// Records one unique durable transcript reference for a pane.

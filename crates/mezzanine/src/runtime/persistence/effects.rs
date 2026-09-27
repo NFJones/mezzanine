@@ -202,6 +202,14 @@ impl RuntimePersistenceComponent {
 
     /// Queues one transcript or prompt-history persistence effect.
     pub(crate) fn queue_transcript(&mut self, effect: RuntimeSideEffect) {
+        if let RuntimeSideEffect::PersistTranscriptEntries { entries, .. } = &effect
+            && let Some(last) = entries.last()
+        {
+            self.set_deferred_transcript_next_sequence(
+                last.conversation_id.clone(),
+                last.sequence.saturating_add(1),
+            );
+        }
         self.queued_transcript_effects.push(effect);
     }
 
@@ -575,16 +583,28 @@ mod tests {
             content: "exact queued text".to_string(),
         };
         let mut component = RuntimePersistenceComponent::default();
+        assert_eq!(
+            component.deferred_transcript_next_sequence("drained-write"),
+            None
+        );
         component.queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path("drained-write").unwrap(),
             store,
             entries: vec![row.clone()],
         });
         assert_eq!(
+            component.deferred_transcript_next_sequence("drained-write"),
+            Some(2)
+        );
+        assert_eq!(
             component.pending_transcript_entries("drained-write"),
             vec![row.clone()]
         );
         assert_eq!(component.take_transcript_effects().len(), 1);
+        assert_eq!(
+            component.deferred_transcript_next_sequence("drained-write"),
+            Some(2)
+        );
         assert_eq!(
             component.pending_transcript_entries("drained-write"),
             vec![row.clone()]
@@ -606,10 +626,75 @@ mod tests {
             vec![row.clone()]
         );
         component.settle_transcript_write("drained-write", 1, std::slice::from_ref(&row));
+        assert_eq!(
+            component.deferred_transcript_next_sequence("drained-write"),
+            Some(2)
+        );
         assert!(
             component
                 .pending_transcript_entries("drained-write")
                 .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A newer settled batch keeps the sequence reservation above an older
+    /// uncertain batch; cancellation leaves worker-owned rows untouched.
+    #[test]
+    fn transcript_sequence_reservation_survives_out_of_order_settlement() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-transcript-high-water-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let first = mez_agent::transcript::TranscriptEntry {
+            conversation_id: "high-water".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "first".to_string(),
+        };
+        let second = mez_agent::transcript::TranscriptEntry {
+            sequence: 2,
+            content: "second".to_string(),
+            ..first.clone()
+        };
+        let path = store.transcript_path("high-water").unwrap();
+        let mut component = RuntimePersistenceComponent::default();
+        for row in [&first, &second] {
+            component.queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+                store: store.clone(),
+                path: path.clone(),
+                entries: vec![row.clone()],
+            });
+        }
+        assert_eq!(
+            component.deferred_transcript_next_sequence("high-water"),
+            Some(3)
+        );
+        assert_eq!(component.take_transcript_effects().len(), 2);
+        assert!(component.settle_transcript_write("high-water", 2, std::slice::from_ref(&second)));
+        assert_eq!(
+            component.pending_transcript_entries("high-water"),
+            vec![first.clone()]
+        );
+        assert_eq!(
+            component.deferred_transcript_next_sequence("high-water"),
+            Some(3)
+        );
+        component.cancel_queued_transcript_entries_for_conversation("other-conversation");
+        assert_eq!(
+            component.deferred_transcript_next_sequence("high-water"),
+            Some(3)
+        );
+        assert!(component.settle_transcript_write("high-water", 1, std::slice::from_ref(&first)));
+        assert_eq!(
+            component.deferred_transcript_next_sequence("high-water"),
+            Some(3)
         );
         let _ = std::fs::remove_dir_all(root);
     }
