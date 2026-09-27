@@ -753,8 +753,7 @@ impl HostSessionRouter {
                 &assignment.session_id,
                 assignment.boot_generation,
                 assignment.assignment_generation,
-                current_unix_seconds()
-                    .map_err(|error| (error, RecoveryFailureDisposition::Retryable))?,
+                follow_up_instant_unix_seconds(assignment.updated_at_unix_seconds),
             ) {
                 let _ = self.supervisor.stop(runtime.session_id(), true).await;
                 return Err((error, RecoveryFailureDisposition::Retryable));
@@ -2449,6 +2448,21 @@ mod tests {
         assert_eq!(recoverable[0].session_id, created.session_id);
         assert_eq!(recoverable[0].name, "durable-local");
 
+        // A previous write may have a timestamp ahead of the wall clock. The
+        // restart transition must follow that record rather than sample an
+        // earlier second and reject an otherwise valid restoration as stale.
+        let future = current_unix_seconds().unwrap().saturating_add(60);
+        let recoverable = restarted
+            .local_assignments
+            .record_retryable_recovery_failure(
+                &created.session_id,
+                recoverable[0].boot_generation,
+                recoverable[0].assignment_generation,
+                future,
+                "retryable restart diagnostic".to_string(),
+            )
+            .unwrap();
+
         let restored = restarted
             .resolve_local(Some(&created.session_id), "primary")
             .await
@@ -2456,15 +2470,13 @@ mod tests {
         assert_eq!(restored.session_id, created.session_id);
         assert_eq!(restored.name, "durable-local");
         assert!(restored.socket_path.exists());
-        assert_eq!(
-            restarted
-                .local_assignments
-                .get(&created.session_id)
-                .unwrap()
-                .unwrap()
-                .state,
-            LocalSessionAssignmentState::Active
-        );
+        let active = restarted
+            .local_assignments
+            .get(&created.session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(active.state, LocalSessionAssignmentState::Active);
+        assert!(active.updated_at_unix_seconds >= recoverable.updated_at_unix_seconds);
         assert!(restarted.list_leases(None, None, true).unwrap().is_empty());
 
         restarted
