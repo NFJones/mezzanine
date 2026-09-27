@@ -1113,7 +1113,7 @@ impl RuntimeSessionService {
             },
             None => self.path_scopes_for_pane(&turn.pane_id).ok_or_else(|| {
                 MezError::invalid_state(
-                    "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or review the project and run /sandbox trust <project-root>",
+                    "Sandbox filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or review the project and run /sandbox trust <project-root>",
                 )
             })?,
         };
@@ -1185,13 +1185,11 @@ impl RuntimeSessionService {
                 .path_scopes_for_pane_request(&turn.pane_id, &request)?
                 .ok_or_else(|| {
                     MezError::invalid_state(
-                        "Bubblewrap dispatch requires resolved primary path authority",
+                        "Sandbox dispatch requires resolved primary path authority",
                     )
                 })?,
             None => self.path_scopes_for_pane(&turn.pane_id).ok_or_else(|| {
-                MezError::invalid_state(
-                    "Bubblewrap dispatch requires resolved primary path authority",
-                )
+                MezError::invalid_state("Sandbox dispatch requires resolved primary path authority")
             })?,
         };
         let Some(scope) = self.subagent_scope_declaration_for_turn(turn) else {
@@ -1210,7 +1208,7 @@ impl RuntimeSessionService {
             .path_scopes_for_pane_request(&turn.pane_id, &request)?
             .ok_or_else(|| {
                 MezError::invalid_state(
-                    "Bubblewrap dispatch requires resolved subagent path authority",
+                    "Sandbox dispatch requires resolved subagent path authority",
                 )
             })?;
         primary
