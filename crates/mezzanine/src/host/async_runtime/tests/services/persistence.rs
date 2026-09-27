@@ -3,6 +3,67 @@
 use super::super::*;
 use crate::storage::transcript::AgentPresentationEntry;
 
+/// A replacement persistence worker reconciles a committed transcript claim
+/// whose first worker was lost before delivering its completion event.
+#[tokio::test(flavor = "current_thread")]
+async fn async_persistence_worker_recovers_lost_transcript_acknowledgment() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-transcript-worker-lost-ack-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "lost-ack".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted once".to_string(),
+    };
+    let path = store.transcript_path(&row.conversation_id).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                store: store.clone(),
+                path,
+                entries: vec![row.clone()],
+            }])
+            .await
+            .unwrap();
+        let abandoned = handle.drain_persistence_side_effects(1).await.unwrap();
+        assert_eq!(abandoned.len(), 1);
+        store.append_many(std::slice::from_ref(&row)).unwrap();
+        drop(abandoned);
+
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 2,
+                drain_limit: 1,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.failed, 0);
+        assert_eq!(store.inspect(&row.conversation_id).unwrap(), vec![row]);
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// A live persistence worker retries an exact failed claim on its next poll,
 /// before a later reserved sequence, after two local attempts have failed.
 #[tokio::test(flavor = "current_thread")]
