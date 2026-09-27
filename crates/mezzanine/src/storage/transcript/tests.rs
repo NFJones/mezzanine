@@ -1544,6 +1544,43 @@ fn transcript_store_append_many_rejects_missing_prefix_before_new_row() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A malformed first row cannot be decoded or extended by a new batch,
+/// regardless of its size; the archive bytes remain unchanged.
+#[test]
+fn transcript_store_append_many_rejects_oversized_first_row() {
+    let root = temp_root("append-many-oversized-first-row");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let path = store.transcript_path("conv1").unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let oversized = vec![b'a'; 2 * 1024 * 1024 + 1];
+    fs::write(&path, &oversized).unwrap();
+    assert!(
+        store
+            .append_many(&[entry("conv1", 1, TranscriptRole::User)])
+            .is_err()
+    );
+    assert_eq!(fs::read(&path).unwrap(), oversized);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A valid large encoded first row must remain appendable and idempotent even
+/// when escaping makes it larger than the ordinary bounded tail read window.
+#[test]
+fn transcript_store_append_many_accepts_large_first_row() {
+    let root = temp_root("append-many-large-first-row");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut first = entry("conv1", 1, TranscriptRole::User);
+    first.content = "\\".repeat(1024 * 1024 + 1);
+    store.append(&first).unwrap();
+    assert_eq!(store.append_many(std::slice::from_ref(&first)).unwrap(), 0);
+    let second = entry("conv1", 2, TranscriptRole::Assistant);
+    store.append_many(std::slice::from_ref(&second)).unwrap();
+    assert_eq!(store.inspect("conv1").unwrap(), vec![first, second]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// One worker receipt names one conversation; reject mixed batches before any
 /// archive can commit a prefix under a different conversation lock.
 #[test]
