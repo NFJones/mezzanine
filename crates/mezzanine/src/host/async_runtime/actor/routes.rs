@@ -437,6 +437,14 @@ impl RuntimeSideEffectRouter {
             .collect()
     }
 
+    /// Retires exact persistence work that no worker has claimed yet.
+    pub(super) fn retire_queued_provider_settlement(&mut self, turn_id: &str, generation: u64) {
+        self.persistence.retain(|effect| {
+            !matches!(effect, RuntimeSideEffect::SettleAgentProviderPersistence { work }
+                if work.turn.turn_id == turn_id && work.generation == generation)
+        });
+    }
+
     /// Drains deferred interactive commands without inspecting provider work.
     pub(super) fn drain_commands(&mut self, limit: usize) -> Vec<RuntimeSideEffect> {
         self.commands

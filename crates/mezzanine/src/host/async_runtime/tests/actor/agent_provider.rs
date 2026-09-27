@@ -509,6 +509,18 @@ async fn async_actor_applies_agent_provider_completion_events() {
 /// settlement stores the execution used by external-action dispatch.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_fences_external_actions_while_provider_persistence_settles() {
+    run_provider_persistence_handoff(false).await;
+}
+
+/// A full transient lane cannot leave persistence-owned work without a lease
+/// or allow an unclaimed issue write after the affected turn fails.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_rejected_persistence_deadline_settles_exact_turn() {
+    run_provider_persistence_handoff(true).await;
+}
+
+/// Drives the same provider completion with normal or rejected timer admission.
+async fn run_provider_persistence_handoff(saturate_deadline: bool) {
     let config_root = std::env::temp_dir().join(format!(
         "mez-provider-issue-settlement-{}-{:?}",
         std::process::id(),
@@ -634,6 +646,10 @@ async fn async_actor_fences_external_actions_while_provider_persistence_settles(
     };
     let database_path = config_root.join("issues.sqlite");
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: if saturate_deadline { 1 } else { 512 },
+            ..AsyncRuntimeActorConfig::default()
+        })
         .build()
         .unwrap();
 
@@ -642,6 +658,15 @@ async fn async_actor_fences_external_actions_while_provider_persistence_settles(
             .record_claimed_agent_provider_task_for_tests(task.turn_id.clone(), 1)
             .await
             .unwrap();
+        if saturate_deadline {
+            handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: AgentId::opaque("agent-%1").unwrap(),
+                    turn_id: "unrelated-turn".to_string(),
+                }])
+                .await
+                .unwrap();
+        }
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
             agent_id: AgentId::opaque(task.agent_id).unwrap(),
@@ -652,6 +677,47 @@ async fn async_actor_fences_external_actions_while_provider_persistence_settles(
         let ingress = handle.submit_runtime_events(batch).await.unwrap();
         assert_eq!(ingress.applied, 1);
         assert!(!database_path.exists());
+        if saturate_deadline {
+            assert!(
+                handle
+                    .drain_timer_side_effects(8)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(
+                        |effect| !matches!(effect, RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::ProviderPersistence)
+                    )
+            );
+            assert!(
+                handle
+                    .drain_persistence_side_effects(8)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            let queued = handle.drain_runtime_side_effects(8).await.unwrap();
+            assert!(queued.iter().any(|effect| matches!(effect,
+                RuntimeSideEffect::DispatchAgentProvider { turn_id, .. }
+                    if turn_id == "unrelated-turn")));
+            handle.shutdown().await.unwrap();
+            return;
+        }
+        let lease = handle
+            .drain_timer_side_effects(8)
+            .await
+            .unwrap()
+            .into_iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::ProviderPersistence =>
+                {
+                    Some(key)
+                }
+                _ => None,
+            })
+            .expect("provider persistence must have a deadline");
+        assert_eq!(lease.owner_id, turn.turn_id);
         assert!(
             handle
                 .drain_agent_provider_dispatch_side_effects(8)
@@ -676,6 +742,22 @@ async fn async_actor_fences_external_actions_while_provider_persistence_settles(
         assert_eq!(persistence.completed, 1);
         assert_eq!(persistence.failed, 0);
         assert_eq!(persistence.applied_events, 1);
+        assert!(
+            handle
+                .drain_timer_side_effects(8)
+                .await
+                .unwrap()
+                .iter()
+                .any(|effect| matches!(effect,
+                    RuntimeSideEffect::CancelTimer { key } if key == &lease
+                ))
+        );
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::Timer(TimerEvent {
+            key: lease,
+            now_ms: 1,
+        }));
+        assert_eq!(handle.submit_runtime_events(late).await.unwrap().applied, 0);
         assert_eq!(
             handle
                 .drain_agent_provider_dispatch_side_effects(8)
@@ -691,6 +773,26 @@ async fn async_actor_fences_external_actions_while_provider_persistence_settles(
     };
 
     let ((), mut exit) = tokio::join!(client, actor.run());
+    if saturate_deadline {
+        assert!(!database_path.exists());
+        assert_eq!(
+            exit.service
+                .agent_turn_ledger()
+                .turn(&turn.turn_id)
+                .unwrap()
+                .state,
+            mez_agent::AgentTurnState::Failed
+        );
+        assert!(
+            exit.service
+                .agent_provider_persistence_progress_turn_ids()
+                .next()
+                .is_none()
+        );
+        exit.service.terminate_all_pane_processes().unwrap();
+        let _ = std::fs::remove_dir_all(config_root);
+        return;
+    }
     let connection = rusqlite::Connection::open(&database_path).unwrap();
     let count = connection
         .query_row("SELECT COUNT(*) FROM issues", [], |row| {
@@ -705,6 +807,95 @@ async fn async_actor_fences_external_actions_while_provider_persistence_settles(
     );
     exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_dir_all(config_root);
+}
+
+/// A lost persistence-worker result must fail only the exact waiting generation,
+/// without retrying a write or allowing its late failure to settle another turn.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_expires_lost_provider_persistence_result() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let response = service
+        .execute_agent_shell_command(&primary, "wait for persistence")
+        .unwrap();
+    assert!(response.contains(r#""state":"running""#), "{response}");
+    let turn_id = service.pending_agent_provider_tasks()[0].turn_id.clone();
+    service.remove_pending_agent_provider_task(&turn_id);
+    let generation = service.mark_agent_provider_persistence_pending(&turn_id);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let key = RuntimeTimerKey::new(RuntimeTimerKind::ProviderPersistence, &turn_id, generation);
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+                key: key.clone(),
+                delay_ms: 120_000,
+            }])
+            .await
+            .unwrap();
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(|effect|
+            matches!(effect, RuntimeSideEffect::ScheduleTimer { key: scheduled, .. } if scheduled == &key)));
+        let mut expired = RuntimeEventBatch::new();
+        expired.push(RuntimeEvent::Timer(TimerEvent {
+            key: key.clone(),
+            now_ms: 1,
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(expired).await.unwrap().applied,
+            1
+        );
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::AgentProvider(
+            AgentProviderEvent::PersistenceFailed {
+                turn_id: turn_id.clone(),
+                generation,
+                provider_id: "test".to_string(),
+                kind: "persistence".to_string(),
+                message: "late worker failure".to_string(),
+            },
+        ));
+        assert_eq!(handle.submit_runtime_events(late).await.unwrap().applied, 0);
+        let mut duplicate = RuntimeEventBatch::new();
+        duplicate.push(RuntimeEvent::Timer(TimerEvent { key, now_ms: 2 }));
+        assert_eq!(
+            handle
+                .submit_runtime_events(duplicate)
+                .await
+                .unwrap()
+                .applied,
+            0
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(
+        exit.service
+            .agent_turn_ledger()
+            .turn(&turn_id)
+            .unwrap()
+            .state,
+        mez_agent::AgentTurnState::Failed
+    );
+    assert!(
+        exit.service
+            .agent_provider_persistence_progress_turn_ids()
+            .next()
+            .is_none()
+    );
+    let pane = exit
+        .service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane.contains("writes may have committed"), "{pane}");
 }
 
 /// Verifies that provider completions queue durable transcript entries for the

@@ -178,6 +178,7 @@ impl RuntimeSessionService {
                 .unwrap_or_default();
             let work = RuntimeAgentProviderPersistenceWork {
                 turn: turn.clone(),
+                generation: self.mark_agent_provider_persistence_pending(turn_id),
                 model_profile: model_profile.clone(),
                 provider_id: provider_id.to_string(),
                 execution: execution.clone(),
@@ -197,7 +198,6 @@ impl RuntimeSessionService {
                 actions_executed_before_persistence,
                 settled_action_results_before_persistence: terminal_observations.results().to_vec(),
             };
-            self.mark_agent_provider_persistence_pending(turn_id);
             self.persistence.queue_provider_settlement(
                 RuntimeSideEffect::SettleAgentProviderPersistence {
                     work: Box::new(work),
@@ -234,6 +234,7 @@ impl RuntimeSessionService {
     ) -> Result<AgentTurnExecution> {
         let RuntimeAgentProviderPersistenceOutcome {
             turn,
+            generation: _,
             model_profile,
             provider_id,
             mut execution,

@@ -257,6 +257,9 @@ impl RuntimeSessionService {
             .pending_agent_provider_persistence
             .remove(turn_id);
         self.agent
+            .agent_provider_persistence_generations
+            .remove(turn_id);
+        self.agent
             .pending_approved_external_actions
             .retain(|identity, _| identity.0 != turn_id);
         self.agent

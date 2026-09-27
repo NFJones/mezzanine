@@ -1273,6 +1273,7 @@ where
                 }
                 RuntimeSideEffect::SettleAgentProviderPersistence { work } => {
                     let turn_id = work.turn.turn_id.clone();
+                    let generation = work.generation;
                     let provider_id = work.provider_id.clone();
                     match settle_agent_provider_persistence(work).await {
                         Ok(outcome) => {
@@ -1288,6 +1289,7 @@ where
                             batch.push(RuntimeEvent::AgentProvider(
                                 super::AgentProviderEvent::PersistenceFailed {
                                     turn_id,
+                                    generation,
                                     provider_id,
                                     kind: "persistence".to_string(),
                                     message: error.message().to_string(),

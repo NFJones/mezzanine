@@ -392,6 +392,8 @@ pub enum RuntimeAgentProviderWorkerOutcome {
 pub struct RuntimeAgentProviderPersistenceWork {
     /// Running turn that owns every action in the execution.
     pub turn: AgentTurnRecord,
+    /// Exact persistence settlement generation for rejecting late worker results.
+    pub generation: u64,
     /// Effective model profile selected for this execution.
     pub model_profile: ModelProfile,
     /// Provider identity retained for trace and failure reporting.
@@ -425,6 +427,8 @@ pub struct RuntimeAgentProviderPersistenceWork {
 pub struct RuntimeAgentProviderPersistenceOutcome {
     /// Running turn that owned the validated persistence work.
     pub turn: AgentTurnRecord,
+    /// Exact persistence settlement generation for rejecting late worker results.
+    pub generation: u64,
     /// Effective model profile selected for this execution.
     pub model_profile: ModelProfile,
     /// Provider identity retained for trace and failure reporting.

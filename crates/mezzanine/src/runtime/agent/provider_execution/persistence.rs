@@ -18,6 +18,7 @@ pub(crate) fn execute_agent_provider_persistence_work(
 ) -> Result<RuntimeAgentProviderPersistenceOutcome> {
     let RuntimeAgentProviderPersistenceWork {
         turn,
+        generation,
         model_profile,
         provider_id,
         execution,
@@ -35,6 +36,7 @@ pub(crate) fn execute_agent_provider_persistence_work(
     let Some(batch) = execution.response.action_batch.as_ref() else {
         return Ok(RuntimeAgentProviderPersistenceOutcome {
             turn,
+            generation,
             model_profile,
             provider_id,
             execution,
@@ -121,6 +123,7 @@ pub(crate) fn execute_agent_provider_persistence_work(
 
     Ok(RuntimeAgentProviderPersistenceOutcome {
         turn,
+        generation,
         model_profile,
         provider_id,
         execution,

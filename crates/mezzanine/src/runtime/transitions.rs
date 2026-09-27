@@ -395,6 +395,8 @@ pub enum AgentProviderEvent {
     PersistenceFailed {
         /// Turn whose persistence phase failed.
         turn_id: String,
+        /// Exact persistence settlement generation.
+        generation: u64,
         /// Provider identity retained for failure diagnostics.
         provider_id: String,
         /// Stable runtime error kind.
@@ -797,6 +799,8 @@ pub enum RuntimeTimerKind {
     ProviderClaim,
     /// Timeout for a compaction task claimed by an async worker.
     CompactionClaim,
+    /// Timeout for actor-validated memory or issue persistence settlement.
+    ProviderPersistence,
     /// Short one-shot check for command-backed pane pipe completion or failure.
     PanePipeHealth,
     /// Bounded recovery for an unterminated pane synchronized-output transaction.

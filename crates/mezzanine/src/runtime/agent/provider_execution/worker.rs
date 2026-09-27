@@ -155,7 +155,7 @@ impl RuntimeSessionService {
         outcome: crate::runtime::RuntimeAgentProviderPersistenceOutcome,
     ) -> Result<crate::runtime::RuntimeTransition> {
         let turn_id = outcome.turn.turn_id.clone();
-        if !self.clear_agent_provider_persistence_pending(&turn_id) {
+        if !self.clear_agent_provider_persistence_generation(&turn_id, outcome.generation) {
             return Ok(crate::runtime::RuntimeTransition::default());
         }
         let current = self.agent_turn_ledger().turn(&turn_id);
@@ -198,11 +198,12 @@ impl RuntimeSessionService {
     pub(crate) fn apply_agent_provider_persistence_failed_transition(
         &mut self,
         turn_id: &str,
+        generation: u64,
         provider_id: &str,
         kind: &str,
         message: &str,
     ) -> Result<crate::runtime::RuntimeTransition> {
-        if !self.clear_agent_provider_persistence_pending(turn_id) {
+        if !self.clear_agent_provider_persistence_generation(turn_id, generation) {
             return Ok(crate::runtime::RuntimeTransition::default());
         }
         let Some(turn) = self

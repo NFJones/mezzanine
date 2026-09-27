@@ -1327,6 +1327,12 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Retires provider settlement work still owned by the service, not a worker.
+    pub(crate) fn retire_queued_provider_settlement(&mut self, turn_id: &str, generation: u64) {
+        self.persistence
+            .retire_queued_provider_settlement(turn_id, generation);
+    }
+
     /// Drains configuration persistence through one transport-neutral runtime transition.
     pub(crate) fn drain_config_persistence_transition(&mut self) -> RuntimeTransition {
         RuntimeTransition {

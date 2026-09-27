@@ -474,6 +474,14 @@ impl RuntimePersistenceComponent {
         std::mem::take(&mut self.queued_provider_settlement_effects)
     }
 
+    /// Removes only provider settlement work that has not crossed the worker boundary.
+    pub(crate) fn retire_queued_provider_settlement(&mut self, turn_id: &str, generation: u64) {
+        self.queued_provider_settlement_effects.retain(|effect| {
+            !matches!(effect, RuntimeSideEffect::SettleAgentProviderPersistence { work }
+                if work.turn.turn_id == turn_id && work.generation == generation)
+        });
+    }
+
     /// Queues one configuration persistence effect.
     pub(crate) fn queue_config(&mut self, effect: RuntimeSideEffect) {
         self.queued_config_effects.push(effect);

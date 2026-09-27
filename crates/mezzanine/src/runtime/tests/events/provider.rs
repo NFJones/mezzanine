@@ -89,7 +89,7 @@ async fn runtime_provider_completion_queues_network_action_for_worker() {
         service.agent_turn_executions()[&turn.turn_id].action_results[0].status,
         ActionStatus::Running
     );
-    assert!(service.mark_agent_provider_persistence_pending(&turn.turn_id));
+    assert!(service.mark_agent_provider_persistence_pending(&turn.turn_id) > 0);
     assert!(service.pending_approved_external_actions().is_empty());
     assert!(
         service

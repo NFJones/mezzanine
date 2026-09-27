@@ -776,6 +776,30 @@ impl AsyncRuntimeSessionActor {
                     side_effects,
                 })
             }
+            RuntimeTimerKind::ProviderPersistence => {
+                if self.timers.provider_persistence.get(&timer.key.owner_id) != Some(&timer.key) {
+                    self.record_ignored_timer_event();
+                    return Ok(RuntimeTransition::default());
+                }
+                self.timers.provider_persistence.remove(&timer.key.owner_id);
+                self.service
+                    .retire_queued_provider_settlement(&timer.key.owner_id, timer.key.generation);
+                self.side_effect_routes
+                    .retire_queued_provider_settlement(&timer.key.owner_id, timer.key.generation);
+                let mut transition = self.service.apply_agent_provider_persistence_failed_transition(
+                    &timer.key.owner_id,
+                    timer.key.generation,
+                    "persistence_timeout",
+                    "persistence_timeout",
+                    "persistence worker result was not delivered before its deadline; writes may have committed and must not be replayed",
+                )?;
+                if transition.applied {
+                    transition
+                        .side_effects
+                        .extend(self.pending_provider_dispatch_side_effects()?);
+                }
+                Ok(transition)
+            }
             RuntimeTimerKind::SynchronizedOutput => {
                 if self
                     .timers
@@ -895,6 +919,21 @@ impl AsyncRuntimeSessionActor {
             applied,
             side_effects,
         })
+    }
+
+    /// Cancels only the persistence deadline for the settled worker generation.
+    pub(super) fn provider_persistence_cancel_timer_side_effects(
+        &mut self,
+        turn_id: &str,
+        generation: u64,
+    ) -> Vec<RuntimeSideEffect> {
+        let key = RuntimeTimerKey::new(RuntimeTimerKind::ProviderPersistence, turn_id, generation);
+        if self.timers.provider_persistence.get(turn_id) == Some(&key) {
+            self.timers.provider_persistence.remove(turn_id);
+            vec![RuntimeSideEffect::CancelTimer { key }]
+        } else {
+            Vec::new()
+        }
     }
 
     /// Removes and returns a timer cancellation for a claimed provider task.
@@ -1551,6 +1590,36 @@ impl AsyncRuntimeSessionActor {
                     .service
                     .apply_agent_provider_completed_transition(&agent_id, &turn_id, *execution)
                     .await?;
+                if let Some(generation) =
+                    self.service.agent_provider_persistence_generation(&turn_id)
+                {
+                    let deadline = RuntimeSideEffect::ScheduleTimer {
+                        key: RuntimeTimerKey::new(
+                            RuntimeTimerKind::ProviderPersistence,
+                            &turn_id,
+                            generation,
+                        ),
+                        delay_ms: super::DEFAULT_PROVIDER_PERSISTENCE_TIMEOUT_MS,
+                    };
+                    if let Err(error) = self.queue_runtime_side_effects(vec![deadline]) {
+                        self.service
+                            .retire_queued_provider_settlement(&turn_id, generation);
+                        self.side_effect_routes
+                            .retire_queued_provider_settlement(&turn_id, generation);
+                        let failure = self.service.apply_agent_provider_persistence_failed_transition(
+                            &turn_id,
+                            generation,
+                            "persistence_deadline_admission",
+                            "persistence_deadline_admission",
+                            &format!(
+                                "persistence deadline could not be admitted: {}; writes may have committed and must not be replayed",
+                                error.message()
+                            ),
+                        )?;
+                        transition.applied |= failure.applied;
+                        transition.side_effects.extend(failure.side_effects);
+                    }
+                }
                 if transition.applied {
                     transition
                         .side_effects
@@ -1560,10 +1629,18 @@ impl AsyncRuntimeSessionActor {
                 Ok(transition)
             }
             AgentProviderEvent::PersistenceSettled { outcome } => {
+                let turn_id = outcome.turn.turn_id.clone();
+                let generation = outcome.generation;
                 let mut transition = self
                     .service
                     .apply_agent_provider_persistence_settled_transition(*outcome)
                     .await?;
+                if self.service.agent_provider_persistence_generation(&turn_id) != Some(generation)
+                {
+                    transition.side_effects.extend(
+                        self.provider_persistence_cancel_timer_side_effects(&turn_id, generation),
+                    );
+                }
                 if transition.applied {
                     transition
                         .side_effects
@@ -1573,6 +1650,7 @@ impl AsyncRuntimeSessionActor {
             }
             AgentProviderEvent::PersistenceFailed {
                 turn_id,
+                generation,
                 provider_id,
                 kind,
                 message,
@@ -1581,10 +1659,17 @@ impl AsyncRuntimeSessionActor {
                     .service
                     .apply_agent_provider_persistence_failed_transition(
                         &turn_id,
+                        generation,
                         &provider_id,
                         &kind,
                         &message,
                     )?;
+                if self.service.agent_provider_persistence_generation(&turn_id) != Some(generation)
+                {
+                    transition.side_effects.extend(
+                        self.provider_persistence_cancel_timer_side_effects(&turn_id, generation),
+                    );
+                }
                 if transition.applied {
                     transition
                         .side_effects

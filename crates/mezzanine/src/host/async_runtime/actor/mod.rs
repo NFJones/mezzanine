@@ -58,6 +58,8 @@ const DEFAULT_PROVIDER_CLAIM_TIMEOUT_GRACE_MS: u64 = 30_000;
 /// being failed by the actor while the HTTP provider call is still valid.
 const DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS: u64 =
     DEFAULT_PROVIDER_TIMEOUT_MS + DEFAULT_PROVIDER_CLAIM_TIMEOUT_GRACE_MS;
+/// Bounded wait for actor-validated persistence work, including SQLite contention.
+const DEFAULT_PROVIDER_PERSISTENCE_TIMEOUT_MS: u64 = 120_000;
 /// Defines the DEFAULT PANE PIPE HEALTH DELAY MS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module

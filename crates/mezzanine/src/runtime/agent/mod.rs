@@ -475,6 +475,10 @@ pub(crate) struct RuntimeAgentComponent {
     /// Provider turns whose actor-validated memory or issue actions are being
     /// settled by the bounded persistence worker.
     pending_agent_provider_persistence: BTreeSet<String>,
+    /// Exact generation of each pending persistence settlement.
+    agent_provider_persistence_generations: BTreeMap<String, u64>,
+    /// Monotonic identity for persistence results across turns and retries.
+    next_agent_provider_persistence_generation: u64,
     /// Approved network and MCP actions waiting for external worker dispatch.
     ///
     /// The value binds an MCP approval to the tool-schema generation that
@@ -2950,17 +2954,49 @@ impl RuntimeSessionService {
     }
 
     /// Marks one validated provider turn as waiting on persistence settlement.
-    pub(crate) fn mark_agent_provider_persistence_pending(&mut self, turn_id: &str) -> bool {
+    pub(crate) fn mark_agent_provider_persistence_pending(&mut self, turn_id: &str) -> u64 {
+        self.agent.next_agent_provider_persistence_generation = self
+            .agent
+            .next_agent_provider_persistence_generation
+            .saturating_add(1);
+        let generation = self.agent.next_agent_provider_persistence_generation;
         self.agent
             .pending_agent_provider_persistence
-            .insert(turn_id.to_string())
+            .insert(turn_id.to_string());
+        self.agent
+            .agent_provider_persistence_generations
+            .insert(turn_id.to_string(), generation);
+        generation
     }
 
     /// Clears one completed or cancelled provider persistence settlement.
     pub(crate) fn clear_agent_provider_persistence_pending(&mut self, turn_id: &str) -> bool {
         self.agent
+            .agent_provider_persistence_generations
+            .remove(turn_id);
+        self.agent
             .pending_agent_provider_persistence
             .remove(turn_id)
+    }
+
+    /// Returns the exact pending worker generation for a provider turn.
+    pub(crate) fn agent_provider_persistence_generation(&self, turn_id: &str) -> Option<u64> {
+        self.agent
+            .agent_provider_persistence_generations
+            .get(turn_id)
+            .copied()
+    }
+
+    /// Clears only the pending worker generation that produced this result.
+    pub(crate) fn clear_agent_provider_persistence_generation(
+        &mut self,
+        turn_id: &str,
+        generation: u64,
+    ) -> bool {
+        if self.agent_provider_persistence_generation(turn_id) != Some(generation) {
+            return false;
+        }
+        self.clear_agent_provider_persistence_pending(turn_id)
     }
 
     /// Iterates over turns whose progress is owned by the persistence worker.

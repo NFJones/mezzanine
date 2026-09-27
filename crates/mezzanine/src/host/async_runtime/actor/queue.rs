@@ -130,6 +130,9 @@ impl AsyncRuntimeSessionActor {
                     self.timers.compaction_claim.remove(key);
                 }
             }
+            RuntimeTimerKind::ProviderPersistence => {
+                Self::track_owned_timer_key(&mut self.timers.provider_persistence, key, scheduled);
+            }
             RuntimeTimerKind::PanePipeHealth => {
                 Self::track_owned_timer_key(&mut self.timers.pane_pipe_health, key, scheduled);
             }
