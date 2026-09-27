@@ -255,10 +255,10 @@ impl RuntimeSessionService {
             let presentation_entries = store.inspect_presentation(&conversation_id)?;
             if metadata.transcript_entries > 0 {
                 match store.next_sequence(&conversation_id) {
-                    Ok(sequence) if sequence > 1 => {}
+                    Ok(sequence) if sequence.saturating_sub(1) >= metadata.transcript_entries => {}
                     Ok(_) => {
                         return Err(MezError::invalid_state(
-                            "restored conversation has no required transcript history",
+                            "restored conversation has incomplete required transcript history",
                         ));
                     }
                     Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {

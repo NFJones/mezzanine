@@ -1165,6 +1165,48 @@ fn runtime_restore_rejects_missing_counted_transcript() {
     assert!(restarted.agent_shell_store().get("%1").is_none());
 }
 
+/// A partial durable archive cannot satisfy a checkpoint that recorded more
+/// accepted transcript rows before the persistence worker finished writing.
+#[test]
+fn runtime_restore_rejects_partial_counted_transcript() {
+    let store = AgentTranscriptStore::new(temp_root("partial-counted-transcript"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 2)
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+    store
+        .append(&TranscriptEntry {
+            conversation_id: conversation,
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-partial".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "only committed row".to_string(),
+        })
+        .unwrap();
+
+    let mut restarted = test_runtime_service();
+    restarted.session.id = service.session().id.clone();
+    restarted.set_agent_transcript_store(store);
+    assert!(
+        restarted
+            .restore_agent_sessions_from_transcript_store()
+            .is_err()
+    );
+    assert!(restarted.agent_shell_store().get("%1").is_none());
+}
+
 /// Verifies that `/clear` follows the spec-level behavior of clearing the live
 /// viewport while preserving pane logs and starting a fresh visible
 /// conversation.
