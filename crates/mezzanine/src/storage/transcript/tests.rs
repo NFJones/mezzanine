@@ -1607,6 +1607,28 @@ fn transcript_store_receipt_recovers_late_append_faults_after_restart() {
     }
 }
 
+/// A receipt for a sequence already committed with different contents must
+/// fail before journaling, rather than poison every later startup recovery.
+#[test]
+fn transcript_store_rejects_receipt_conflicting_with_durable_row() {
+    let root = temp_root("receipt-durable-conflict");
+    let store = AgentTranscriptStore::new(root.clone());
+    let original = entry("conv1", 1, TranscriptRole::User);
+    store.append(&original).unwrap();
+    let mut conflicting = original.clone();
+    conflicting.content = "different content".to_string();
+
+    assert!(
+        store
+            .accept_append_receipt(std::slice::from_ref(&conflicting), 1)
+            .is_err()
+    );
+    assert!(store.pending_append_receipts().unwrap().is_empty());
+    store.recover_append_receipts().unwrap();
+    assert_eq!(store.inspect("conv1").unwrap(), vec![original]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A worker retry after a partial append must not duplicate its committed
 /// prefix or allow a conflicting sequence to replace that prefix.
 #[test]

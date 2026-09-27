@@ -12,7 +12,7 @@ use mez_agent::transcript::{TranscriptEntry, validate_conversation_id};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::error::{MezError, Result};
+use crate::error::{MezError, MezErrorKind, Result};
 
 use super::encoding::{decode_transcript_entry, encode_transcript_entry};
 use super::fs::{set_private_dir_permissions, set_private_file_permissions};
@@ -162,6 +162,25 @@ impl AgentTranscriptStore {
     ) -> Result<()> {
         let receipt = AppendReceipt::new(entries, generation)?;
         let _lock = self.acquire_conversation_lock(&receipt.conversation_id)?;
+        // Admission must not leave a replayable receipt for a sequence that
+        // already belongs to different durable content. Check the complete
+        // archive off-actor so an older batch cannot hide behind a long tail.
+        match self.inspect(&receipt.conversation_id) {
+            Ok(durable) => {
+                self.validate_restored_transcript(&receipt.conversation_id)?;
+                if entries.iter().any(|entry| {
+                    durable
+                        .iter()
+                        .any(|row| row.sequence == entry.sequence && row != entry)
+                }) {
+                    return Err(MezError::conflict(
+                        "transcript receipt conflicts with durable contents",
+                    ));
+                }
+            }
+            Err(error) if error.kind() == MezErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         for (_, existing, rows) in self.read_append_receipts()? {
             if existing.conversation_id != receipt.conversation_id {
                 continue;
