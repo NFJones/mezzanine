@@ -276,7 +276,7 @@ impl RuntimeSessionService {
         let boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
         let staged = match &task.target {
             RuntimeAgentCompactionTarget::ActiveTurn { staged, .. } => {
-                staged.as_ref().map(|state| &state.projection)
+                staged.as_ref().and_then(|state| state.projection.as_ref())
             }
             RuntimeAgentCompactionTarget::Conversation => None,
         };
@@ -1297,6 +1297,96 @@ impl RuntimeSessionService {
                     &provider_options,
                     estimate_stream,
                 )?;
+                if plan.requires_additional_segments() {
+                    let attempts = match &task.target {
+                        RuntimeAgentCompactionTarget::ActiveTurn { staged, .. } => {
+                            staged.as_ref().map_or(0, |state| state.attempts)
+                        }
+                        RuntimeAgentCompactionTarget::Conversation => 0,
+                    };
+                    if attempts >= 3 {
+                        return Err(MezError::invalid_state(
+                            "pre-summary recovery exhausted its closed-segment limit",
+                        ));
+                    }
+                    let projection =
+                        if matches!(
+                            trigger,
+                            RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. }
+                        ) {
+                            self.prospective_observed_compaction_epoch(
+                            &task, &context, plan.as_ref(), &final_summary,
+                        )?.ok_or_else(|| MezError::invalid_state(
+                            "pre-summary recovery cannot map the first segment to durable rows",
+                        ))?.into()
+                        } else {
+                            None
+                        };
+                    let (budget, token_costs) = plan.planning_budget();
+                    let provider =
+                        mez_agent::ProviderBudgetProjection::new(api, &model_profile.provider);
+                    let next_plan = if token_costs {
+                        mez_agent::plan_model_context_compaction_for_provider_tokens(
+                            &compacted,
+                            budget,
+                            0,
+                            plan.consumed_sequence_high_water(),
+                            provider,
+                        )
+                    } else {
+                        mez_agent::plan_model_context_compaction_for_provider(
+                            &compacted,
+                            budget,
+                            0,
+                            plan.consumed_sequence_high_water(),
+                            provider,
+                        )
+                    }
+                    .map_err(|error| MezError::invalid_state(error.message()))?;
+                    if !next_plan.changes_context() {
+                        return Err(MezError::invalid_state(
+                            "pre-summary recovery has no additional closed segment",
+                        ));
+                    }
+                    if next_plan.replacement_event_sequences() == plan.replacement_event_sequences()
+                    {
+                        return Err(MezError::invalid_state(
+                            "pre-summary recovery did not advance to another closed segment",
+                        ));
+                    }
+                    let source_high_water = self
+                        .agent_turn_contexts()
+                        .get(&turn_id)
+                        .map_or(0, AgentContext::event_sequence_high_water_mark);
+                    if let RuntimeAgentCompactionTarget::ActiveTurn {
+                        plan,
+                        staged,
+                        final_request_retry,
+                        completed_summaries,
+                        pending_blocks,
+                        ..
+                    } = &mut task.target
+                    {
+                        **plan = next_plan;
+                        *staged = Some(Box::new(
+                            crate::runtime::agent_state::RuntimeStagedCompaction {
+                                context: compacted,
+                                projection,
+                                attempts: attempts + 1,
+                                source_high_water,
+                            },
+                        ));
+                        final_request_retry.last_input_tokens = Some(retry_estimate.input_tokens);
+                        final_request_retry.attempts = 0;
+                        final_request_retry.summary_ceiling = None;
+                        completed_summaries.clear();
+                        pending_blocks.clear();
+                        let blocks = runtime_redact_compaction_blocks(plan.replacement_blocks());
+                        runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
+                        self.queue_agent_compaction_task(task.clone());
+                        return Ok(());
+                    }
+                }
                 if let Some(input_limit) = runtime_compaction_safe_input_limit(
                     model_profile.max_input_tokens(),
                     model_profile.context_window_tokens(),
@@ -1448,7 +1538,7 @@ impl RuntimeSessionService {
                                 *staged = projection.clone().map(|projection| {
                                     Box::new(crate::runtime::agent_state::RuntimeStagedCompaction {
                                         context: compacted.clone(),
-                                        projection,
+                                        projection: Some(projection),
                                         attempts: 0,
                                         source_high_water,
                                     })
@@ -1480,7 +1570,7 @@ impl RuntimeSessionService {
                                 *staged = projection.clone().map(|projection| {
                                     Box::new(crate::runtime::agent_state::RuntimeStagedCompaction {
                                         context: compacted.clone(),
-                                        projection,
+                                        projection: Some(projection),
                                         attempts: attempts + 1,
                                         source_high_water,
                                     })

@@ -159,6 +159,11 @@ another eligible closed range beyond an exact barrier. Earlier summaries remain
 provisional until one combined epoch fits the refreshed request. A non-reducing
 or exhausted retry fails without replacing the previous transcript projection;
 its diagnostic reports component estimates, not task content.
+If the first segment has no summary allowance because later eligible closed
+history remains raw, planning accounts for those later segments before failing.
+Each segment is still summarized separately at its original anchor, with at most
+three additional provisional segment attempts; exact instructions and unfinished
+work stay raw. No intermediate summary resumes the turn or publishes an epoch.
 The compacted block carries only a short lossy-context warning and the
 model-authored summary; pane, model, entry counts, and other audit metadata
 are not repeated in the next model-visible summary.

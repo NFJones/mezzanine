@@ -653,8 +653,8 @@ pub enum RuntimeActiveTurnCompactionTrigger {
 pub struct RuntimeStagedCompaction {
     /// Prospective live context after earlier summaries.
     pub context: super::AgentContext,
-    /// Prospective durable replay projection.
-    pub projection: crate::storage::transcript::AgentCompactionEpoch,
+    /// Prospective durable replay projection, absent for turn-local recovery.
+    pub projection: Option<crate::storage::transcript::AgentCompactionEpoch>,
     /// Number of additional closed ranges attempted.
     pub attempts: u32,
     /// Last authoritative chronology sequence captured before staging.

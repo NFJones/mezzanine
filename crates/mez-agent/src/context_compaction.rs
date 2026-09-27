@@ -53,6 +53,9 @@ pub struct ModelContextCompactionPlan {
     retained_tail: Vec<ContextBlock>,
     summary_budget_words: usize,
     summary_budget_is_tokens: bool,
+    context_budget: usize,
+    /// Later closed segments must also be summarized before the request can fit.
+    requires_additional_segments: bool,
     report: ModelContextCompactionReport,
 }
 
@@ -88,6 +91,17 @@ impl ModelContextCompactionPlan {
     /// Returns the maximum provider-visible word budget for the model summary.
     pub fn summary_budget_words(&self) -> usize {
         self.summary_budget_words
+    }
+
+    /// Whether this summary alone cannot fit the planner's block allowance.
+    /// Callers must stage further anchored segments before publishing or resuming.
+    pub fn requires_additional_segments(&self) -> bool {
+        self.requires_additional_segments
+    }
+
+    /// Returns the block allowance and its unit frozen for this plan.
+    pub fn planning_budget(&self) -> (usize, bool) {
+        (self.context_budget, self.summary_budget_is_tokens)
     }
 
     /// Returns deterministic accounting for the selected replacement blocks.
@@ -145,6 +159,8 @@ impl ModelContextCompactionPlan {
             retained_tail: Vec::new(),
             summary_budget_words: 0,
             summary_budget_is_tokens: false,
+            context_budget: 0,
+            requires_additional_segments: false,
             report,
         }
     }
@@ -409,8 +425,65 @@ fn plan_model_context_compaction_with_projection(
     } else {
         model_context_visible_total_words(&retained_chronology, &retained_chronology_visible)
     };
-    let summary_budget_words = context_budget_words
+    let mut summary_budget_words = context_budget_words
         .saturating_sub(stable_prefix_words.saturating_add(retained_chronology_words));
+    let mut requires_additional_segments = false;
+    if summary_budget_words == 0 {
+        // The first segment cannot fit by itself. Count only additional whole
+        // eligible groups, but never mix their source into this plan: each
+        // barrier-delimited segment needs its own anchored model summary.
+        let mut additional_cost = 0usize;
+        let mut additional_segments = 0usize;
+        let mut previous_end = replacement_ranges.last().map_or(0, |range| range.end);
+        for range in eligible_replacements.iter().filter(|range| {
+            !replacement_ranges.contains(range)
+                && !immutable_chronology[(*range).clone()]
+                    .iter()
+                    .all(context_block_is_compaction_summary)
+        }) {
+            if range.start != previous_end {
+                additional_segments += 1;
+            }
+            previous_end = range.end;
+            additional_cost = additional_cost.saturating_add(
+                chronology_costs[range.clone()]
+                    .iter()
+                    .copied()
+                    .fold(0usize, usize::saturating_add),
+            );
+        }
+        // A replacement is a framed reference block, not just its summary
+        // text. Reserve the framing of the first block and a nonempty framed
+        // block for each later segment before advertising an output ceiling.
+        let minimum_summary = ContextBlock::reference_event(
+            ContextSourceKind::Memory,
+            "context compaction summary",
+            "x",
+        );
+        let minimum_cost = if token_costs {
+            crate::provider_text_input_token_estimate(&format!(
+                "{}{}",
+                model_context_block_header(&minimum_summary),
+                minimum_summary.content
+            ))
+        } else {
+            model_context_block_words(&minimum_summary)
+        };
+        let framing = if token_costs {
+            crate::provider_text_input_token_estimate(&model_context_block_header(&minimum_summary))
+        } else {
+            minimum_cost.saturating_sub(1)
+        };
+        summary_budget_words = context_budget_words
+            .saturating_sub(
+                stable_prefix_words
+                    .saturating_add(retained_chronology_words)
+                    .saturating_sub(additional_cost),
+            )
+            .saturating_sub(framing)
+            .saturating_sub(additional_segments.saturating_mul(minimum_cost));
+        requires_additional_segments = additional_segments > 0 && summary_budget_words > 0;
+    }
     if summary_budget_words == 0 {
         return Err(AgentContextError::new(format!(
             "unrecoverable model context overflow: no budget remains for a model-authored compaction summary (context_budget_words={context_budget_words} stable_prefix_words={stable_prefix_words} retained_chronology_words={retained_chronology_words})"
@@ -441,6 +514,8 @@ fn plan_model_context_compaction_with_projection(
             summary_budget_words
         },
         summary_budget_is_tokens: token_costs,
+        context_budget: context_budget_words,
+        requires_additional_segments,
         report: ModelContextCompactionReport {
             compacted_blocks: replacement_blocks.len(),
             omitted_blocks: 0,
@@ -1387,6 +1462,135 @@ mod tests {
         assert_eq!(chronology[1].block().content, "keep this steering in place");
         assert!(chronology[2].block().content.contains("later decision"));
         assert!(chronology[3].block().content.contains("later outcome"));
+    }
+
+    /// A zero allowance after selecting the first segment is not an exact
+    /// floor when another closed segment beyond steering is also replaceable.
+    /// The planner must identify recoverable work rather than report that no
+    /// summary can fit while retaining that second segment unchanged.
+    #[test]
+    fn model_context_compaction_replans_zero_budget_across_exact_barrier() {
+        let context = AgentContext::new_durable(vec![
+            ContextBlock::assistant_event("first decision", "first ".repeat(200)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "first outcome",
+                "outcome ".repeat(200),
+            ),
+            ContextBlock::user_event("steering", "preserve this exact instruction"),
+            ContextBlock::assistant_event("second decision", "second ".repeat(200)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "second outcome",
+                "result ".repeat(200),
+            ),
+        ])
+        .unwrap();
+        let plan = plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            100,
+            1,
+            context.event_sequence_high_water_mark(),
+        )
+        .unwrap();
+        assert_eq!(plan.replacement_blocks().len(), 2);
+        assert!(plan.requires_additional_segments());
+        assert!(plan.summary_budget_words() > 0);
+        let maximal_summary = "word ".repeat(plan.summary_budget_words());
+        let (staged, _) =
+            apply_model_context_compaction_plan(context, &plan, maximal_summary).unwrap();
+        let next = plan_model_context_compaction_at_consumed_sequence(
+            &staged,
+            100,
+            1,
+            plan.consumed_sequence_high_water(),
+        )
+        .unwrap();
+        assert!(next.changes_context());
+        assert!(next.summary_budget_words() > 0);
+        assert!(
+            next.replacement_blocks().iter().all(|block| {
+                block.content.contains("second") || block.content.contains("result")
+            })
+        );
+    }
+
+    /// A maximal first summary must leave room for a framed later summary
+    /// when planning uses the provider's token estimate rather than words.
+    /// This also catches a one-token rounding loss from concatenated framing.
+    #[test]
+    fn model_context_compaction_token_ceiling_preserves_later_segment_allowance() {
+        let context = AgentContext::new_durable(vec![
+            ContextBlock::assistant_event("first decision", "first ".repeat(200)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "first outcome",
+                "outcome ".repeat(200),
+            ),
+            ContextBlock::user_event("steering", "preserve this exact instruction"),
+            ContextBlock::assistant_event("second decision", "second ".repeat(200)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "second outcome",
+                "result ".repeat(200),
+            ),
+        ])
+        .unwrap();
+        let projection =
+            ProviderBudgetProjection::new(ProviderApiCompatibility::OpenAiResponses, "openai");
+        let plan = plan_model_context_compaction_for_provider_tokens(
+            &context,
+            100,
+            1,
+            context.event_sequence_high_water_mark(),
+            projection,
+        )
+        .unwrap();
+        assert!(plan.requires_additional_segments());
+        let maximal_summary = "abcd".repeat(plan.summary_budget_words());
+        let (staged, _) =
+            apply_model_context_compaction_plan(context, &plan, maximal_summary).unwrap();
+        let next = plan_model_context_compaction_for_provider_tokens(
+            &staged,
+            100,
+            1,
+            plan.consumed_sequence_high_water(),
+            projection,
+        )
+        .unwrap();
+        assert!(next.changes_context());
+        assert!(next.summary_budget_words() > 0);
+    }
+
+    /// Even replacing every closed segment cannot create a summary allowance
+    /// if exact steering alone consumes the entire provider-visible budget.
+    /// No exact block may be selected to manufacture apparent capacity.
+    #[test]
+    fn model_context_compaction_rejects_irreducible_exact_floor() {
+        let context = AgentContext::new_durable(vec![
+            ContextBlock::assistant_event("first decision", "first ".repeat(200)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "first outcome",
+                "outcome ".repeat(200),
+            ),
+            ContextBlock::user_event("steering", "exact ".repeat(200)),
+            ContextBlock::assistant_event("second decision", "second ".repeat(200)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "second outcome",
+                "result ".repeat(200),
+            ),
+        ])
+        .unwrap();
+        let error = plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            100,
+            1,
+            context.event_sequence_high_water_mark(),
+        )
+        .unwrap_err();
+        assert!(error.message().contains("protected exact context"));
     }
 
     /// A summary before exact steering cannot prevent a later eligible segment

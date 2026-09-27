@@ -212,6 +212,104 @@ fn runtime_context_limit_recovery_skips_earlier_summary_only_segment() {
     assert!(service.agent_provider_task_is_pending("turn-1"));
 }
 
+/// A pre-summary zero budget must stage separate anchored summaries instead
+/// of publishing an earlier summary ahead of exact steering. The first
+/// response cannot resume the turn; the second must retain original order.
+#[test]
+fn runtime_zero_budget_recovery_stages_barrier_separated_segments() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "zero-budget-recovery".to_string(),
+        path: None,
+        format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary,
+        trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"zero-budget\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.zero-budget]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"zero-budget","method":"agent/shell/command","params":{"idempotency_key":"zero-budget-recovery","input":"continue"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    context
+        .replace_after_compaction(vec![
+            ContextBlock::assistant_event("first decision", "first ".repeat(200)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "first outcome",
+                "outcome ".repeat(200),
+            ),
+            ContextBlock::user_event("steering", "preserve this exact instruction"),
+            ContextBlock::assistant_event("second decision", "second ".repeat(200)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "second outcome",
+                "result ".repeat(200),
+            ),
+        ])
+        .unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    let plan = mez_agent::plan_model_context_compaction_at_consumed_sequence(
+        context,
+        100,
+        1,
+        context.event_sequence_high_water_mark(),
+    )
+    .unwrap();
+    assert!(plan.requires_additional_segments());
+    let first_summary = "word ".repeat(plan.summary_budget_words());
+    let profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
+    assert!(
+        service
+            .queue_agent_context_limit_recovery_compaction(
+                "turn-1",
+                "zero-budget".to_string(),
+                profile,
+                1,
+                plan,
+            )
+            .unwrap()
+    );
+    complete_runtime_test_compaction(&mut service, "%1", &first_summary);
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
+    let queued = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        staged, plan, ..
+    } = &queued.target
+    else {
+        panic!("expected staged active-turn compaction")
+    };
+    assert_eq!(staged.as_ref().unwrap().attempts, 1);
+    assert!(
+        plan.replacement_blocks()
+            .iter()
+            .all(|block| block.content.contains("second") || block.content.contains("result"))
+    );
+    complete_runtime_test_compaction(&mut service, "%1", "Second events summarized.");
+    let chronology = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .chronology();
+    assert_eq!(chronology[0].block().content, first_summary.trim_end());
+    assert_eq!(
+        chronology[1].block().content,
+        "preserve this exact instruction"
+    );
+    assert_eq!(chronology[2].block().content, "Second events summarized.");
+    assert!(service.agent_provider_task_is_pending("turn-1"));
+}
+
 /// Verifies large bracketed-paste agent prompt input is displayed compactly in
 /// the pane transcript while the agent turn receives the exact pasted payload.
 #[test]

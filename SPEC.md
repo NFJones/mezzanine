@@ -6871,6 +6871,14 @@ the complete request check and publishes one atomic epoch. Each attempted
 complete candidate MUST make bounded progress; no failed candidate may publish
 an epoch or resume the provider turn. Exhaustion MUST fail visibly with
 content-free component-size estimates without dropping the original context.
+Before requesting the first summary, a zero allowance for one segment MUST NOT
+be treated as irreducible while later closed, consumed segments remain eligible.
+The planner MAY account for replacing those later segments, but each model
+summary MUST remain anchored on its original side of exact barriers. No
+provisional summary may publish or resume a turn until the remaining required
+segments have been summarized and the complete next request fits. Exact,
+incomplete, unconsumed, and mandatory raw-tail context MUST remain protected;
+the number of additional segment attempts MUST be bounded.
 Provider-limit and manual compaction MUST expose at most one model-visible
 compaction block per eligible exact-barrier-delimited segment. A prior
 summary-only segment MUST NOT prevent selecting later closed, consumed history
