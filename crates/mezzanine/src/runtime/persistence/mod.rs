@@ -40,7 +40,7 @@ pub(crate) struct RuntimePersistenceComponent {
     queued_transcript_effects: Vec<RuntimeSideEffect>,
     /// Transcript writes handed to the external worker but not yet settled.
     in_flight_transcript_entries:
-        BTreeMap<(String, u64), Vec<mez_agent::transcript::TranscriptEntry>>,
+        BTreeMap<(String, u64), Vec<Vec<mez_agent::transcript::TranscriptEntry>>>,
     metadata_checkpoint_generations: BTreeMap<String, u64>,
     pending_session_archive_conversation_ids: BTreeSet<String>,
     pending_session_archive_resumes: BTreeMap<String, (ClientId, String)>,

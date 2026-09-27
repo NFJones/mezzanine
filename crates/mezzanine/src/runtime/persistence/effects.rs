@@ -402,7 +402,7 @@ impl RuntimePersistenceComponent {
             .in_flight_transcript_entries
             .iter()
             .filter(|((owner, _), _)| owner == conversation_id)
-            .flat_map(|(_, entries)| entries.iter().cloned())
+            .flat_map(|(_, batches)| batches.iter().flatten().cloned())
             .collect::<Vec<_>>();
         entries.extend(
             self.queued_transcript_effects
@@ -463,10 +463,13 @@ impl RuntimePersistenceComponent {
             if let RuntimeSideEffect::PersistTranscriptEntries { entries, .. } = effect
                 && let Some(first) = entries.first()
             {
-                self.in_flight_transcript_entries.insert(
-                    (first.conversation_id.clone(), first.sequence),
-                    entries.clone(),
-                );
+                let batches = self
+                    .in_flight_transcript_entries
+                    .entry((first.conversation_id.clone(), first.sequence))
+                    .or_default();
+                if !batches.contains(entries) {
+                    batches.push(entries.clone());
+                }
             }
         }
         effects
@@ -482,7 +485,7 @@ impl RuntimePersistenceComponent {
     ) -> bool {
         self.in_flight_transcript_entries
             .get(&(conversation_id.to_string(), first_sequence))
-            .is_some_and(|pending| pending == entries)
+            .is_some_and(|batches| batches.iter().any(|batch| batch == entries))
     }
 
     /// Retires an exact worker-owned append after its completion is accepted.
@@ -496,7 +499,12 @@ impl RuntimePersistenceComponent {
         if !self.owns_transcript_write(conversation_id, first_sequence, entries) {
             return false;
         }
-        self.in_flight_transcript_entries.remove(&key);
+        if let Some(batches) = self.in_flight_transcript_entries.get_mut(&key) {
+            batches.retain(|batch| batch != entries);
+            if batches.is_empty() {
+                self.in_flight_transcript_entries.remove(&key);
+            }
+        }
         true
     }
 
@@ -708,6 +716,68 @@ mod tests {
             component.deferred_transcript_next_sequence("high-water"),
             Some(3)
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A second append with the same starting sequence must not replace the
+    /// first worker-owned receipt or hide its accepted logical rows.
+    #[test]
+    fn transcript_drain_preserves_first_claim_on_sequence_collision() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-transcript-claim-collision-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let first = mez_agent::transcript::TranscriptEntry {
+            conversation_id: "claim-collision".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "original accepted row".to_string(),
+        };
+        let mut replacement = first.clone();
+        replacement.content = "conflicting replacement".to_string();
+        let mut component = RuntimePersistenceComponent::default();
+        for row in [&first, &replacement] {
+            component.queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+                path: store.transcript_path("claim-collision").unwrap(),
+                store: store.clone(),
+                entries: vec![row.clone()],
+            });
+        }
+        assert_eq!(component.take_transcript_effects().len(), 2);
+        assert!(component.owns_transcript_write(
+            "claim-collision",
+            1,
+            std::slice::from_ref(&first)
+        ));
+        assert!(component.owns_transcript_write(
+            "claim-collision",
+            1,
+            std::slice::from_ref(&replacement)
+        ));
+        assert_eq!(
+            component.pending_transcript_entries("claim-collision"),
+            vec![first.clone(), replacement.clone()]
+        );
+        assert!(component.settle_transcript_write(
+            "claim-collision",
+            1,
+            std::slice::from_ref(&first)
+        ));
+        assert_eq!(
+            component.pending_transcript_entries("claim-collision"),
+            vec![replacement.clone()]
+        );
+        assert!(component.owns_transcript_write(
+            "claim-collision",
+            1,
+            std::slice::from_ref(&replacement)
+        ));
         let _ = std::fs::remove_dir_all(root);
     }
 }
