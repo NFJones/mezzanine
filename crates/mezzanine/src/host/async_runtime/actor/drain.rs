@@ -50,6 +50,12 @@ impl AsyncRuntimeSessionActor {
     /// drain progress keeps retained work responsive without spinning workers
     /// that inspected an unrelated non-empty queue.
     pub(super) fn record_side_effect_drain(&mut self, drained: usize) {
+        // Admission may have failed while the lane was full. The service still
+        // owns those exact dispatches; retry after real drain progress without
+        // requiring an unrelated runtime event.
+        if drained > 0 {
+            let _ = self.queue_pending_deferred_agent_command_side_effects();
+        }
         self.metrics.runtime_side_effects_drained = self
             .metrics
             .runtime_side_effects_drained

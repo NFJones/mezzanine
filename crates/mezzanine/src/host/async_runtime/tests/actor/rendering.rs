@@ -113,6 +113,76 @@ async fn async_actor_pumps_deferred_record_browser_refresh_for_applied_events() 
     let ((), _exit) = tokio::join!(client, actor.run());
 }
 
+/// A saturated effect lane retains an admitted command and browser refresh
+/// until each can be queued, without replaying either dispatch after a drain.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_retries_deferred_command_and_refresh_after_queue_pressure() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let accepted = service
+        .execute_agent_shell_command(&primary, "/auth-status")
+        .unwrap();
+    assert!(accepted.contains(r#""body":null"#), "{accepted}");
+    service
+        .queue_record_browser_refresh_for_tests(crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 1,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque("agent-%1").unwrap(),
+                turn_id: "unrelated-turn".to_string(),
+            }])
+            .await
+            .unwrap();
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"pressure\n".to_vec(),
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(batch).await.unwrap().applied,
+            1
+        );
+        let mut dispatched = Vec::new();
+        for _ in 0..8 {
+            let drained = handle.drain_runtime_side_effects(1).await.unwrap();
+            if drained.is_empty() {
+                break;
+            }
+            dispatched.extend(drained.into_iter().filter(|effect| {
+                matches!(
+                    effect,
+                    RuntimeSideEffect::DispatchAgentProvider { .. }
+                        | RuntimeSideEffect::DispatchAgentCommand { .. }
+                        | RuntimeSideEffect::DispatchRecordBrowserRefresh { .. }
+                )
+            }));
+        }
+        assert!(
+            matches!(dispatched.as_slice(),
+            [RuntimeSideEffect::DispatchAgentProvider { turn_id, .. },
+             RuntimeSideEffect::DispatchAgentCommand { command, .. },
+             RuntimeSideEffect::DispatchRecordBrowserRefresh { .. }]
+                if turn_id == "unrelated-turn" && command == "auth-status"),
+            "{dispatched:?}"
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _exit) = tokio::join!(client, actor.run());
+}
+
 /// Verifies an outstanding record-browser refresh cannot park the actor.
 ///
 /// The picker's refresh is claimed as the provider worker would claim it and left

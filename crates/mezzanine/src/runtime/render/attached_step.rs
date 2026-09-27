@@ -394,10 +394,26 @@ impl RuntimeSessionService {
     }
 
     /// Drains deferred slash commands queued by prompt submission.
+    #[cfg(test)]
     pub(crate) fn take_pending_deferred_agent_commands(
         &mut self,
     ) -> Vec<crate::runtime::RuntimeAgentCommandDispatch> {
         std::mem::take(&mut self.presentation.pending_deferred_agent_commands)
+    }
+
+    /// Peeks at the oldest deferred command until its effect is admitted.
+    pub(crate) fn next_pending_deferred_agent_command(
+        &self,
+    ) -> Option<crate::runtime::RuntimeAgentCommandDispatch> {
+        self.presentation
+            .pending_deferred_agent_commands
+            .first()
+            .cloned()
+    }
+
+    /// Retires the oldest deferred command after effect admission.
+    pub(crate) fn retire_pending_deferred_agent_command(&mut self) {
+        self.presentation.pending_deferred_agent_commands.remove(0);
     }
 
     /// Drains interactive prompts whose immutable history needs worker preparation.
@@ -408,10 +424,26 @@ impl RuntimeSessionService {
     }
 
     /// Drains deferred record-browser refreshes queued by overlay flows.
+    #[cfg(test)]
     pub(crate) fn take_pending_record_browser_refreshes(
         &mut self,
     ) -> Vec<crate::runtime::RuntimeRecordBrowserRefreshDispatch> {
         std::mem::take(&mut self.presentation.pending_record_browser_refreshes)
+    }
+
+    /// Peeks at the oldest refresh until its effect is admitted.
+    pub(crate) fn next_pending_record_browser_refresh(
+        &self,
+    ) -> Option<crate::runtime::RuntimeRecordBrowserRefreshDispatch> {
+        self.presentation
+            .pending_record_browser_refreshes
+            .first()
+            .cloned()
+    }
+
+    /// Retires the oldest refresh after effect admission.
+    pub(crate) fn retire_pending_record_browser_refresh(&mut self) {
+        self.presentation.pending_record_browser_refreshes.remove(0);
     }
 
     /// Drains exact clients whose latest divider action must rearm debounce.
