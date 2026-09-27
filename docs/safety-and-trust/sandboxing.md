@@ -108,8 +108,11 @@ deployment policy. Every sandboxed action also receives a code-owned private
 temporary directory as read-write authority. On macOS, Seatbelt additionally
 grants the resolved per-user temporary root so BSD `mktemp` works with its
 default parent, while retaining the private directory as `TMPDIR`. A
-whitelisted `TMPDIR` or `XDG_CACHE_HOME` may request pane evidence for
-non-sandboxed workloads, but it cannot replace that private directory.
+whitelisted `TMPDIR` cannot replace that private directory. Whitelisted XDG
+paths are forwarded from the Mez-server snapshot unchanged when present;
+otherwise Seatbelt uses private XDG defaults under its temporary directory.
+Forwarding an XDG path does not add filesystem access to that path: effective
+read and write scopes still govern access.
 Configured environment forwarding names and sanitized Git identity do not grant
 filesystem authority.
 

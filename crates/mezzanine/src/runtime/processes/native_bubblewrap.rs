@@ -993,7 +993,7 @@ impl crate::runtime::RuntimeSessionService {
         self.native_path_scopes_for_turn(turn, context)?
             .ok_or_else(|| {
                 MezError::invalid_state(
-                    "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or trust the root-process working directory's project",
+                    "Sandbox filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or trust the root-process working directory's project",
                 )
             })
     }
@@ -1072,7 +1072,7 @@ fn host_resolved_path_scopes(
             let resolved = &evidence[requested];
             if resolved.kind != ResolvedPathKind::Existing {
                 return Err(MezError::invalid_state(format!(
-                    "native Bubblewrap read scope does not exist: {requested}"
+                    "sandbox read scope does not exist: {requested}"
                 )));
             }
             Ok(resolved.canonical_path.clone())
@@ -1752,8 +1752,8 @@ mod tests {
     }
 
     /// Verifies a missing configured read scope fails closed because a
-    /// non-existent read target cannot be represented as trusted native
-    /// Bubblewrap authority.
+    /// non-existent read target cannot be represented as trusted sandbox
+    /// authority.
     #[test]
     fn native_host_path_resolution_rejects_missing_read_scope() {
         let root = std::env::temp_dir().join(format!(
@@ -1769,7 +1769,10 @@ mod tests {
         let error =
             host_resolved_path_scopes(&root, &["missing".to_string()], &[], &[]).unwrap_err();
 
-        assert!(error.to_string().contains("read scope does not exist"));
+        assert_eq!(
+            error.to_string(),
+            "sandbox read scope does not exist: missing"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

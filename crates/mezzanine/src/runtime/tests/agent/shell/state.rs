@@ -944,7 +944,7 @@ fn missing_primary_authority_does_not_fabricate_unresolved_scopes() {
 /// Verifies Bubblewrap distinguishes a valid pane environment with no primary
 /// filesystem authority from a missing pane environment signature.
 #[test]
-fn runtime_missing_primary_authority_reports_targeted_bubblewrap_error() {
+fn runtime_missing_primary_authority_reports_neutral_sandbox_error() {
     let root = temp_root("runtime-no-primary-authority-diagnostic");
     fs::create_dir_all(&root).unwrap();
     let mut service = test_runtime_service();
@@ -967,7 +967,7 @@ fn runtime_missing_primary_authority_reports_targeted_bubblewrap_error() {
 
     assert_eq!(
         error.message(),
-        "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or review the project and run /sandbox trust <project-root>"
+        "Sandbox filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or review the project and run /sandbox trust <project-root>"
     );
     assert!(service.running_shell_transactions_for_tests().is_empty());
     fs::remove_dir_all(root).unwrap();

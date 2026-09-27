@@ -8101,12 +8101,13 @@ the Seatbelt child supervisor or `bwrap` MUST receive only the launcher control
 bucket and MUST NOT receive pane credentials or workload entries, while the
 sandboxed payload environment remains owned by the compiled sandbox plan
 (`--clearenv` plus `--setenv`, or the Seatbelt environment document).
-Backend-owned `HOME`, identity, locale, and Git values are defaults only when
-no configured selected snapshot value is present. Seatbelt-owned `TMPDIR` and
-XDG state paths are mandatory private workload paths: selected pane values for
-those names MUST NOT replace them. Seatbelt MUST independently grant the
-resolved macOS per-user temporary root so BSD `mktemp` can use its default
-parent directory.
+Backend-owned `HOME`, identity, locale, Git, and XDG paths are defaults only when
+no configured selected snapshot value is present. Seatbelt-owned `TMPDIR` is a
+mandatory private workload path: selected values MUST NOT replace it. Selected
+XDG path values MUST be forwarded unchanged and MUST NOT add filesystem
+authority; effective read and write scopes still govern access. Seatbelt MUST
+independently grant the resolved macOS per-user temporary root so BSD `mktemp`
+can use its default parent directory.
 Every sandboxed action MUST grant its resolved code-owned temporary directory
 read-write authority independently of configured scope arrays. The contract
 MUST NOT weaken the stricter credential-free context admitted pane-status
