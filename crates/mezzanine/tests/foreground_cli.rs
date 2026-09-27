@@ -321,12 +321,22 @@ fn contains_pane_frame(text: &str, title: &str) -> bool {
             .all(|action| text.contains(action))
 }
 
+/// Recognizes a restored sleep pane when only its changed title cells repaint.
+/// The window bar may keep its unchanged `0 ` prefix across a zen transition.
+fn contains_restored_sleep_pane_frame(text: &str) -> bool {
+    contains_pane_frame(text, "sleep")
+        || (text.contains("\x1b[1;5H") && text.contains("leep"))
+        || (text.contains("\x1b[1;4H") && text.contains("sleep "))
+}
+
 /// Verifies the restored-pane predicate accepts the polling loop's live
 /// `sleep` process title only when the pane-frame chrome is present.
 #[test]
 fn pane_frame_predicate_accepts_sleep_only_with_restored_chrome() {
     assert!(contains_pane_frame("0 sleep □ ⊕ λ", "sleep"));
     assert!(!contains_pane_frame("0 sleep", "sleep"));
+    assert!(contains_restored_sleep_pane_frame("\x1b[1;4H\x1b[0msleep "));
+    assert!(!contains_restored_sleep_pane_frame("sleep "));
 }
 
 /// Launches the real `mez serve --attach-primary` binary inside a PTY so the
@@ -427,9 +437,7 @@ fn foreground_serve_zen_round_trip_resizes_real_pane_pty() {
     process.write_input(b"\x01:zen off\r").unwrap();
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("mez-app-size 10 40")
-                && (contains_pane_frame(text, "sleep")
-                    || (text.contains("\x1b[1;5H") && text.contains("leep")))
+            text.contains("mez-app-size 10 40") && contains_restored_sleep_pane_frame(text)
         })
         .unwrap();
 
@@ -760,8 +768,7 @@ fn foreground_serve_pane_status_explicit_rails_remain_diagnostic_in_zen() {
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
             text.contains("mez-pane-status-zen-size 22 80")
-                && (contains_pane_frame(text, "sleep")
-                    || (text.contains("\x1b[1;5H") && text.contains("leep")))
+                && contains_restored_sleep_pane_frame(text)
         })
         .unwrap();
 

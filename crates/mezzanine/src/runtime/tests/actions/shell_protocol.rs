@@ -1554,7 +1554,7 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
     let mut child_confirmed = false;
     let child_confirmation_deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < child_confirmation_deadline {
-        let _ = service.poll_pane_outputs(1).unwrap();
+        let _ = service.poll_pane_outputs(8192).unwrap();
         // Managed bootstrap ends are recorded by the pane-output frame and
         // settled by the reconciliation pump, so a direct service driver must
         // run that pass itself.
