@@ -147,6 +147,7 @@ impl RuntimeSessionService {
                 entries,
                 path,
                 error,
+                retryable,
             } => {
                 if !self.persistence.owns_transcript_write(
                     &conversation_id,
@@ -166,6 +167,7 @@ impl RuntimeSessionService {
                     "path": path.to_string_lossy(),
                     "state": "failed",
                     "error": error,
+                    "retryable": retryable,
                 })
                 .to_string()
             }
@@ -860,6 +862,7 @@ mod transcript_settlement_tests {
                 entries: vec![row.clone()],
                 path: path.clone(),
                 error: "uncertain write".to_string(),
+                retryable: true,
             })
             .unwrap();
         assert_eq!(
@@ -995,6 +998,7 @@ mod transcript_settlement_tests {
                     entries: vec![row],
                     path: std::path::PathBuf::from("/tmp/unowned-transcript"),
                     error: "late failure".to_string(),
+                    retryable: true,
                 },)
                 .unwrap()
                 .applied

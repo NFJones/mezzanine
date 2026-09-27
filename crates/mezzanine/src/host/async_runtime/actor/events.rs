@@ -1415,14 +1415,27 @@ impl AsyncRuntimeSessionActor {
                     return Ok(RuntimeTransition::default());
                 }
             }
-            PersistenceEvent::TranscriptFailed { entries, path, .. }
-                if self
-                    .side_effect_routes
-                    .owns_claimed_transcript(entries, path) =>
+            PersistenceEvent::TranscriptFailed {
+                entries,
+                path,
+                retryable: true,
+                ..
+            } if self
+                .side_effect_routes
+                .owns_claimed_transcript(entries, path) =>
             {
                 // Reconcile through the sole worker on its next poll, before
                 // later reserved sequences. Stale failures cannot enqueue work.
                 self.side_effect_routes.recover_claimed_transcripts();
+            }
+            PersistenceEvent::TranscriptFailed {
+                entries,
+                path,
+                retryable: false,
+                ..
+            } => {
+                self.side_effect_routes
+                    .block_claimed_transcript(entries, path);
             }
             _ => {}
         }

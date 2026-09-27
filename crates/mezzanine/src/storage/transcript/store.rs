@@ -1113,9 +1113,15 @@ impl AgentTranscriptStore {
                     continue;
                 }
                 if entry.sequence != next_sequence {
-                    return Err(MezError::conflict(
-                        "transcript append sequence is not the next durable entry",
-                    ));
+                    return Err(if entry.sequence > next_sequence {
+                        MezError::invalid_state(
+                            "transcript append is waiting for an earlier durable entry",
+                        )
+                    } else {
+                        MezError::conflict(
+                            "transcript append sequence conflicts with durable chronology",
+                        )
+                    });
                 }
                 bytes = bytes.saturating_add(self.append_one_locked(entry)?);
                 next_sequence = next_sequence.saturating_add(1);

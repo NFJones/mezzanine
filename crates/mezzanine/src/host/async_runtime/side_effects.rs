@@ -1090,6 +1090,11 @@ where
                         }
                         Err(error) => {
                             report.failed = report.failed.saturating_add(1);
+                            let retryable = !matches!(
+                                error.kind(),
+                                crate::error::MezErrorKind::Conflict
+                                    | crate::error::MezErrorKind::InvalidArgs
+                            );
                             batch.push(RuntimeEvent::Persistence(
                                 PersistenceEvent::TranscriptFailed {
                                     conversation_id,
@@ -1097,6 +1102,7 @@ where
                                     entries,
                                     path,
                                     error: error.message().to_string(),
+                                    retryable,
                                 },
                             ));
                         }
@@ -2075,6 +2081,16 @@ async fn persist_transcript_entries(
     entries: Vec<TranscriptEntry>,
 ) -> Result<usize> {
     match store.append_many_async(&entries).await {
+        // A conflicting durable row or invalid batch cannot become valid by
+        // replaying the same immutable work. Keep the original diagnostic.
+        Err(error)
+            if matches!(
+                error.kind(),
+                crate::error::MezErrorKind::Conflict | crate::error::MezErrorKind::InvalidArgs
+            ) =>
+        {
+            Err(error)
+        }
         // The first attempt can have committed a prefix (including a row whose
         // metadata update failed). The store reconciles the exact batch under
         // its conversation lock before any retry writes the missing suffix.
@@ -2470,6 +2486,37 @@ mod transcript_settlement_tests {
                 > 0
         );
         assert_eq!(store.inspect("partial-test").unwrap(), entries);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A durable row with the same sequence but different contents is a
+    /// permanent conflict, not an uncertain append prefix to replay.
+    #[tokio::test]
+    async fn queued_transcript_write_rejects_conflicting_durable_row() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-async-transcript-conflict-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let original = TranscriptEntry {
+            conversation_id: "conflict-test".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "original".to_string(),
+        };
+        store.append(&original).unwrap();
+        let mut conflicting = original.clone();
+        conflicting.content = "replacement".to_string();
+        let error = persist_transcript_entries(store.clone(), vec![conflicting])
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Conflict);
+        assert_eq!(store.inspect("conflict-test").unwrap(), vec![original]);
         let _ = std::fs::remove_dir_all(root);
     }
 }

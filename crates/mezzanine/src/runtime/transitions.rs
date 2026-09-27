@@ -598,6 +598,8 @@ pub enum PersistenceEvent {
         path: PathBuf,
         /// Human-readable write failure.
         error: String,
+        /// Whether a later checked attempt may repair an uncertain write.
+        retryable: bool,
     },
     /// A persistence write completed.
     Completed {

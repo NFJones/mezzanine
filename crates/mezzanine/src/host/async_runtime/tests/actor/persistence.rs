@@ -88,7 +88,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
             .await
             .unwrap();
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
-        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
         let replay = handle.drain_persistence_side_effects(2).await.unwrap();
         assert_eq!(replay.len(), 2);
         assert!(
@@ -121,7 +121,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
             },
         ));
         handle.submit_runtime_events(events).await.unwrap();
-        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
         let remaining = handle.drain_persistence_side_effects(2).await.unwrap();
         assert!(
             matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries[0].sequence == 2)
@@ -195,6 +195,7 @@ async fn async_actor_requeues_failed_transcript_before_later_work() {
                 entries: vec![first.clone()],
                 path: path.clone(),
                 error: "transient".to_string(),
+                retryable: true,
             },
         ));
         handle.submit_runtime_events(events).await.unwrap();
@@ -206,6 +207,161 @@ async fn async_actor_requeues_failed_transcript_before_later_work() {
     };
     let ((), _) = tokio::join!(client, actor.run());
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// A permanent conflict remains visible as an uncertain claim but cannot
+/// immediately replay the same incompatible append through the live worker.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_does_not_requeue_permanent_transcript_failure() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-transcript-permanent-failure-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "permanent-failure".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted".to_string(),
+    };
+    let path = store.transcript_path(&row.conversation_id).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                store,
+                path: path.clone(),
+                entries: vec![row.clone()],
+            }])
+            .await
+            .unwrap();
+        assert_eq!(
+            handle
+                .drain_persistence_side_effects(1)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let mut events = RuntimeEventBatch::new();
+        events.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptFailed {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: 1,
+                entries: vec![row],
+                path,
+                error: "conflicting durable row".to_string(),
+                retryable: false,
+            },
+        ));
+        handle.submit_runtime_events(events).await.unwrap();
+        assert!(
+            handle
+                .drain_persistence_side_effects(1)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Permanent transcript failures stay blocked when another claim is retried,
+/// regardless of which failure event arrives first in an actor batch.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_mixed_transcript_failures_do_not_replay_permanent_claim() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    for permanent_first in [true, false] {
+        let root = std::env::temp_dir().join(format!(
+            "mez-transcript-mixed-failure-{}-{permanent_first}",
+            std::process::id()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let first = TranscriptEntry {
+            conversation_id: "mixed-failure".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "original".to_string(),
+        };
+        let second = TranscriptEntry {
+            sequence: 2,
+            ..first.clone()
+        };
+        let path = store.transcript_path(&first.conversation_id).unwrap();
+        let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+            .build()
+            .unwrap();
+        let client = async {
+            handle
+                .queue_runtime_side_effects(
+                    [first.clone(), second.clone()]
+                        .into_iter()
+                        .map(|row| RuntimeSideEffect::PersistTranscriptEntries {
+                            store: store.clone(),
+                            path: path.clone(),
+                            entries: vec![row],
+                        })
+                        .collect(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                handle
+                    .drain_persistence_side_effects(2)
+                    .await
+                    .unwrap()
+                    .len(),
+                2
+            );
+            let failure = |row: TranscriptEntry, retryable| {
+                RuntimeEvent::Persistence(crate::runtime::PersistenceEvent::TranscriptFailed {
+                    conversation_id: row.conversation_id.clone(),
+                    first_sequence: row.sequence,
+                    entries: vec![row],
+                    path: path.clone(),
+                    error: "test failure".to_string(),
+                    retryable,
+                })
+            };
+            let mut events = RuntimeEventBatch::new();
+            if permanent_first {
+                events.push(failure(first.clone(), false));
+                events.push(failure(second.clone(), true));
+            } else {
+                events.push(failure(second.clone(), true));
+                events.push(failure(first.clone(), false));
+            }
+            handle.submit_runtime_events(events).await.unwrap();
+            let replay = handle.drain_persistence_side_effects(4).await.unwrap();
+            assert!(
+                matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries == &vec![second.clone()])
+            );
+            assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
+            let recovered = handle.drain_persistence_side_effects(4).await.unwrap();
+            assert!(
+                matches!(recovered.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries == &vec![second.clone()])
+            );
+            handle.shutdown().await.unwrap();
+        };
+        let ((), _) = tokio::join!(client, actor.run());
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 /// Verifies durable persistence work has independent admission from the

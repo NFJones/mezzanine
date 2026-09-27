@@ -18,6 +18,11 @@ pub(crate) struct RuntimeSideEffectRouter {
     persistence: VecDeque<RuntimeSideEffect>,
     /// Ordered transcript effects claimed by a worker but not yet acknowledged.
     claimed_transcripts: VecDeque<RuntimeSideEffect>,
+    /// Exact claims with proven permanent failures remain visible but cannot replay.
+    blocked_transcripts: Vec<(
+        std::path::PathBuf,
+        Vec<mez_agent::transcript::TranscriptEntry>,
+    )>,
     commands: VecDeque<RuntimeSideEffect>,
     provider: VecDeque<RuntimeSideEffect>,
     status: VecDeque<RuntimeSideEffect>,
@@ -457,8 +462,13 @@ impl RuntimeSideEffectRouter {
     /// persistence worker is known to have stopped. The store checks any
     /// committed prefix under its conversation lock before writing again.
     pub(super) fn recover_claimed_transcripts(&mut self) -> usize {
-        let count = self.claimed_transcripts.len();
+        let mut count = 0;
         for effect in self.claimed_transcripts.iter().rev() {
+            if matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries, path, .. }
+                if self.blocked_transcripts.iter().any(|(blocked_path, blocked)| blocked_path == path && blocked == entries))
+            {
+                continue;
+            }
             if !self.persistence.iter().any(|queued| {
                 matches!((queued, effect),
                     (RuntimeSideEffect::PersistTranscriptEntries { entries: left, path: left_path, .. },
@@ -466,9 +476,33 @@ impl RuntimeSideEffectRouter {
                      if left == right && left_path == right_path)
             }) {
                 self.persistence.push_front(effect.clone());
+                count += 1;
             }
         }
         count
+    }
+
+    /// Stops replaying an exact permanently rejected claim without hiding its logical rows.
+    pub(super) fn block_claimed_transcript(
+        &mut self,
+        entries: &[mez_agent::transcript::TranscriptEntry],
+        path: &std::path::Path,
+    ) {
+        if !self.owns_claimed_transcript(entries, path) {
+            return;
+        }
+        self.persistence.retain(|effect| {
+            !matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: queued, path: queued_path, .. }
+                if queued == entries && queued_path == path)
+        });
+        if !self
+            .blocked_transcripts
+            .iter()
+            .any(|(blocked_path, blocked)| blocked_path == path && blocked == entries)
+        {
+            self.blocked_transcripts
+                .push((path.to_path_buf(), entries.to_vec()));
+        }
     }
 
     /// Retires only the exact immutable transcript write acknowledged by a worker.
@@ -481,6 +515,8 @@ impl RuntimeSideEffectRouter {
             matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
         }) else { return false; };
         self.claimed_transcripts.remove(position);
+        self.blocked_transcripts
+            .retain(|(blocked_path, blocked)| blocked_path != path || blocked != entries);
         self.persistence.retain(|effect| {
             !matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: queued, path: queued_path, .. } if queued == entries && queued_path == path)
         });
