@@ -1544,6 +1544,29 @@ fn transcript_store_append_many_rejects_missing_prefix_before_new_row() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// An interrupted row without its terminating newline cannot be acknowledged
+/// as a complete durable record or extended by another append.
+#[test]
+fn transcript_store_append_many_rejects_unterminated_last_row() {
+    let root = temp_root("append-many-unterminated-last-row");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("conv1", 1, TranscriptRole::User);
+    store.append(&first).unwrap();
+    let path = store.transcript_path("conv1").unwrap();
+    let mut bytes = fs::read(&path).unwrap();
+    assert_eq!(bytes.pop(), Some(b'\n'));
+    fs::write(&path, &bytes).unwrap();
+    assert!(store.append_many(std::slice::from_ref(&first)).is_err());
+    assert!(
+        store
+            .append_many(&[entry("conv1", 2, TranscriptRole::Assistant)])
+            .is_err()
+    );
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A malformed first row cannot be decoded or extended by a new batch,
 /// regardless of its size; the archive bytes remain unchanged.
 #[test]

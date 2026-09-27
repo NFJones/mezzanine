@@ -1042,6 +1042,17 @@ impl AgentTranscriptStore {
                     })?;
             let path = self.existing_transcript_path_for(&conversation_id)?;
             let durable = if path.exists() {
+                let mut file = std_fs::File::open(&path)?;
+                if file.metadata()?.len() > 0 {
+                    file.seek(SeekFrom::End(-1))?;
+                    let mut terminator = [0];
+                    file.read_exact(&mut terminator)?;
+                    if terminator[0] != b'\n' {
+                        return Err(MezError::invalid_state(
+                            "transcript archive ends with an incomplete row",
+                        ));
+                    }
+                }
                 // The tail alone cannot prove that an older prefix survived.
                 // Rows have no write-time size limit, so the first-row reader
                 // must accept every row that append_one_locked can persist.
