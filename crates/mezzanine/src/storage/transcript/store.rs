@@ -1047,6 +1047,17 @@ impl AgentTranscriptStore {
             } else {
                 Vec::new()
             };
+            if durable
+                .iter()
+                .any(|row| row.conversation_id != conversation_id)
+                || durable
+                    .windows(2)
+                    .any(|pair| pair[0].sequence.checked_add(1) != Some(pair[1].sequence))
+            {
+                return Err(MezError::invalid_state(
+                    "transcript archive contains missing, reordered, or foreign entries",
+                ));
+            }
             let mut next_sequence = durable
                 .last()
                 .map_or(1, |row| row.sequence.saturating_add(1));

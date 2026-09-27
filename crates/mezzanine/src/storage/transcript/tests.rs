@@ -1497,6 +1497,22 @@ fn transcript_store_append_many_reconciles_partial_commit() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// An exact old row does not justify acknowledging a receipt if the durable
+/// archive contains a later row with a missing sequence in between.
+#[test]
+fn transcript_store_append_many_rejects_gapped_durable_history() {
+    let root = temp_root("append-many-gapped-history");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("conv1", 1, TranscriptRole::User);
+    store.append(&first).unwrap();
+    store
+        .append(&entry("conv1", 3, TranscriptRole::Assistant))
+        .unwrap();
+    assert!(store.append_many(std::slice::from_ref(&first)).is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// One worker receipt names one conversation; reject mixed batches before any
 /// archive can commit a prefix under a different conversation lock.
 #[test]
