@@ -150,9 +150,13 @@ worker reports failure. The persistence worker retries only the exact accepted
 batch: under the conversation lock it compares existing rows, rejects a
 conflicting sequence, syncs matching rows and rebuilds their summary and
 catalog before appending a verified missing suffix. Queued rows remain logical
-history, not evidence of durability for selective compaction. A running worker
-paces further retries after a failure; if the daemon exits, resume reads the
-durable archive rather than assuming every previously queued row committed.
+history, not evidence of durability for selective compaction. Before writing,
+the persistence worker saves an exact, private append receipt. On startup Mez
+reconciles retained receipts against the durable archive and rejects conflicting
+rows rather than replaying an ambiguous batch blindly. A running worker paces
+further retries after a failure. A batch still held only in the actor's queue
+has no durable receipt yet; a process exit before worker admission can lose it,
+and a checkpoint requiring those missing rows fails closed on restart.
 
 Resume completion returns at most 200 root-conversation candidates. The
 interactive resume picker keeps only a bounded, viewport-derived keyset page in

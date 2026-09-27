@@ -1509,6 +1509,41 @@ fn transcript_store_append_many_reports_written_bytes() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// An accepted receipt must survive a process restart before the worker
+/// appends anything, and replay must reject a competing batch at its sequence.
+#[test]
+fn transcript_store_receipt_recovers_unwritten_batch_after_restart() {
+    let root = temp_root("accepted-receipt-restart");
+    let store = AgentTranscriptStore::new(root.clone());
+    let entries = vec![
+        entry("conv1", 1, TranscriptRole::User),
+        entry("conv1", 2, TranscriptRole::Assistant),
+    ];
+    let staging =
+        root.join(".append-receipts/conv1-00000000000000000001-00000000000000000001.json.tmp");
+    fs::create_dir_all(staging.parent().unwrap()).unwrap();
+    fs::write(&staging, b"interrupted before rename").unwrap();
+    store.accept_append_receipt(&entries, 1).unwrap();
+    assert!(store.settle_append_receipt(&entries, 1).is_err());
+    store.append(&entries[0]).unwrap();
+    assert!(store.settle_append_receipt(&entries, 1).is_err());
+    let mut collision = entries.clone();
+    collision[0].content = "competing content".to_string();
+    assert!(store.accept_append_receipt(&collision, 2).is_err());
+    drop(store);
+
+    let restarted = AgentTranscriptStore::new(root.clone());
+    assert_eq!(
+        restarted.pending_append_receipts().unwrap(),
+        vec![entries.clone()]
+    );
+    restarted.recover_append_receipts().unwrap();
+    assert_eq!(restarted.inspect("conv1").unwrap(), entries);
+    assert!(restarted.pending_append_receipts().unwrap().is_empty());
+    restarted.recover_append_receipts().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A worker retry after a partial append must not duplicate its committed
 /// prefix or allow a conflicting sequence to replace that prefix.
 #[test]

@@ -154,6 +154,10 @@ impl RuntimeSessionService {
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
         };
+        // This restoration runs during session startup before the actor owns
+        // the service. Reconcile accepted worker receipts before validating
+        // counted history; missing or conflicting rows still fail closed.
+        store.recover_append_receipts()?;
         let session_id = self.session.id.as_str().to_string();
         let records = store.load_agent_session_metadata(&session_id)?;
         let restored_bindings = records

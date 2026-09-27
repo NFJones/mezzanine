@@ -32,6 +32,8 @@ mod fs;
 /// Both prompt histories share one SQLite database; the legacy TSV files are
 /// imported once and then left untouched.
 mod history;
+/// Durable, exact-batch acceptance receipts for uncertain transcript writes.
+mod receipts;
 /// Exposes the store module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

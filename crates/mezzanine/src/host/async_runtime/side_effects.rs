@@ -2080,7 +2080,16 @@ async fn persist_transcript_entries(
     store: AgentTranscriptStore,
     entries: Vec<TranscriptEntry>,
 ) -> Result<usize> {
-    match store.append_many_async(&entries).await {
+    // Journal before the worker touches the archive. A lost worker result can
+    // then be reconciled on startup without guessing whether a prefix landed.
+    let journal_store = store.clone();
+    let journal_entries = entries.clone();
+    tokio::task::spawn_blocking(move || journal_store.accept_append_receipt(&journal_entries, 1))
+        .await
+        .map_err(|error| {
+            MezError::invalid_state(format!("transcript receipt worker join failed: {error}"))
+        })??;
+    let result = match store.append_many_async(&entries).await {
         // A conflicting durable row or invalid batch cannot become valid by
         // replaying the same immutable work. Keep the original diagnostic.
         Err(error)
@@ -2096,7 +2105,18 @@ async fn persist_transcript_entries(
         // its conversation lock before any retry writes the missing suffix.
         Err(_) => store.append_many_async(&entries).await,
         result => result,
+    };
+    if result.is_ok() {
+        let journal_store = store.clone();
+        tokio::task::spawn_blocking(move || journal_store.settle_append_receipt(&entries, 1))
+            .await
+            .map_err(|error| {
+                MezError::invalid_state(format!(
+                    "transcript receipt settlement worker join failed: {error}"
+                ))
+            })??;
     }
+    result
 }
 
 /// Persists an immutable active-session metadata snapshot on the blocking pool.

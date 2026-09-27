@@ -1137,6 +1137,51 @@ fn runtime_agent_loop_checkpoint_restart_restores_parent_catalog() {
     );
 }
 
+/// A checkpointed count can recover from an accepted exact receipt when the
+/// process exits before its transcript worker writes the archive.
+#[test]
+fn runtime_restore_replays_accepted_transcript_receipt() {
+    let store = AgentTranscriptStore::new(temp_root("accepted-counted-transcript"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let entry = TranscriptEntry {
+        conversation_id: conversation,
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-accepted".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted before worker".to_string(),
+    };
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+    store
+        .accept_append_receipt(std::slice::from_ref(&entry), 1)
+        .unwrap();
+
+    let mut restarted = test_runtime_service();
+    restarted.session.id = service.session().id.clone();
+    restarted.set_agent_transcript_store(store.clone());
+    assert_eq!(
+        restarted
+            .restore_agent_sessions_from_transcript_store()
+            .unwrap(),
+        1
+    );
+    assert_eq!(store.inspect(&entry.conversation_id).unwrap(), vec![entry]);
+    assert!(store.pending_append_receipts().unwrap().is_empty());
+}
+
 /// A restored nonzero transcript count cannot turn a missing historical
 /// archive into an empty conversation, even when presentation is absent.
 #[test]

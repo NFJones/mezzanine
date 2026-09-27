@@ -9265,7 +9265,12 @@ The baseline command capabilities are:
   entries after an uncertain outcome MUST verify existing rows under the
   conversation append lock, reject conflicting sequences, repair durability and
   derived metadata before acknowledging a match, and append only a verified
-  missing suffix. Queued or worker-owned rows MUST NOT prove durability for a
+  missing suffix. A worker-owned append receipt MUST retain its exact validated
+  rows until the complete durable archive matches, and startup recovery MUST
+  reconcile retained receipts before validating checkpointed history. An
+  actor-queued append has no crash-recovery guarantee until its worker saves a
+  receipt; missing checkpointed history MUST fail closed. Queued or worker-owned
+  rows MUST NOT prove durability for a
   selective compaction epoch. When
   persistent memory is enabled and a config root is available, `/compact`
   SHOULD opportunistically prune expired persistent-memory records before it
