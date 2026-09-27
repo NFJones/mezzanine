@@ -1207,6 +1207,48 @@ fn runtime_restore_rejects_partial_counted_transcript() {
     assert!(restarted.agent_shell_store().get("%1").is_none());
 }
 
+/// A high tail sequence does not prove that every checkpointed row survived.
+#[test]
+fn runtime_restore_rejects_gapped_counted_transcript() {
+    let store = AgentTranscriptStore::new(temp_root("gapped-counted-transcript"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 2)
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+    for sequence in [1, 3] {
+        store
+            .append(&TranscriptEntry {
+                conversation_id: conversation.clone(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: TranscriptRole::User,
+                turn_id: format!("turn-{sequence}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("row {sequence}"),
+            })
+            .unwrap();
+    }
+    let mut restarted = test_runtime_service();
+    restarted.session.id = service.session().id.clone();
+    restarted.set_agent_transcript_store(store);
+    assert!(
+        restarted
+            .restore_agent_sessions_from_transcript_store()
+            .is_err()
+    );
+    assert!(restarted.agent_shell_store().get("%1").is_none());
+}
+
 /// Verifies that `/clear` follows the spec-level behavior of clearing the live
 /// viewport while preserving pane logs and starting a fresh visible
 /// conversation.

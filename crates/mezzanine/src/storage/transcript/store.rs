@@ -2233,6 +2233,33 @@ impl AgentTranscriptStore {
             .collect()
     }
 
+    /// Validates the complete durable chronology at restart without retaining
+    /// the archive in memory. Returns the number of contiguous committed rows.
+    pub(crate) fn validate_restored_transcript(&self, conversation_id: &str) -> Result<u64> {
+        let path = self.existing_transcript_path_for(conversation_id)?;
+        let mut reader = BufReader::new(std_fs::File::open(path)?);
+        let mut count = 0u64;
+        let mut line = String::new();
+        while reader.read_line(&mut line)? != 0 {
+            if !line.ends_with('\n') {
+                return Err(MezError::invalid_state(
+                    "restored transcript has an unterminated row",
+                ));
+            }
+            let entry = decode_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
+            count = count
+                .checked_add(1)
+                .ok_or_else(|| MezError::invalid_state("restored transcript sequence overflow"))?;
+            if entry.conversation_id != conversation_id || entry.sequence != count {
+                return Err(MezError::invalid_state(
+                    "restored transcript contains missing, reordered, or foreign rows",
+                ));
+            }
+            line.clear();
+        }
+        Ok(count)
+    }
+
     /// Reads a bounded durable projection and merges captured queued or worker-owned
     /// rows for replay. Only `committed` may justify a selective publication.
     /// An absent archive is an empty first write only if no committed prefix was
