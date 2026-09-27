@@ -298,8 +298,14 @@ impl RuntimePersistenceComponent {
                 }
                 _ => true,
             });
-        self.deferred_transcript_next_sequences
-            .remove(conversation_id);
+        if !self
+            .in_flight_transcript_entries
+            .keys()
+            .any(|(owner, _)| owner == conversation_id)
+        {
+            self.deferred_transcript_next_sequences
+                .remove(conversation_id);
+        }
     }
 
     /// Queues one archive lifecycle operation unless that conversation already has work pending.
@@ -690,6 +696,12 @@ mod tests {
         assert_eq!(
             component.deferred_transcript_next_sequence("high-water"),
             Some(3)
+        );
+        component.cancel_queued_transcript_entries_for_conversation("high-water");
+        assert_eq!(
+            component.deferred_transcript_next_sequence("high-water"),
+            Some(3),
+            "worker-owned and settled sequences survive cancellation of queued work"
         );
         assert!(component.settle_transcript_write("high-water", 1, std::slice::from_ref(&first)));
         assert_eq!(
