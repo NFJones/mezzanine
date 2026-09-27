@@ -1527,6 +1527,23 @@ fn transcript_store_append_many_rejects_missing_durable_prefix() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A missing leading row also invalidates a new append after the damaged tail.
+#[test]
+fn transcript_store_append_many_rejects_missing_prefix_before_new_row() {
+    let root = temp_root("append-many-missing-prefix-new-row");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let second = entry("conv1", 2, TranscriptRole::User);
+    store.append(&second).unwrap();
+    assert!(
+        store
+            .append_many(&[entry("conv1", 3, TranscriptRole::Assistant)])
+            .is_err()
+    );
+    assert_eq!(store.inspect("conv1").unwrap(), vec![second]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// One worker receipt names one conversation; reject mixed batches before any
 /// archive can commit a prefix under a different conversation lock.
 #[test]

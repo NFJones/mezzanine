@@ -1032,6 +1032,18 @@ impl AgentTranscriptStore {
                     })?;
             let path = self.existing_transcript_path_for(&conversation_id)?;
             let durable = if path.exists() {
+                // The tail alone cannot prove that an older prefix survived.
+                // Read just the first complete row even for a new append.
+                let mut first_line = String::new();
+                BufReader::new(std_fs::File::open(&path)?).read_line(&mut first_line)?;
+                if !first_line.is_empty()
+                    && decode_transcript_entry(first_line.trim_end_matches(['\r', '\n']))?.sequence
+                        != 1
+                {
+                    return Err(MezError::invalid_state(
+                        "transcript archive is missing its leading history",
+                    ));
+                }
                 let latest = self.inspect_latest_entries(&conversation_id, 1)?;
                 if latest
                     .last()
