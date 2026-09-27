@@ -144,10 +144,17 @@ impl RuntimeSessionService {
             crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id,
                 first_sequence,
-                entries: _,
+                entries,
                 path,
                 error,
             } => {
+                if !self.persistence.owns_transcript_write(
+                    &conversation_id,
+                    first_sequence,
+                    &entries,
+                ) {
+                    return Ok(crate::runtime::RuntimeTransition::default());
+                }
                 // A failed append may already have committed a prefix. Retain
                 // the worker-owned rows for checked logical replay; only a
                 // verified completion can retire their visibility.
@@ -960,6 +967,35 @@ mod transcript_settlement_tests {
         assert!(
             !service
                 .apply_persistence_transition(completed)
+                .unwrap()
+                .applied
+        );
+    }
+
+    /// A late worker failure cannot report fresh settlement once the exact
+    /// transcript batch has already completed.
+    #[test]
+    fn stale_transcript_failure_reports_ignored_settlement() {
+        let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+        let row = TranscriptEntry {
+            conversation_id: "stale-failure".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted text".to_string(),
+        };
+        assert!(
+            !service
+                .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptFailed {
+                    conversation_id: row.conversation_id.clone(),
+                    first_sequence: row.sequence,
+                    entries: vec![row],
+                    path: std::path::PathBuf::from("/tmp/unowned-transcript"),
+                    error: "late failure".to_string(),
+                },)
                 .unwrap()
                 .applied
         );
