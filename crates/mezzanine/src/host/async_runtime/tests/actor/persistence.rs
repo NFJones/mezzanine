@@ -44,7 +44,12 @@ async fn async_actor_transcript_admission_precedes_worker_receipt() {
             1
         );
         assert!(store.pending_append_receipts().unwrap().is_empty());
-        assert!(!store.transcript_path(&row.conversation_id).unwrap().exists());
+        assert!(
+            !store
+                .transcript_path(&row.conversation_id)
+                .unwrap()
+                .exists()
+        );
         handle.shutdown().await.unwrap();
     };
     let ((), _) = tokio::join!(client, actor.run());

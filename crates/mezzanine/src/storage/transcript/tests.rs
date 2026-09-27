@@ -1567,6 +1567,46 @@ fn transcript_store_rejects_corrupt_append_receipt_without_mutation() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// An accepted receipt survives interrupted file sync or derived metadata
+/// writes; startup repairs the exact row before retiring recovery evidence.
+#[test]
+fn transcript_store_receipt_recovers_late_append_faults_after_restart() {
+    for (name, inject) in [
+        (
+            "sync",
+            AgentTranscriptStore::fail_transcript_append_before_sync as fn(&AgentTranscriptStore),
+        ),
+        (
+            "summary",
+            AgentTranscriptStore::fail_transcript_append_before_summary,
+        ),
+        (
+            "catalog",
+            AgentTranscriptStore::fail_transcript_append_before_catalog,
+        ),
+    ] {
+        let root = temp_root(&format!("receipt-late-{name}"));
+        let store = AgentTranscriptStore::new(root.clone());
+        let row = entry("conv1", 1, TranscriptRole::User);
+        store
+            .accept_append_receipt(std::slice::from_ref(&row), 1)
+            .unwrap();
+        inject(&store);
+        assert!(store.append_many(std::slice::from_ref(&row)).is_err());
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![row.clone()]]
+        );
+        drop(store);
+
+        let restarted = AgentTranscriptStore::new(root.clone());
+        restarted.recover_append_receipts().unwrap();
+        assert_eq!(restarted.inspect("conv1").unwrap(), vec![row]);
+        assert!(restarted.pending_append_receipts().unwrap().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
 /// A worker retry after a partial append must not duplicate its committed
 /// prefix or allow a conflicting sequence to replace that prefix.
 #[test]
