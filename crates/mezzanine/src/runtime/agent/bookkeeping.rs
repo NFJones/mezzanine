@@ -80,12 +80,6 @@ impl RuntimeSessionService {
             if entries.is_empty() {
                 return Ok(0);
             }
-            if let Some(next_sequence) =
-                entries.last().map(|entry| entry.sequence.saturating_add(1))
-            {
-                self.persistence
-                    .set_deferred_transcript_next_sequence(conversation_id.clone(), next_sequence);
-            }
             self.persistence
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(&conversation_id)?,
@@ -216,10 +210,6 @@ impl RuntimeSessionService {
         guidance_entry.validate()?;
         entries.push(guidance_entry);
         if self.persistence.transcript_uses_adapter() {
-            self.persistence.set_deferred_transcript_next_sequence(
-                conversation_id.to_string(),
-                sequence.saturating_add(entries.len() as u64),
-            );
             self.persistence
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(conversation_id)?,
@@ -402,10 +392,6 @@ impl RuntimeSessionService {
             return Ok(0);
         }
         if self.persistence.transcript_uses_adapter() {
-            self.persistence.set_deferred_transcript_next_sequence(
-                turn.conversation_id.clone(),
-                first_sequence.saturating_add(entries.len() as u64),
-            );
             self.persistence
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(&turn.conversation_id)?,

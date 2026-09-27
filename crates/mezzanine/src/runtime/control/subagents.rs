@@ -1740,12 +1740,6 @@ impl RuntimeSessionService {
             })
             .collect::<Vec<_>>();
         if self.persistence.transcript_uses_adapter() {
-            self.persistence.set_deferred_transcript_next_sequence(
-                child_conversation_id.to_string(),
-                u64::try_from(entries.len())
-                    .unwrap_or(u64::MAX)
-                    .saturating_add(1),
-            );
             self.persistence
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(child_conversation_id)?,
