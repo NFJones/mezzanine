@@ -145,6 +145,15 @@ operations do not scan the complete session directory. If a catalog write
 fails after a payload write, preserve the files and rebuild the catalog rather
 than deleting the recoverable conversation.
 
+An interrupted transcript batch can leave a durable prefix even when its
+worker reports failure. The persistence worker retries only the exact accepted
+batch: under the conversation lock it compares existing rows, rejects a
+conflicting sequence, syncs matching rows and rebuilds their summary and
+catalog before appending a verified missing suffix. Queued rows remain logical
+history, not evidence of durability for selective compaction. A running worker
+paces further retries after a failure; if the daemon exits, resume reads the
+durable archive rather than assuming every previously queued row committed.
+
 Resume completion returns at most 200 root-conversation candidates. The
 interactive resume picker keeps only a bounded, viewport-derived keyset page in
 memory and fetches adjacent pages as focus crosses an edge. Directory scope,

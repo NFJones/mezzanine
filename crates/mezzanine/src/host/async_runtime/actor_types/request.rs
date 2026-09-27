@@ -1176,6 +1176,11 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Vec<RuntimeSideEffect>>>,
     },
+    /// Restores unacknowledged transcript work when the sole persistence worker starts.
+    RecoverClaimedTranscripts {
+        /// Number of exact append effects returned to the ordered worker queue.
+        reply: oneshot::Sender<usize>,
+    },
     /// Represents the Drain Hook Side Effects case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1384,6 +1389,7 @@ impl AsyncRuntimeRequest {
             | Self::DrainClientOutputFlushSideEffects { .. }
             | Self::DrainTimerSideEffects { .. }
             | Self::DrainPersistenceSideEffects { .. }
+            | Self::RecoverClaimedTranscripts { .. }
             | Self::DrainHookSideEffects { .. }
             | Self::DrainHostClipboardSideEffects { .. }
             | Self::DrainStatusPillSideEffects { .. }

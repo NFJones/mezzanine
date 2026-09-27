@@ -521,6 +521,8 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_next_transcript_append: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            fail_transcript_append_attempts: Arc::new(AtomicU8::new(0)),
+            #[cfg(test)]
             fail_transcript_append_after_first: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             fail_transcript_append_before_sync: Arc::new(AtomicBool::new(false)),
@@ -553,6 +555,7 @@ impl AgentTranscriptStore {
             fail_compaction_epoch_before_rename: Arc::new(AtomicBool::new(false)),
             fail_compaction_epoch_before_marker: Arc::new(AtomicBool::new(false)),
             fail_next_transcript_append: Arc::new(AtomicBool::new(false)),
+            fail_transcript_append_attempts: Arc::new(AtomicU8::new(0)),
             fail_transcript_append_after_first: Arc::new(AtomicBool::new(false)),
             fail_transcript_append_before_sync: Arc::new(AtomicBool::new(false)),
             fail_transcript_append_before_summary: Arc::new(AtomicBool::new(false)),
@@ -642,6 +645,13 @@ impl AgentTranscriptStore {
     pub fn fail_next_transcript_append(&self) {
         self.fail_next_transcript_append
             .store(true, Ordering::SeqCst);
+    }
+
+    /// Injects consecutive failures before transcript rows are written.
+    #[cfg(test)]
+    pub fn fail_transcript_append_attempts(&self, attempts: u8) {
+        self.fail_transcript_append_attempts
+            .store(attempts, Ordering::SeqCst);
     }
 
     /// Injects one failure after the first transcript batch row is durable.
@@ -959,6 +969,19 @@ impl AgentTranscriptStore {
     pub fn append_many(&self, entries: &[TranscriptEntry]) -> Result<usize> {
         #[cfg(test)]
         if self
+            .fail_transcript_append_attempts
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(MezError::from(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "injected consecutive transcript append failure",
+            )));
+        }
+        #[cfg(test)]
+        if self
             .fail_next_transcript_append
             .swap(false, Ordering::SeqCst)
         {
@@ -1054,7 +1077,8 @@ impl AgentTranscriptStore {
                 // acknowledging an identical uncertain batch.
                 std_fs::File::open(&path)?.sync_all()?;
                 set_private_file_permissions(&path)?;
-                if let Some(summary) = self.legacy_bounded_summary(&conversation_id)? {
+                if let Some(mut summary) = summarize_conversation(self.inspect(&conversation_id)?) {
+                    summary.project_root = saved_session_project_root(summary.directory.as_deref());
                     self.write_summary_sidecar(&summary)?;
                 }
                 self.upsert_catalog_from_files(&conversation_id, None)?;

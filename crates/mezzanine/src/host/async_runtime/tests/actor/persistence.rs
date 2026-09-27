@@ -4,6 +4,164 @@ use super::super::*;
 use crate::runtime::RuntimeRegistryUpdatePlan;
 use crate::security::project::{ProjectTrustStore, TrustDecision};
 
+/// A replacement worker must recover the exact claimed batch ahead of later
+/// queued writes, then retire it only after its matching completion.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-transcript-restart-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let path = store.transcript_path("restart-test").unwrap();
+    let row = TranscriptEntry {
+        conversation_id: "restart-test".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted".to_string(),
+    };
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                store: store.clone(),
+                path: path.clone(),
+                entries: vec![row.clone()],
+            }])
+            .await
+            .unwrap();
+        let claimed = handle.drain_persistence_side_effects(1).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        store.append_many(std::slice::from_ref(&row)).unwrap();
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                store: store.clone(),
+                path: path.clone(),
+                entries: vec![TranscriptEntry {
+                    sequence: 2,
+                    ..row.clone()
+                }],
+            }])
+            .await
+            .unwrap();
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
+        let replay = handle.drain_persistence_side_effects(2).await.unwrap();
+        assert_eq!(replay.len(), 2);
+        assert!(
+            matches!(&replay[0], RuntimeSideEffect::PersistTranscriptEntries { entries, .. } if entries == &vec![row.clone()])
+        );
+        assert!(
+            matches!(&replay[1], RuntimeSideEffect::PersistTranscriptEntries { entries, .. } if entries[0].sequence == 2)
+        );
+        store.append_many(std::slice::from_ref(&row)).unwrap();
+        let mut events = RuntimeEventBatch::new();
+        events.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptCompleted {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: 1,
+                entries: vec![row.clone()],
+                path,
+                bytes: 0,
+            },
+        ));
+        handle.submit_runtime_events(events).await.unwrap();
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
+        let remaining = handle.drain_persistence_side_effects(2).await.unwrap();
+        assert!(
+            matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries[0].sequence == 2)
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A live worker failure must requeue its exact claimed write before later
+/// reserved sequences rather than waiting for a worker restart.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_requeues_failed_transcript_before_later_work() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-transcript-failed-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let path = store.transcript_path("failure-test").unwrap();
+    let first = TranscriptEntry {
+        conversation_id: "failure-test".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted".to_string(),
+    };
+    let second = TranscriptEntry {
+        sequence: 2,
+        ..first.clone()
+    };
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                store: store.clone(),
+                path: path.clone(),
+                entries: vec![first.clone()],
+            }])
+            .await
+            .unwrap();
+        assert_eq!(
+            handle
+                .drain_persistence_side_effects(1)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                store: store.clone(),
+                path: path.clone(),
+                entries: vec![second.clone()],
+            }])
+            .await
+            .unwrap();
+        let mut events = RuntimeEventBatch::new();
+        events.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptFailed {
+                conversation_id: first.conversation_id.clone(),
+                first_sequence: 1,
+                entries: vec![first.clone()],
+                path: path.clone(),
+                error: "transient".to_string(),
+            },
+        ));
+        handle.submit_runtime_events(events).await.unwrap();
+        let replay = handle.drain_persistence_side_effects(2).await.unwrap();
+        assert!(matches!(replay.as_slice(),
+            [RuntimeSideEffect::PersistTranscriptEntries { entries: old, .. }, RuntimeSideEffect::PersistTranscriptEntries { entries: new, .. }]
+            if old == &vec![first] && new == &vec![second]));
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies durable persistence work has independent admission from the
 /// bounded transient side-effect queue. A persistence burst must remain
 /// drainable rather than causing its already-applied producer to fail.

@@ -3,6 +3,63 @@
 use super::super::*;
 use crate::storage::transcript::AgentPresentationEntry;
 
+/// A live persistence worker retries an exact failed claim on its next poll,
+/// before a later reserved sequence, after two local attempts have failed.
+#[tokio::test(flavor = "current_thread")]
+async fn async_persistence_worker_recovers_after_two_transcript_failures() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-transcript-worker-recovery-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "worker-recovery".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted".to_string(),
+    };
+    let path = store.transcript_path(&row.conversation_id).unwrap();
+    store.fail_transcript_append_attempts(2);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                store: store.clone(),
+                path,
+                entries: vec![row.clone()],
+            }])
+            .await
+            .unwrap();
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 3,
+                drain_limit: 1,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 3,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.completed, 1);
+        assert_eq!(store.inspect(&row.conversation_id).unwrap(), vec![row]);
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that persistence side effects are owned by a concrete Tokio worker
 /// instead of the actor. The worker writes the bytes and reports completion back
 /// through typed event ingress so later audit, transcript, snapshot, and config

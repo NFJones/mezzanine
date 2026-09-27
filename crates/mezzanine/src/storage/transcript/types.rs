@@ -355,6 +355,9 @@ pub struct AgentTranscriptStore {
     /// One-shot failure before any transcript row is appended.
     #[cfg(test)]
     pub(super) fail_next_transcript_append: Arc<AtomicBool>,
+    /// Number of consecutive precommit batch faults for worker recovery tests.
+    #[cfg(test)]
+    pub(super) fail_transcript_append_attempts: Arc<AtomicU8>,
     /// One-shot failure after the first row of a transcript batch commits.
     #[cfg(test)]
     pub(super) fail_transcript_append_after_first: Arc<AtomicBool>,

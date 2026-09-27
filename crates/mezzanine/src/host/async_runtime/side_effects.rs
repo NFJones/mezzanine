@@ -922,6 +922,11 @@ where
     };
     let mut audit_retention_schedule = BTreeMap::<PathBuf, AuditRetentionSchedule>::new();
 
+    // Only the sole replacement worker requests replay. The actor restores
+    // claimed transcript writes ahead of later queued persistence work; each
+    // append reconciles its durable prefix off-actor before writing a suffix.
+    handle.recover_claimed_transcripts().await?;
+
     while report.polls < config.max_polls {
         let state = *lifecycle_watcher.borrow_and_update();
         report.terminal_state = state;
@@ -1392,10 +1397,19 @@ where
             crate::host::async_runtime::AsyncRuntimeLatencyPhase::PersistenceBatch,
             u64::try_from(persistence_batch_started.elapsed().as_millis()).unwrap_or(u64::MAX),
         );
+        let transcript_failed = batch.events.iter().any(|event| {
+            matches!(
+                event,
+                RuntimeEvent::Persistence(PersistenceEvent::TranscriptFailed { .. })
+            )
+        });
         if !batch.events.is_empty() {
             let ingress = handle.submit_runtime_events(batch).await?;
             report.submitted_events = report.submitted_events.saturating_add(ingress.accepted);
             report.applied_events = report.applied_events.saturating_add(ingress.applied);
+        }
+        if transcript_failed {
+            tokio::time::sleep(config.idle_interval).await;
         }
     }
 

@@ -9260,7 +9260,12 @@ The baseline command capabilities are:
   before any row is written MAY be retried once as a local persistence operation
   against the identical accepted entries; this MUST NOT repeat provider generation
   or action dispatch. A partial or ambiguous append failure MUST NOT be treated
-  as precommit evidence or blindly retried. When
+  as precommit evidence or blindly retried. A retry of the identical accepted
+  entries after an uncertain outcome MUST verify existing rows under the
+  conversation append lock, reject conflicting sequences, repair durability and
+  derived metadata before acknowledging a match, and append only a verified
+  missing suffix. Queued or worker-owned rows MUST NOT prove durability for a
+  selective compaction epoch. When
   persistent memory is enabled and a config root is available, `/compact`
   SHOULD opportunistically prune expired persistent-memory records before it
   builds compaction context or queues model-backed work.

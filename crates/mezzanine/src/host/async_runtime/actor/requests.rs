@@ -1881,6 +1881,10 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(self.drain_persistence_side_effects(limit));
                 false
             }
+            AsyncRuntimeRequest::RecoverClaimedTranscripts { reply } => {
+                let _ = reply.send(self.side_effect_routes.recover_claimed_transcripts());
+                false
+            }
             AsyncRuntimeRequest::DrainHookSideEffects { limit, reply } => {
                 let _ = reply.send(self.drain_hook_side_effects(limit));
                 false

@@ -16,6 +16,8 @@ pub(crate) struct RuntimeSideEffectRouter {
     flushes: HashMap<crate::host::async_runtime::ClientId, RuntimeSideEffect>,
     pane_processes: BTreeMap<PaneProcessInstance, VecDeque<RuntimeSideEffect>>,
     persistence: VecDeque<RuntimeSideEffect>,
+    /// Ordered transcript effects claimed by a worker but not yet acknowledged.
+    claimed_transcripts: VecDeque<RuntimeSideEffect>,
     commands: VecDeque<RuntimeSideEffect>,
     provider: VecDeque<RuntimeSideEffect>,
     status: VecDeque<RuntimeSideEffect>,
@@ -432,9 +434,68 @@ impl RuntimeSideEffectRouter {
     /// Drains bounded persistence work in enqueue order without inspecting
     /// clipboard, hooks, or compatibility-queue effects.
     pub(super) fn drain_persistence(&mut self, limit: usize) -> Vec<RuntimeSideEffect> {
-        self.persistence
+        let effects = self
+            .persistence
             .drain(..limit.min(self.persistence.len()))
-            .collect()
+            .collect::<Vec<_>>();
+        for effect in &effects {
+            if matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { .. })
+                && !self.claimed_transcripts.iter().any(|claimed| {
+                    matches!((claimed, effect),
+                        (RuntimeSideEffect::PersistTranscriptEntries { entries: left, path: left_path, .. },
+                         RuntimeSideEffect::PersistTranscriptEntries { entries: right, path: right_path, .. })
+                         if left == right && left_path == right_path)
+                })
+            {
+                self.claimed_transcripts.push_back(effect.clone());
+            }
+        }
+        effects
+    }
+
+    /// Restores claimed transcript writes ahead of later queued work after a
+    /// persistence worker is known to have stopped. The store checks any
+    /// committed prefix under its conversation lock before writing again.
+    pub(super) fn recover_claimed_transcripts(&mut self) -> usize {
+        let count = self.claimed_transcripts.len();
+        for effect in self.claimed_transcripts.iter().rev() {
+            if !self.persistence.iter().any(|queued| {
+                matches!((queued, effect),
+                    (RuntimeSideEffect::PersistTranscriptEntries { entries: left, path: left_path, .. },
+                     RuntimeSideEffect::PersistTranscriptEntries { entries: right, path: right_path, .. })
+                     if left == right && left_path == right_path)
+            }) {
+                self.persistence.push_front(effect.clone());
+            }
+        }
+        count
+    }
+
+    /// Retires only the exact immutable transcript write acknowledged by a worker.
+    pub(super) fn settle_claimed_transcript(
+        &mut self,
+        entries: &[mez_agent::transcript::TranscriptEntry],
+        path: &std::path::Path,
+    ) -> bool {
+        let Some(position) = self.claimed_transcripts.iter().position(|effect| {
+            matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
+        }) else { return false; };
+        self.claimed_transcripts.remove(position);
+        self.persistence.retain(|effect| {
+            !matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: queued, path: queued_path, .. } if queued == entries && queued_path == path)
+        });
+        true
+    }
+
+    /// Reports whether a worker event still names an exact claimed append.
+    pub(super) fn owns_claimed_transcript(
+        &self,
+        entries: &[mez_agent::transcript::TranscriptEntry],
+        path: &std::path::Path,
+    ) -> bool {
+        self.claimed_transcripts.iter().any(|effect| {
+            matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
+        })
     }
 
     /// Retires exact persistence work that no worker has claimed yet.

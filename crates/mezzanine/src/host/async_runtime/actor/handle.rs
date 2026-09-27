@@ -1394,6 +1394,12 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Restores transcript writes claimed by a previous stopped persistence worker.
+    pub(crate) async fn recover_claimed_transcripts(&self) -> Result<usize> {
+        self.request(|reply| AsyncRuntimeRequest::RecoverClaimedTranscripts { reply })
+            .await
+    }
+
     /// Runs the drain hook side effects operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

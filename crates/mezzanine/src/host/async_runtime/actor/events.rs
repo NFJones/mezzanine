@@ -1380,6 +1380,22 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         persistence_event: PersistenceEvent,
     ) -> Result<RuntimeTransition> {
+        match &persistence_event {
+            PersistenceEvent::TranscriptCompleted { entries, path, .. } => {
+                self.side_effect_routes
+                    .settle_claimed_transcript(entries, path);
+            }
+            PersistenceEvent::TranscriptFailed { entries, path, .. }
+                if self
+                    .side_effect_routes
+                    .owns_claimed_transcript(entries, path) =>
+            {
+                // Reconcile through the sole worker on its next poll, before
+                // later reserved sequences. Stale failures cannot enqueue work.
+                self.side_effect_routes.recover_claimed_transcripts();
+            }
+            _ => {}
+        }
         let transition = self
             .service
             .apply_persistence_transition(persistence_event)?;

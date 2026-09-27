@@ -1572,6 +1572,33 @@ fn transcript_store_append_many_reconciles_before_later_append() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Retrying an old receipt after a long non-user suffix must retain the most
+/// recent user prompt and the exact durable row count in saved-session metadata.
+#[test]
+fn transcript_store_replayed_receipt_preserves_middle_prompt_summary() {
+    let root = temp_root("append-many-middle-prompt");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("conv1", 1, TranscriptRole::User);
+    store.append_many(std::slice::from_ref(&first)).unwrap();
+    let mut middle = entry("conv1", 2, TranscriptRole::User);
+    middle.content = "latest middle prompt".to_string();
+    store.append(&middle).unwrap();
+    for sequence in 3..=70 {
+        store
+            .append(&entry("conv1", sequence, TranscriptRole::Assistant))
+            .unwrap();
+    }
+    let before = store.summary("conv1").unwrap().unwrap();
+    assert_eq!(
+        before.latest_user_prompt.as_deref(),
+        Some("latest middle prompt")
+    );
+    assert_eq!(store.append_many(std::slice::from_ref(&first)).unwrap(), 0);
+    assert_eq!(store.summary("conv1").unwrap().unwrap(), before);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies deleting one durable entry rewrites the remaining transcript in
 /// order, keeps append sequencing contiguous, and refreshes summary metadata.
 #[test]
