@@ -1769,8 +1769,9 @@ mod tests {
         let error =
             host_resolved_path_scopes(&root, &["missing".to_string()], &[], &[]).unwrap_err();
 
+        assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
         assert_eq!(
-            error.to_string(),
+            error.message(),
             "sandbox read scope does not exist: missing"
         );
         let _ = std::fs::remove_dir_all(root);
