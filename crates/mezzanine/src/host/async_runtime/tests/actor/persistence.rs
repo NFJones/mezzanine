@@ -4,6 +4,53 @@ use super::super::*;
 use crate::runtime::RuntimeRegistryUpdatePlan;
 use crate::security::project::{ProjectTrustStore, TrustDecision};
 
+/// Actor admission currently acknowledges a batch before the persistence
+/// worker writes its receipt. Keep this crash window visible until a durable
+/// pre-admission handoff covers all actor-produced transcript effects.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_transcript_admission_precedes_worker_receipt() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-actor-preworker-receipt-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "preworker-test".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted before worker".to_string(),
+    };
+    let path = store.transcript_path(&row.conversation_id).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+    let client = async {
+        assert_eq!(
+            handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                    store: store.clone(),
+                    path,
+                    entries: vec![row.clone()],
+                }])
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(store.pending_append_receipts().unwrap().is_empty());
+        assert!(!store.transcript_path(&row.conversation_id).unwrap().exists());
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// A replacement worker must recover the exact claimed batch ahead of later
 /// queued writes, then retire it only after its matching completion.
 #[tokio::test(flavor = "current_thread")]
