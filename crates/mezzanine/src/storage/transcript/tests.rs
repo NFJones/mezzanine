@@ -1476,6 +1476,102 @@ fn transcript_store_append_many_reports_written_bytes() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A worker retry after a partial append must not duplicate its committed
+/// prefix or allow a conflicting sequence to replace that prefix.
+#[test]
+fn transcript_store_append_many_reconciles_partial_commit() {
+    let root = temp_root("append-many-partial");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let entries = vec![
+        entry("conv1", 1, TranscriptRole::User),
+        entry("conv1", 2, TranscriptRole::Assistant),
+    ];
+    store.append(&entries[0]).unwrap();
+    let mut conflict = entries.clone();
+    conflict[0].content = "different first row".to_string();
+    assert!(store.append_many(&conflict).is_err());
+    assert_eq!(store.inspect("conv1").unwrap(), vec![entries[0].clone()]);
+    store.append_many(&entries).unwrap();
+    assert_eq!(store.inspect("conv1").unwrap(), entries);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A failure after the first durable row has an uncertain outcome; a subsequent
+/// identical batch must reconcile the prefix without duplicating its sequence.
+#[test]
+fn transcript_store_append_many_recovers_after_partial_write() {
+    let root = temp_root("append-many-fault-after-first");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let entries = vec![
+        entry("conv1", 1, TranscriptRole::User),
+        entry("conv1", 2, TranscriptRole::Assistant),
+    ];
+    store.fail_transcript_append_after_first();
+    assert!(store.append_many(&entries).is_err());
+    assert_eq!(store.inspect("conv1").unwrap(), vec![entries[0].clone()]);
+    store.append_many(&entries).unwrap();
+    assert_eq!(store.inspect("conv1").unwrap(), entries);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A readable row written before an interrupted sync cannot be acknowledged
+/// until its file and derived summary have been repaired under the same lock.
+#[test]
+fn transcript_store_append_many_recovers_before_sync() {
+    let root = temp_root("append-many-fault-before-sync");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("conv1", 1, TranscriptRole::User);
+    store.fail_transcript_append_before_sync();
+    assert!(store.append_many(std::slice::from_ref(&row)).is_err());
+    assert_eq!(store.inspect("conv1").unwrap(), vec![row.clone()]);
+    assert_eq!(store.append_many(std::slice::from_ref(&row)).unwrap(), 0);
+    assert_eq!(store.summary("conv1").unwrap().unwrap().entries, 1);
+    assert_eq!(store.inspect("conv1").unwrap(), vec![row]);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A row synced before summary publication is not acknowledged until retry
+/// rebuilds its summary and catalog from the durable transcript contents.
+#[test]
+fn transcript_store_append_many_recovers_before_summary() {
+    let root = temp_root("append-many-fault-before-summary");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("conv1", 1, TranscriptRole::User);
+    store.fail_transcript_append_before_summary();
+    assert!(store.append_many(std::slice::from_ref(&row)).is_err());
+    assert_eq!(store.inspect("conv1").unwrap(), vec![row.clone()]);
+    assert_eq!(store.append_many(std::slice::from_ref(&row)).unwrap(), 0);
+    assert_eq!(store.summary("conv1").unwrap().unwrap().entries, 1);
+    assert_eq!(store.inspect("conv1").unwrap(), vec![row]);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A delayed acknowledgement for an older batch must not confuse newer rows
+/// with the missing prefix or duplicate an already committed sequence.
+#[test]
+fn transcript_store_append_many_reconciles_before_later_append() {
+    let root = temp_root("append-many-late-retry");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let entries = vec![
+        entry("conv1", 1, TranscriptRole::User),
+        entry("conv1", 2, TranscriptRole::Assistant),
+    ];
+    store.append_many(&entries).unwrap();
+    let later = entry("conv1", 3, TranscriptRole::Tool);
+    store.append(&later).unwrap();
+    assert_eq!(store.append_many(&entries).unwrap(), 0);
+    assert_eq!(
+        store.inspect("conv1").unwrap(),
+        [entries, vec![later]].concat()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies deleting one durable entry rewrites the remaining transcript in
 /// order, keeps append sequencing contiguous, and refreshes summary metadata.
 #[test]

@@ -458,10 +458,24 @@ impl RuntimePersistenceComponent {
         effects
     }
 
-    /// Settles only the matching worker-owned append, never another conversation's rows.
-    pub(crate) fn settle_transcript_write(&mut self, conversation_id: &str, first_sequence: u64) {
-        self.in_flight_transcript_entries
-            .remove(&(conversation_id.to_string(), first_sequence));
+    /// Settles only a matching worker-owned immutable append, not a replacement
+    /// that happens to reuse its conversation and starting sequence.
+    pub(crate) fn settle_transcript_write(
+        &mut self,
+        conversation_id: &str,
+        first_sequence: u64,
+        entries: &[mez_agent::transcript::TranscriptEntry],
+    ) -> bool {
+        let key = (conversation_id.to_string(), first_sequence);
+        if self
+            .in_flight_transcript_entries
+            .get(&key)
+            .is_none_or(|pending| pending != entries)
+        {
+            return false;
+        }
+        self.in_flight_transcript_entries.remove(&key);
+        true
     }
 
     /// Returns the newest queued metadata checkpoint record count for tests and
@@ -565,14 +579,25 @@ mod tests {
         assert_eq!(component.take_transcript_effects().len(), 1);
         assert_eq!(
             component.pending_transcript_entries("drained-write"),
-            vec![row]
+            vec![row.clone()]
         );
-        component.settle_transcript_write("other-conversation", 1);
+        component.settle_transcript_write("other-conversation", 1, std::slice::from_ref(&row));
         assert_eq!(
             component.pending_transcript_entries("drained-write").len(),
             1
         );
-        component.settle_transcript_write("drained-write", 1);
+        let mut stale = row.clone();
+        stale.content = "stale replacement".to_string();
+        assert!(!component.settle_transcript_write(
+            "drained-write",
+            1,
+            std::slice::from_ref(&stale)
+        ));
+        assert_eq!(
+            component.pending_transcript_entries("drained-write"),
+            vec![row.clone()]
+        );
+        component.settle_transcript_write("drained-write", 1, std::slice::from_ref(&row));
         assert!(
             component
                 .pending_transcript_entries("drained-write")

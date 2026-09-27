@@ -579,17 +579,21 @@ pub enum PersistenceEvent {
         conversation_id: String,
         /// First sequence of the settled append.
         first_sequence: u64,
+        /// Exact immutable rows handed to the worker, for settlement fencing.
+        entries: Vec<TranscriptEntry>,
         /// Destination path written by the worker.
         path: PathBuf,
         /// Number of durable bytes written.
         bytes: usize,
     },
-    /// One ordered transcript append failed; its rows remain non-durable.
+    /// One ordered transcript append failed with an uncertain durable prefix.
     TranscriptFailed {
         /// Conversation owning the immutable append.
         conversation_id: String,
         /// First sequence of the failed append.
         first_sequence: u64,
+        /// Exact immutable rows handed to the worker, for diagnostic identity.
+        entries: Vec<TranscriptEntry>,
         /// Destination path attempted by the worker.
         path: PathBuf,
         /// Human-readable write failure.

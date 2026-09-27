@@ -521,6 +521,12 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_next_transcript_append: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            fail_transcript_append_after_first: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_transcript_append_before_sync: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_transcript_append_before_summary: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
             fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
@@ -547,6 +553,9 @@ impl AgentTranscriptStore {
             fail_compaction_epoch_before_rename: Arc::new(AtomicBool::new(false)),
             fail_compaction_epoch_before_marker: Arc::new(AtomicBool::new(false)),
             fail_next_transcript_append: Arc::new(AtomicBool::new(false)),
+            fail_transcript_append_after_first: Arc::new(AtomicBool::new(false)),
+            fail_transcript_append_before_sync: Arc::new(AtomicBool::new(false)),
+            fail_transcript_append_before_summary: Arc::new(AtomicBool::new(false)),
             fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
             fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
         }
@@ -632,6 +641,27 @@ impl AgentTranscriptStore {
     #[cfg(test)]
     pub fn fail_next_transcript_append(&self) {
         self.fail_next_transcript_append
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Injects one failure after the first transcript batch row is durable.
+    #[cfg(test)]
+    pub fn fail_transcript_append_after_first(&self) {
+        self.fail_transcript_append_after_first
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Injects one failure after writing a row but before syncing it.
+    #[cfg(test)]
+    pub fn fail_transcript_append_before_sync(&self) {
+        self.fail_transcript_append_before_sync
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Injects one failure after syncing a row but before its summary update.
+    #[cfg(test)]
+    pub fn fail_transcript_append_before_summary(&self) {
+        self.fail_transcript_append_before_summary
             .store(true, Ordering::SeqCst);
     }
 
@@ -946,10 +976,20 @@ impl AgentTranscriptStore {
                 .or_default()
                 .push(entry);
         }
+        for group in grouped.values() {
+            if group
+                .windows(2)
+                .any(|pair| pair[0].sequence.checked_add(1) != Some(pair[1].sequence))
+            {
+                return Err(MezError::invalid_args(
+                    "transcript append batch must have contiguous ordered sequences",
+                ));
+            }
+        }
         let mut bytes = 0usize;
         for (conversation_id, entries) in grouped {
-            // Lock acquisition precedes every append in this conversation. A
-            // one-conversation caller may safely retry the identical batch.
+            // Reconcile under the same lock as append: a failed batch may have
+            // written its prefix before reporting an uncertain outcome.
             let _conversation_lock =
                 self.acquire_conversation_lock(&conversation_id)
                     .map_err(|error| {
@@ -959,8 +999,65 @@ impl AgentTranscriptStore {
                             error
                         }
                     })?;
+            let path = self.existing_transcript_path_for(&conversation_id)?;
+            let durable = if path.exists() {
+                let latest = self.inspect_latest_entries(&conversation_id, 1)?;
+                if latest
+                    .last()
+                    .is_some_and(|last| entries[0].sequence <= last.sequence)
+                {
+                    // Older receipts can precede arbitrarily many later rows.
+                    // Scan off-actor rather than allocating from an untrusted
+                    // sequence gap or silently dropping the older prefix.
+                    self.inspect(&conversation_id)?
+                } else {
+                    latest
+                }
+            } else {
+                Vec::new()
+            };
+            let mut next_sequence = durable
+                .last()
+                .map_or(1, |row| row.sequence.saturating_add(1));
+            let mut matched = false;
             for entry in entries {
+                if let Some(existing) = durable.iter().find(|row| row.sequence == entry.sequence) {
+                    if existing != entry {
+                        return Err(MezError::conflict(
+                            "transcript append sequence conflicts with durable contents",
+                        ));
+                    }
+                    matched = true;
+                    continue;
+                }
+                if entry.sequence != next_sequence {
+                    return Err(MezError::conflict(
+                        "transcript append sequence is not the next durable entry",
+                    ));
+                }
                 bytes = bytes.saturating_add(self.append_one_locked(entry)?);
+                next_sequence = next_sequence.saturating_add(1);
+                #[cfg(test)]
+                if self
+                    .fail_transcript_append_after_first
+                    .swap(false, Ordering::SeqCst)
+                {
+                    return Err(MezError::from(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "injected transcript append failure after first commit",
+                    )));
+                }
+            }
+            if matched {
+                // A visible record need not have survived sync or its summary
+                // and catalog writes. Repair these under the append lock before
+                // acknowledging an identical uncertain batch.
+                std_fs::File::open(&path)?.sync_all()?;
+                set_private_file_permissions(&path)?;
+                if let Some(summary) = self.legacy_bounded_summary(&conversation_id)? {
+                    self.write_summary_sidecar(&summary)?;
+                }
+                self.upsert_catalog_from_files(&conversation_id, None)?;
             }
         }
         Ok(bytes)
@@ -1902,8 +1999,28 @@ impl AgentTranscriptStore {
         let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
         file.write_all(encoded.as_bytes())?;
         file.write_all(b"\n")?;
+        #[cfg(test)]
+        if self
+            .fail_transcript_append_before_sync
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(MezError::from(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "injected transcript append failure before sync",
+            )));
+        }
         file.sync_all()?;
         set_private_file_permissions(&path)?;
+        #[cfg(test)]
+        if self
+            .fail_transcript_append_before_summary
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(MezError::from(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "injected transcript append failure before summary",
+            )));
+        }
         self.update_summary_after_append(entry)?;
         self.upsert_catalog_from_files(&entry.conversation_id, None)?;
         Ok(encoded.len().saturating_add(1))

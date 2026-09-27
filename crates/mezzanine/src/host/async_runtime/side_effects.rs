@@ -1069,7 +1069,7 @@ where
                         .first()
                         .map_or(String::new(), |entry| entry.conversation_id.clone());
                     let first_sequence = entries.first().map_or(0, |entry| entry.sequence);
-                    match persist_transcript_entries(store, entries).await {
+                    match persist_transcript_entries(store, entries.clone()).await {
                         Ok(bytes) => {
                             report.completed = report.completed.saturating_add(1);
                             report.bytes_written = report.bytes_written.saturating_add(bytes);
@@ -1077,6 +1077,7 @@ where
                                 PersistenceEvent::TranscriptCompleted {
                                     conversation_id,
                                     first_sequence,
+                                    entries,
                                     path,
                                     bytes,
                                 },
@@ -1088,6 +1089,7 @@ where
                                 PersistenceEvent::TranscriptFailed {
                                     conversation_id,
                                     first_sequence,
+                                    entries,
                                     path,
                                     error: error.message().to_string(),
                                 },
@@ -2059,9 +2061,10 @@ async fn persist_transcript_entries(
     entries: Vec<TranscriptEntry>,
 ) -> Result<usize> {
     match store.append_many_async(&entries).await {
-        Err(error) if error.local_transcript_precommit_retryable() => {
-            store.append_many_async(&entries).await
-        }
+        // The first attempt can have committed a prefix (including a row whose
+        // metadata update failed). The store reconciles the exact batch under
+        // its conversation lock before any retry writes the missing suffix.
+        Err(_) => store.append_many_async(&entries).await,
         result => result,
     }
 }
@@ -2420,6 +2423,39 @@ mod transcript_settlement_tests {
                 > 0
         );
         assert_eq!(store.inspect("precommit-test").unwrap(), vec![entry]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A worker failure after a durable prefix reconciles the same exact batch
+    /// before reporting completion, rather than leaving a gap for later work.
+    #[tokio::test]
+    async fn queued_transcript_write_recovers_partial_commit() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-async-transcript-partial-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let entries = (1..=2)
+            .map(|sequence| TranscriptEntry {
+                conversation_id: "partial-test".to_string(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: TranscriptRole::Assistant,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("accepted response {sequence}"),
+            })
+            .collect::<Vec<_>>();
+        store.fail_transcript_append_after_first();
+        assert!(
+            persist_transcript_entries(store.clone(), entries.clone())
+                .await
+                .unwrap()
+                > 0
+        );
+        assert_eq!(store.inspect("partial-test").unwrap(), entries);
         let _ = std::fs::remove_dir_all(root);
     }
 }

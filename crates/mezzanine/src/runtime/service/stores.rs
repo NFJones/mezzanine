@@ -111,11 +111,15 @@ impl RuntimeSessionService {
             crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id,
                 first_sequence,
+                entries,
                 path,
                 bytes,
             } => {
-                self.persistence
-                    .settle_transcript_write(&conversation_id, first_sequence);
+                self.persistence.settle_transcript_write(
+                    &conversation_id,
+                    first_sequence,
+                    &entries,
+                );
                 serde_json::json!({
                     "worker": "async-persistence",
                     "target": "transcript",
@@ -129,15 +133,18 @@ impl RuntimeSessionService {
             crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id,
                 first_sequence,
+                entries: _,
                 path,
                 error,
             } => {
-                self.persistence
-                    .settle_transcript_write(&conversation_id, first_sequence);
+                // A failed append may already have committed a prefix. Retain
+                // the worker-owned rows for checked logical replay; only a
+                // verified completion can retire their visibility.
                 serde_json::json!({
                     "worker": "async-persistence",
                     "target": "transcript",
                     "conversation_id": conversation_id,
+                    "first_sequence": first_sequence,
                     "path": path.to_string_lossy(),
                     "state": "failed",
                     "error": error,
@@ -780,5 +787,73 @@ fn saved_session_retention_schedule_effect(
                 .saturating_add(delay_ms),
         ),
         delay_ms,
+    }
+}
+
+#[cfg(test)]
+mod transcript_settlement_tests {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    /// An uncertain worker failure keeps the exact batch available for checked
+    /// replay; only its matching successful settlement removes those rows.
+    #[test]
+    fn failed_transcript_event_preserves_uncertain_rows() {
+        let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+        let root = std::env::temp_dir().join(format!(
+            "mez-uncertain-transcript-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let path = store.transcript_path("uncertain-write").unwrap();
+        let row = TranscriptEntry {
+            conversation_id: "uncertain-write".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted text".to_string(),
+        };
+        service.persistence.queue_transcript(
+            crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
+                store,
+                path: path.clone(),
+                entries: vec![row.clone()],
+            },
+        );
+        service.persistence.take_transcript_effects();
+        service
+            .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptFailed {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: 1,
+                entries: vec![row.clone()],
+                path: path.clone(),
+                error: "uncertain write".to_string(),
+            })
+            .unwrap();
+        assert_eq!(
+            service
+                .persistence
+                .pending_transcript_entries("uncertain-write"),
+            vec![row.clone()]
+        );
+        service
+            .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptCompleted {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: 1,
+                entries: vec![row.clone()],
+                path,
+                bytes: 1,
+            })
+            .unwrap();
+        assert!(
+            service
+                .persistence
+                .pending_transcript_entries("uncertain-write")
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

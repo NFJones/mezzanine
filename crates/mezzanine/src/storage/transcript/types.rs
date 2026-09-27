@@ -355,6 +355,15 @@ pub struct AgentTranscriptStore {
     /// One-shot failure before any transcript row is appended.
     #[cfg(test)]
     pub(super) fail_next_transcript_append: Arc<AtomicBool>,
+    /// One-shot failure after the first row of a transcript batch commits.
+    #[cfg(test)]
+    pub(super) fail_transcript_append_after_first: Arc<AtomicBool>,
+    /// One-shot failure after a row is written but before its file sync.
+    #[cfg(test)]
+    pub(super) fail_transcript_append_before_sync: Arc<AtomicBool>,
+    /// One-shot failure after a row sync but before summary metadata.
+    #[cfg(test)]
+    pub(super) fail_transcript_append_before_summary: Arc<AtomicBool>,
     /// Test-only one-shot failure after a child contract sidecar commits.
     #[cfg(test)]
     pub(super) fail_subagent_contract_catalog_upsert: Arc<AtomicBool>,
