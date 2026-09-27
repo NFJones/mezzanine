@@ -191,6 +191,39 @@ fn transcript_view_separates_first_write_from_committed_rows() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Restart validation accepts writer-produced large rows while rejecting a
+/// foreign row or an incomplete final record without treating either as history.
+#[test]
+fn transcript_restart_validation_checks_complete_owned_rows() {
+    let root = temp_root("restart-validated-rows");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut first = entry("conv1", 1, TranscriptRole::User);
+    first.content = "\\".repeat(1024 * 1024 + 1);
+    store.append(&first).unwrap();
+    assert_eq!(store.validate_restored_transcript("conv1").unwrap(), 1);
+    let path = store.transcript_path("conv1").unwrap();
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.pop();
+    fs::write(&path, &bytes).unwrap();
+    assert!(store.validate_restored_transcript("conv1").is_err());
+    bytes.push(b'\n');
+    fs::write(&path, &bytes).unwrap();
+    store
+        .append(&entry("conv2", 2, TranscriptRole::Assistant))
+        .unwrap();
+    let foreign = fs::read(store.transcript_path("conv2").unwrap()).unwrap();
+    use std::io::Write;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&foreign)
+        .unwrap();
+    assert!(store.validate_restored_transcript("conv1").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Selective epochs must never replace direct user text or only half of one
 /// typed execution group, and rejected writes leave the previous epoch intact.
 #[test]
