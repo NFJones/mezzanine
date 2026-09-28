@@ -935,9 +935,7 @@ impl RuntimeSessionService {
                 );
             }
             AgentActionPayload::ConfigChange { .. } => {
-                if !self
-                    .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
-                {
+                if !self.queue_ordered_provider_header(&turn.pane_id, &execution, &action)? {
                     self.append_agent_status_text_to_terminal_buffer(
                         &turn.pane_id,
                         &format!(
@@ -963,6 +961,7 @@ impl RuntimeSessionService {
                     )?;
                 }
                 execution.action_results[result_index] = result;
+                self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
             }
             AgentActionPayload::SendMessage { .. } => {
                 let AgentActionPayload::SendMessage {
@@ -1007,9 +1006,7 @@ impl RuntimeSessionService {
                         "approved send_message no longer matches the approved recipient or payload",
                     ));
                 }
-                if !self
-                    .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
-                {
+                if !self.queue_ordered_provider_header(&turn.pane_id, &execution, &action)? {
                     self.append_agent_status_text_to_terminal_buffer(
                         &turn.pane_id,
                         &format!(
@@ -1021,6 +1018,7 @@ impl RuntimeSessionService {
                 }
                 let result = self.execute_message_action_for_turn(&turn, result_index, &action)?;
                 execution.action_results[result_index] = result;
+                self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
                 self.finalize_settled_outbound_message_previews(
                     &turn.pane_id,
                     &turn.turn_id,
