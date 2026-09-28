@@ -64,6 +64,73 @@ async fn async_persistence_worker_recovers_lost_transcript_acknowledgment() {
 
 /// A live persistence worker retries an exact failed claim on its next poll,
 /// before a later reserved sequence, after two local attempts have failed.
+/// A stopped worker leaves its failed append receipt for a new process to
+/// reconcile even when neither local attempt wrote a transcript row.
+#[tokio::test(flavor = "current_thread")]
+async fn async_persistence_worker_failed_receipt_replays_after_restart() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-transcript-worker-failed-restart-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "worker-failed-restart".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted before failed worker".to_string(),
+    };
+    store.fail_transcript_append_attempts(2);
+    let mut service = test_service_with_event_log();
+    service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+        path: store.transcript_path(&row.conversation_id).unwrap(),
+        store: store.clone(),
+        entries: vec![row.clone()],
+    });
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1,
+                drain_limit: 1,
+                idle_interval: Duration::from_millis(1),
+            },
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.failed, 1);
+        assert!(
+            !store
+                .transcript_path(&row.conversation_id)
+                .unwrap()
+                .exists()
+        );
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![row.clone()]]
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let restarted = AgentTranscriptStore::new(root.clone());
+    restarted.recover_append_receipts().unwrap();
+    assert_eq!(restarted.inspect(&row.conversation_id).unwrap(), vec![row]);
+    assert!(restarted.pending_append_receipts().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A live persistence worker retries an exact failed claim on its next poll,
+/// before a later reserved sequence, after two local attempts have failed.
 #[tokio::test(flavor = "current_thread")]
 async fn async_persistence_worker_recovers_after_two_transcript_failures() {
     use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
