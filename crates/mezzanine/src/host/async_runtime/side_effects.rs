@@ -2080,15 +2080,26 @@ async fn persist_transcript_entries(
     store: AgentTranscriptStore,
     entries: Vec<TranscriptEntry>,
 ) -> Result<usize> {
+    persist_transcript_entries_with_generation(store, entries, 1).await
+}
+
+/// Reconciles one immutable worker claim using its exact receipt generation.
+async fn persist_transcript_entries_with_generation(
+    store: AgentTranscriptStore,
+    entries: Vec<TranscriptEntry>,
+    generation: u64,
+) -> Result<usize> {
     // Journal before the worker touches the archive. A lost worker result can
     // then be reconciled on startup without guessing whether a prefix landed.
     let journal_store = store.clone();
     let journal_entries = entries.clone();
-    tokio::task::spawn_blocking(move || journal_store.accept_append_receipt(&journal_entries, 1))
-        .await
-        .map_err(|error| {
-            MezError::invalid_state(format!("transcript receipt worker join failed: {error}"))
-        })??;
+    tokio::task::spawn_blocking(move || {
+        journal_store.accept_append_receipt(&journal_entries, generation)
+    })
+    .await
+    .map_err(|error| {
+        MezError::invalid_state(format!("transcript receipt worker join failed: {error}"))
+    })??;
     let result = match store.append_many_async(&entries).await {
         // A conflicting durable row or invalid batch cannot become valid by
         // replaying the same immutable work. Keep the original diagnostic.
@@ -2108,13 +2119,15 @@ async fn persist_transcript_entries(
     };
     if result.is_ok() {
         let journal_store = store.clone();
-        tokio::task::spawn_blocking(move || journal_store.settle_append_receipt(&entries, 1))
-            .await
-            .map_err(|error| {
-                MezError::invalid_state(format!(
-                    "transcript receipt settlement worker join failed: {error}"
-                ))
-            })??;
+        tokio::task::spawn_blocking(move || {
+            journal_store.settle_append_receipt(&entries, generation)
+        })
+        .await
+        .map_err(|error| {
+            MezError::invalid_state(format!(
+                "transcript receipt settlement worker join failed: {error}"
+            ))
+        })??;
     }
     result
 }
@@ -2520,6 +2533,45 @@ mod transcript_settlement_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Identical batches with different claims retain independent journals
+    /// after uncertain failures, rather than aliasing the first worker's receipt.
+    #[tokio::test]
+    async fn queued_transcript_distinct_failed_claims_keep_distinct_receipts() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-async-transcript-distinct-claims-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let row = TranscriptEntry {
+            conversation_id: "distinct-claims".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted".to_string(),
+        };
+        store.fail_transcript_append_attempts(4);
+        for generation in [1, 2] {
+            assert!(
+                persist_transcript_entries_with_generation(
+                    store.clone(),
+                    vec![row.clone()],
+                    generation
+                )
+                .await
+                .is_err()
+            );
+        }
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![row.clone()], vec![row]]
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// A later identical claim has a distinct durable generation; a worker
     /// processing the old claim must not retire the later receipt.
     #[tokio::test]
@@ -2543,7 +2595,7 @@ mod transcript_settlement_tests {
         store
             .accept_append_receipt(std::slice::from_ref(&row), 2)
             .unwrap();
-        persist_transcript_entries(store.clone(), vec![row.clone()])
+        persist_transcript_entries_with_generation(store.clone(), vec![row.clone()], 1)
             .await
             .unwrap();
         assert_eq!(
