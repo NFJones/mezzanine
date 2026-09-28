@@ -23,6 +23,8 @@ use super::{
 pub(crate) enum RuntimeProviderLogInput<'a> {
     /// A source fragment or lifecycle barrier from the current provider claim.
     Progress(&'a mez_agent::StreamingSayEvent),
+    /// Retire provisional source after the owning caller rejects or loses a response.
+    DiscardProvisional,
     /// Reconcile installed provisional source with a validated execution.
     Validated(&'a AgentTurnExecution),
     /// Present any validated component not already promoted by reconciliation.
@@ -64,6 +66,10 @@ impl RuntimeSessionService {
         match input {
             RuntimeProviderLogInput::Progress(event) => {
                 self.apply_agent_streaming_say_event_to_terminal_buffer(pane_id, turn_id, event)
+            }
+            RuntimeProviderLogInput::DiscardProvisional => {
+                self.discard_agent_streaming_say_presentations_for_turn(turn_id)?;
+                Ok(())
             }
             RuntimeProviderLogInput::Validated(execution) => {
                 self.reconcile_agent_streaming_say_completion_with_render_intent(

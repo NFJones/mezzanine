@@ -211,7 +211,6 @@ mod memory;
 mod messages;
 mod outcome;
 mod presentation;
-#[cfg(test)]
 pub(crate) use presentation::RuntimeProviderLogInput;
 mod provider_context;
 mod provider_events;

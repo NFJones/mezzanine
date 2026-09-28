@@ -1532,8 +1532,11 @@ impl AsyncRuntimeSessionActor {
                 }
                 let claim_cancellations = self.provider_claim_cancel_timer_side_effects(&turn_id);
                 self.service.clear_claimed_agent_provider_task(&turn_id);
-                self.service
-                    .discard_agent_streaming_say_presentations_for_turn(&turn_id)?;
+                self.service.ingest_provider_log(
+                    "",
+                    &turn_id,
+                    crate::runtime::RuntimeProviderLogInput::DiscardProvisional,
+                )?;
                 let retry_class = match provider_event_error_kind(&kind) {
                     Some(parsed_kind) => provider_error_retry_class_from_parts(
                         parsed_kind,
