@@ -298,8 +298,29 @@ async fn async_actor_applies_agent_provider_failure_events() {
 /// output on the same actor-owned transcript, audit, scheduler, prompt display,
 /// and pane rendering path as the compatibility provider poller while allowing
 /// future workers to perform network I/O outside the actor.
-#[tokio::test(flavor = "current_thread")]
-async fn async_actor_applies_agent_provider_completion_events() {
+#[test]
+fn async_actor_applies_agent_provider_completion_events() {
+    std::thread::Builder::new()
+        .name("provider-log-mode-parity".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("current-thread runtime should build");
+            runtime.block_on(async {
+                let complete = actor_provider_completion_case(false).await;
+                let streamed = actor_provider_completion_case(true).await;
+                assert_eq!(complete, streamed);
+            });
+        })
+        .expect("provider-log test thread should spawn")
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
+}
+
+/// Runs the same actor completion with or without optional installed progress.
+async fn actor_provider_completion_case(streamed: bool) -> Vec<String> {
     let mut service = test_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
@@ -463,50 +484,53 @@ async fn async_actor_applies_agent_provider_completion_events() {
         assert_eq!(stale.accepted, 1);
         assert_eq!(stale.applied, 0);
 
-        let mut progress = RuntimeEventBatch::new();
-        for event in [
-            mez_agent::StreamingSayEvent::Started {
-                action_index: 0,
-                status: mez_agent::SayStatus::Final,
-                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
-            },
-            mez_agent::StreamingSayEvent::TextDelta {
-                action_index: 0,
-                text: "Typed completion applied.".to_string(),
-            },
-            mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
-            mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
-        ] {
-            progress.push(RuntimeEvent::AgentProvider(
-                AgentProviderEvent::StreamingSay {
-                    agent_id: AgentId::opaque(task.agent_id.clone()).unwrap(),
-                    turn_id: task.turn_id.clone(),
-                    pane_id: task.pane_id.clone(),
-                    claim_generation: 1,
-                    event,
+        if streamed {
+            let mut progress = RuntimeEventBatch::new();
+            for event in [
+                mez_agent::StreamingSayEvent::Started {
+                    action_index: 0,
+                    status: mez_agent::SayStatus::Final,
+                    content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                 },
-            ));
+                mez_agent::StreamingSayEvent::TextDelta {
+                    action_index: 0,
+                    text: "Typed completion applied.".to_string(),
+                },
+                mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+                mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
+            ] {
+                progress.push(RuntimeEvent::AgentProvider(
+                    AgentProviderEvent::StreamingSay {
+                        agent_id: AgentId::opaque(task.agent_id.clone()).unwrap(),
+                        turn_id: task.turn_id.clone(),
+                        pane_id: task.pane_id.clone(),
+                        claim_generation: 1,
+                        event,
+                    },
+                ));
+            }
+            assert_eq!(
+                handle
+                    .submit_runtime_events(progress)
+                    .await
+                    .unwrap()
+                    .applied,
+                4
+            );
+            let work = handle
+                .take_streaming_say_projection_work(task.pane_id.clone(), task.turn_id.clone())
+                .await
+                .unwrap()
+                .expect("provider progress should project before completion");
+            let projection =
+                RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+            assert!(
+                handle
+                    .apply_streaming_say_projection(projection)
+                    .await
+                    .unwrap()
+            );
         }
-        assert_eq!(
-            handle
-                .submit_runtime_events(progress)
-                .await
-                .unwrap()
-                .applied,
-            4
-        );
-        let work = handle
-            .take_streaming_say_projection_work(task.pane_id.clone(), task.turn_id.clone())
-            .await
-            .unwrap()
-            .expect("provider progress should project before completion");
-        let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
-        assert!(
-            handle
-                .apply_streaming_say_projection(projection)
-                .await
-                .unwrap()
-        );
 
         let report = handle
             .submit_runtime_events(completion(1, execution))
@@ -547,8 +571,20 @@ async fn async_actor_applies_agent_provider_completion_events() {
         1,
         "{pane_text}"
     );
-    assert_eq!(exit.commands_processed, 6);
+    assert_eq!(exit.commands_processed, if streamed { 6 } else { 3 });
+    let presented = exit
+        .service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .into_iter()
+        .filter(|line| {
+            line.contains("thinking: test action batch rationale")
+                || line.contains("mez> Typed completion applied.")
+        })
+        .collect();
     exit.service.terminate_all_pane_processes().unwrap();
+    presented
 }
 
 /// Verifies provider-produced issue writes cross the actor-validation,
