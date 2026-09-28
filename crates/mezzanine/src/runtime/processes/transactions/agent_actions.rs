@@ -2882,6 +2882,9 @@ impl RuntimeSessionService {
             }
         } else if terminal_state == AgentTurnState::Running {
             self.commit_settled_action_results_context(turn_id, &observed_results)?;
+            if let Some(execution) = self.agent_turn_executions().get(turn_id).cloned() {
+                self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, &execution)?;
+            }
             self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
             if ready_for_provider_continuation {
                 if !self

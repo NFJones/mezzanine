@@ -57,6 +57,21 @@ fn validated_log_components(batch: &mez_agent::MaapBatch) -> Vec<RuntimeValidate
     components
 }
 
+/// Whether this action owns a log that must precede a later say component.
+fn action_holds_later_log(action: &mez_agent::AgentAction) -> bool {
+    runtime_agent_action_has_runtime_visible_effect(action)
+        || matches!(
+            action.payload,
+            AgentActionPayload::ListAgents { .. }
+                | AgentActionPayload::Wait
+                | AgentActionPayload::CloseAgent { .. }
+                | AgentActionPayload::IssueAdd { .. }
+                | AgentActionPayload::IssueUpdate { .. }
+                | AgentActionPayload::IssueQuery { .. }
+                | AgentActionPayload::IssueDelete { .. }
+        )
+}
+
 impl RuntimeSessionService {
     /// Routes both effective streaming and non-streaming responses through the
     /// same presentation owner. Callers retain claim fencing and execution
@@ -293,10 +308,7 @@ impl RuntimeSessionService {
             );
         let mut emitted_user_visible_action = false;
         let mut pending_runtime_visible_action = false;
-        let has_runtime_visible_action = batch
-            .actions
-            .iter()
-            .any(runtime_agent_action_has_runtime_visible_effect);
+        let has_runtime_visible_action = batch.actions.iter().any(action_holds_later_log);
         for component in validated_log_components(batch) {
             let (action_index, payload) = match component {
                 RuntimeValidatedLogComponent::Rationale(text) => {
@@ -411,13 +423,7 @@ impl RuntimeSessionService {
         let Some(batch) = execution.response.action_batch.as_ref() else {
             return Ok(0);
         };
-        if !batch.actions.iter().any(|action| {
-            runtime_agent_action_has_runtime_visible_effect(action)
-                || matches!(
-                    action.payload,
-                    AgentActionPayload::ListAgents { .. } | AgentActionPayload::Wait
-                )
-        }) {
+        if !batch.actions.iter().any(action_holds_later_log) {
             return Ok(0);
         }
 
@@ -459,13 +465,7 @@ impl RuntimeSessionService {
                 if *status == SayStatus::Progress
                     && !batch.actions[..action_index]
                         .iter()
-                        .any(runtime_agent_action_has_runtime_visible_effect)
-                    && !batch.actions[..action_index].iter().any(|prior| {
-                        matches!(
-                            prior.payload,
-                            AgentActionPayload::ListAgents { .. } | AgentActionPayload::Wait
-                        )
-                    })
+                        .any(action_holds_later_log)
                 {
                     continue;
                 }

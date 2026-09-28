@@ -688,6 +688,7 @@ impl RuntimeSessionService {
         }
 
         self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
+        self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution.clone());
         if runtime_execution_ready_for_provider_continuation(&execution) {

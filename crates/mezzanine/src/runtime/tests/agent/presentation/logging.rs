@@ -112,6 +112,126 @@ fn runtime_mixed_action_progress_waits_for_preceding_header() {
     );
 }
 
+/// Issue and close-agent actions must release a later progress say after
+/// their runtime-owned results settle, even when no static header exists.
+#[test]
+fn runtime_issue_and_close_headers_release_deferred_progress() {
+    for (kind, payload, header) in [
+        (
+            "issue_query",
+            mez_agent::AgentActionPayload::IssueQuery {
+                kind: None,
+                state: None,
+                text: None,
+                limit: None,
+                refresh: false,
+            },
+            "issue query",
+        ),
+        (
+            "close_agent",
+            mez_agent::AgentActionPayload::CloseAgent {
+                agent_id: "agent-%2".to_string(),
+            },
+            "close agent",
+        ),
+    ] {
+        let mut service = test_runtime_service();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new(Size::new(80, 16).unwrap(), 120).unwrap(),
+        );
+        let action = mez_agent::AgentAction {
+            id: kind.to_string(),
+            payload,
+        };
+        let mut execution = mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture("turn-deferred-kind"),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: String::new(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    rationale: String::new(),
+                    actions: vec![
+                        action.clone(),
+                        mez_agent::AgentAction {
+                            id: "progress".to_string(),
+                            payload: mez_agent::AgentActionPayload::Say {
+                                status: mez_agent::SayStatus::Progress,
+                                text: "later progress".to_string(),
+                                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                                    .to_string(),
+                            },
+                        },
+                    ],
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: Default::default(),
+            action_results: Vec::new(),
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        };
+        service
+            .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+            .unwrap();
+        assert!(
+            !service
+                .agent_pane_screen("%1")
+                .unwrap()
+                .normal_content_lines()
+                .join("\n")
+                .contains("later progress")
+        );
+        let has_header = service
+            .append_agent_action_execution_text_to_terminal_buffer("%1", &action)
+            .unwrap();
+        execution.action_results.push(mez_agent::ActionResult {
+            protocol: "maap/1".to_string(),
+            turn_id: "turn-deferred-kind".to_string(),
+            agent_id: "agent-%1".to_string(),
+            action_id: action.id.clone(),
+            action_type: kind,
+            status: ActionStatus::Succeeded,
+            content: Vec::new(),
+            structured_content_json: None,
+            permission_evaluation: None,
+            is_error: false,
+            error: None,
+        });
+        service
+            .present_deferred_agent_say_actions_to_terminal_buffer("%1", &execution)
+            .unwrap();
+        let lines = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        assert_eq!(lines.contains(header), has_header, "{kind}: {lines}");
+        assert_eq!(
+            lines.matches("later progress").count(),
+            1,
+            "{kind}: {lines}"
+        );
+        if has_header {
+            assert!(
+                lines.find(header).unwrap() < lines.find("later progress").unwrap(),
+                "{kind}: {lines}"
+            );
+        }
+    }
+}
+
 /// Verifies progress `say` messages continue through durable assistant
 /// chronology without a request-local ledger.
 ///
