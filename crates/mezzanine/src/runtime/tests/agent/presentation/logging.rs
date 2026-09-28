@@ -2,6 +2,87 @@
 
 use super::*;
 
+/// A validated progress say after a runtime-owned action waits for its log.
+/// The action header is emitted by its executor, not the batch presenter.
+#[test]
+fn runtime_mixed_action_progress_waits_for_preceding_header() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 16).unwrap(), 120).unwrap(),
+    );
+    let action = mez_agent::AgentAction {
+        id: "discovery".to_string(),
+        payload: mez_agent::AgentActionPayload::ListAgents {
+            agent_type: Some("subagent".to_string()),
+            scope: Some("project".to_string()),
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-mixed-log"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: String::new(),
+                actions: vec![
+                    action.clone(),
+                    mez_agent::AgentAction {
+                        id: "progress".to_string(),
+                        payload: mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Progress,
+                            text: "later progress".to_string(),
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                                .to_string(),
+                        },
+                    },
+                ],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    let before = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!before.contains("later progress"), "{before}");
+    service
+        .append_agent_action_execution_text_to_terminal_buffer("%1", &action)
+        .unwrap();
+    service
+        .present_deferred_agent_say_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    let after = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(after.contains("list agents:"), "{after}");
+    assert!(after.contains("later progress"), "{after}");
+    assert!(
+        after.find("list agents:").unwrap() < after.find("later progress").unwrap(),
+        "{after}"
+    );
+}
+
 /// Verifies progress `say` messages continue through durable assistant
 /// chronology without a request-local ledger.
 ///

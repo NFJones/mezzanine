@@ -321,7 +321,9 @@ impl RuntimeSessionService {
                     if text.trim().is_empty() {
                         continue;
                     }
-                    if has_runtime_visible_action && *status != SayStatus::Progress {
+                    if pending_runtime_visible_action
+                        || (has_runtime_visible_action && *status != SayStatus::Progress)
+                    {
                         pending_runtime_visible_action = true;
                     } else {
                         emitted_user_visible_action = true;
@@ -403,11 +405,13 @@ impl RuntimeSessionService {
         let Some(batch) = execution.response.action_batch.as_ref() else {
             return Ok(0);
         };
-        if !batch
-            .actions
-            .iter()
-            .any(runtime_agent_action_has_runtime_visible_effect)
-        {
+        if !batch.actions.iter().any(|action| {
+            runtime_agent_action_has_runtime_visible_effect(action)
+                || matches!(
+                    action.payload,
+                    AgentActionPayload::ListAgents { .. } | AgentActionPayload::Wait
+                )
+        }) {
             return Ok(0);
         }
 
@@ -426,7 +430,20 @@ impl RuntimeSessionService {
                 ) {
                     continue;
                 }
-                if *status == SayStatus::Progress || text.trim().is_empty() {
+                if text.trim().is_empty() {
+                    continue;
+                }
+                if *status == SayStatus::Progress
+                    && !batch.actions[..action_index]
+                        .iter()
+                        .any(runtime_agent_action_has_runtime_visible_effect)
+                    && !batch.actions[..action_index].iter().any(|prior| {
+                        matches!(
+                            prior.payload,
+                            AgentActionPayload::ListAgents { .. } | AgentActionPayload::Wait
+                        )
+                    })
+                {
                     continue;
                 }
                 self.append_agent_assistant_content_to_terminal_buffer(
