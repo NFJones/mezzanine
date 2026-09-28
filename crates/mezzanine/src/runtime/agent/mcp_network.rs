@@ -193,7 +193,10 @@ impl RuntimeSessionService {
                     queued = queued.saturating_add(1);
                 }
                 ActionStatus::Succeeded | ActionStatus::Failed => {
-                    self.record_preexecuted_network_action_result(turn, &action, result)?;
+                    self.record_preexecuted_network_action_result(
+                        turn, execution, &action, result,
+                    )?;
+                    self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
                     preexecuted = preexecuted.saturating_add(1);
                 }
                 _ => {}
@@ -1141,9 +1144,11 @@ impl RuntimeSessionService {
                         })?;
                     self.record_preexecuted_network_action_result(
                         turn,
+                        execution,
                         &action,
                         &execution.action_results[index],
                     )?;
+                    self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
                     self.append_network_action_progress_guidance(
                         &turn.turn_id,
                         &action,
@@ -1181,11 +1186,10 @@ impl RuntimeSessionService {
                     ),
                 )?;
                 execution.action_results[index] = result;
+                self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
                 continue;
             }
-            if !self
-                .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
-            {
+            if !self.queue_ordered_provider_header(&turn.pane_id, execution, &action)? {
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,
                     &format!(
@@ -1233,6 +1237,7 @@ impl RuntimeSessionService {
                 ),
             )?;
             execution.action_results[index] = result;
+            self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
             executed = executed.saturating_add(1);
         }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
@@ -1278,13 +1283,14 @@ impl RuntimeSessionService {
     fn record_preexecuted_network_action_result(
         &mut self,
         turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
         action: &AgentAction,
         result: &ActionResult,
     ) -> Result<()> {
         let Some(plan) = network_action_plan(action) else {
             return Ok(());
         };
-        if !self.append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)? {
+        if !self.queue_ordered_provider_header(&turn.pane_id, execution, action)? {
             self.append_agent_status_text_to_terminal_buffer(
                 &turn.pane_id,
                 &format!(

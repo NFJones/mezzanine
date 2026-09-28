@@ -585,11 +585,25 @@ impl RuntimeSessionService {
                 content_type,
             } = &action.payload
             {
+                let publication_key = owner.as_ref().map(|conversation_id| {
+                    (
+                        pane_id.to_string(),
+                        execution.request.turn_id.clone(),
+                        conversation_id.clone(),
+                        group.clone(),
+                        action_index,
+                    )
+                });
                 if self.agent_streaming_say_action_is_promoted(
                     pane_id,
                     &execution.request.turn_id,
                     action_index,
                 ) {
+                    if let Some(key) = publication_key {
+                        self.presentation
+                            .agent_deferred_provider_progress
+                            .insert(key);
+                    }
                     continue;
                 }
                 if text.trim().is_empty() {
@@ -624,15 +638,6 @@ impl RuntimeSessionService {
                 {
                     continue;
                 }
-                let publication_key = owner.as_ref().map(|conversation_id| {
-                    (
-                        pane_id.to_string(),
-                        execution.request.turn_id.clone(),
-                        conversation_id.clone(),
-                        group.clone(),
-                        action_index,
-                    )
-                });
                 if publication_key.as_ref().is_some_and(|key| {
                     self.presentation
                         .agent_deferred_provider_progress
