@@ -2445,6 +2445,38 @@ mod transcript_settlement_tests {
     use super::*;
     use mez_agent::transcript::TranscriptRole;
 
+    /// Repeated worker attempts for the same immutable claim keep one durable
+    /// recovery receipt; retries cannot multiply replay work.
+    #[tokio::test]
+    async fn queued_transcript_repeated_failures_reuse_exact_receipt() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-async-transcript-duplicate-receipts-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let row = TranscriptEntry {
+            conversation_id: "duplicate-receipts".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::Assistant,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted response".to_string(),
+        };
+        store.fail_transcript_append_attempts(4);
+        for _ in 0..2 {
+            assert!(
+                persist_transcript_entries(store.clone(), vec![row.clone()])
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(store.pending_append_receipts().unwrap(), vec![vec![row]]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// Two transient precommit failures leave the worker's exact receipt
     /// available for restart recovery without repeating a provider action.
     #[tokio::test]
