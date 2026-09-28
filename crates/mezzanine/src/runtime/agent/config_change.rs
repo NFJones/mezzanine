@@ -830,7 +830,7 @@ impl RuntimeSessionService {
         approval_state: &str,
     ) -> Result<usize> {
         for (_, action) in actions {
-            if !self.append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)? {
+            if !self.queue_ordered_provider_header(&turn.pane_id, execution, action)? {
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,
                     &format!(
@@ -982,6 +982,7 @@ impl RuntimeSessionService {
                 }
             }
         }
+        self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
         let executed = actions.len();
         let suppressed_duplicate = execution
             .action_results
@@ -1115,9 +1116,7 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running config_change result does not match an action")
                 })?;
-            if !self
-                .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
-            {
+            if !self.queue_ordered_provider_header(&turn.pane_id, execution, &action)? {
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,
                     &format!(
@@ -1135,6 +1134,7 @@ impl RuntimeSessionService {
                 &controller,
                 approval_state,
             )?;
+            self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
             executed = executed.saturating_add(1);
         }
         let suppressed_duplicate = execution
