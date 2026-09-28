@@ -223,6 +223,7 @@ impl AgentTranscriptStore {
             {
                 if rows == entries {
                     fs::File::open(self.append_receipt_directory())?.sync_all()?;
+                    fs::File::open(&self.root)?.sync_all()?;
                     return Ok(());
                 }
                 return Err(MezError::conflict("transcript receipt identity changed"));
