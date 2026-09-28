@@ -1606,6 +1606,7 @@ async fn runtime_streaming_say_completion_does_not_append_final_duplicate() {
 #[test]
 fn runtime_validated_say_settlement_matches_with_and_without_progress() {
     let rationale = "Distinct validated rationale without fragments";
+    let later = "Later validated action without fragments";
     for (case, content_type, source) in [
         (
             "plain",
@@ -1689,14 +1690,25 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                     quota_usage: Default::default(),
                     action_batch: Some(mez_agent::MaapBatch {
                         rationale: rationale.to_string(),
-                        actions: vec![mez_agent::AgentAction {
-                            id: "answer".to_string(),
-                            payload: mez_agent::AgentActionPayload::Say {
-                                status: mez_agent::SayStatus::Final,
-                                text: source.to_string(),
-                                content_type: content_type.to_string(),
+                        actions: vec![
+                            mez_agent::AgentAction {
+                                id: "answer".to_string(),
+                                payload: mez_agent::AgentActionPayload::Say {
+                                    status: mez_agent::SayStatus::Final,
+                                    text: source.to_string(),
+                                    content_type: content_type.to_string(),
+                                },
                             },
-                        }],
+                            mez_agent::AgentAction {
+                                id: "later".to_string(),
+                                payload: mez_agent::AgentActionPayload::Say {
+                                    status: mez_agent::SayStatus::Final,
+                                    text: later.to_string(),
+                                    content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                                        .to_string(),
+                                },
+                            },
+                        ],
                     }),
                     provider_transcript_events: Vec::new(),
                 },
@@ -1740,12 +1752,30 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                     .count(),
                 1
             );
+            assert_eq!(
+                entries
+                    .iter()
+                    .filter(|entry| entry.source_text.as_deref() == Some(later))
+                    .count(),
+                1,
+                "{case}: {entries:?}"
+            );
+            assert_eq!(
+                entries
+                    .iter()
+                    .filter_map(|entry| entry.source_text.as_deref())
+                    .filter(|text| [rationale, source, later].contains(text))
+                    .collect::<Vec<_>>(),
+                vec![rationale, source, later],
+                "{case}: {entries:?}"
+            );
             settled.push((
                 rows,
                 entries
                     .into_iter()
                     .filter(|entry| {
-                        [source, rationale].contains(&entry.source_text.as_deref().unwrap_or(""))
+                        [source, rationale, later]
+                            .contains(&entry.source_text.as_deref().unwrap_or(""))
                     })
                     .map(|entry| (entry.display_lines, entry.copy_lines))
                     .collect::<Vec<_>>(),
