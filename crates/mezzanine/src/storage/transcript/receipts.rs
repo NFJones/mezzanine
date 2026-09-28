@@ -176,9 +176,10 @@ impl AgentTranscriptStore {
             Ok(durable) => {
                 let count = self.validate_restored_transcript(&receipt.conversation_id)?;
                 if entries.iter().any(|entry| {
-                    durable
-                        .iter()
-                        .any(|row| row.sequence == entry.sequence && row != entry)
+                    usize::try_from(entry.sequence - 1)
+                        .ok()
+                        .and_then(|index| durable.get(index))
+                        .is_some_and(|row| row != entry)
                 }) {
                     return Err(MezError::conflict(
                         "transcript receipt conflicts with durable contents",
