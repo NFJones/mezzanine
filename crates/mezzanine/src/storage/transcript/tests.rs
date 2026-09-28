@@ -1612,6 +1612,29 @@ fn transcript_store_receipt_recovers_unwritten_batch_after_restart() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Overlapping accepted batches share exact rows and replay only their missing
+/// suffix, even when the earlier worker committed a partial prefix.
+#[test]
+fn transcript_store_receipt_recovers_overlapping_batches() {
+    let root = temp_root("overlapping-append-receipts");
+    let store = AgentTranscriptStore::new(root.clone());
+    let rows = vec![
+        entry("conv1", 1, TranscriptRole::User),
+        entry("conv1", 2, TranscriptRole::Assistant),
+        entry("conv1", 3, TranscriptRole::Tool),
+    ];
+    store.accept_append_receipt(&rows[..2], 1).unwrap();
+    store.accept_append_receipt(&rows[1..], 2).unwrap();
+    store.append(&rows[0]).unwrap();
+    drop(store);
+
+    let restarted = AgentTranscriptStore::new(root.clone());
+    restarted.recover_append_receipts().unwrap();
+    assert_eq!(restarted.inspect("conv1").unwrap(), rows);
+    assert!(restarted.pending_append_receipts().unwrap().is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A late acknowledgment for an older generation must leave a newer exact
 /// receipt available until its own matching settlement or startup replay.
 #[test]
