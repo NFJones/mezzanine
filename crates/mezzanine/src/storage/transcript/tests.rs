@@ -215,6 +215,16 @@ fn transcript_view_rejects_missing_committed_prefix_in_latest_read() {
         store
             .conversation_transcript_view(
                 &second.conversation_id,
+                ConversationTranscriptRead::After(0),
+                true,
+                std::slice::from_ref(&second),
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .conversation_transcript_view(
+                &second.conversation_id,
                 ConversationTranscriptRead::Latest(1),
                 true,
                 std::slice::from_ref(&second),
