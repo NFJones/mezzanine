@@ -479,7 +479,7 @@ impl RuntimeSessionService {
                 .remove(&(turn_id.to_string(), action_id.to_string()));
             return Ok(None);
         };
-        let execution = self.agent_turn_executions().get(turn_id);
+        let execution = self.agent_turn_executions().get(turn_id).cloned();
         let Some(execution) = execution else {
             self.agent
                 .pending_approved_external_actions
@@ -509,7 +509,7 @@ impl RuntimeSessionService {
             return Ok(None);
         }
 
-        if !self.append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)? {
+        if !self.queue_ordered_provider_header(&turn.pane_id, &execution, &action)? {
             self.append_agent_status_text_to_terminal_buffer(
                 &turn.pane_id,
                 &format!(
@@ -819,6 +819,7 @@ impl RuntimeSessionService {
             &execution.action_results,
             execution.final_turn,
         );
+        self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
         let siblings_pending = execution.action_results.iter().any(|result| {
             matches!(result.status, ActionStatus::Running | ActionStatus::Blocked)
                 && !self.action_result_is_inactive_pending_shell_sibling(&turn.turn_id, result)
