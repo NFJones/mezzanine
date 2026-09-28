@@ -2308,6 +2308,11 @@ impl AgentTranscriptStore {
                 "transcript replay boundary is absent from the durable archive",
             ));
         }
+        if matches!(read, ConversationTranscriptRead::After(_))
+            && self.existing_transcript_path_for(conversation_id)?.exists()
+        {
+            self.validate_restored_transcript(conversation_id)?;
+        }
         // Pending receipts may fill a gap in the logical projection, but they
         // cannot repair missing committed history. The full-history read is
         // already off the actor and must validate the archive independently.

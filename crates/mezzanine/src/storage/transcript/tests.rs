@@ -440,6 +440,16 @@ fn transcript_view_rejects_committed_gap_with_pending_row() {
         store
             .conversation_transcript_view(
                 "gap-with-receipt",
+                ConversationTranscriptRead::After(3),
+                true,
+                &[],
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .conversation_transcript_view(
+                "gap-with-receipt",
                 ConversationTranscriptRead::All,
                 true,
                 std::slice::from_ref(&second),
