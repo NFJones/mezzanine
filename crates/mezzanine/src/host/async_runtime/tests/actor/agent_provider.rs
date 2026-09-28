@@ -583,7 +583,19 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
         .service
         .pane_screen("%1")
         .unwrap()
-        .normal_styled_content_lines();
+        .normal_styled_content_lines()
+        .into_iter()
+        .map(|mut line| {
+            // Elapsed-time status can cross a second boundary between the two
+            // runs; compare all rows and styles without treating that clock as
+            // provider-log output.
+            if line.text.starts_with("▐ Worked for ") {
+                line.text = "▐ Worked for <elapsed>".to_string();
+                line.copy_text = Some("Worked for <elapsed>".to_string());
+            }
+            line
+        })
+        .collect();
     exit.service.terminate_all_pane_processes().unwrap();
     presented
 }

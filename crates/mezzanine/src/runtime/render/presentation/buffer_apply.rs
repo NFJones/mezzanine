@@ -3525,6 +3525,10 @@ impl RuntimeSessionService {
             .into_iter()
             .chain(first_unreceived_action)
             .chain(first_no_preview_action)
+            // Receipt establishes an ordinal, not an accepted or finalized
+            // component. Keep later provisional source buffered until the
+            // validated completion hands it to the ordinary presenter.
+            .chain(presentation.received_actions.iter().copied().min())
             .min();
         let visible = |index: &usize| first_pending_action.is_none_or(|pending| *index <= pending);
         Ok(Some(crate::runtime::RuntimeStreamingSayProjectionWork {

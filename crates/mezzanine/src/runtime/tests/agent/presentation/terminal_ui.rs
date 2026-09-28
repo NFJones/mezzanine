@@ -1149,7 +1149,7 @@ fn runtime_streaming_later_complete_action_waits_for_earlier_source() {
     let work = service
         .take_agent_streaming_say_projection_work("%1", "turn-order")
         .unwrap()
-        .expect("receiving the predecessor releases buffered source");
+        .expect("receipt may update projection ownership");
     let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
     service
         .apply_agent_streaming_say_projection_result(projection)
@@ -1159,7 +1159,10 @@ fn runtime_streaming_later_complete_action_waits_for_earlier_source() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(visible.contains("second is complete"), "{visible}");
+    assert!(
+        !visible.contains("second is complete"),
+        "receipt alone cannot finalize action 0: {visible}"
+    );
 }
 
 /// A received action with no preview still occupies its ordinal until the
@@ -1370,7 +1373,10 @@ fn runtime_streaming_command_closure_releases_later_say() {
         .normal_content_lines()
         .join("\n");
     assert!(after.contains("printf first"), "{after}");
-    assert!(after.contains("later answer"), "{after}");
+    assert!(
+        !after.contains("later answer"),
+        "command receipt alone cannot finalize its preview: {after}"
+    );
 }
 
 /// Verifies every published cumulative Markdown and diff prefix is identical
