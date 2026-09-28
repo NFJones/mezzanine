@@ -25,11 +25,8 @@ pub(crate) struct RuntimeSideEffectRouter {
     persistence: VecDeque<QueuedPersistence>,
     /// Ordered transcript effects claimed by a worker but not yet acknowledged.
     claimed_transcripts: VecDeque<RuntimeSideEffect>,
-    /// Exact claims with proven permanent failures remain visible but cannot replay.
-    blocked_transcripts: Vec<(
-        std::path::PathBuf,
-        Vec<mez_agent::transcript::TranscriptEntry>,
-    )>,
+    /// Per-claim permanent failures, aligned with `claimed_transcripts`.
+    blocked_transcripts: VecDeque<bool>,
     commands: VecDeque<RuntimeSideEffect>,
     provider: VecDeque<RuntimeSideEffect>,
     status: VecDeque<RuntimeSideEffect>,
@@ -462,6 +459,7 @@ impl RuntimeSideEffectRouter {
             ) && !queued.recovered_claim
             {
                 self.claimed_transcripts.push_back(queued.effect.clone());
+                self.blocked_transcripts.push_back(false);
             }
         }
         effects.into_iter().map(|queued| queued.effect).collect()
@@ -472,10 +470,8 @@ impl RuntimeSideEffectRouter {
     /// committed prefix under its conversation lock before writing again.
     pub(super) fn recover_claimed_transcripts(&mut self) -> usize {
         let mut count = 0;
-        for effect in self.claimed_transcripts.iter().rev() {
-            if matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries, path, .. }
-                if self.blocked_transcripts.iter().any(|(blocked_path, blocked)| blocked_path == path && blocked == entries))
-            {
+        for (index, effect) in self.claimed_transcripts.iter().enumerate().rev() {
+            if self.blocked_transcripts[index] {
                 continue;
             }
             let queued_count = self.persistence.iter().filter(|queued| {
@@ -484,8 +480,8 @@ impl RuntimeSideEffectRouter {
                      RuntimeSideEffect::PersistTranscriptEntries { entries: right, path: right_path, .. })
                      if left == right && left_path == right_path)
             }).count();
-            let claimed_count = self.claimed_transcripts.iter().filter(|claimed| {
-                matches!((claimed, effect),
+            let claimed_count = self.claimed_transcripts.iter().enumerate().filter(|(index, claimed)| {
+                !self.blocked_transcripts[*index] && matches!((*claimed, effect),
                     (RuntimeSideEffect::PersistTranscriptEntries { entries: left, path: left_path, .. },
                      RuntimeSideEffect::PersistTranscriptEntries { entries: right, path: right_path, .. })
                      if left == right && left_path == right_path)
@@ -510,18 +506,16 @@ impl RuntimeSideEffectRouter {
         if !self.owns_claimed_transcript(entries, path) {
             return;
         }
-        self.persistence.retain(|queued| {
-            !(queued.recovered_claim && matches!(&queued.effect, RuntimeSideEffect::PersistTranscriptEntries { entries: queued, path: queued_path, .. }
-                if queued == entries && queued_path == path)
-            )
-        });
-        if !self
-            .blocked_transcripts
-            .iter()
-            .any(|(blocked_path, blocked)| blocked_path == path && blocked == entries)
-        {
-            self.blocked_transcripts
-                .push((path.to_path_buf(), entries.to_vec()));
+        if let Some(index) = self.claimed_transcripts.iter().enumerate().position(|(index, effect)| {
+            !self.blocked_transcripts[index] && matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
+        }) {
+            self.blocked_transcripts[index] = true;
+            if let Some(position) = self.persistence.iter().position(|queued| {
+                queued.recovered_claim && matches!(&queued.effect, RuntimeSideEffect::PersistTranscriptEntries { entries: queued, path: queued_path, .. }
+                    if queued == entries && queued_path == path)
+            }) {
+                self.persistence.remove(position);
+            }
         }
     }
 
@@ -531,12 +525,11 @@ impl RuntimeSideEffectRouter {
         entries: &[mez_agent::transcript::TranscriptEntry],
         path: &std::path::Path,
     ) -> bool {
-        let Some(position) = self.claimed_transcripts.iter().position(|effect| {
-            matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
+        let Some(position) = self.claimed_transcripts.iter().enumerate().position(|(index, effect)| {
+            !self.blocked_transcripts[index] && matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
         }) else { return false; };
         self.claimed_transcripts.remove(position);
-        self.blocked_transcripts
-            .retain(|(blocked_path, blocked)| blocked_path != path || blocked != entries);
+        self.blocked_transcripts.remove(position);
         if let Some(position) = self.persistence.iter().position(|queued| {
             queued.recovered_claim
                 && matches!(&queued.effect,
@@ -554,8 +547,8 @@ impl RuntimeSideEffectRouter {
         entries: &[mez_agent::transcript::TranscriptEntry],
         path: &std::path::Path,
     ) -> bool {
-        self.claimed_transcripts.iter().any(|effect| {
-            matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
+        self.claimed_transcripts.iter().enumerate().any(|(index, effect)| {
+            !self.blocked_transcripts[index] && matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
         })
     }
 

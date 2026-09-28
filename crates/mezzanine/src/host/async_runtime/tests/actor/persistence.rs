@@ -670,10 +670,10 @@ async fn async_actor_does_not_requeue_permanent_transcript_failure() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Row-only blocked ownership currently suppresses both identical claims
-/// when one permanently fails; a generation-fenced claim must correct this.
+/// Permanently rejecting one of two identical claimed appends must not suppress
+/// the other claim's replacement-worker replay.
 #[tokio::test(flavor = "current_thread")]
-async fn async_actor_permanent_failure_blocks_identical_claims_together() {
+async fn async_actor_permanent_failure_preserves_other_identical_claim() {
     use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
 
     let root = std::env::temp_dir().join(format!(
@@ -718,20 +718,17 @@ async fn async_actor_permanent_failure_blocks_identical_claims_together() {
             crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row],
+                entries: vec![row.clone()],
                 path,
                 error: "permanent conflict".to_string(),
                 retryable: false,
             },
         ));
         handle.submit_runtime_events(events).await.unwrap();
-        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
+        let replay = handle.drain_persistence_side_effects(2).await.unwrap();
         assert!(
-            handle
-                .drain_persistence_side_effects(2)
-                .await
-                .unwrap()
-                .is_empty()
+            matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries == &vec![row.clone()])
         );
         handle.shutdown().await.unwrap();
     };
