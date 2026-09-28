@@ -2359,6 +2359,35 @@ fn transcript_store_append_many_rejects_missing_prefix_before_new_row() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// An owned tail cannot justify appending when the archive's leading row
+/// belongs to another conversation, even if that row has sequence one.
+#[test]
+fn transcript_store_append_many_rejects_foreign_leading_row() {
+    let root = temp_root("append-many-foreign-prefix");
+    let store = AgentTranscriptStore::new(root.clone());
+    let path = store.transcript_path("conv1").unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let foreign = entry("other", 1, TranscriptRole::User);
+    let second = entry("conv1", 2, TranscriptRole::Assistant);
+    fs::write(
+        &path,
+        format!(
+            "{}\n{}\n",
+            encode_transcript_entry(&foreign).unwrap(),
+            encode_transcript_entry(&second).unwrap()
+        ),
+    )
+    .unwrap();
+    let before = fs::read(&path).unwrap();
+    assert!(
+        store
+            .append_many(&[entry("conv1", 3, TranscriptRole::Tool)])
+            .is_err()
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// An interrupted row without its terminating newline cannot be acknowledged
 /// as a complete durable record or extended by another append.
 #[test]
