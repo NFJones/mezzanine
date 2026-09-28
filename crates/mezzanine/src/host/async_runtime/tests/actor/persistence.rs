@@ -735,6 +735,22 @@ async fn async_actor_permanent_failure_preserves_other_identical_claim() {
             },
         ));
         let duplicate_failure = events.clone();
+        let mut foreign_failure = events.clone();
+        if let RuntimeEvent::Persistence(crate::runtime::PersistenceEvent::TranscriptClaim {
+            claim_id,
+            ..
+        }) = &mut foreign_failure.events[0]
+        {
+            *claim_id = second_id.wrapping_add(1);
+        }
+        assert_eq!(
+            handle
+                .submit_runtime_events(foreign_failure)
+                .await
+                .unwrap()
+                .applied,
+            0
+        );
         handle.submit_runtime_events(events).await.unwrap();
         assert_eq!(
             handle
