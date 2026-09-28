@@ -1612,6 +1612,37 @@ fn transcript_store_receipt_recovers_unwritten_batch_after_restart() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Reusing an exact receipt must restore private permissions on both the
+/// journal and its directory before acknowledging the accepted rows.
+#[cfg(unix)]
+#[test]
+fn transcript_store_receipt_retry_restores_private_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_root("receipt-retry-permissions");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("conv1", 1, TranscriptRole::User);
+    store
+        .accept_append_receipt(std::slice::from_ref(&row), 1)
+        .unwrap();
+    let directory = root.join(".append-receipts");
+    let path = directory.join("conv1-00000000000000000001-00000000000000000001.json");
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    store
+        .accept_append_receipt(std::slice::from_ref(&row), 1)
+        .unwrap();
+    assert_eq!(
+        fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Overlapping accepted batches share exact rows and replay only their missing
 /// suffix, even when the earlier worker committed a partial prefix.
 #[test]

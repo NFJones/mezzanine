@@ -222,7 +222,10 @@ impl AgentTranscriptStore {
                 && existing.generation == generation
             {
                 if rows == entries {
-                    fs::File::open(self.append_receipt_directory())?.sync_all()?;
+                    let directory = self.append_receipt_directory();
+                    set_private_dir_permissions(&directory)?;
+                    set_private_file_permissions(&directory.join(existing.filename()))?;
+                    fs::File::open(&directory)?.sync_all()?;
                     fs::File::open(&self.root)?.sync_all()?;
                     return Ok(());
                 }
