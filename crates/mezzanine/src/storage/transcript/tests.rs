@@ -191,6 +191,28 @@ fn transcript_view_separates_first_write_from_committed_rows() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Identical outstanding receipts for one first-write row represent one
+/// logical entry, not a missing or conflicting archive prefix.
+#[test]
+fn transcript_view_accepts_identical_first_write_receipts() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("identical-first-write-receipts");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("identical-first-write", 1, TranscriptRole::User);
+    let view = store
+        .conversation_transcript_view(
+            &row.conversation_id,
+            ConversationTranscriptRead::All,
+            false,
+            &[row.clone(), row.clone()],
+        )
+        .unwrap();
+    assert!(view.committed.is_empty());
+    assert_eq!(view.logical, vec![row]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Restart validation accepts writer-produced large rows while rejecting a
 /// foreign row or an incomplete final record without treating either as history.
 #[test]
