@@ -724,7 +724,8 @@ fn deepseek_provider_rejects_missing_maap_after_strict_retry() {
 /// The first request follows DeepSeek's thinking-mode pattern by advertising
 /// tools without forced `tool_choice`. If the model declines to call the MAAP
 /// function, the adapter retries once with thinking disabled and a forced MAAP
-/// function so the runtime still receives a structured action batch.
+/// function so the runtime still receives a structured action batch, even
+/// when optional provider progress is requested.
 async fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose() {
     let mut request = assemble_model_request(
         &ModelProfile {
@@ -842,7 +843,12 @@ async fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_p
         crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
     );
 
-    let response = observed.send_request_async(&request).await.unwrap();
+    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::channel(4);
+    let response = observed
+        .send_request_async_with_progress(&request, Some(progress_sender))
+        .await
+        .unwrap();
+    assert!(progress_receiver.try_recv().is_err());
 
     {
         let requests = provider.transport.requests.lock().unwrap();
