@@ -29,6 +29,28 @@ pub(crate) enum RuntimeProviderLogInput<'a> {
     Settled(&'a AgentTurnExecution),
 }
 
+/// Validated response-local log components in the same order as provider
+/// progress: batch rationale precedes action ordinals. This is presentation
+/// input only; execution results remain owned by their action workers.
+enum RuntimeValidatedLogComponent<'a> {
+    Rationale(&'a str),
+    Action(usize, &'a AgentActionPayload),
+}
+
+/// Adapts a complete validated batch without inventing provisional deltas.
+fn validated_log_components(batch: &mez_agent::MaapBatch) -> Vec<RuntimeValidatedLogComponent<'_>> {
+    let mut components = Vec::with_capacity(batch.actions.len().saturating_add(1));
+    components.push(RuntimeValidatedLogComponent::Rationale(&batch.rationale));
+    components.extend(
+        batch
+            .actions
+            .iter()
+            .enumerate()
+            .map(|(index, action)| RuntimeValidatedLogComponent::Action(index, &action.payload)),
+    );
+    components
+}
+
 impl RuntimeSessionService {
     /// Routes both effective streaming and non-streaming responses through the
     /// same presentation owner. Callers retain claim fencing and execution
@@ -213,17 +235,23 @@ impl RuntimeSessionService {
                 batch,
                 &visible_action_texts,
             );
-        if batch_rationale_was_presented {
-            self.append_agent_thinking_text_to_terminal_buffer(pane_id, batch.rationale.trim())?;
-        }
         let mut emitted_user_visible_action = false;
         let mut pending_runtime_visible_action = false;
         let has_runtime_visible_action = batch
             .actions
             .iter()
             .any(runtime_agent_action_has_runtime_visible_effect);
-        for (action_index, action) in batch.actions.iter().enumerate() {
-            match &action.payload {
+        for component in validated_log_components(batch) {
+            let (action_index, payload) = match component {
+                RuntimeValidatedLogComponent::Rationale(text) => {
+                    if batch_rationale_was_presented {
+                        self.append_agent_thinking_text_to_terminal_buffer(pane_id, text.trim())?;
+                    }
+                    continue;
+                }
+                RuntimeValidatedLogComponent::Action(index, payload) => (index, payload),
+            };
+            match payload {
                 AgentActionPayload::Say {
                     status,
                     text,
