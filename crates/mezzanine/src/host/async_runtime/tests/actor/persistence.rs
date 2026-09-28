@@ -496,6 +496,20 @@ async fn async_actor_recovers_two_fresh_identical_transcript_claims() {
                 }),
             },
         ));
+        for invalid_id in [0, first_id.wrapping_add(second_id).wrapping_add(1)] {
+            let mut invalid = events.clone();
+            if let RuntimeEvent::Persistence(crate::runtime::PersistenceEvent::TranscriptClaim {
+                claim_id,
+                ..
+            }) = &mut invalid.events[0]
+            {
+                *claim_id = invalid_id;
+            }
+            assert_eq!(
+                handle.submit_runtime_events(invalid).await.unwrap().applied,
+                0
+            );
+        }
         let stale_completion = events.clone();
         assert_eq!(
             handle.submit_runtime_events(events).await.unwrap().applied,
