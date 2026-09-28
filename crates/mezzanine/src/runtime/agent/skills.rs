@@ -138,9 +138,7 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running skill result does not match an action")
                 })?;
-            if !self
-                .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
-            {
+            if !self.queue_ordered_provider_header(&turn.pane_id, execution, &action)? {
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,
                     &format!(
@@ -152,6 +150,7 @@ impl RuntimeSessionService {
             }
             execution.action_results[index] =
                 self.execute_skill_action_for_turn(turn, &action, &mut skill_context)?;
+            self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
             executed = executed.saturating_add(1);
         }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
