@@ -2278,6 +2278,14 @@ impl AgentTranscriptStore {
         pending: &[TranscriptEntry],
     ) -> Result<ConversationTranscriptView> {
         validate_conversation_id(conversation_id)?;
+        // Pending receipts may fill a gap in the logical projection, but they
+        // cannot repair missing committed history. The full-history read is
+        // already off the actor and must validate the archive independently.
+        if matches!(read, ConversationTranscriptRead::All)
+            && self.existing_transcript_path_for(conversation_id)?.exists()
+        {
+            self.validate_restored_transcript(conversation_id)?;
+        }
         let committed = match read {
             ConversationTranscriptRead::All => self.inspect(conversation_id),
             ConversationTranscriptRead::Latest(count) => {

@@ -259,6 +259,31 @@ fn transcript_view_merges_repeated_multi_row_first_write_receipts() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Pending receipts cannot make a gapped committed archive valid history.
+#[test]
+fn transcript_view_rejects_committed_gap_with_pending_row() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("committed-gap-with-receipt");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("gap-with-receipt", 1, TranscriptRole::User);
+    let second = entry("gap-with-receipt", 2, TranscriptRole::Assistant);
+    let third = entry("gap-with-receipt", 3, TranscriptRole::Tool);
+    store.append(&first).unwrap();
+    store.append(&third).unwrap();
+    assert!(
+        store
+            .conversation_transcript_view(
+                "gap-with-receipt",
+                ConversationTranscriptRead::All,
+                true,
+                std::slice::from_ref(&second),
+            )
+            .is_err()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Restart validation accepts writer-produced large rows while rejecting a
 /// foreign row or an incomplete final record without treating either as history.
 #[test]
