@@ -1631,6 +1631,34 @@ fn transcript_store_rejects_symlinked_receipt_on_settlement() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Replacing the journal directory after receipt admission must not make a
+/// worker acknowledgment follow and retire a file outside the store.
+#[cfg(unix)]
+#[test]
+fn transcript_store_rejects_redirected_receipt_directory_on_settlement() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_root("redirected-receipt-settlement");
+    let outside = temp_root("outside-receipt-settlement");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("conv1", 1, TranscriptRole::User);
+    store
+        .accept_append_receipt(std::slice::from_ref(&row), 1)
+        .unwrap();
+    store.append_many(std::slice::from_ref(&row)).unwrap();
+    fs::rename(root.join(".append-receipts"), &outside).unwrap();
+    symlink(&outside, root.join(".append-receipts")).unwrap();
+
+    assert!(
+        store
+            .settle_append_receipt(std::slice::from_ref(&row), 1)
+            .is_err()
+    );
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(outside);
+}
+
 /// Conflicting retained receipts must be rejected before either batch changes
 /// the archive, even if both records are individually valid and well-formed.
 #[test]

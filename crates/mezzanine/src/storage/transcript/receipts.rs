@@ -379,6 +379,16 @@ impl AgentTranscriptStore {
         let receipt = AppendReceipt::new(entries, generation)?;
         let _lock = self.acquire_conversation_lock(&receipt.conversation_id)?;
         let directory = self.append_receipt_directory();
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(MezError::invalid_state(
+                    "transcript receipt directory is not a real directory",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
         let path = directory.join(receipt.filename());
         match fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_file() => {}
