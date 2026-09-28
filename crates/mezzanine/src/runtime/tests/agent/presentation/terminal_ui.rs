@@ -1059,6 +1059,82 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
     assert!(pane_text.contains("▐      delta epsilon"), "{pane_text}");
 }
 
+/// An open rationale must keep even the first action off the pane until its
+/// source closes; neither a started label nor a worker projection may bypass it.
+#[test]
+fn runtime_streaming_open_rationale_holds_first_say() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(52, 20).unwrap(), 200)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+    );
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: "working through the rationale".to_string(),
+        },
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 0,
+            status: mez_agent::SayStatus::Progress,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 0,
+            text: "later answer".to_string(),
+        },
+    ] {
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-rationale-order",
+                crate::runtime::RuntimeProviderLogInput::Progress(&event),
+            )
+            .unwrap();
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-rationale-order")
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    service
+        .apply_agent_streaming_say_projection_result(projection)
+        .unwrap();
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        visible.contains("working through the rationale"),
+        "{visible}"
+    );
+    assert!(!visible.contains("later answer"), "{visible}");
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-rationale-order",
+            crate::runtime::RuntimeProviderLogInput::Progress(
+                &mez_agent::StreamingSayEvent::RationaleTextComplete,
+            ),
+        )
+        .unwrap();
+    assert!(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-rationale-order")
+            .unwrap()
+            .is_some(),
+        "closing rationale must schedule buffered projection"
+    );
+}
+
 /// A later complete action must wait while the preceding action still has
 /// unclosed source, even when the later action has a complete renderable body.
 #[test]

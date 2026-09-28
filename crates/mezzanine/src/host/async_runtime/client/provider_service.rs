@@ -53,13 +53,13 @@ fn streaming_presentation_event_changes_projection(event: &mez_agent::StreamingS
         mez_agent::StreamingSayEvent::TextComplete { .. }
         | mez_agent::StreamingSayEvent::MessagePayloadComplete { .. }
         | mez_agent::StreamingSayEvent::ShellCommandTextComplete { .. }
-        | mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { .. } => true,
+        | mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { .. }
+        | mez_agent::StreamingSayEvent::RationaleTextComplete => true,
         mez_agent::StreamingSayEvent::ResponseStarted { .. }
         | mez_agent::StreamingSayEvent::Started { .. }
         | mez_agent::StreamingSayEvent::RationaleStarted
         | mez_agent::StreamingSayEvent::ShellCommandStarted { .. }
         | mez_agent::StreamingSayEvent::ShellCommandSummaryStarted { .. }
-        | mez_agent::StreamingSayEvent::RationaleTextComplete
         | mez_agent::StreamingSayEvent::MessageStarted { .. }
         | mez_agent::StreamingSayEvent::ActionHeader { .. } => false,
         mez_agent::StreamingSayEvent::ActionComplete { .. } => true,

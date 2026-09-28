@@ -2807,7 +2807,11 @@ impl RuntimeSessionService {
                     .chain(presentation.shell_summaries.keys())
                     .chain(presentation.action_headers.keys())
                     .chain(presentation.received_actions.iter())
-                    .any(|index| index < action_index);
+                    .any(|index| index < action_index)
+                    || presentation
+                        .rationale
+                        .as_ref()
+                        .is_some_and(|source| !source.complete);
                 if !has_predecessor {
                     self.append_agent_streaming_say_started(pane_id)?;
                 }
@@ -3009,6 +3013,14 @@ impl RuntimeSessionService {
                     )
                 })?;
                 rationale.complete = true;
+                if !presentation.actions.is_empty()
+                    || !presentation.action_headers.is_empty()
+                    || !presentation.shell_commands.is_empty()
+                    || !presentation.outbound_messages.is_empty()
+                {
+                    presentation.revision = presentation.revision.wrapping_add(1);
+                    presentation.projected_revision = None;
+                }
             }
             mez_agent::StreamingSayEvent::ShellCommandStarted { action_index } => {
                 self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
@@ -3542,6 +3554,13 @@ impl RuntimeSessionService {
             .chain(presentation.received_actions.iter().copied().min())
             .min();
         let visible = |index: &usize| first_pending_action.is_none_or(|pending| *index <= pending);
+        let visible = |index: &usize| {
+            presentation
+                .rationale
+                .as_ref()
+                .is_none_or(|source| source.complete)
+                && visible(index)
+        };
         Ok(Some(crate::runtime::RuntimeStreamingSayProjectionWork {
             pane_id: pane_id.to_string(),
             turn_id: turn_id.to_string(),
