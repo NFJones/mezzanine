@@ -6875,7 +6875,9 @@ combined turn-local request fits. Legacy transcript user rows are exact
 barriers even when their imported block retention metadata is summarizable.
 If the complete candidate after a model-authored summary exceeds the safe input
 allowance, compaction MAY request a shorter model-authored summary of the same
-frozen source in bounded passes. If that summary cannot cover the excess,
+frozen source while the complete candidate estimate and enforceable output
+ceiling strictly decrease. A repeated or non-improving candidate MUST fail
+without publication. If that summary cannot cover the excess,
 compaction MAY summarize another eligible closed range beyond an exact barrier;
 all earlier summaries MUST remain provisional until the combined replay passes
 the complete request check and publishes one atomic epoch. Each attempted

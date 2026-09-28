@@ -1222,6 +1222,52 @@ fn runtime_observed_compaction_retries_oversized_final_request() {
     );
 }
 
+/// A fourth improving final candidate must continue instead of failing at an
+/// arbitrary retry count; the complete request and output ceiling still shrink.
+#[test]
+fn runtime_observed_compaction_allows_fourth_improving_final_retry() {
+    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "17000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        final_request_retry,
+        ..
+    } = &mut task.target
+    else {
+        panic!("expected active-turn retry state");
+    };
+    final_request_retry.attempts = 3;
+    final_request_retry.last_input_tokens = Some(usize::MAX);
+    final_request_retry.summary_ceiling = Some(usize::MAX);
+    service.queue_agent_compaction_task(task);
+    complete_runtime_test_compaction(&mut service, "%1", &"large-summary ".repeat(900));
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    let retry = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("fourth improving candidate must retain the frozen source");
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        final_request_retry,
+        ..
+    } = &retry.target
+    else {
+        panic!("expected active-turn retry state");
+    };
+    assert_eq!(final_request_retry.attempts, 4);
+    assert!(final_request_retry.last_input_tokens.unwrap() < usize::MAX);
+    assert!(final_request_retry.summary_ceiling.unwrap() < usize::MAX);
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
+}
+
 /// A second closed segment remains provisional until both anchored summaries
 /// fit the complete refreshed request and can publish as one epoch.
 #[test]

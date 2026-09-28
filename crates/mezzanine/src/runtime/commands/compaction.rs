@@ -1540,11 +1540,14 @@ impl RuntimeSessionService {
                         let next_budget = summary_tokens
                             .saturating_sub(excess)
                             .min(summary_tokens / 2);
-                        if final_request_retry.attempts < 3
-                            && next_budget > 0
+                        if next_budget > 0
+                            && final_request_retry
+                                .summary_ceiling
+                                .is_none_or(|ceiling| next_budget < ceiling)
                             && previous.is_none_or(|value| retry_estimate.input_tokens < value)
                         {
-                            final_request_retry.attempts += 1;
+                            final_request_retry.attempts =
+                                final_request_retry.attempts.saturating_add(1);
                             final_request_retry.last_input_tokens =
                                 Some(retry_estimate.input_tokens);
                             final_request_retry.summary_ceiling = Some(next_budget);
@@ -1767,13 +1770,16 @@ impl RuntimeSessionService {
                             final_request_retry,
                             ..
                         } = &mut task.target
-                            && final_request_retry.attempts < 3
                             && next_budget > 0
+                            && final_request_retry
+                                .summary_ceiling
+                                .is_none_or(|ceiling| next_budget < ceiling)
                             && final_request_retry
                                 .last_input_tokens
                                 .is_none_or(|previous| candidate_tokens < previous)
                         {
-                            final_request_retry.attempts += 1;
+                            final_request_retry.attempts =
+                                final_request_retry.attempts.saturating_add(1);
                             final_request_retry.last_input_tokens = Some(candidate_tokens);
                             final_request_retry.summary_ceiling = Some(next_budget);
                             let blocks =
@@ -1896,7 +1902,13 @@ impl RuntimeSessionService {
                         .saturating_sub(candidate_tokens.saturating_sub(input_limit))
                         .min(summary_tokens / 2);
                     let (previous, attempts) = task.manual_final_retry.unwrap_or((usize::MAX, 0));
-                    if attempts < 3 && next_budget > 0 && candidate_tokens < previous {
+                    if next_budget > 0
+                        && task
+                            .request
+                            .max_output_tokens
+                            .is_none_or(|ceiling| next_budget < ceiling)
+                        && candidate_tokens < previous
+                    {
                         let source = task.manual_retry_source.clone().ok_or_else(|| {
                             MezError::invalid_state("manual compaction retry source is unavailable")
                         })?;
@@ -1906,7 +1918,8 @@ impl RuntimeSessionService {
                             chunks.summaries.clear();
                             chunks.pending.clear();
                         }
-                        task.manual_final_retry = Some((candidate_tokens, attempts + 1));
+                        task.manual_final_retry =
+                            Some((candidate_tokens, attempts.saturating_add(1)));
                         task.request.max_output_tokens = Some(next_budget);
                         self.queue_agent_compaction_task(task.clone());
                         return Ok(());
