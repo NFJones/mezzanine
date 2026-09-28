@@ -1163,21 +1163,10 @@ impl RuntimeSessionService {
                         })
                         .collect::<Vec<_>>()
                         .join("\n\n");
-                    if synthesis.len() >= chunks.current.len()
-                        && chunks.synthesis_source_bytes.is_some()
-                    {
-                        return Err(MezError::invalid_state(
-                            "conversation compactor synthesis did not reduce its source",
-                        ));
-                    }
-                    if chunks
-                        .synthesis_source_bytes
-                        .is_some_and(|previous| synthesis.len() >= previous)
-                    {
-                        return Err(MezError::invalid_state(
-                            "conversation compactor synthesis did not make progress",
-                        ));
-                    }
+                    runtime_require_smaller_synthesis(
+                        chunks.synthesis_source_bytes,
+                        synthesis.len(),
+                    )?;
                     chunks.synthesis_source_bytes = Some(synthesis.len());
                     chunks.summaries.clear();
                     runtime_rebuild_conversation_compaction_request(&mut task, synthesis)?;
@@ -2902,6 +2891,17 @@ fn runtime_split_conversation_compaction_source(source: &str) -> Option<(String,
     })
 }
 
+/// Admit the first synthesis round, then require every later round to shrink
+/// its preceding synthesis source; an empty candidate never makes progress.
+fn runtime_require_smaller_synthesis(previous: Option<usize>, candidate: usize) -> Result<()> {
+    if candidate == 0 || previous.is_some_and(|bytes| candidate >= bytes) {
+        return Err(MezError::invalid_state(
+            "conversation compactor synthesis did not make progress",
+        ));
+    }
+    Ok(())
+}
+
 /// Starts bounded recursive manual work only after freezing and redacting the
 /// original source in the already prepared compactor request.
 fn runtime_prepare_conversation_compaction_chunks(
@@ -3513,6 +3513,17 @@ pub(super) fn runtime_transcript_role_name(role: TranscriptRole) -> &'static str
 #[cfg(test)]
 mod size_diagnostic_tests {
     use super::*;
+
+    /// A synthesis round must shrink the frozen source; equal, growing, and
+    /// empty candidates cannot cause another model request.
+    #[test]
+    fn manual_synthesis_requires_strict_source_reduction() {
+        assert!(runtime_require_smaller_synthesis(Some(100), 99).is_ok());
+        assert!(runtime_require_smaller_synthesis(Some(100), 100).is_err());
+        assert!(runtime_require_smaller_synthesis(Some(100), 101).is_err());
+        assert!(runtime_require_smaller_synthesis(Some(100), 0).is_err());
+        assert!(runtime_require_smaller_synthesis(None, 1).is_ok());
+    }
 
     /// A single oversized source can be split repeatedly without cutting a
     /// Unicode scalar or losing its final sentinel between temporary chunks.
