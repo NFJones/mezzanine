@@ -467,9 +467,7 @@ impl RuntimePersistenceComponent {
                     .in_flight_transcript_entries
                     .entry((first.conversation_id.clone(), first.sequence))
                     .or_default();
-                if !batches.contains(entries) {
-                    batches.push(entries.clone());
-                }
+                batches.push(entries.clone());
             }
         }
         effects
@@ -500,7 +498,9 @@ impl RuntimePersistenceComponent {
             return false;
         }
         if let Some(batches) = self.in_flight_transcript_entries.get_mut(&key) {
-            batches.retain(|batch| batch != entries);
+            if let Some(position) = batches.iter().position(|batch| batch == entries) {
+                batches.remove(position);
+            }
             if batches.is_empty() {
                 self.in_flight_transcript_entries.remove(&key);
             }
@@ -824,6 +824,61 @@ mod tests {
         assert!(
             component
                 .pending_transcript_entries("identical-claim")
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Two simultaneously drained identical appends remain two outstanding
+    /// claims; settling one must not erase the other's logical visibility.
+    #[test]
+    fn transcript_identical_in_flight_claims_settle_one_at_a_time() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-transcript-duplicate-claims-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let row = mez_agent::transcript::TranscriptEntry {
+            conversation_id: "duplicate-claims".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted".to_string(),
+        };
+        let effect = RuntimeSideEffect::PersistTranscriptEntries {
+            path: store.transcript_path("duplicate-claims").unwrap(),
+            store,
+            entries: vec![row.clone()],
+        };
+        let mut component = RuntimePersistenceComponent::default();
+        component.queue_transcript(effect.clone());
+        component.queue_transcript(effect);
+        assert_eq!(component.take_transcript_effects().len(), 2);
+        assert_eq!(
+            component.pending_transcript_entries("duplicate-claims"),
+            vec![row.clone(), row.clone()]
+        );
+        assert!(component.settle_transcript_write(
+            "duplicate-claims",
+            1,
+            std::slice::from_ref(&row)
+        ));
+        assert_eq!(
+            component.pending_transcript_entries("duplicate-claims"),
+            vec![row.clone()]
+        );
+        assert!(component.settle_transcript_write(
+            "duplicate-claims",
+            1,
+            std::slice::from_ref(&row)
+        ));
+        assert!(
+            component
+                .pending_transcript_entries("duplicate-claims")
                 .is_empty()
         );
         let _ = std::fs::remove_dir_all(root);
