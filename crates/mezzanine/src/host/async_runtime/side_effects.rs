@@ -1422,11 +1422,12 @@ where
             crate::host::async_runtime::AsyncRuntimeLatencyPhase::PersistenceBatch,
             u64::try_from(persistence_batch_started.elapsed().as_millis()).unwrap_or(u64::MAX),
         );
-        let transcript_failed = batch.events.iter().any(|event| {
-            matches!(
-                event,
-                RuntimeEvent::Persistence(PersistenceEvent::TranscriptFailed { .. })
-            )
+        let transcript_failed = batch.events.iter().any(|event| match event {
+            RuntimeEvent::Persistence(PersistenceEvent::TranscriptFailed { .. }) => true,
+            RuntimeEvent::Persistence(PersistenceEvent::TranscriptClaim { outcome, .. }) => {
+                matches!(outcome.as_ref(), PersistenceEvent::TranscriptFailed { .. })
+            }
+            _ => false,
         });
         if !batch.events.is_empty() {
             let ingress = handle.submit_runtime_events(batch).await?;
