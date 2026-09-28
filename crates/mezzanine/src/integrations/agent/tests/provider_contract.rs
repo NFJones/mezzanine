@@ -5,6 +5,79 @@
 
 use super::*;
 
+/// A unary Anthropic native tool-use response must provide an authoritative
+/// validated batch without inventing incremental MAAP presentation events.
+#[tokio::test]
+async fn anthropic_unary_tool_use_completes_without_provider_progress() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "anthropic".to_string(),
+            model: "claude-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: Default::default(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "claude-test",
+                "stop_reason": "tool_use",
+                "content": [{
+                    "type": "tool_use",
+                    "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                    "input": {
+                        "rationale": "complete Anthropic answer",
+                        "actions": [{
+                            "type": "say",
+                            "status": "final",
+                            "content_type": "text/plain; charset=utf-8",
+                            "text": "hello"
+                        }]
+                    }
+                }]
+            })
+            .to_string(),
+        },
+    };
+    let provider =
+        crate::integrations::agent::provider::AnthropicMessagesProvider::without_auth(transport)
+            .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+    let response = provider
+        .send_request_async_with_progress(&request, Some(sender))
+        .await
+        .unwrap();
+    assert!(receiver.try_recv().is_err());
+    let batch = response.action_batch.unwrap();
+    assert_eq!(batch.rationale, "complete Anthropic answer");
+    assert!(matches!(
+        &batch.actions[0].payload,
+        AgentActionPayload::Say { text, .. } if text == "hello"
+    ));
+    let sent = provider.transport.requests.lock().unwrap();
+    let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+    assert_eq!(body["stream"], false);
+}
+
 #[test]
 /// Verifies model provider trait returns model response.
 ///
