@@ -537,6 +537,81 @@ fn openai_provider_stream_parses_maap_function_call_arguments() {
     }
 }
 
+/// A streaming request may receive complete JSON instead of SSE; completion
+/// remains authoritative and must not fabricate optional progress events.
+#[tokio::test]
+async fn openai_stream_request_accepts_json_completion_without_progress() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: Default::default(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
+    let raw_text = serde_json::json!({
+        "rationale": "complete response",
+        "actions": [{
+            "type": "say",
+            "status": "final",
+            "content_type": "text/plain; charset=utf-8",
+            "text": "hello"
+        }]
+    })
+    .to_string();
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: std::collections::BTreeMap::from([(
+                "Content-Type".to_string(),
+                "application/json".to_string(),
+            )]),
+            body: serde_json::json!({"model": "gpt-test", "output_text": raw_text}).to_string(),
+        },
+    };
+    let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "test-key",
+        "https://example.test/responses",
+        10,
+        Default::default(),
+        true,
+        transport,
+    )
+    .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+    let response = provider
+        .send_request_async_with_progress(&request, Some(sender))
+        .await
+        .unwrap();
+    assert!(receiver.try_recv().is_err());
+    let batch = response.action_batch.unwrap();
+    assert_eq!(batch.rationale, "complete response");
+    assert!(matches!(
+        &batch.actions[0].payload,
+        AgentActionPayload::Say { text, .. } if text == "hello"
+    ));
+    let sent = provider.transport.requests.lock().unwrap();
+    let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+    assert_eq!(body["stream"], true);
+}
+
 #[tokio::test]
 /// Verifies provider streaming forwards an ordered `say` event backlog larger
 /// than the former bounded progress channel without dropping source text.
