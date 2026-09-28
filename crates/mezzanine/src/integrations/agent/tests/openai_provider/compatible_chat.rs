@@ -1190,6 +1190,109 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies a requested stream that negotiates unary transport returns a
+/// validated batch even when the caller supplies an optional progress channel.
+/// No synthetic preview may be emitted for the complete JSON response.
+#[tokio::test]
+async fn compatible_unary_completion_does_not_require_provider_progress() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-generic-chat-unary-progress-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "local-openai-chat".to_string(),
+            model: "local-chat-model".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: Default::default(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
+    let arguments = serde_json::json!({
+        "rationale": "complete unary answer",
+        "actions": [{
+            "type": "say",
+            "status": "final",
+            "content_type": "text/plain; charset=utf-8",
+            "text": "hello"
+        }]
+    })
+    .to_string();
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "local-chat-model",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                "arguments": arguments
+                            }
+                        }]
+                    }
+                }]
+            })
+            .to_string(),
+        },
+    };
+    let provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "local-openai-chat",
+        Some("http://localhost:1234/v1"),
+        &std::collections::BTreeMap::new(),
+        120_000,
+        transport,
+    )
+    .unwrap()
+    .with_stream(true);
+    assert!(!provider.streams_request(&request));
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+    let response = provider
+        .send_request_async_with_progress(&request, Some(sender))
+        .await
+        .unwrap();
+    assert!(receiver.try_recv().is_err());
+    let batch = response.action_batch.unwrap();
+    assert_eq!(batch.rationale, "complete unary answer");
+    assert!(matches!(
+        &batch.actions[0].payload,
+        AgentActionPayload::Say { text, .. } if text == "hello"
+    ));
+    let sent = provider.transport.requests.lock().unwrap();
+    assert_eq!(
+        sent[0].headers.get("Accept").map(String::as_str),
+        Some("application/json")
+    );
+    let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+    assert_eq!(body["stream"], false);
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[tokio::test]
 /// Verifies a generic compatible backend can explicitly opt in to standard
 /// OpenAI Chat Completions SSE without changing the default unary behavior.
