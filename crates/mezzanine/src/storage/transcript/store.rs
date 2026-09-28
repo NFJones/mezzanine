@@ -2600,6 +2600,16 @@ impl AgentTranscriptStore {
         const READ_CHUNK_BYTES: usize = 64 * 1024;
         let mut file = std_fs::File::open(path)?;
         let mut position = file.metadata()?.len();
+        if position > 0 {
+            file.seek(SeekFrom::End(-1))?;
+            let mut terminator = [0];
+            file.read_exact(&mut terminator)?;
+            if terminator[0] != b'\n' {
+                return Err(MezError::invalid_state(
+                    "transcript archive ends with an incomplete row",
+                ));
+            }
+        }
         let mut prefix = Vec::new();
         let mut lines = Vec::with_capacity(max_entries);
         while position > 0 && lines.len() < max_entries {

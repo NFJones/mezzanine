@@ -284,6 +284,33 @@ fn transcript_view_rejects_committed_gap_with_pending_row() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A bounded view must not treat an unterminated durable row as committed,
+/// even when an identical pending receipt could supply its contents.
+#[test]
+fn transcript_view_rejects_unterminated_committed_tail() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("unterminated-view-tail");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("unterminated-view-tail", 1, TranscriptRole::User);
+    store.append(&row).unwrap();
+    let path = store.transcript_path(&row.conversation_id).unwrap();
+    let mut bytes = fs::read(&path).unwrap();
+    assert_eq!(bytes.pop(), Some(b'\n'));
+    fs::write(&path, bytes).unwrap();
+    assert!(
+        store
+            .conversation_transcript_view(
+                &row.conversation_id,
+                ConversationTranscriptRead::Latest(1),
+                true,
+                std::slice::from_ref(&row)
+            )
+            .is_err()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Pending rows after a valid committed prefix cannot skip a sequence and
 /// become a model-visible logical history.
 #[test]
