@@ -1307,6 +1307,47 @@ fn runtime_compaction_continues_pending_chunk_after_32_responses() {
     assert!(!service.agent_provider_task_is_pending(&turn_id));
 }
 
+/// A later active-turn synthesis round cannot repeat or enlarge its previous
+/// source; terminal failure leaves durable replay unchanged.
+#[test]
+fn runtime_compaction_rejects_nonreducing_active_synthesis() {
+    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let original_rows = store.inspect(&conversation_id).unwrap();
+    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        completed_summaries,
+        synthesis_source_bytes,
+        ..
+    } = &mut task.target
+    else {
+        panic!("expected active-turn compaction");
+    };
+    completed_summaries.push("earlier summary".to_string());
+    *synthesis_source_bytes = Some(1);
+    service.queue_agent_compaction_task(task);
+    complete_runtime_test_compaction(&mut service, "%1", "later summary");
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_none()
+    );
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert!(
+        store
+            .inspect(&conversation_id)
+            .unwrap()
+            .starts_with(&original_rows)
+    );
+    assert!(service.agent_turn_contexts().get(&turn_id).is_none());
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
+}
+
 /// A second closed segment remains provisional until both anchored summaries
 /// fit the complete refreshed request and can publish as one epoch.
 #[test]

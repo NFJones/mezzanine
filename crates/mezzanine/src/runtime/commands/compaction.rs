@@ -805,6 +805,7 @@ impl RuntimeSessionService {
                 current_blocks,
                 pending_blocks,
                 completed_summaries: Vec::new(),
+                synthesis_source_bytes: None,
                 completed_responses: 0,
                 plan: Box::new(plan),
             },
@@ -1180,6 +1181,7 @@ impl RuntimeSessionService {
                         current_blocks,
                         pending_blocks,
                         completed_summaries,
+                        synthesis_source_bytes,
                         completed_responses,
                         ..
                     } = &mut task.target
@@ -1201,7 +1203,11 @@ impl RuntimeSessionService {
                         (None, completed_summaries.pop())
                     } else {
                         let summaries = std::mem::take(completed_summaries);
-                        (Some(runtime_compaction_summary_blocks(summaries)), None)
+                        let blocks = runtime_compaction_summary_blocks(summaries);
+                        let bytes = blocks.iter().map(|block| block.content.len()).sum();
+                        runtime_require_smaller_synthesis(*synthesis_source_bytes, bytes)?;
+                        *synthesis_source_bytes = Some(bytes);
+                        (Some(blocks), None)
                     }
                 };
                 if let Some(blocks) = next_blocks {

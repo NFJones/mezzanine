@@ -705,6 +705,8 @@ pub enum RuntimeAgentCompactionTarget {
         pending_blocks: Vec<Vec<super::ContextBlock>>,
         /// Completed chunk summaries awaiting one final synthesis request.
         completed_summaries: Vec<String>,
+        /// Prior synthesis source size; later synthesis rounds must shrink.
+        synthesis_source_bytes: Option<usize>,
         /// Total provider responses consumed across recursive compaction rounds.
         completed_responses: usize,
         /// Deterministic selection and application contract.
