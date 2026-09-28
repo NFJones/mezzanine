@@ -1089,12 +1089,15 @@ where
                             report.completed = report.completed.saturating_add(1);
                             report.bytes_written = report.bytes_written.saturating_add(bytes);
                             batch.push(RuntimeEvent::Persistence(
-                                PersistenceEvent::TranscriptCompleted {
-                                    conversation_id,
-                                    first_sequence,
-                                    entries,
-                                    path,
-                                    bytes,
+                                PersistenceEvent::TranscriptClaim {
+                                    claim_id: claim_id.unwrap_or(0),
+                                    outcome: Box::new(PersistenceEvent::TranscriptCompleted {
+                                        conversation_id,
+                                        first_sequence,
+                                        entries,
+                                        path,
+                                        bytes,
+                                    }),
                                 },
                             ));
                         }
@@ -1106,13 +1109,16 @@ where
                                     | crate::error::MezErrorKind::InvalidArgs
                             );
                             batch.push(RuntimeEvent::Persistence(
-                                PersistenceEvent::TranscriptFailed {
-                                    conversation_id,
-                                    first_sequence,
-                                    entries,
-                                    path,
-                                    error: error.message().to_string(),
-                                    retryable,
+                                PersistenceEvent::TranscriptClaim {
+                                    claim_id: claim_id.unwrap_or(0),
+                                    outcome: Box::new(PersistenceEvent::TranscriptFailed {
+                                        conversation_id,
+                                        first_sequence,
+                                        entries,
+                                        path,
+                                        error: error.message().to_string(),
+                                        retryable,
+                                    }),
                                 },
                             ));
                         }

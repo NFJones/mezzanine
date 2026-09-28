@@ -446,6 +446,11 @@ impl RuntimeSessionService {
                 })
                 .to_string()
             }
+            crate::runtime::PersistenceEvent::TranscriptClaim { .. } => {
+                return Err(crate::error::MezError::invalid_state(
+                    "transcript claim must be fenced by the actor before service settlement",
+                ));
+            }
         };
         // A completed transcript write is already durable. Diagnostic delivery
         // must not strand its actor-owned receipt when the event log rejects a

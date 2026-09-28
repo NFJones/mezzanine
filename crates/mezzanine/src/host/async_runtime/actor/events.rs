@@ -1380,6 +1380,23 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         persistence_event: PersistenceEvent,
     ) -> Result<RuntimeTransition> {
+        let (persistence_event, claim_id) = match persistence_event {
+            PersistenceEvent::TranscriptClaim { claim_id, outcome } => (*outcome, Some(claim_id)),
+            event => (event, None),
+        };
+        if let Some(claim_id) = claim_id {
+            let (entries, path) = match &persistence_event {
+                PersistenceEvent::TranscriptCompleted { entries, path, .. }
+                | PersistenceEvent::TranscriptFailed { entries, path, .. } => (entries, path),
+                _ => return Ok(RuntimeTransition::default()),
+            };
+            if !self
+                .side_effect_routes
+                .owns_claimed_transcript_id(claim_id, entries, path)
+            {
+                return Ok(RuntimeTransition::default());
+            }
+        }
         let completed_claim = match &persistence_event {
             PersistenceEvent::TranscriptCompleted { entries, path, .. } => {
                 Some((entries.clone(), path.clone()))
@@ -1428,8 +1445,13 @@ impl AsyncRuntimeSessionActor {
                 retryable: false,
                 ..
             } => {
-                self.side_effect_routes
-                    .block_claimed_transcript(entries, path);
+                if let Some(id) = claim_id {
+                    self.side_effect_routes
+                        .block_claimed_transcript_id(id, entries, path);
+                } else {
+                    self.side_effect_routes
+                        .block_claimed_transcript(entries, path);
+                }
             }
             _ => {}
         }
@@ -1439,8 +1461,13 @@ impl AsyncRuntimeSessionActor {
         if transition.applied
             && let Some((entries, path)) = completed_claim
         {
-            self.side_effect_routes
-                .settle_claimed_transcript(&entries, &path);
+            if let Some(id) = claim_id {
+                self.side_effect_routes
+                    .settle_claimed_transcript_id(id, &entries, &path);
+            } else {
+                self.side_effect_routes
+                    .settle_claimed_transcript(&entries, &path);
+            }
         }
         self.queue_peer_message_delivery_timer_if_needed(async_runtime_current_unix_millis())?;
         Ok(transition)

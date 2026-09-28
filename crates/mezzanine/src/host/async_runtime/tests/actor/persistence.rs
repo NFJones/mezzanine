@@ -475,25 +475,25 @@ async fn async_actor_recovers_two_fresh_identical_transcript_claims() {
         .build()
         .unwrap();
     let client = async {
-        assert_eq!(
-            handle
-                .drain_persistence_side_effects(2)
-                .await
-                .unwrap()
-                .len(),
-            2
-        );
+        let claimed = handle.drain_persistence_claims(2).await.unwrap();
+        assert_eq!(claimed.len(), 2);
+        let first_id = claimed[0].1.unwrap();
+        let second_id = claimed[1].1.unwrap();
+        assert_ne!(first_id, second_id);
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 2);
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
         store.append_many(std::slice::from_ref(&row)).unwrap();
         let mut events = RuntimeEventBatch::new();
         events.push(RuntimeEvent::Persistence(
-            crate::runtime::PersistenceEvent::TranscriptCompleted {
-                conversation_id: row.conversation_id.clone(),
-                first_sequence: row.sequence,
-                entries: vec![row.clone()],
-                path: store.transcript_path(&row.conversation_id).unwrap(),
-                bytes: 0,
+            crate::runtime::PersistenceEvent::TranscriptClaim {
+                claim_id: first_id,
+                outcome: Box::new(crate::runtime::PersistenceEvent::TranscriptCompleted {
+                    conversation_id: row.conversation_id.clone(),
+                    first_sequence: row.sequence,
+                    entries: vec![row.clone()],
+                    path: store.transcript_path(&row.conversation_id).unwrap(),
+                    bytes: 0,
+                }),
             },
         ));
         let stale_completion = events.clone();
@@ -507,18 +507,13 @@ async fn async_actor_recovers_two_fresh_identical_transcript_claims() {
                 .await
                 .unwrap()
                 .applied,
-            1,
-            "row-only worker events currently settle the other identical claim"
+            0,
+            "a duplicate outcome must not settle the other identical claim"
         );
-        assert_eq!(
-            handle
-                .drain_persistence_side_effects(2)
-                .await
-                .unwrap()
-                .len(),
-            0
-        );
-        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
+        let replay = handle.drain_persistence_claims(2).await.unwrap();
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].1, Some(second_id));
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
         handle.shutdown().await.unwrap();
     };
     let ((), _) = tokio::join!(client, actor.run());
@@ -705,31 +700,40 @@ async fn async_actor_permanent_failure_preserves_other_identical_claim() {
         .build()
         .unwrap();
     let client = async {
-        assert_eq!(
-            handle
-                .drain_persistence_side_effects(2)
-                .await
-                .unwrap()
-                .len(),
-            2
-        );
+        let claims = handle.drain_persistence_claims(2).await.unwrap();
+        assert_eq!(claims.len(), 2);
+        let first_id = claims[0].1.unwrap();
+        let second_id = claims[1].1.unwrap();
+        assert_ne!(first_id, second_id);
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 2);
         let mut events = RuntimeEventBatch::new();
         events.push(RuntimeEvent::Persistence(
-            crate::runtime::PersistenceEvent::TranscriptFailed {
-                conversation_id: row.conversation_id.clone(),
-                first_sequence: row.sequence,
-                entries: vec![row.clone()],
-                path,
-                error: "permanent conflict".to_string(),
-                retryable: false,
+            crate::runtime::PersistenceEvent::TranscriptClaim {
+                claim_id: first_id,
+                outcome: Box::new(crate::runtime::PersistenceEvent::TranscriptFailed {
+                    conversation_id: row.conversation_id.clone(),
+                    first_sequence: row.sequence,
+                    entries: vec![row.clone()],
+                    path,
+                    error: "permanent conflict".to_string(),
+                    retryable: false,
+                }),
             },
         ));
+        let duplicate_failure = events.clone();
         handle.submit_runtime_events(events).await.unwrap();
+        assert_eq!(
+            handle
+                .submit_runtime_events(duplicate_failure)
+                .await
+                .unwrap()
+                .applied,
+            0
+        );
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
-        let replay = handle.drain_persistence_side_effects(2).await.unwrap();
+        let replay = handle.drain_persistence_claims(2).await.unwrap();
         assert!(
-            matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries == &vec![row.clone()])
+            matches!(replay.as_slice(), [(RuntimeSideEffect::PersistTranscriptEntries { entries, .. }, Some(id))] if entries == &vec![row.clone()] && *id == second_id)
         );
         handle.shutdown().await.unwrap();
     };

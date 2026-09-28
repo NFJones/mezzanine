@@ -574,6 +574,55 @@ impl RuntimeSideEffectRouter {
     }
 
     /// Reports whether a worker event still names an exact claimed append.
+    pub(super) fn owns_claimed_transcript_id(
+        &self,
+        id: u64,
+        entries: &[mez_agent::transcript::TranscriptEntry],
+        path: &std::path::Path,
+    ) -> bool {
+        id != 0 && self.claimed_transcripts.iter().any(|claim| {
+            claim.id == id && !claim.blocked && matches!(&claim.effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
+        })
+    }
+
+    /// Blocks only the exact claimed append named by a worker failure.
+    pub(super) fn block_claimed_transcript_id(
+        &mut self,
+        id: u64,
+        entries: &[mez_agent::transcript::TranscriptEntry],
+        path: &std::path::Path,
+    ) {
+        if !self.owns_claimed_transcript_id(id, entries, path) {
+            return;
+        }
+        if let Some(claim) = self
+            .claimed_transcripts
+            .iter_mut()
+            .find(|claim| claim.id == id)
+        {
+            claim.blocked = true;
+        }
+        self.persistence
+            .retain(|queued| queued.recovered_claim != Some(id));
+    }
+
+    /// Retires only the exact claimed append named by a worker completion.
+    pub(super) fn settle_claimed_transcript_id(
+        &mut self,
+        id: u64,
+        entries: &[mez_agent::transcript::TranscriptEntry],
+        path: &std::path::Path,
+    ) -> bool {
+        if !self.owns_claimed_transcript_id(id, entries, path) {
+            return false;
+        }
+        self.claimed_transcripts.retain(|claim| claim.id != id);
+        self.persistence
+            .retain(|queued| queued.recovered_claim != Some(id));
+        true
+    }
+
+    /// Reports whether a worker event still names an exact claimed append.
     pub(super) fn owns_claimed_transcript(
         &self,
         entries: &[mez_agent::transcript::TranscriptEntry],

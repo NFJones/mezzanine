@@ -573,6 +573,13 @@ pub enum AsyncHookEvent {
 /// Event emitted by an async persistence worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PersistenceEvent {
+    /// Worker outcome for one exact actor-owned transcript append claim.
+    TranscriptClaim {
+        /// Nonzero identity assigned when the append entered the actor queue.
+        claim_id: u64,
+        /// Completed or failed transcript append outcome for that claim.
+        outcome: Box<PersistenceEvent>,
+    },
     /// One ordered transcript append completed and can leave the in-flight view.
     TranscriptCompleted {
         /// Conversation owning the immutable append.
