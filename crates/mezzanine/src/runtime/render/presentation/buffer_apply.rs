@@ -76,6 +76,36 @@ const AGENT_PRESENTATION_THINKING_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.thinking+text; charset=utf-8";
 /// Reserved presentation marker for an accepted rationale, never an action index.
 const STREAMED_RATIONALE_PRESENTED_MARKER: usize = usize::MAX;
+/// Marks a projection dirty only when closing one field can expose a later ordinal.
+fn release_later_streaming_action(
+    presentation: &mut RuntimeStreamingSayPresentation,
+    action_index: usize,
+) {
+    let later = presentation
+        .actions
+        .keys()
+        .any(|index| *index > action_index)
+        || presentation
+            .outbound_messages
+            .keys()
+            .any(|index| *index > action_index)
+        || presentation
+            .shell_commands
+            .keys()
+            .any(|index| *index > action_index)
+        || presentation
+            .shell_summaries
+            .keys()
+            .any(|index| *index > action_index)
+        || presentation
+            .action_headers
+            .keys()
+            .any(|index| *index > action_index);
+    if later {
+        presentation.revision = presentation.revision.wrapping_add(1);
+        presentation.projected_revision = None;
+    }
+}
 /// Content type for structured macro lifecycle rows rendered at replay geometry.
 const AGENT_PRESENTATION_MACRO_LIFECYCLE_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.macro-lifecycle+json; charset=utf-8";
@@ -2815,30 +2845,7 @@ impl RuntimeSessionService {
                 action.complete = true;
                 // Closure may release source buffered behind this ordinal even
                 // though the completed field adds no display characters.
-                let has_later_source = presentation
-                    .actions
-                    .keys()
-                    .any(|index| index > action_index)
-                    || presentation
-                        .outbound_messages
-                        .keys()
-                        .any(|index| index > action_index)
-                    || presentation
-                        .shell_commands
-                        .keys()
-                        .any(|index| index > action_index)
-                    || presentation
-                        .shell_summaries
-                        .keys()
-                        .any(|index| index > action_index)
-                    || presentation
-                        .action_headers
-                        .keys()
-                        .any(|index| index > action_index);
-                if has_later_source {
-                    presentation.revision = presentation.revision.wrapping_add(1);
-                    presentation.projected_revision = None;
-                }
+                release_later_streaming_action(presentation, *action_index);
             }
             mez_agent::StreamingSayEvent::MessageStarted {
                 action_index,
@@ -2933,6 +2940,7 @@ impl RuntimeSessionService {
                 };
                 if let Some(message) = presentation.outbound_messages.get_mut(action_index) {
                     message.complete = true;
+                    release_later_streaming_action(presentation, *action_index);
                 }
             }
             mez_agent::StreamingSayEvent::RationaleStarted => {
@@ -3061,6 +3069,7 @@ impl RuntimeSessionService {
                         )
                     })?;
                 command.complete = true;
+                release_later_streaming_action(presentation, *action_index);
             }
             mez_agent::StreamingSayEvent::ShellCommandSummaryStarted { action_index } => {
                 self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
@@ -3125,6 +3134,7 @@ impl RuntimeSessionService {
                         )
                     })?;
                 summary.complete = true;
+                release_later_streaming_action(presentation, *action_index);
             }
             mez_agent::StreamingSayEvent::ActionHeader {
                 action_index,
