@@ -97,6 +97,10 @@ async fn async_persistence_worker_failed_receipt_replays_after_restart() {
         .build()
         .unwrap();
     let client = async {
+        let abandoned = handle.drain_persistence_claims(1).await.unwrap();
+        assert_eq!(abandoned.len(), 1);
+        let claim_id = abandoned[0].1.expect("transcript append has a claim id");
+        drop(abandoned);
         let report = run_async_persistence_side_effect_service(
             &handle,
             AsyncRuntimeSideEffectServiceConfig {
@@ -118,6 +122,14 @@ async fn async_persistence_worker_failed_receipt_replays_after_restart() {
         assert_eq!(
             store.pending_append_receipts().unwrap(),
             vec![vec![row.clone()]]
+        );
+        let receipt = root.join(format!(
+            ".append-receipts/{}-{:020}-{:020}.json",
+            row.conversation_id, row.sequence, claim_id
+        ));
+        assert!(
+            receipt.is_file(),
+            "worker must retain the exact claim receipt"
         );
         handle.shutdown().await.unwrap();
     };
