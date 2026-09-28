@@ -2278,6 +2278,14 @@ impl AgentTranscriptStore {
         pending: &[TranscriptEntry],
     ) -> Result<ConversationTranscriptView> {
         validate_conversation_id(conversation_id)?;
+        if let ConversationTranscriptRead::After(through_sequence) = read
+            && through_sequence > 0
+            && self.next_sequence(conversation_id)? <= through_sequence
+        {
+            return Err(MezError::invalid_state(
+                "transcript replay boundary is absent from the durable archive",
+            ));
+        }
         // Pending receipts may fill a gap in the logical projection, but they
         // cannot repair missing committed history. The full-history read is
         // already off the actor and must validate the archive independently.
