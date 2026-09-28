@@ -478,12 +478,19 @@ impl RuntimeSideEffectRouter {
             {
                 continue;
             }
-            if !self.persistence.iter().any(|queued| {
+            let queued_count = self.persistence.iter().filter(|queued| {
                 queued.recovered_claim && matches!((&queued.effect, effect),
                     (RuntimeSideEffect::PersistTranscriptEntries { entries: left, path: left_path, .. },
                      RuntimeSideEffect::PersistTranscriptEntries { entries: right, path: right_path, .. })
                      if left == right && left_path == right_path)
-            }) {
+            }).count();
+            let claimed_count = self.claimed_transcripts.iter().filter(|claimed| {
+                matches!((claimed, effect),
+                    (RuntimeSideEffect::PersistTranscriptEntries { entries: left, path: left_path, .. },
+                     RuntimeSideEffect::PersistTranscriptEntries { entries: right, path: right_path, .. })
+                     if left == right && left_path == right_path)
+            }).count();
+            if queued_count < claimed_count {
                 self.persistence.push_front(QueuedPersistence {
                     effect: effect.clone(),
                     recovered_claim: true,
@@ -530,11 +537,14 @@ impl RuntimeSideEffectRouter {
         self.claimed_transcripts.remove(position);
         self.blocked_transcripts
             .retain(|(blocked_path, blocked)| blocked_path != path || blocked != entries);
-        self.persistence.retain(|queued| {
-            !(queued.recovered_claim && matches!(&queued.effect,
-                RuntimeSideEffect::PersistTranscriptEntries { entries: queued, path: queued_path, .. }
-                if queued == entries && queued_path == path))
-        });
+        if let Some(position) = self.persistence.iter().position(|queued| {
+            queued.recovered_claim
+                && matches!(&queued.effect,
+                    RuntimeSideEffect::PersistTranscriptEntries { entries: queued, path: queued_path, .. }
+                    if queued == entries && queued_path == path)
+        }) {
+            self.persistence.remove(position);
+        }
         true
     }
 
