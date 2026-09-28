@@ -1601,6 +1601,122 @@ async fn runtime_streaming_say_completion_does_not_append_final_duplicate() {
     );
 }
 
+/// The same validated batch must settle to one rendered and persisted answer
+/// whether optional provider fragments were received or not.
+#[test]
+fn runtime_validated_say_settlement_matches_with_and_without_progress() {
+    let mut settled = Vec::new();
+    for streamed in [false, true] {
+        let mut service = test_runtime_service();
+        let store = AgentTranscriptStore::new(temp_root(if streamed {
+            "mode-parity-streamed"
+        } else {
+            "mode-parity-complete"
+        }));
+        service.set_agent_transcript_store(store.clone());
+        service
+            .attach_primary("primary", true, Size::new(48, 12).unwrap(), 120)
+            .unwrap();
+        let conversation_id = service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+        );
+        let source = "**same** validated answer";
+        if streamed {
+            for event in [
+                mez_agent::StreamingSayEvent::Started {
+                    action_index: 0,
+                    status: mez_agent::SayStatus::Final,
+                    content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+                },
+                mez_agent::StreamingSayEvent::TextDelta {
+                    action_index: 0,
+                    text: source.to_string(),
+                },
+                mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+                mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
+            ] {
+                service
+                    .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+                    .unwrap();
+            }
+            let projection = RuntimeSessionService::build_agent_streaming_say_projection(
+                service
+                    .take_agent_streaming_say_projection_work("%1", "turn-1")
+                    .unwrap()
+                    .unwrap(),
+            )
+            .unwrap();
+            service
+                .apply_agent_streaming_say_projection_result(projection)
+                .unwrap();
+        }
+        let execution = mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture("turn-1"),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: source.to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    rationale: String::new(),
+                    actions: vec![mez_agent::AgentAction {
+                        id: "answer".to_string(),
+                        payload: mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Final,
+                            text: source.to_string(),
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE
+                                .to_string(),
+                        },
+                    }],
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: Default::default(),
+            action_results: Vec::new(),
+            final_turn: true,
+            terminal_state: AgentTurnState::Completed,
+        };
+        service
+            .reconcile_agent_streaming_say_completion("%1", "turn-1", &execution)
+            .unwrap();
+        service
+            .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+            .unwrap();
+        let rows = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_styled_content_lines();
+        let entries = store.inspect_presentation(&conversation_id).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.source_text.as_deref() == Some(source))
+                .count(),
+            1
+        );
+        settled.push((
+            rows,
+            entries
+                .into_iter()
+                .filter(|entry| entry.source_text.as_deref() == Some(source))
+                .map(|entry| (entry.display_lines, entry.copy_lines))
+                .collect::<Vec<_>>(),
+        ));
+    }
+    assert_eq!(settled[0], settled[1]);
+}
+
 /// Verifies interrupting a turn freezes already streamed output in the pane
 /// buffer rather than restoring the screen that existed before streaming.
 ///
