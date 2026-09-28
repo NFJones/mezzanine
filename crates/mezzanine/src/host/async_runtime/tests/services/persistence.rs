@@ -129,6 +129,61 @@ async fn async_persistence_worker_failed_receipt_replays_after_restart() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A lost worker after its first durable row leaves the exact claimed batch
+/// recoverable without duplicating that prefix or dropping its missing suffix.
+#[tokio::test(flavor = "current_thread")]
+async fn async_persistence_worker_partial_claim_replays_after_restart() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-transcript-worker-partial-restart-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = TranscriptEntry {
+        conversation_id: "partial-worker-restart".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "first accepted row".to_string(),
+    };
+    let second = TranscriptEntry {
+        sequence: 2,
+        content: "second accepted row".to_string(),
+        ..first.clone()
+    };
+    let entries = vec![first.clone(), second.clone()];
+    let mut service = test_service_with_event_log();
+    service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+        path: store.transcript_path(&first.conversation_id).unwrap(),
+        store: store.clone(),
+        entries: entries.clone(),
+    });
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let abandoned = handle.drain_persistence_side_effects(1).await.unwrap();
+        assert_eq!(abandoned.len(), 1);
+        store.accept_append_receipt(&entries, 1).unwrap();
+        store.fail_transcript_append_after_first();
+        assert!(store.append_many(&entries).is_err());
+        assert_eq!(store.inspect(&first.conversation_id).unwrap(), vec![first]);
+        drop(abandoned);
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let restarted = AgentTranscriptStore::new(root.clone());
+    restarted.recover_append_receipts().unwrap();
+    assert_eq!(restarted.inspect(&second.conversation_id).unwrap(), entries);
+    assert!(restarted.pending_append_receipts().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// A live persistence worker retries an exact failed claim on its next poll,
 /// before a later reserved sequence, after two local attempts have failed.
 #[tokio::test(flavor = "current_thread")]
