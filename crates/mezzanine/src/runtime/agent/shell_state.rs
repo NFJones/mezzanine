@@ -129,6 +129,8 @@ fn bubblewrap_action_path_resolution_request(
 pub(super) struct ShellActionDispatch<'a> {
     /// Original command retained for execution, preview, and audit identity.
     pub(super) command: &'a str,
+    /// Validated response owner for ordered executor logs; direct test dispatch has none.
+    pub(super) execution: Option<&'a super::AgentTurnExecution>,
     /// Whether validated streaming already installed this exact command preview.
     pub(super) preview_already_presented: bool,
     /// Optional separately streamed data associated with the command plan.
@@ -177,6 +179,7 @@ impl RuntimeSessionService {
     ) -> Result<ShellActionDispatchOutcome> {
         let ShellActionDispatch {
             command,
+            execution,
             preview_already_presented,
             input_sidecar,
             program_dialect,
@@ -287,6 +290,7 @@ impl RuntimeSessionService {
                 action,
                 context,
                 command,
+                execution,
                 preview_already_presented,
                 input_sidecar,
                 program_dialect,
@@ -655,12 +659,26 @@ impl RuntimeSessionService {
         let emitted_action_log = if is_internal_apply_patch_write_phase {
             false
         } else if let Some(path) = apply_patch_read_path {
-            self.append_agent_action_execution_header_to_terminal_buffer(
-                &turn.pane_id,
-                action,
-                &format!("apply patch: {path}"),
-            )?;
+            if let Some(execution) = execution {
+                self.queue_ordered_provider_header_with_text(
+                    &turn.pane_id,
+                    execution,
+                    action,
+                    format!("apply patch: {path}"),
+                )?;
+                self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
+            } else {
+                self.append_agent_action_execution_header_to_terminal_buffer(
+                    &turn.pane_id,
+                    action,
+                    &format!("apply patch: {path}"),
+                )?;
+            }
             true
+        } else if let Some(execution) = execution {
+            let queued = self.queue_ordered_provider_header(&turn.pane_id, execution, action)?;
+            self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
+            queued
         } else {
             self.append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)?
         };
@@ -797,6 +815,7 @@ impl RuntimeSessionService {
         action: &AgentAction,
         context: NativeShellContext,
         command: &str,
+        execution: Option<&super::AgentTurnExecution>,
         preview_already_presented: bool,
         input_sidecar: Option<&str>,
         program_dialect: LocalProgramDialect,
@@ -917,12 +936,26 @@ impl RuntimeSessionService {
         let emitted_action_log = if is_internal_apply_patch_write_phase {
             false
         } else if let Some(path) = apply_patch_read_path {
-            self.append_agent_action_execution_header_to_terminal_buffer(
-                &turn.pane_id,
-                action,
-                &format!("apply patch: {path}"),
-            )?;
+            if let Some(execution) = execution {
+                self.queue_ordered_provider_header_with_text(
+                    &turn.pane_id,
+                    execution,
+                    action,
+                    format!("apply patch: {path}"),
+                )?;
+                self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
+            } else {
+                self.append_agent_action_execution_header_to_terminal_buffer(
+                    &turn.pane_id,
+                    action,
+                    &format!("apply patch: {path}"),
+                )?;
+            }
             true
+        } else if let Some(execution) = execution {
+            let queued = self.queue_ordered_provider_header(&turn.pane_id, execution, action)?;
+            self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
+            queued
         } else {
             self.append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)?
         };
@@ -1052,6 +1085,7 @@ impl RuntimeSessionService {
             action,
             ShellActionDispatch {
                 command,
+                execution: None,
                 preview_already_presented: false,
                 input_sidecar: None,
                 program_dialect: local_action_plan(action)?

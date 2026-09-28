@@ -2014,6 +2014,7 @@ impl RuntimeSessionService {
                 action,
                 super::shell_state::ShellActionDispatch {
                     command,
+                    execution: Some(execution),
                     preview_already_presented: self.agent_streaming_say_action_is_promoted(
                         &turn.pane_id,
                         &turn.turn_id,

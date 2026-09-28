@@ -168,12 +168,24 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
+        self.queue_ordered_provider_header_with_text(pane_id, execution, action, header)?;
+        Ok(true)
+    }
+
+    /// Queues an approved transaction-specific header at its validated action ordinal.
+    pub(crate) fn queue_ordered_provider_header_with_text(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        action: &mez_agent::AgentAction,
+        header: String,
+    ) -> Result<()> {
         let Some(conversation_id) = self
             .agent_shell_store()
             .get(pane_id)
             .map(|s| s.session_id.clone())
         else {
-            return Ok(false);
+            return Ok(());
         };
         let group = super::provider_execution::provider_log_execution_group_id(execution)?;
         let Some(index) = execution.response.action_batch.as_ref().and_then(|batch| {
@@ -182,7 +194,7 @@ impl RuntimeSessionService {
                 .iter()
                 .position(|candidate| candidate.id == action.id)
         }) else {
-            return Ok(false);
+            return Ok(());
         };
         let key = (
             pane_id.to_string(),
@@ -195,7 +207,7 @@ impl RuntimeSessionService {
             .agent_queued_provider_headers
             .entry(key)
             .or_insert_with(|| (action.clone(), header));
-        Ok(true)
+        Ok(())
     }
 
     /// Publishes ready executor headers in response order, without delaying execution.
