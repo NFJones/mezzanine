@@ -291,6 +291,20 @@ impl AgentTranscriptStore {
     /// Failure leaves the receipt available for a later checked recovery.
     pub(crate) fn recover_append_receipts(&self) -> Result<()> {
         let receipts = self.read_append_receipts()?;
+        // Reject mutually inconsistent retained claims before any append can
+        // make one side of the conflict durable. A damaged journal remains
+        // available for diagnosis rather than being partially replayed.
+        let mut claimed = std::collections::BTreeMap::new();
+        for (_, receipt, entries) in &receipts {
+            for entry in entries {
+                let key = (&receipt.conversation_id, entry.sequence);
+                if claimed.insert(key, entry).is_some_and(|old| old != entry) {
+                    return Err(MezError::conflict(
+                        "transcript recovery receipts conflict at the same sequence",
+                    ));
+                }
+            }
+        }
         let mut receipts = receipts
             .into_iter()
             .map(|(_, receipt, entries)| (receipt, entries))

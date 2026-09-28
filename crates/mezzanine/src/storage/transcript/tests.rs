@@ -1603,6 +1603,32 @@ fn transcript_store_rejects_symlinked_receipt_directory() {
     let _ = fs::remove_dir_all(outside);
 }
 
+/// Conflicting retained receipts must be rejected before either batch changes
+/// the archive, even if both records are individually valid and well-formed.
+#[test]
+fn transcript_store_rejects_conflicting_receipts_before_replay() {
+    let root = temp_root("conflicting-append-receipts");
+    let store = AgentTranscriptStore::new(root.clone());
+    let original = entry("conv1", 1, TranscriptRole::User);
+    store
+        .accept_append_receipt(std::slice::from_ref(&original), 1)
+        .unwrap();
+    let first = root.join(".append-receipts/conv1-00000000000000000001-00000000000000000001.json");
+    let held = root.join("held-receipt.json");
+    fs::rename(&first, &held).unwrap();
+    let mut conflicting = original.clone();
+    conflicting.content = "different content".to_string();
+    store
+        .accept_append_receipt(std::slice::from_ref(&conflicting), 2)
+        .unwrap();
+    fs::rename(&held, &first).unwrap();
+
+    assert!(store.recover_append_receipts().is_err());
+    assert!(!store.transcript_path("conv1").unwrap().exists());
+    assert_eq!(store.pending_append_receipts().unwrap().len(), 2);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A damaged accepted receipt cannot be skipped or replayed as a different
 /// batch after restart; its archive remains unchanged for manual recovery.
 #[test]
