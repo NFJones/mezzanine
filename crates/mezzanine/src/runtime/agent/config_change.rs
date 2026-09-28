@@ -1049,7 +1049,7 @@ impl RuntimeSessionService {
     /// but live configuration mutation still has to pass through the normal
     /// runtime control path so validation, events, and idempotency remain
     /// identical to approved blocked config changes.
-    pub(super) fn execute_running_config_change_actions_for_turn(
+    pub(crate) fn execute_running_config_change_actions_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
