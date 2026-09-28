@@ -10,6 +10,10 @@ struct QueuedPersistence {
     effect: RuntimeSideEffect,
     recovered_claim: Option<u64>,
     claim_id: Option<u64>,
+    receipt_held: bool,
+    receipt_scheduled: bool,
+    receipt_failed: bool,
+    direct_submission: bool,
 }
 
 /// One worker-owned transcript claim and its permanent-failure fence.
@@ -406,7 +410,101 @@ impl RuntimeSideEffectRouter {
             effect,
             recovered_claim: None,
             claim_id,
+            receipt_held: claim_id.is_some(),
+            receipt_scheduled: false,
+            receipt_failed: false,
+            direct_submission: false,
         });
+    }
+
+    /// Direct submissions have no service-owned sequence ledger to retain on rejection.
+    pub(super) fn mark_direct_transcript_claims_after(&mut self, previous_id: u64) {
+        for queued in &mut self.persistence {
+            if queued.claim_id.is_some_and(|id| id > previous_id) {
+                queued.direct_submission = true;
+            }
+        }
+    }
+
+    /// Holds an exact unclaimed append for the route-level admission regression.
+    #[cfg(test)]
+    pub(super) fn hold_transcript_receipt(&mut self, id: u64) -> bool {
+        let Some(queued) = self
+            .persistence
+            .iter_mut()
+            .find(|queued| queued.claim_id == Some(id) && queued.recovered_claim.is_none())
+        else {
+            return false;
+        };
+        queued.receipt_held = true;
+        true
+    }
+
+    /// Releases an exact fsynced receipt; a failed service append stays held
+    /// with its sequence owner until explicit worker-recovery admission.
+    pub(super) fn finish_transcript_receipt(&mut self, id: u64, accepted: bool) -> bool {
+        let Some(position) = self
+            .persistence
+            .iter()
+            .position(|queued| queued.claim_id == Some(id) && queued.receipt_held)
+        else {
+            return false;
+        };
+        if accepted {
+            self.persistence[position].receipt_held = false;
+        } else if self.persistence[position].direct_submission {
+            self.persistence.remove(position);
+        } else {
+            self.persistence[position].receipt_failed = true;
+        }
+        true
+    }
+
+    /// Makes failed service-owned receipts eligible for one explicit recovery attempt.
+    /// Never releases them to the persistence worker without a successful sync.
+    pub(super) fn retry_failed_transcript_receipts(&mut self) -> usize {
+        let mut count = 0;
+        for queued in &mut self.persistence {
+            if queued.receipt_failed {
+                queued.receipt_failed = false;
+                queued.receipt_scheduled = false;
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Captures newly enqueued transcript claims for off-actor receipt admission.
+    /// All fresh claims start held, including claims installed during construction.
+    pub(super) fn hold_transcript_receipts_after(
+        &mut self,
+        previous_id: u64,
+    ) -> Vec<(
+        u64,
+        crate::storage::transcript::AgentTranscriptStore,
+        Vec<mez_agent::transcript::TranscriptEntry>,
+    )> {
+        self.persistence
+            .iter_mut()
+            .filter_map(|queued| {
+                let id = queued
+                    .claim_id
+                    .filter(|id| *id > previous_id && !queued.receipt_scheduled)?;
+                let RuntimeSideEffect::PersistTranscriptEntries { store, entries, .. } =
+                    &queued.effect
+                else {
+                    return None;
+                };
+                queued.receipt_held = true;
+                queued.receipt_scheduled = true;
+                Some((id, store.clone(), entries.clone()))
+            })
+            .collect()
+    }
+
+    /// Returns the latest assigned transcript claim before a new enqueue.
+    pub(super) fn next_transcript_claim_id(&self) -> u64 {
+        self.next_transcript_claim_id
     }
 
     /// Enqueues one deferred interactive command for its dedicated worker.
@@ -477,10 +575,13 @@ impl RuntimeSideEffectRouter {
         &mut self,
         limit: usize,
     ) -> Vec<(RuntimeSideEffect, Option<u64>)> {
-        let effects = self
+        let ready = self
             .persistence
-            .drain(..limit.min(self.persistence.len()))
-            .collect::<Vec<_>>();
+            .iter()
+            .take(limit)
+            .take_while(|queued| !queued.receipt_held)
+            .count();
+        let effects = self.persistence.drain(..ready).collect::<Vec<_>>();
         for queued in &effects {
             if let Some(id) = queued.claim_id
                 && queued.recovered_claim.is_none()
@@ -525,6 +626,10 @@ impl RuntimeSideEffectRouter {
                     effect: claim.effect.clone(),
                     recovered_claim: Some(claim.id),
                     claim_id: Some(claim.id),
+                    receipt_held: false,
+                    receipt_scheduled: true,
+                    receipt_failed: false,
+                    direct_submission: false,
                 });
                 count += 1;
             }
@@ -814,6 +919,9 @@ mod transcript_claim_tests {
             .map(|queued| queued.claim_id)
             .collect::<Vec<_>>();
         assert!(ids[0].is_some() && ids[0] != ids[1]);
+        for id in ids.iter().flatten() {
+            assert!(route.finish_transcript_receipt(*id, true));
+        }
         let first_dispatch = route.drain_persistence_claims(2);
         assert_eq!(first_dispatch.len(), 2);
         assert_eq!(
@@ -838,6 +946,64 @@ mod transcript_claim_tests {
                 .collect::<Vec<_>>(),
             ids
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Holding a receipt prevents the append and later persistence from
+    /// draining until the exact claim is released or rejected.
+    #[test]
+    fn held_transcript_receipt_fences_ordered_drain() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-route-held-receipt-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let row = TranscriptEntry {
+            conversation_id: "held-receipt".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted".to_string(),
+        };
+        let mut route = RuntimeSideEffectRouter::default();
+        route.push_persistence(RuntimeSideEffect::PersistTranscriptEntries {
+            path: store.transcript_path(&row.conversation_id).unwrap(),
+            store,
+            entries: vec![row],
+        });
+        let id = route.persistence[0].claim_id.unwrap();
+        assert!(route.hold_transcript_receipt(id));
+        route.push_persistence(RuntimeSideEffect::Persist {
+            target: crate::runtime::PersistenceTarget::AuditLog,
+            path: root.join("later"),
+            bytes: vec![1],
+            mode: crate::runtime::PersistenceWriteMode::Append,
+        });
+        assert!(route.drain_persistence_claims(2).is_empty());
+        assert!(route.finish_transcript_receipt(id, true));
+        assert_eq!(route.drain_persistence_claims(2).len(), 2);
+        route.push_persistence(RuntimeSideEffect::PersistTranscriptEntries {
+            path: root.join("retry"),
+            store: crate::storage::transcript::AgentTranscriptStore::new(root.clone()),
+            entries: vec![TranscriptEntry {
+                conversation_id: "held-receipt".to_string(),
+                sequence: 2,
+                created_at_unix_seconds: 2,
+                role: TranscriptRole::Assistant,
+                turn_id: "turn-2".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: "later".to_string(),
+            }],
+        });
+        let rejected_id = route.persistence[0].claim_id.unwrap();
+        assert!(route.hold_transcript_receipt(rejected_id));
+        assert!(route.finish_transcript_receipt(rejected_id, false));
+        assert!(route.drain_persistence_claims(1).is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 

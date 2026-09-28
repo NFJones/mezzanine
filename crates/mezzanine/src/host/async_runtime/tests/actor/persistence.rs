@@ -1,14 +1,34 @@
 //! Async-runtime tests owned by persistence behavior.
 
 use super::super::*;
+use crate::host::async_runtime::AsyncRuntimeSessionHandle;
 use crate::runtime::RuntimeRegistryUpdatePlan;
 use crate::security::project::{ProjectTrustStore, TrustDecision};
 
-/// Construction currently transfers service-queued transcript rows to the
-/// actor without a durable receipt. Keep this earlier crash window explicit
-/// until nonblocking admission covers service and actor producers together.
-#[test]
-fn async_actor_construction_precedes_worker_receipt() {
+/// Waits for the off-actor startup receipt callback rather than assuming the
+/// constructor's queued transcript has already passed its durable gate.
+async fn wait_for_startup_transcript_receipts(
+    handle: &AsyncRuntimeSessionHandle,
+    store: &AgentTranscriptStore,
+    count: usize,
+) {
+    let mut watcher = handle.side_effect_delivery_watcher();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if store.pending_append_receipts().unwrap().len() == count {
+                break;
+            }
+            watcher.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+}
+
+/// Startup holds service-owned transcript work until its receipt has synced;
+/// a replacement store can recover it without a persistence worker drain.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_construction_journals_before_worker_drain() {
     use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
 
     let root = std::env::temp_dir().join(format!(
@@ -33,28 +53,30 @@ fn async_actor_construction_precedes_worker_receipt() {
         store: store.clone(),
         entries: vec![row.clone()],
     });
-    let (_handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     assert!(store.pending_append_receipts().unwrap().is_empty());
-    drop(actor);
+    let client = async {
+        wait_for_startup_transcript_receipts(&handle, &store, 1).await;
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![row.clone()]]
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
     AgentTranscriptStore::new(root.clone())
         .recover_append_receipts()
         .unwrap();
-    assert!(
-        !store
-            .transcript_path(&row.conversation_id)
-            .unwrap()
-            .exists()
-    );
+    assert_eq!(store.inspect(&row.conversation_id).unwrap(), vec![row]);
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Actor admission currently acknowledges a batch before the persistence
-/// worker writes its receipt. Keep this crash window visible until a durable
-/// pre-admission handoff covers all actor-produced transcript effects.
+/// Direct actor admission must journal the accepted append before replying,
+/// even when the persistence worker has not drained it.
 #[tokio::test(flavor = "current_thread")]
-async fn async_actor_transcript_admission_precedes_worker_receipt() {
+async fn async_actor_transcript_admission_journals_before_reply() {
     use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
 
     let root = std::env::temp_dir().join(format!(
@@ -89,7 +111,10 @@ async fn async_actor_transcript_admission_precedes_worker_receipt() {
                 .unwrap(),
             1
         );
-        assert!(store.pending_append_receipts().unwrap().is_empty());
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![row.clone()]]
+        );
         assert!(
             !store
                 .transcript_path(&row.conversation_id)
@@ -99,6 +124,565 @@ async fn async_actor_transcript_admission_precedes_worker_receipt() {
         handle.shutdown().await.unwrap();
     };
     let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Cancelling a caller after actor enqueue must not cancel the actor-owned
+/// receipt sync or strand its held persistence claim.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_cancelled_transcript_producer_does_not_strand_claim() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-actor-cancelled-receipt-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "cancelled-receipt".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted".to_string(),
+    };
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+    let client = async {
+        let mut watcher = handle.side_effect_delivery_watcher();
+        let producer_handle = handle.clone();
+        let producer_store = store.clone();
+        let producer_row = row.clone();
+        let cancelled = tokio::spawn(async move {
+            producer_handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                    path: producer_store
+                        .transcript_path(&producer_row.conversation_id)
+                        .unwrap(),
+                    store: producer_store,
+                    entries: vec![producer_row],
+                }])
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), watcher.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        cancelled.abort();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if store.pending_append_receipts().unwrap() == vec![vec![row.clone()]] {
+                    break;
+                }
+                watcher.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(handle.drain_persistence_claims(1).await.unwrap().len(), 1);
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A terminal step that drains service-owned transcript work must not reply
+/// before the exact append receipt is durable.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_terminal_step_journals_service_transcript_before_reply() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-terminal-step-receipt-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "terminal-step-receipt".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted through terminal step".to_string(),
+    };
+    let mut service = test_service_with_event_log();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, mut actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    actor
+        .service
+        .queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+            path: store.transcript_path(&row.conversation_id).unwrap(),
+            store: store.clone(),
+            entries: vec![row.clone()],
+        });
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan(
+                primary,
+                AttachedTerminalClientStepPlan {
+                    actions: Vec::new(),
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![row.clone()]]
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Event ingress must not acknowledge service-owned transcript rows until
+/// their exact receipt is durable, even without a persistence worker drain.
+/// A later non-transcript control frame cannot acknowledge an earlier frame
+/// whose service-owned append receipt was rejected.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_multiframe_control_rejects_earlier_failed_receipt() {
+    use crate::control::encode_control_body;
+    use crate::storage::snapshot::SnapshotRepository;
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+    use std::os::unix::fs::symlink;
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-multiframe-receipt-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let outside = root.with_extension("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    symlink(&outside, root.join(".append-receipts")).unwrap();
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "multiframe-receipt".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "must not acknowledge".to_string(),
+    };
+    let mut service = test_service_with_event_log();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, mut actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    actor
+        .service
+        .queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+            path: store.transcript_path(&row.conversation_id).unwrap(),
+            store: store.clone(),
+            entries: vec![row],
+        });
+    let client = async {
+        let mut input = encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"first","method":"session/get","params":{}}"#,
+        );
+        input.extend_from_slice(&encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"last","method":"snapshot/list","params":{}}"#,
+        ));
+        assert!(
+            handle
+                .handle_control_input_for_connection_with_snapshots(
+                    input,
+                    4096,
+                    ControlConnectionState::trusted_existing_client(primary),
+                    SnapshotRepository::new(root.join("snapshots")),
+                )
+                .await
+                .is_err()
+        );
+        assert!(handle.drain_persistence_claims(1).await.unwrap().is_empty());
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(outside);
+}
+
+/// Receipt completion must not await a full interactive lane while holding
+/// the actor: urgent shutdown remains serviceable until continuation admission.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_receipt_continuation_does_not_block_urgent_shutdown() {
+    use crate::control::encode_control_body;
+    use crate::host::async_runtime::actor_types::{
+        AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope, TranscriptReceiptReply,
+    };
+    use crate::storage::snapshot::SnapshotRepository;
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .config(AsyncRuntimeActorConfig {
+            command_buffer: 4,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+    let sender = actor.sender.clone();
+    let interactive_permit = sender
+        .interactive_admission
+        .clone()
+        .acquire_owned()
+        .await
+        .unwrap();
+    let mut receipt_completion = handle.side_effect_delivery_watcher();
+    receipt_completion.borrow_and_update();
+    let (reply, _response) = tokio::sync::oneshot::channel();
+    let continuation = AsyncRuntimeRequest::HandleControlInputWithSnapshots {
+        input: encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"next","method":"session/get","params":{}}"#,
+        ),
+        output_prefix: Vec::new(),
+        consumed_prefix: 0,
+        record_metrics: false,
+        max_content_length: 4096,
+        connection: ControlConnectionState::new(true, true),
+        snapshots: SnapshotRepository::new(std::env::temp_dir().join("mez-full-lane-continuation")),
+        reply,
+    };
+    sender
+        .send(AsyncRuntimeRequestEnvelope::new(
+            AsyncRuntimeRequest::CompleteTranscriptReceipts {
+                results: Vec::new(),
+                reply: TranscriptReceiptReply::ControlContinuation(Box::new(continuation)),
+            },
+        ))
+        .await
+        .unwrap();
+    let client = async {
+        // Receipt completion publishes this revision before dispatching the
+        // continuation. Keep the interactive permit held across shutdown.
+        tokio::time::timeout(Duration::from_secs(5), receipt_completion.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), handle.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    drop(interactive_permit);
+}
+
+/// Event ingress must not acknowledge service-owned transcript rows until
+/// their exact receipt is durable, even without a persistence worker drain.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_event_admission_journals_service_transcript_before_reply() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-actor-event-receipt-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "event-receipt".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted through event".to_string(),
+    };
+    let (handle, mut actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+    actor
+        .service
+        .queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+            path: store.transcript_path(&row.conversation_id).unwrap(),
+            store: store.clone(),
+            entries: vec![row.clone()],
+        });
+    let client = async {
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptFailed {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: row.sequence,
+                entries: vec![row.clone()],
+                path: store.transcript_path(&row.conversation_id).unwrap(),
+                error: "unclaimed".to_string(),
+                retryable: true,
+            },
+        ));
+        handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![row.clone()]]
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Consecutive accepted batches cannot overtake one another while receipt
+/// writes run off-actor; both replies require durable recovery evidence.
+/// A rejected startup receipt retains the service-owned sequence and can be
+/// resynced when the persistence worker explicitly recovers after repair.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_recovers_service_receipt_after_admission_failure() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+    use std::os::unix::fs::symlink;
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-service-receipt-retry-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let outside = root.with_extension("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    symlink(&outside, root.join(".append-receipts")).unwrap();
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "service-receipt-retry".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "retained after failed admission".to_string(),
+    };
+    let mut service = test_service_with_event_log();
+    service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+        path: store.transcript_path(&row.conversation_id).unwrap(),
+        store: store.clone(),
+        entries: vec![row.clone()],
+    });
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let mut watcher = handle.side_effect_delivery_watcher();
+        watcher.borrow_and_update();
+        tokio::time::timeout(Duration::from_secs(5), watcher.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(handle.drain_persistence_claims(1).await.unwrap().is_empty());
+        std::fs::remove_file(root.join(".append-receipts")).unwrap();
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![row.clone()]]
+        );
+        assert_eq!(handle.drain_persistence_claims(1).await.unwrap().len(), 1);
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    AgentTranscriptStore::new(root.clone())
+        .recover_append_receipts()
+        .unwrap();
+    assert_eq!(store.inspect(&row.conversation_id).unwrap(), vec![row]);
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(outside);
+}
+
+/// Consecutive accepted batches cannot overtake one another while receipt
+/// writes run off-actor; both replies require durable recovery evidence.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_journals_consecutive_transcript_admissions_in_order() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-actor-ordered-receipts-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let rows = (1..=2)
+        .map(|sequence| TranscriptEntry {
+            conversation_id: "ordered-receipts".to_string(),
+            sequence,
+            created_at_unix_seconds: sequence,
+            role: TranscriptRole::User,
+            turn_id: format!("turn-{sequence}"),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: format!("row {sequence}"),
+        })
+        .collect::<Vec<_>>();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+    let client = async {
+        let first =
+            handle.queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                path: store.transcript_path("ordered-receipts").unwrap(),
+                store: store.clone(),
+                entries: vec![rows[0].clone()],
+            }]);
+        let second =
+            handle.queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                path: store.transcript_path("ordered-receipts").unwrap(),
+                store: store.clone(),
+                entries: vec![rows[1].clone()],
+            }]);
+        let (first, second) = tokio::join!(first, second);
+        assert_eq!(first.unwrap(), 1);
+        assert_eq!(second.unwrap(), 1);
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![rows[0].clone()], vec![rows[1].clone()]]
+        );
+        assert!(!store.transcript_path("ordered-receipts").unwrap().exists());
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A replacement worker must recover the exact claimed batch ahead of later
+/// queued writes, then retire it only after its matching completion.
+/// A rejected receipt directory must fail the producer reply and leave no
+/// transcript effect for the persistence worker to execute.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_rejects_unjournaled_transcript_admission() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+    use std::os::unix::fs::symlink;
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-actor-rejected-receipt-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let outside = root.with_extension("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    symlink(&outside, root.join(".append-receipts")).unwrap();
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "rejected-receipt".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "do not append".to_string(),
+    };
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+    let client = async {
+        assert!(
+            handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                    path: store.transcript_path(&row.conversation_id).unwrap(),
+                    store: store.clone(),
+                    entries: vec![row.clone()],
+                }])
+                .await
+                .is_err()
+        );
+        assert!(handle.drain_persistence_claims(1).await.unwrap().is_empty());
+        assert!(
+            !store
+                .transcript_path(&row.conversation_id)
+                .unwrap()
+                .exists()
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(outside);
+}
+
+/// An invalid later receipt rejects the producer submission without losing
+/// the earlier durable receipt or preventing its exact worker claim.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_mixed_receipt_failure_preserves_accepted_prefix() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-actor-mixed-receipts-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let rows = (1..=2)
+        .map(|sequence| TranscriptEntry {
+            conversation_id: "mixed-receipts".to_string(),
+            sequence,
+            created_at_unix_seconds: sequence,
+            role: TranscriptRole::User,
+            turn_id: format!("turn-{sequence}"),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: format!("row {sequence}"),
+        })
+        .collect::<Vec<_>>();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+    let client = async {
+        assert!(
+            handle
+                .queue_runtime_side_effects(vec![
+                    RuntimeSideEffect::PersistTranscriptEntries {
+                        path: store.transcript_path("mixed-receipts").unwrap(),
+                        store: store.clone(),
+                        entries: vec![rows[0].clone()],
+                    },
+                    RuntimeSideEffect::PersistTranscriptEntries {
+                        path: store.transcript_path("mixed-receipts").unwrap(),
+                        store: store.clone(),
+                        entries: vec![rows[1].clone(), rows[0].clone()],
+                    },
+                ])
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![rows[0].clone()]]
+        );
+        let claims = handle.drain_persistence_claims(2).await.unwrap();
+        assert_eq!(claims.len(), 1);
+        assert!(
+            matches!(&claims[0].0, RuntimeSideEffect::PersistTranscriptEntries { entries, .. } if entries == &vec![rows[0].clone()])
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    AgentTranscriptStore::new(root.clone())
+        .recover_append_receipts()
+        .unwrap();
+    assert_eq!(
+        store.inspect("mixed-receipts").unwrap(),
+        vec![rows[0].clone()]
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -135,6 +719,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
         .build()
         .unwrap();
     let client = async {
+        wait_for_startup_transcript_receipts(&handle, &store, 1).await;
         let mut unclaimed_failure = RuntimeEventBatch::new();
         unclaimed_failure.push(RuntimeEvent::Persistence(
             crate::runtime::PersistenceEvent::TranscriptFailed {
@@ -320,6 +905,7 @@ async fn async_actor_recovered_claim_preserves_later_identical_append() {
         .build()
         .unwrap();
     let client = async {
+        wait_for_startup_transcript_receipts(&handle, &store, 1).await;
         assert_eq!(
             handle
                 .drain_persistence_side_effects(1)
@@ -399,6 +985,7 @@ async fn async_actor_completion_preserves_queued_identical_transcript() {
         .build()
         .unwrap();
     let client = async {
+        wait_for_startup_transcript_receipts(&handle, &store, 1).await;
         assert_eq!(
             handle
                 .drain_persistence_side_effects(1)
@@ -475,6 +1062,7 @@ async fn async_actor_recovers_two_fresh_identical_transcript_claims() {
         .build()
         .unwrap();
     let client = async {
+        wait_for_startup_transcript_receipts(&handle, &store, 2).await;
         let claimed = handle.drain_persistence_claims(2).await.unwrap();
         assert_eq!(claimed.len(), 2);
         let first_id = claimed[0].1.unwrap();
@@ -703,7 +1291,7 @@ async fn async_actor_permanent_failure_preserves_other_identical_claim() {
     };
     let path = store.transcript_path(&row.conversation_id).unwrap();
     let effect = RuntimeSideEffect::PersistTranscriptEntries {
-        store,
+        store: store.clone(),
         path: path.clone(),
         entries: vec![row.clone()],
     };
@@ -714,6 +1302,7 @@ async fn async_actor_permanent_failure_preserves_other_identical_claim() {
         .build()
         .unwrap();
     let client = async {
+        wait_for_startup_transcript_receipts(&handle, &store, 2).await;
         let claims = handle.drain_persistence_claims(2).await.unwrap();
         assert_eq!(claims.len(), 2);
         let first_id = claims[0].1.unwrap();

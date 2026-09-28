@@ -3,6 +3,25 @@
 use super::super::*;
 use crate::storage::transcript::AgentPresentationEntry;
 
+/// Waits for startup receipt admission before simulating worker loss or retry.
+async fn wait_for_startup_receipts(
+    handle: &crate::host::async_runtime::AsyncRuntimeSessionHandle,
+    store: &AgentTranscriptStore,
+    count: usize,
+) {
+    let mut watcher = handle.side_effect_delivery_watcher();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if store.pending_append_receipts().unwrap().len() == count {
+                break;
+            }
+            watcher.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+}
+
 /// A replacement persistence worker reconciles a committed transcript claim
 /// whose first worker was lost before delivering its completion event.
 #[tokio::test(flavor = "current_thread")]
@@ -36,6 +55,7 @@ async fn async_persistence_worker_recovers_lost_transcript_acknowledgment() {
         .build()
         .unwrap();
     let client = async {
+        wait_for_startup_receipts(&handle, &store, 1).await;
         let abandoned = handle.drain_persistence_side_effects(1).await.unwrap();
         assert_eq!(abandoned.len(), 1);
         store.append_many(std::slice::from_ref(&row)).unwrap();
@@ -97,6 +117,7 @@ async fn async_persistence_worker_failed_receipt_replays_after_restart() {
         .build()
         .unwrap();
     let client = async {
+        wait_for_startup_receipts(&handle, &store, 1).await;
         let abandoned = handle.drain_persistence_claims(1).await.unwrap();
         assert_eq!(abandoned.len(), 1);
         let claim_id = abandoned[0].1.expect("transcript append has a claim id");
@@ -179,6 +200,7 @@ async fn async_persistence_worker_partial_claim_replays_after_restart() {
         .build()
         .unwrap();
     let client = async {
+        wait_for_startup_receipts(&handle, &store, 1).await;
         let abandoned = handle.drain_persistence_side_effects(1).await.unwrap();
         assert_eq!(abandoned.len(), 1);
         store.accept_append_receipt(&entries, 1).unwrap();
@@ -230,6 +252,7 @@ async fn async_persistence_worker_recovers_after_two_transcript_failures() {
         .build()
         .unwrap();
     let client = async {
+        wait_for_startup_receipts(&handle, &store, 1).await;
         let report = run_async_persistence_side_effect_service(
             &handle,
             AsyncRuntimeSideEffectServiceConfig {
@@ -292,6 +315,7 @@ async fn async_persistence_worker_recovers_dependent_transcript_batches() {
         .build()
         .unwrap();
     let client = async {
+        wait_for_startup_receipts(&handle, &store, 2).await;
         let report = run_async_persistence_side_effect_service(
             &handle,
             AsyncRuntimeSideEffectServiceConfig {

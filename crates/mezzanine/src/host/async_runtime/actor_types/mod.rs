@@ -32,6 +32,8 @@ mod message;
 mod render;
 mod request;
 
+pub(in crate::host::async_runtime) use request::TranscriptReceiptReply;
+
 #[cfg(test)]
 pub use attached::{
     AsyncAttachedTerminalStepRequest, plan_and_apply_async_attached_terminal_client_step,

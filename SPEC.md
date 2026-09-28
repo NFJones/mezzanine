@@ -9270,11 +9270,17 @@ The baseline command capabilities are:
   reconcile retained receipts before validating checkpointed history. An
   absent receipt MUST NOT acknowledge uncommitted rows; a late duplicate
   settlement is harmless only if the complete exact batch is already present
-  in valid committed history. An actor-queued append has no crash-recovery
-  guarantee until its worker saves a receipt; missing checkpointed history
-  MUST fail closed. Queued or worker-owned rows MUST NOT prove durability for a
-  selective compaction epoch, and publication MUST reject a damaged committed
-  archive even when the selected rows themselves match. When
+  in valid committed history. A transcript append admitted into the actor's
+  ordered persistence lane MUST remain unavailable to its worker until its
+  exact append receipt is synced off actor ownership. A producer reply that
+  acknowledges that append MUST wait for receipt admission; a rejected receipt
+  MUST NOT acknowledge its rows as accepted. Startup MUST similarly fence
+  transferred service-owned appends until their receipts are synced. A process
+  exit before receipt admission does not establish durable acceptance; missing
+  checkpointed history MUST fail closed. Queued or worker-owned rows MUST NOT
+  prove durability for a selective compaction epoch, and publication MUST
+  reject a damaged committed archive even when the selected rows themselves
+  match. When
   persistent memory is enabled and a config root is available, `/compact`
   SHOULD opportunistically prune expired persistent-memory records before it
   builds compaction context or queues model-backed work.

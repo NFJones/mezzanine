@@ -1,5 +1,6 @@
 //! Serialized request dispatch for the runtime actor.
 
+use super::TranscriptReceiptReply;
 use super::construction::execute_snapshot_control_async_work;
 use super::{
     AsyncControlInputResult, AsyncIrohRenderSnapshot, AsyncMessageFanout, AsyncMessageInputResult,
@@ -13,6 +14,68 @@ use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::host::terminal::AttachedTerminalClientStepPlan;
 
 impl AsyncRuntimeSessionActor {
+    /// Admits a control continuation without waiting on the actor's own bounded ingress.
+    fn dispatch_control_continuation(&self, continuation: Box<AsyncRuntimeRequest>) {
+        let sender = self.sender.clone();
+        let task = tokio::spawn(async move {
+            let _ = sender
+                .send(AsyncRuntimeRequestEnvelope::new(*continuation))
+                .await;
+        });
+        std::mem::drop(task);
+    }
+
+    /// Holds newly queued transcript claims and syncs receipts in enqueue order
+    /// before returning the producer's reply to the serialized actor.
+    pub(super) fn start_transcript_receipt_admission(
+        &mut self,
+        previous_id: u64,
+        reply: TranscriptReceiptReply,
+    ) -> Option<TranscriptReceiptReply> {
+        let receipts = self
+            .side_effect_routes
+            .hold_transcript_receipts_after(previous_id);
+        if receipts.is_empty() {
+            return Some(reply);
+        }
+        let sender = self.sender.clone();
+        let predecessor = self.transcript_receipt_predecessor.take();
+        let (finished, successor) = tokio::sync::oneshot::channel();
+        self.transcript_receipt_predecessor = Some(successor);
+        tokio::spawn(async move {
+            if let Some(predecessor) = predecessor {
+                let _ = predecessor.await;
+            }
+            let ids = receipts.iter().map(|(id, _, _)| *id).collect::<Vec<_>>();
+            let results = tokio::task::spawn_blocking(move || {
+                receipts
+                    .into_iter()
+                    .map(|(id, store, entries)| (id, store.accept_append_receipt(&entries, id)))
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_else(|error| {
+                ids.into_iter()
+                    .map(|id| {
+                        (
+                            id,
+                            Err(MezError::invalid_state(format!(
+                                "transcript receipt worker failed: {error}"
+                            ))),
+                        )
+                    })
+                    .collect()
+            });
+            let _ = finished.send(());
+            let _ = sender
+                .send(AsyncRuntimeRequestEnvelope::new(
+                    AsyncRuntimeRequest::CompleteTranscriptReceipts { results, reply },
+                ))
+                .await;
+        });
+        None
+    }
+
     /// Starts worker preparation for every prompt-history dispatch currently owned by the service.
     pub(super) fn dispatch_pending_agent_prompt_history(&mut self) {
         for dispatch in self.service.take_pending_agent_prompt_history() {
@@ -659,6 +722,7 @@ impl AsyncRuntimeSessionActor {
             } => {
                 self.record_terminal_control_request_metrics(&input, max_content_length);
                 let previous_lifecycle_state = self.service.lifecycle_state();
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let mut result = self
                     .service
                     .handle_control_input_for_connection_transition(
@@ -690,7 +754,14 @@ impl AsyncRuntimeSessionActor {
                         &mut result,
                     );
                 let should_notify = result.as_ref().is_ok_and(|result| result.consumed > 0);
-                let _ = reply.send(result);
+                if let Some(TranscriptReceiptReply::Control(reply, result)) = self
+                    .start_transcript_receipt_admission(
+                        previous_id,
+                        TranscriptReceiptReply::Control(reply, result),
+                    )
+                {
+                    let _ = reply.send(result);
+                }
                 if should_notify {
                     self.notify_event_delivery();
                 }
@@ -709,6 +780,7 @@ impl AsyncRuntimeSessionActor {
                 snapshots,
                 reply,
             } => {
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 if record_metrics {
                     self.record_terminal_control_request_metrics(&input, max_content_length);
                 }
@@ -809,7 +881,14 @@ impl AsyncRuntimeSessionActor {
                 let mut terminal_lifecycle_deferred = false;
                 match result {
                     Err(error) => {
-                        let _ = reply.send(Err(error));
+                        if let Some(TranscriptReceiptReply::Control(reply, result)) = self
+                            .start_transcript_receipt_admission(
+                                previous_id,
+                                TranscriptReceiptReply::Control(reply, Err(error)),
+                            )
+                        {
+                            let _ = reply.send(result);
+                        }
                     }
                     Ok(consumed) if remaining_input.is_empty() => {
                         let mut result = Ok(AsyncControlInputResult {
@@ -823,29 +902,36 @@ impl AsyncRuntimeSessionActor {
                                 previous_lifecycle_state,
                                 &mut result,
                             );
-                        let _ = reply.send(result);
+                        if let Some(TranscriptReceiptReply::Control(reply, result)) = self
+                            .start_transcript_receipt_admission(
+                                previous_id,
+                                TranscriptReceiptReply::Control(reply, result),
+                            )
+                        {
+                            let _ = reply.send(result);
+                        }
                         self.notify_event_delivery();
                     }
                     Ok(consumed) => {
-                        let sender = self.sender.clone();
                         let consumed_prefix = consumed_prefix.saturating_add(consumed);
-                        let join_handle = tokio::spawn(async move {
-                            let _ = sender
-                                .send(AsyncRuntimeRequestEnvelope::new(
-                                    AsyncRuntimeRequest::HandleControlInputWithSnapshots {
-                                        input: remaining_input,
-                                        output_prefix,
-                                        consumed_prefix,
-                                        record_metrics: false,
-                                        max_content_length,
-                                        connection,
-                                        snapshots,
-                                        reply,
-                                    },
-                                ))
-                                .await;
-                        });
-                        std::mem::drop(join_handle);
+                        let continuation = AsyncRuntimeRequest::HandleControlInputWithSnapshots {
+                            input: remaining_input,
+                            output_prefix,
+                            consumed_prefix,
+                            record_metrics: false,
+                            max_content_length,
+                            connection,
+                            snapshots,
+                            reply,
+                        };
+                        if let Some(TranscriptReceiptReply::ControlContinuation(continuation)) =
+                            self.start_transcript_receipt_admission(
+                                previous_id,
+                                TranscriptReceiptReply::ControlContinuation(Box::new(continuation)),
+                            )
+                        {
+                            self.dispatch_control_continuation(continuation);
+                        }
                     }
                 }
                 if !terminal_lifecycle_deferred {
@@ -865,6 +951,7 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let (body, transition) = self
                     .service
                     .complete_runtime_snapshot_control_async_work_transition(
@@ -878,7 +965,14 @@ impl AsyncRuntimeSessionActor {
                     .and_then(|_| self.queue_runtime_side_effects(transition.side_effects));
                 let mut terminal_lifecycle_deferred = false;
                 if let Err(error) = queued {
-                    let _ = reply.send(Err(error));
+                    if let Some(TranscriptReceiptReply::Control(reply, result)) = self
+                        .start_transcript_receipt_admission(
+                            previous_id,
+                            TranscriptReceiptReply::Control(reply, Err(error)),
+                        )
+                    {
+                        let _ = reply.send(result);
+                    }
                 } else if remaining_input.is_empty() {
                     let mut result = Ok(AsyncControlInputResult {
                         output: output_prefix,
@@ -891,27 +985,34 @@ impl AsyncRuntimeSessionActor {
                             previous_lifecycle_state,
                             &mut result,
                         );
-                    let _ = reply.send(result);
+                    if let Some(TranscriptReceiptReply::Control(reply, result)) = self
+                        .start_transcript_receipt_admission(
+                            previous_id,
+                            TranscriptReceiptReply::Control(reply, result),
+                        )
+                    {
+                        let _ = reply.send(result);
+                    }
                     self.notify_event_delivery();
                 } else {
-                    let sender = self.sender.clone();
-                    let join_handle = tokio::spawn(async move {
-                        let _ = sender
-                            .send(AsyncRuntimeRequestEnvelope::new(
-                                AsyncRuntimeRequest::HandleControlInputWithSnapshots {
-                                    input: remaining_input,
-                                    output_prefix,
-                                    consumed_prefix,
-                                    record_metrics: false,
-                                    max_content_length,
-                                    connection,
-                                    snapshots,
-                                    reply,
-                                },
-                            ))
-                            .await;
-                    });
-                    std::mem::drop(join_handle);
+                    let continuation = AsyncRuntimeRequest::HandleControlInputWithSnapshots {
+                        input: remaining_input,
+                        output_prefix,
+                        consumed_prefix,
+                        record_metrics: false,
+                        max_content_length,
+                        connection,
+                        snapshots,
+                        reply,
+                    };
+                    if let Some(TranscriptReceiptReply::ControlContinuation(continuation)) = self
+                        .start_transcript_receipt_admission(
+                            previous_id,
+                            TranscriptReceiptReply::ControlContinuation(Box::new(continuation)),
+                        )
+                    {
+                        self.dispatch_control_continuation(continuation);
+                    }
                 }
                 if !terminal_lifecycle_deferred {
                     self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
@@ -1091,6 +1192,7 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let stale_coordinate_input = render_token
                     .as_ref()
                     .filter(|_| Self::step_uses_render_coordinates(&step))
@@ -1203,7 +1305,14 @@ impl AsyncRuntimeSessionActor {
                     self.queue_pending_deferred_agent_command_side_effects()?;
                     Ok(application)
                 });
-                let _ = reply.send(result);
+                if let Some(TranscriptReceiptReply::TerminalStep(reply, result)) = self
+                    .start_transcript_receipt_admission(
+                        previous_id,
+                        TranscriptReceiptReply::TerminalStep(reply, result),
+                    )
+                {
+                    let _ = reply.send(result);
+                }
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
                 false
             }
@@ -1238,6 +1347,7 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let result = self
                     .service
                     .execute_terminal_command_async(&primary_client_id, &input)
@@ -1249,7 +1359,14 @@ impl AsyncRuntimeSessionActor {
                         Ok(output)
                     });
                 let should_notify = result.is_ok();
-                let _ = reply.send(result);
+                if let Some(TranscriptReceiptReply::Command(reply, result)) = self
+                    .start_transcript_receipt_admission(
+                        previous_id,
+                        TranscriptReceiptReply::Command(reply, result),
+                    )
+                {
+                    let _ = reply.send(result);
+                }
                 if should_notify {
                     self.notify_event_delivery();
                 }
@@ -1360,6 +1477,7 @@ impl AsyncRuntimeSessionActor {
                     }
                 }
                 let previous_lifecycle_state = self.service.lifecycle_state();
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let result = self
                     .service
                     .execute_agent_shell_command_async(&primary_client_id, &input)
@@ -1373,7 +1491,14 @@ impl AsyncRuntimeSessionActor {
                         Ok(output)
                     });
                 let should_notify = result.is_ok();
-                let _ = reply.send(result);
+                if let Some(TranscriptReceiptReply::Command(reply, result)) = self
+                    .start_transcript_receipt_admission(
+                        previous_id,
+                        TranscriptReceiptReply::Command(reply, result),
+                    )
+                {
+                    let _ = reply.send(result);
+                }
                 if should_notify {
                     self.notify_event_delivery();
                 }
@@ -1387,6 +1512,7 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let result = self
                     .service
                     .apply_agent_provider_preparation(preparation)
@@ -1403,7 +1529,14 @@ impl AsyncRuntimeSessionActor {
                         Ok(output)
                     });
                 let should_notify = result.is_ok();
-                let _ = reply.send(result);
+                if let Some(TranscriptReceiptReply::Command(reply, result)) = self
+                    .start_transcript_receipt_admission(
+                        previous_id,
+                        TranscriptReceiptReply::Command(reply, result),
+                    )
+                {
+                    let _ = reply.send(result);
+                }
                 if should_notify {
                     self.notify_event_delivery();
                 }
@@ -1417,6 +1550,7 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let result = self
                     .service
                     .complete_agent_shell_provider_info_refresh(&primary_client_id, &input, outcome)
@@ -1425,7 +1559,14 @@ impl AsyncRuntimeSessionActor {
                         Ok(output)
                     });
                 let should_notify = result.is_ok();
-                let _ = reply.send(result);
+                if let Some(TranscriptReceiptReply::Command(reply, result)) = self
+                    .start_transcript_receipt_admission(
+                        previous_id,
+                        TranscriptReceiptReply::Command(reply, result),
+                    )
+                {
+                    let _ = reply.send(result);
+                }
                 if should_notify {
                     self.notify_event_delivery();
                 }
@@ -1610,6 +1751,7 @@ impl AsyncRuntimeSessionActor {
             }
             AsyncRuntimeRequest::CompleteApprovedExternalAction { outcome, reply } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let result = self
                     .service
                     .complete_approved_external_action(outcome)
@@ -1619,7 +1761,14 @@ impl AsyncRuntimeSessionActor {
                         Ok(applied)
                     });
                 let should_notify = result.is_ok();
-                let _ = reply.send(result);
+                if let Some(TranscriptReceiptReply::Applied(reply, result)) = self
+                    .start_transcript_receipt_admission(
+                        previous_id,
+                        TranscriptReceiptReply::Applied(reply, result),
+                    )
+                {
+                    let _ = reply.send(result);
+                }
                 if should_notify {
                     self.notify_event_delivery();
                 }
@@ -1656,6 +1805,7 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let result = self
                     .service
                     .complete_agent_command_work(&work, *outcome)
@@ -1664,7 +1814,14 @@ impl AsyncRuntimeSessionActor {
                         Ok(applied)
                     });
                 let should_notify = result.as_ref().is_ok_and(|applied| *applied);
-                let _ = reply.send(result);
+                if let Some(TranscriptReceiptReply::Applied(reply, result)) = self
+                    .start_transcript_receipt_admission(
+                        previous_id,
+                        TranscriptReceiptReply::Applied(reply, result),
+                    )
+                {
+                    let _ = reply.send(result);
+                }
                 if should_notify {
                     self.notify_event_delivery();
                 }
@@ -1811,6 +1968,7 @@ impl AsyncRuntimeSessionActor {
             }
             AsyncRuntimeRequest::SubmitRuntimeEvents { batch, reply } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let result = self.apply_runtime_event_batch(batch).await;
                 let should_notify = result.as_ref().is_ok_and(|report| report.applied > 0);
                 if should_notify {
@@ -1822,11 +1980,28 @@ impl AsyncRuntimeSessionActor {
                     // admission after the next side-effect drain.
                     let _ = self.queue_pending_deferred_agent_command_side_effects();
                 }
-                let _ = reply.send(result);
                 if should_notify {
                     self.notify_event_delivery();
                 }
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                if let Ok(report) = result {
+                    if let Some(TranscriptReceiptReply::Event(reply, report)) = self
+                        .start_transcript_receipt_admission(
+                            previous_id,
+                            TranscriptReceiptReply::Event(reply, report),
+                        )
+                    {
+                        let _ = reply.send(Ok(report));
+                    }
+                } else if let Err(error) = result
+                    && let Some(TranscriptReceiptReply::EventError(reply, error)) = self
+                        .start_transcript_receipt_admission(
+                            previous_id,
+                            TranscriptReceiptReply::EventError(reply, error),
+                        )
+                {
+                    let _ = reply.send(Err(error));
+                }
                 false
             }
             AsyncRuntimeRequest::DrainRuntimeSideEffects { limit, reply } => {
@@ -1838,10 +2013,100 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let queued = side_effects.len();
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let result = self
                     .queue_runtime_side_effects(side_effects)
                     .map(|()| queued);
-                let _ = reply.send(result);
+                if result.is_ok() {
+                    self.side_effect_routes
+                        .mark_direct_transcript_claims_after(previous_id);
+                    if let Some(TranscriptReceiptReply::SideEffects(reply, queued)) = self
+                        .start_transcript_receipt_admission(
+                            previous_id,
+                            TranscriptReceiptReply::SideEffects(reply, queued),
+                        )
+                    {
+                        let _ = reply.send(Ok(queued));
+                    }
+                } else {
+                    let _ = reply.send(result);
+                }
+                false
+            }
+            AsyncRuntimeRequest::CompleteTranscriptReceipts { results, reply } => {
+                let mut failure = None;
+                let mut admitted = 0;
+                for (id, result) in results {
+                    let accepted = result.is_ok();
+                    if !self
+                        .side_effect_routes
+                        .finish_transcript_receipt(id, accepted)
+                    {
+                        failure.get_or_insert_with(|| {
+                            MezError::invalid_state("transcript receipt claim is no longer queued")
+                        });
+                    } else if accepted {
+                        admitted += 1;
+                    }
+                    if let Err(error) = result {
+                        failure.get_or_insert(error);
+                    }
+                }
+                // A successful prefix may be ready even when a later receipt
+                // in the same producer submission was rejected.
+                self.notify_side_effect_delivery();
+                match reply {
+                    TranscriptReceiptReply::Startup => {}
+                    TranscriptReceiptReply::Recovery(sender, already_recovered) => {
+                        let _ = sender.send(already_recovered.saturating_add(admitted));
+                    }
+                    TranscriptReceiptReply::ControlContinuation(continuation) => {
+                        if let Some(error) = failure {
+                            if let AsyncRuntimeRequest::HandleControlInputWithSnapshots {
+                                reply,
+                                ..
+                            } = *continuation
+                            {
+                                let _ = reply.send(Err(error));
+                            }
+                        } else {
+                            self.dispatch_control_continuation(continuation);
+                        }
+                    }
+                    TranscriptReceiptReply::Control(sender, result) => {
+                        let _ = sender.send(match failure {
+                            Some(error) if result.is_ok() => Err(error),
+                            _ => result,
+                        });
+                    }
+                    TranscriptReceiptReply::Command(sender, result) => {
+                        let _ = sender.send(match failure {
+                            Some(error) if result.is_ok() => Err(error),
+                            _ => result,
+                        });
+                    }
+                    TranscriptReceiptReply::Applied(sender, result) => {
+                        let _ = sender.send(match failure {
+                            Some(error) if result.is_ok() => Err(error),
+                            _ => result,
+                        });
+                    }
+                    TranscriptReceiptReply::TerminalStep(sender, result) => {
+                        let _ = sender.send(match failure {
+                            Some(error) if result.is_ok() => Err(error),
+                            _ => result,
+                        });
+                    }
+                    TranscriptReceiptReply::Event(sender, report) => {
+                        let _ = sender.send(failure.map_or(Ok(report), Err));
+                    }
+                    TranscriptReceiptReply::EventError(sender, error) => {
+                        let _ = sender.send(Err(error));
+                    }
+                    TranscriptReceiptReply::SideEffects(sender, queued) => {
+                        let _ = sender.send(failure.map_or(Ok(queued), Err));
+                    }
+                }
                 false
             }
             AsyncRuntimeRequest::DrainAgentProviderDispatchSideEffects { limit, reply } => {
@@ -1886,7 +2151,16 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             AsyncRuntimeRequest::RecoverClaimedTranscripts { reply } => {
-                let _ = reply.send(self.side_effect_routes.recover_claimed_transcripts());
+                let recovered = self.side_effect_routes.recover_claimed_transcripts();
+                self.side_effect_routes.retry_failed_transcript_receipts();
+                if let Some(TranscriptReceiptReply::Recovery(reply, recovered)) = self
+                    .start_transcript_receipt_admission(
+                        0,
+                        TranscriptReceiptReply::Recovery(reply, recovered),
+                    )
+                {
+                    let _ = reply.send(recovered);
+                }
                 false
             }
             AsyncRuntimeRequest::DrainHookSideEffects { limit, reply } => {

@@ -306,6 +306,7 @@ impl AsyncRuntimeSessionActor {
             rendered_client_side_effects: Default::default(),
             side_effects: Default::default(),
             side_effect_routes: Default::default(),
+            transcript_receipt_predecessor: None,
             side_effect_queue_nonempty_since: None,
             pane_input_leases: Default::default(),
             timers: Default::default(),
@@ -443,6 +444,9 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub async fn run(mut self) -> AsyncRuntimeActorExit {
+        // Construction transfers existing service work without filesystem I/O.
+        // Hold its claims until receipt sync completes off actor ownership.
+        let _ = self.start_transcript_receipt_admission(0, super::TranscriptReceiptReply::Startup);
         loop {
             if self.request_scheduler.requests_since_clipboard_cleanup
                 >= MAX_REQUESTS_BEFORE_CLIPBOARD_CLEANUP
@@ -490,6 +494,11 @@ impl AsyncRuntimeSessionActor {
                 self.sync_metrics_snapshot_to_service();
             }
             let should_shutdown = self.handle_request(envelope.request).await;
+            // Internal command paths may queue transcript effects without a
+            // dedicated producer callback. Schedule their held claims before
+            // the next request can drain the ordered persistence lane.
+            let _ =
+                self.start_transcript_receipt_admission(0, super::TranscriptReceiptReply::Startup);
             let handler_duration_ms =
                 u64::try_from(handler_started.elapsed().as_millis()).unwrap_or(u64::MAX);
             if envelope.record_actor_latency {

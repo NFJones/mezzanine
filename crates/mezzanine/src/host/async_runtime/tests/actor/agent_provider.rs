@@ -1055,6 +1055,12 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         assert_eq!(report.applied, 1);
         assert!(report.side_effects >= 2);
         assert!(!transcript_path.exists());
+        assert!(
+            !transcript_store
+                .pending_append_receipts()
+                .unwrap()
+                .is_empty()
+        );
 
         let persistence = run_async_persistence_side_effect_service(
             &handle,

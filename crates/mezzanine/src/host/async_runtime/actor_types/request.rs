@@ -22,6 +22,42 @@ use crate::runtime::{PaneInputDispatch, RuntimeEventConnectionTable};
 use crate::runtime::{RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork};
 use std::time::Instant;
 
+/// Original producer reply retained while its transcript receipts are synced.
+pub(in crate::host::async_runtime) enum TranscriptReceiptReply {
+    /// Startup transfer has no caller, but still gates the worker lane.
+    Startup,
+    /// Worker recovery waits for retry admission before draining persistence.
+    Recovery(oneshot::Sender<usize>, usize),
+    /// Resume a later control frame only after the preceding frame's receipt settles.
+    ControlContinuation(Box<AsyncRuntimeRequest>),
+    /// A control response whose applied transcript rows must be recoverable.
+    Control(
+        oneshot::Sender<Result<AsyncControlInputResult>>,
+        Result<AsyncControlInputResult>,
+    ),
+    /// A terminal or agent-shell command response.
+    Command(oneshot::Sender<Result<String>>, Result<String>),
+    /// A settled asynchronous action or command result.
+    Applied(oneshot::Sender<Result<bool>>, Result<bool>),
+    /// Interactive terminal step whose transcript effects require a receipt.
+    TerminalStep(
+        oneshot::Sender<Result<AttachedClientStepApplication>>,
+        Result<AttachedClientStepApplication>,
+    ),
+    /// Event ingress report for a service-owned transition.
+    Event(
+        oneshot::Sender<Result<RuntimeEventIngressReport>>,
+        RuntimeEventIngressReport,
+    ),
+    /// Partial event failure can leave already-applied transcript work queued.
+    EventError(
+        oneshot::Sender<Result<RuntimeEventIngressReport>>,
+        crate::error::MezError,
+    ),
+    /// Number of accepted direct side effects.
+    SideEffects(oneshot::Sender<Result<usize>>, usize),
+}
+
 /// Timestamped command envelope accepted by the serialized runtime actor.
 pub(in crate::host::async_runtime) struct AsyncRuntimeRequestEnvelope {
     /// Fixed request family captured without allocating a dynamic label.
@@ -1059,6 +1095,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<usize>>,
     },
+    /// Reports off-actor receipt sync for one producer submission.
+    CompleteTranscriptReceipts {
+        /// Exact queued claims whose receipts were attempted in order.
+        results: Vec<(u64, Result<()>)>,
+        /// Producer acknowledgment held until all receipts are settled.
+        reply: TranscriptReceiptReply,
+    },
     /// Represents the Drain Agent Provider Dispatch Side Effects case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1393,6 +1436,7 @@ impl AsyncRuntimeRequest {
             Self::SubmitRuntimeEvents { .. } => Family::Event,
             Self::DrainRuntimeSideEffects { .. }
             | Self::QueueRuntimeSideEffects { .. }
+            | Self::CompleteTranscriptReceipts { .. }
             | Self::DrainAgentProviderDispatchSideEffects { .. }
             | Self::DrainAgentCommandDispatchSideEffects { .. }
             | Self::DrainRenderSideEffects { .. }
