@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 struct QueuedPersistence {
     effect: RuntimeSideEffect,
     recovered_claim: Option<u64>,
+    claim_id: Option<u64>,
 }
 
 /// One worker-owned transcript claim and its permanent-failure fence.
@@ -385,9 +386,19 @@ impl RuntimeSideEffectRouter {
             }
             self.persistence.remove(position);
         }
+        let claim_id = if matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { .. }) {
+            self.next_transcript_claim_id = self
+                .next_transcript_claim_id
+                .checked_add(1)
+                .expect("transcript claim id exhausted");
+            Some(self.next_transcript_claim_id)
+        } else {
+            None
+        };
         self.persistence.push_back(QueuedPersistence {
             effect,
             recovered_claim: None,
+            claim_id,
         });
     }
 
@@ -460,17 +471,11 @@ impl RuntimeSideEffectRouter {
             .drain(..limit.min(self.persistence.len()))
             .collect::<Vec<_>>();
         for queued in &effects {
-            if matches!(
-                queued.effect,
-                RuntimeSideEffect::PersistTranscriptEntries { .. }
-            ) && queued.recovered_claim.is_none()
+            if let Some(id) = queued.claim_id
+                && queued.recovered_claim.is_none()
             {
-                self.next_transcript_claim_id = self
-                    .next_transcript_claim_id
-                    .checked_add(1)
-                    .expect("transcript claim id exhausted");
                 self.claimed_transcripts.push_back(ClaimedTranscript {
-                    id: self.next_transcript_claim_id,
+                    id,
                     effect: queued.effect.clone(),
                     blocked: false,
                 });
@@ -496,6 +501,7 @@ impl RuntimeSideEffectRouter {
                 self.persistence.push_front(QueuedPersistence {
                     effect: claim.effect.clone(),
                     recovered_claim: Some(claim.id),
+                    claim_id: Some(claim.id),
                 });
                 count += 1;
             }
