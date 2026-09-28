@@ -2572,6 +2572,47 @@ mod transcript_settlement_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// A later identical claim can commit the rows without retiring an earlier
+    /// uncertain claim's journal; restart may reconcile that older claim safely.
+    #[tokio::test]
+    async fn queued_transcript_later_success_preserves_older_uncertain_receipt() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-async-transcript-mixed-claims-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let row = TranscriptEntry {
+            conversation_id: "mixed-claims".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted".to_string(),
+        };
+        store.fail_transcript_append_attempts(2);
+        assert!(
+            persist_transcript_entries_with_generation(store.clone(), vec![row.clone()], 1)
+                .await
+                .is_err()
+        );
+        persist_transcript_entries_with_generation(store.clone(), vec![row.clone()], 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![row.clone()]]
+        );
+        AgentTranscriptStore::new(root.clone())
+            .recover_append_receipts()
+            .unwrap();
+        assert_eq!(store.inspect(&row.conversation_id).unwrap(), vec![row]);
+        assert!(store.pending_append_receipts().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// A later identical claim has a distinct durable generation; a worker
     /// processing the old claim must not retire the later receipt.
     #[tokio::test]
