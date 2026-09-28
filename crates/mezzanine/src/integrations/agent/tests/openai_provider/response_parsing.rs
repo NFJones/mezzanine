@@ -643,8 +643,11 @@ async fn openai_provider_stream_forwards_lossless_say_event_backlog() {
         } if content_type == mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
     )));
     assert!(matches!(
-        events.last(),
-        Some(mez_agent::StreamingSayEvent::TextComplete { action_index: 0 })
+        &events[events.len() - 2..],
+        [
+            mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+            mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
+        ]
     ));
     let streamed_text = events
         .iter()

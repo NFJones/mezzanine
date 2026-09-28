@@ -3173,6 +3173,8 @@ impl RuntimeSessionService {
                     presentation.projected_revision = None;
                 }
             }
+            // Receipt is an ordering barrier, not source, validation or execution.
+            mez_agent::StreamingSayEvent::ActionComplete { .. } => {}
         }
         Ok(())
     }

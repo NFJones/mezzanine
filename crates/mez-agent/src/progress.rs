@@ -123,6 +123,11 @@ pub enum StreamingPresentationEvent {
         /// Typed source used by the product's shared static formatter.
         header: Box<StreamingActionHeader>,
     },
+    /// A direct action object has closed; this is receipt, not validation or execution.
+    ActionComplete {
+        /// Zero-based position in the current response's `actions` array.
+        action_index: usize,
+    },
 }
 
 /// One fail-closed action-header source that is safe to project provisionally.
@@ -178,6 +183,8 @@ struct ActiveStreamingSource {
 pub struct StreamingPresentationExtractor {
     input: String,
     emitted: std::collections::BTreeMap<StreamingSourceId, EmittedStreamingSource>,
+    /// Direct action ordinals already reported as completely received.
+    received_actions: BTreeSet<usize>,
     active: Option<ActiveStreamingSource>,
     disabled: bool,
     #[cfg(test)]
@@ -225,12 +232,26 @@ impl StreamingPresentationExtractor {
         {
             self.structural_scans = self.structural_scans.saturating_add(1);
         }
-        let Some(sources) = streaming_presentation_sources(&self.input) else {
-            return events;
-        };
+        let sources = streaming_presentation_sources(&self.input).unwrap_or_default();
+        let closed_actions = provisional_maap_object(&self.input)
+            .and_then(|object| direct_json_field_value_start(object, "actions"))
+            .and_then(|value| value.trim_start().strip_prefix('['))
+            .map(|actions| {
+                direct_json_array_objects(actions)
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(index, (_, closed))| closed.then_some(index))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
         let mut next_active = None;
         for source in sources {
+            if let Some(action_index) = source.id.action_index() {
+                for &closed in closed_actions.iter().filter(|&&index| index < action_index) {
+                    self.emit_action_receipt(closed, &mut events);
+                }
+            }
             let state = self.emitted.entry(source.id).or_default();
             if !state.started {
                 state.started = true;
@@ -266,7 +287,21 @@ impl StreamingPresentationExtractor {
             }
         }
         self.active = next_active;
+        for action_index in closed_actions {
+            self.emit_action_receipt(action_index, &mut events);
+        }
         events
+    }
+
+    /// Emits one non-authoritative receipt after earlier preview source events.
+    fn emit_action_receipt(
+        &mut self,
+        action_index: usize,
+        events: &mut Vec<StreamingPresentationEvent>,
+    ) {
+        if self.received_actions.insert(action_index) {
+            events.push(StreamingPresentationEvent::ActionComplete { action_index });
+        }
     }
 
     /// Appends one incrementally decoded suffix to established source state.
@@ -316,7 +351,22 @@ impl StreamingPresentationExtractor {
         self.disabled = true;
         self.input.clear();
         self.emitted.clear();
+        self.received_actions.clear();
         self.active = None;
+    }
+}
+
+impl StreamingSourceId {
+    /// Returns the direct action ordinal, excluding batch-level rationale.
+    fn action_index(self) -> Option<usize> {
+        match self {
+            Self::Rationale => None,
+            Self::Say(index)
+            | Self::SendMessagePayload(index)
+            | Self::ShellCommand(index)
+            | Self::ShellCommandSummary(index)
+            | Self::ActionHeader(index) => Some(index),
+        }
     }
 }
 
@@ -438,128 +488,142 @@ fn streaming_presentation_sources(input: &str) -> Option<Vec<StreamingPresentati
     else {
         return Some(extracted);
     };
-    for (action_index, action) in direct_json_array_objects(actions).into_iter().enumerate() {
-        match json_string_field(action, "type")?.as_str() {
-            "say" => {
-                let status = SayStatus::parse(&json_string_field(action, "status")?)?;
-                let content_type = json_string_field(action, "content_type")?;
-                let content_type = crate::normalize_agent_output_content_type(Some(&content_type));
-                if content_type != crate::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                    && !crate::agent_output_content_type_is_markdown(&content_type)
-                    && !crate::agent_output_content_type_is_diff(&content_type)
-                {
-                    continue;
-                }
-                let text_start = direct_json_field_value_start(action, "text")?.trim_start();
-                let (text, complete, raw_cursor) = decode_incomplete_json_string(text_start)?;
-                extracted.push(StreamingPresentationSource {
-                    id: StreamingSourceId::Say(action_index),
-                    status: Some(status),
-                    recipient: None,
-                    content_type: Some(content_type),
-                    text,
-                    complete,
-                    raw_cursor: text_start.as_ptr() as usize - input.as_ptr() as usize + raw_cursor,
-                    header: None,
-                });
-            }
-            "send_message" => {
-                let recipient = json_string_field(action, "recipient")?;
-                let content_type = crate::normalize_maap_message_content_type(&json_string_field(
-                    action,
-                    "content_type",
-                )?);
-                if !streaming_message_content_type_is_supported(&content_type) {
-                    continue;
-                }
-                let payload_start = direct_json_field_value_start(action, "payload")?.trim_start();
-                let (text, complete, raw_cursor) = decode_incomplete_json_string(payload_start)?;
-                extracted.push(StreamingPresentationSource {
-                    id: StreamingSourceId::SendMessagePayload(action_index),
-                    status: None,
-                    recipient: Some(recipient),
-                    content_type: Some(content_type),
-                    text,
-                    complete,
-                    raw_cursor: payload_start.as_ptr() as usize - input.as_ptr() as usize
-                        + raw_cursor,
-                    header: None,
-                });
-            }
-            "shell_command" => {
-                let summary_start = direct_json_field_value_start(action, "summary")?.trim_start();
-                let (summary, complete, raw_cursor) = decode_incomplete_json_string(summary_start)?;
-                extracted.push(StreamingPresentationSource {
-                    id: StreamingSourceId::ShellCommandSummary(action_index),
-                    status: None,
-                    recipient: None,
-                    content_type: None,
-                    text: summary,
-                    complete,
-                    raw_cursor: summary_start.as_ptr() as usize - input.as_ptr() as usize
-                        + raw_cursor,
-                    header: None,
-                });
-                if let Some(command_start) =
-                    direct_json_field_value_start(action, "command").map(str::trim_start)
-                {
-                    let (text, complete, raw_cursor) =
-                        decode_incomplete_json_string(command_start)?;
+    for (action_index, (action, _)) in direct_json_array_objects(actions).into_iter().enumerate() {
+        // An incomplete later action must not discard already extracted fields
+        // from earlier closed siblings: their receipt follows those fields.
+        let Some(mut action_sources) = (|| {
+            let mut extracted = Vec::new();
+            match json_string_field(action, "type")?.as_str() {
+                "say" => {
+                    let status = SayStatus::parse(&json_string_field(action, "status")?)?;
+                    let content_type = json_string_field(action, "content_type")?;
+                    let content_type =
+                        crate::normalize_agent_output_content_type(Some(&content_type));
+                    if content_type != crate::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                        && !crate::agent_output_content_type_is_markdown(&content_type)
+                        && !crate::agent_output_content_type_is_diff(&content_type)
+                    {
+                        return Some(extracted);
+                    }
+                    let text_start = direct_json_field_value_start(action, "text")?.trim_start();
+                    let (text, complete, raw_cursor) = decode_incomplete_json_string(text_start)?;
                     extracted.push(StreamingPresentationSource {
-                        id: StreamingSourceId::ShellCommand(action_index),
-                        status: None,
+                        id: StreamingSourceId::Say(action_index),
+                        status: Some(status),
                         recipient: None,
-                        content_type: None,
+                        content_type: Some(content_type),
                         text,
                         complete,
-                        raw_cursor: command_start.as_ptr() as usize - input.as_ptr() as usize
+                        raw_cursor: text_start.as_ptr() as usize - input.as_ptr() as usize
                             + raw_cursor,
                         header: None,
                     });
                 }
-            }
-            "web_search" | "fetch_url" => {
-                let header = match json_string_field(action, "type")?.as_str() {
-                    "web_search" => json_string_field(action, "query")
-                        .map(|query| StreamingActionHeader::WebSearch { query }),
-                    "fetch_url" => json_string_field(action, "url")
-                        .map(|url| StreamingActionHeader::FetchUrl { url }),
-                    _ => None,
-                };
-                if let Some(header) = header {
+                "send_message" => {
+                    let recipient = json_string_field(action, "recipient")?;
+                    let content_type = crate::normalize_maap_message_content_type(
+                        &json_string_field(action, "content_type")?,
+                    );
+                    if !streaming_message_content_type_is_supported(&content_type) {
+                        return Some(extracted);
+                    }
+                    let payload_start =
+                        direct_json_field_value_start(action, "payload")?.trim_start();
+                    let (text, complete, raw_cursor) =
+                        decode_incomplete_json_string(payload_start)?;
                     extracted.push(StreamingPresentationSource {
-                        id: StreamingSourceId::ActionHeader(action_index),
+                        id: StreamingSourceId::SendMessagePayload(action_index),
+                        status: None,
+                        recipient: Some(recipient),
+                        content_type: Some(content_type),
+                        text,
+                        complete,
+                        raw_cursor: payload_start.as_ptr() as usize - input.as_ptr() as usize
+                            + raw_cursor,
+                        header: None,
+                    });
+                }
+                "shell_command" => {
+                    let summary_start =
+                        direct_json_field_value_start(action, "summary")?.trim_start();
+                    let (summary, complete, raw_cursor) =
+                        decode_incomplete_json_string(summary_start)?;
+                    extracted.push(StreamingPresentationSource {
+                        id: StreamingSourceId::ShellCommandSummary(action_index),
                         status: None,
                         recipient: None,
                         content_type: None,
-                        text: String::new(),
-                        complete: true,
-                        raw_cursor: 0,
-                        header: Some(header),
+                        text: summary,
+                        complete,
+                        raw_cursor: summary_start.as_ptr() as usize - input.as_ptr() as usize
+                            + raw_cursor,
+                        header: None,
                     });
+                    if let Some(command_start) =
+                        direct_json_field_value_start(action, "command").map(str::trim_start)
+                    {
+                        let (text, complete, raw_cursor) =
+                            decode_incomplete_json_string(command_start)?;
+                        extracted.push(StreamingPresentationSource {
+                            id: StreamingSourceId::ShellCommand(action_index),
+                            status: None,
+                            recipient: None,
+                            content_type: None,
+                            text,
+                            complete,
+                            raw_cursor: command_start.as_ptr() as usize - input.as_ptr() as usize
+                                + raw_cursor,
+                            header: None,
+                        });
+                    }
                 }
-            }
-            _ if action.ends_with('}') => {
-                let Ok(action) = crate::parse_maap_action_json(action) else {
-                    continue;
-                };
-                if streaming_action_has_safe_header(&action.payload) {
-                    extracted.push(StreamingPresentationSource {
-                        id: StreamingSourceId::ActionHeader(action_index),
-                        status: None,
-                        recipient: None,
-                        content_type: None,
-                        text: String::new(),
-                        complete: true,
-                        raw_cursor: 0,
-                        header: Some(StreamingActionHeader::Action {
-                            action: Box::new(action),
-                        }),
-                    });
+                "web_search" | "fetch_url" => {
+                    let header = match json_string_field(action, "type")?.as_str() {
+                        "web_search" => json_string_field(action, "query")
+                            .map(|query| StreamingActionHeader::WebSearch { query }),
+                        "fetch_url" => json_string_field(action, "url")
+                            .map(|url| StreamingActionHeader::FetchUrl { url }),
+                        _ => None,
+                    };
+                    if let Some(header) = header {
+                        extracted.push(StreamingPresentationSource {
+                            id: StreamingSourceId::ActionHeader(action_index),
+                            status: None,
+                            recipient: None,
+                            content_type: None,
+                            text: String::new(),
+                            complete: true,
+                            raw_cursor: 0,
+                            header: Some(header),
+                        });
+                    }
                 }
+                _ if action.ends_with('}') => {
+                    let Ok(action) = crate::parse_maap_action_json(action) else {
+                        return Some(extracted);
+                    };
+                    if streaming_action_has_safe_header(&action.payload) {
+                        extracted.push(StreamingPresentationSource {
+                            id: StreamingSourceId::ActionHeader(action_index),
+                            status: None,
+                            recipient: None,
+                            content_type: None,
+                            text: String::new(),
+                            complete: true,
+                            raw_cursor: 0,
+                            header: Some(StreamingActionHeader::Action {
+                                action: Box::new(action),
+                            }),
+                        });
+                    }
+                }
+                _ => {}
             }
-            _ => {}
-        }
+            Some(extracted)
+        })() else {
+            break;
+        };
+        extracted.append(&mut action_sources);
     }
     Some(extracted)
 }
@@ -647,8 +711,8 @@ fn direct_json_field_value_start<'a>(input: &'a str, key: &str) -> Option<&'a st
     None
 }
 
-/// Returns each complete or currently incomplete direct object in one array.
-fn direct_json_array_objects(input: &str) -> Vec<&str> {
+/// Returns each direct object and whether its structural closing brace arrived.
+fn direct_json_array_objects(input: &str) -> Vec<(&str, bool)> {
     let bytes = input.as_bytes();
     let mut objects = Vec::new();
     let mut index = 0_usize;
@@ -690,7 +754,7 @@ fn direct_json_array_objects(input: &str) -> Vec<&str> {
                         _ => index += 1,
                     }
                 }
-                objects.push(&input[start..index]);
+                objects.push((&input[start..index], object_depth == 0));
             }
             _ => index += 1,
         }
@@ -1184,6 +1248,7 @@ mod tests {
                         text: "**wörld**\nnext".to_string(),
                     },
                     StreamingSayEvent::TextComplete { action_index: 0 },
+                    StreamingSayEvent::ActionComplete { action_index: 0 },
                 ]
             );
         }
@@ -1233,6 +1298,7 @@ mod tests {
                     text: "b'".to_string(),
                 },
                 StreamingPresentationEvent::ShellCommandTextComplete { action_index: 0 },
+                StreamingPresentationEvent::ActionComplete { action_index: 0 },
             ]
         );
     }
@@ -1269,25 +1335,32 @@ mod tests {
                     text: "pwd".to_string(),
                 },
                 StreamingPresentationEvent::ShellCommandTextComplete { action_index: 0 },
+                StreamingPresentationEvent::ActionComplete { action_index: 0 },
             ]
         );
         assert_eq!(
             extractor.push_delta(r#""},{"type":"fetch_url","url":"https://example.test"#),
-            vec![StreamingPresentationEvent::ActionHeader {
-                action_index: 1,
-                header: Box::new(StreamingActionHeader::WebSearch {
-                    query: "streaming previews".to_string(),
-                }),
-            }]
+            vec![
+                StreamingPresentationEvent::ActionHeader {
+                    action_index: 1,
+                    header: Box::new(StreamingActionHeader::WebSearch {
+                        query: "streaming previews".to_string(),
+                    }),
+                },
+                StreamingPresentationEvent::ActionComplete { action_index: 1 },
+            ]
         );
         assert_eq!(
             extractor.push_delta(r#"/guide"}] }"#),
-            vec![StreamingPresentationEvent::ActionHeader {
-                action_index: 2,
-                header: Box::new(StreamingActionHeader::FetchUrl {
-                    url: "https://example.test/guide".to_string(),
-                }),
-            }]
+            vec![
+                StreamingPresentationEvent::ActionHeader {
+                    action_index: 2,
+                    header: Box::new(StreamingActionHeader::FetchUrl {
+                        url: "https://example.test/guide".to_string(),
+                    }),
+                },
+                StreamingPresentationEvent::ActionComplete { action_index: 2 },
+            ]
         );
     }
 
@@ -1315,6 +1388,7 @@ mod tests {
                         }),
                     }),
                 },
+                StreamingPresentationEvent::ActionComplete { action_index: 0 },
                 StreamingPresentationEvent::ActionHeader {
                     action_index: 1,
                     header: Box::new(StreamingActionHeader::Action {
@@ -1329,6 +1403,7 @@ mod tests {
                         }),
                     }),
                 },
+                StreamingPresentationEvent::ActionComplete { action_index: 1 },
                 StreamingPresentationEvent::MessageStarted {
                     action_index: 2,
                     recipient: "agent-2".to_string(),
@@ -1339,6 +1414,7 @@ mod tests {
                     text: "private".to_string(),
                 },
                 StreamingPresentationEvent::MessagePayloadComplete { action_index: 2 },
+                StreamingPresentationEvent::ActionComplete { action_index: 2 },
             ]
         );
     }
@@ -1356,14 +1432,146 @@ mod tests {
                 .is_empty()
         );
         let events = extractor.push_delta(r#"},{"type":"wait""#);
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2);
         assert!(
             matches!(&events[0], StreamingPresentationEvent::ActionHeader { action_index: 0, header } if matches!(&**header, StreamingActionHeader::Action { action } if matches!(&action.payload, AgentActionPayload::ListAgents { agent_type: Some(kind), scope: Some(scope) } if kind == "subagent" && scope == "project")))
         );
+        assert_eq!(
+            events[1],
+            StreamingPresentationEvent::ActionComplete { action_index: 0 }
+        );
         let events = extractor.push_delta(r#"}]}"#);
         assert!(
-            matches!(&events[..], [StreamingPresentationEvent::ActionHeader { action_index: 1, header }] if matches!(&**header, StreamingActionHeader::Action { action } if matches!(&action.payload, AgentActionPayload::Wait)))
+            matches!(&events[..], [StreamingPresentationEvent::ActionHeader { action_index: 1, header }, StreamingPresentationEvent::ActionComplete { action_index: 1 }] if matches!(&**header, StreamingActionHeader::Action { action } if matches!(&action.payload, AgentActionPayload::Wait)))
         );
+    }
+
+    /// A closed source string is not whole-action receipt; nested braces and
+    /// escaped delimiters cannot produce an extra direct-action barrier.
+    #[test]
+    fn streaming_action_receipts_follow_direct_objects_once() {
+        let mut extractor = StreamingPresentationExtractor::default();
+        let mut events = Vec::new();
+        for byte in br#"{"actions":[{"type":"say","status":"progress","content_type":"text/plain","text":"a}b" ,"extra":{"nested":"}"}},{"type":"request_capability","capability":"shell","reason":"private"},{"type":"wait"}]}"# {
+            events.extend(extractor.push_delta(std::str::from_utf8(std::slice::from_ref(byte)).unwrap()));
+        }
+        assert!(extractor.push_delta(" ").is_empty());
+        let barriers = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamingPresentationEvent::ActionComplete { action_index } => Some(*action_index),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(barriers, [0, 1, 2]);
+        let text_closed = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    StreamingPresentationEvent::TextComplete { action_index: 0 }
+                )
+            })
+            .unwrap();
+        let first_receipt = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    StreamingPresentationEvent::ActionComplete { action_index: 0 }
+                )
+            })
+            .unwrap();
+        let next_header = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    StreamingPresentationEvent::ActionHeader {
+                        action_index: 2,
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        assert!(text_closed < first_receipt && first_receipt < next_header);
+        assert!(events.iter().all(|event| !matches!(event, StreamingPresentationEvent::TextDelta { text, .. } if text.contains("private"))));
+    }
+
+    /// A brace at the end of an unfinished quoted field is not a direct
+    /// object terminator, even when no previewable source is available.
+    #[test]
+    fn streaming_action_receipt_waits_for_unfinished_string_close() {
+        let mut extractor = StreamingPresentationExtractor::default();
+        assert!(
+            extractor
+                .push_delta(r#"{"actions":[{"type":"request_capability","reason":"still open }"#)
+                .is_empty()
+        );
+        assert_eq!(
+            extractor.push_delta(r#""}] }"#),
+            vec![StreamingPresentationEvent::ActionComplete { action_index: 0 }]
+        );
+    }
+
+    /// An incomplete later object cannot delay an earlier action's preview
+    /// until after that earlier action's whole-object receipt.
+    #[test]
+    fn streaming_action_receipt_follows_earlier_fields_with_later_incomplete_action() {
+        let mut extractor = StreamingPresentationExtractor::default();
+        let first = extractor.push_delta(
+            r#"{"actions":[{"type":"say","status":"progress","content_type":"text/plain","text":"hello"},{"type":"#,
+        );
+        assert!(
+            matches!(
+                first.as_slice(),
+                [
+                    StreamingPresentationEvent::Started {
+                        action_index: 0,
+                        ..
+                    },
+                    StreamingPresentationEvent::TextDelta {
+                        action_index: 0,
+                        ..
+                    },
+                    StreamingPresentationEvent::TextComplete { action_index: 0 },
+                    StreamingPresentationEvent::ActionComplete { action_index: 0 },
+                ]
+            ),
+            "{first:?}"
+        );
+        let second = extractor.push_delta(r#""wait"}]}"#);
+        assert!(
+            matches!(
+                second.as_slice(),
+                [
+                    StreamingPresentationEvent::ActionHeader {
+                        action_index: 1,
+                        ..
+                    },
+                    StreamingPresentationEvent::ActionComplete { action_index: 1 },
+                ]
+            ),
+            "{second:?}"
+        );
+    }
+
+    /// Action ordinals restart with the next provider response, never with a
+    /// second fragment of the same response or a repeated source snapshot.
+    #[test]
+    fn streaming_action_receipts_restart_with_new_extractor() {
+        let source = r#"{"actions":[{"type":"wait"}]}"#;
+        let mut first = StreamingPresentationExtractor::default();
+        assert!(first.push_delta(source).iter().any(|event| matches!(
+            event,
+            StreamingPresentationEvent::ActionComplete { action_index: 0 }
+        )));
+        assert!(first.push_delta(" ").is_empty());
+        let mut second = StreamingPresentationExtractor::default();
+        assert!(second.push_delta(source).iter().any(|event| matches!(
+            event,
+            StreamingPresentationEvent::ActionComplete { action_index: 0 }
+        )));
     }
 
     /// Verifies a structurally established send action streams escaped payload
@@ -1401,6 +1609,7 @@ mod tests {
                     text: "😀".to_string(),
                 },
                 StreamingPresentationEvent::MessagePayloadComplete { action_index: 0 },
+                StreamingPresentationEvent::ActionComplete { action_index: 0 },
             ]
         );
     }
@@ -1413,7 +1622,10 @@ mod tests {
             r#"{"actions":[{"type":"send_message","recipient":"agent-2","content_type":"text/html","payload":"<private>"}]}"#,
         );
 
-        assert!(events.is_empty(), "events={events:?}");
+        assert_eq!(
+            events,
+            vec![StreamingPresentationEvent::ActionComplete { action_index: 0 }]
+        );
     }
 
     /// Verifies binary media stays out of provisional message presentation
@@ -1424,7 +1636,10 @@ mod tests {
             r#"{"actions":[{"type":"send_message","recipient":"agent-2","content_type":"application/octet-stream","payload":"cGF5bG9hZA=="}]}"#,
         );
 
-        assert!(events.is_empty(), "events={events:?}");
+        assert_eq!(
+            events,
+            vec![StreamingPresentationEvent::ActionComplete { action_index: 0 }]
+        );
     }
 
     /// Verifies unsupported fields fail closed without leaking nested text.
@@ -1434,7 +1649,10 @@ mod tests {
             r#"{"actions":[{"type":"shell_command","content_type":"text/plain","text":"secret"}]}"#,
             r#"{"actions":[{"type":"say","status":"unknown","content_type":"text/plain","text":"secret"}]}"#,
         ] {
-            assert!(StreamingSayExtractor::default().push_delta(raw).is_empty());
+            assert_eq!(
+                StreamingSayExtractor::default().push_delta(raw),
+                vec![StreamingSayEvent::ActionComplete { action_index: 0 }]
+            );
         }
 
         let nested = StreamingSayExtractor::default().push_delta(
@@ -1507,6 +1725,7 @@ mod tests {
                     text: "😀\n".to_string(),
                 },
                 StreamingSayEvent::TextComplete { action_index: 0 },
+                StreamingSayEvent::ActionComplete { action_index: 0 },
             ]
         );
     }
@@ -1539,7 +1758,10 @@ mod tests {
         assert_eq!(streamed, "linear-source-".repeat(512));
         assert_eq!(
             completed,
-            vec![StreamingSayEvent::TextComplete { action_index: 0 }]
+            vec![
+                StreamingSayEvent::TextComplete { action_index: 0 },
+                StreamingSayEvent::ActionComplete { action_index: 0 },
+            ]
         );
         assert!(
             extractor.structural_scans <= 2,

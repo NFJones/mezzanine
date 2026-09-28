@@ -59,6 +59,7 @@ fn streaming_presentation_event_changes_projection(event: &mez_agent::StreamingS
         | mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { .. }
         | mez_agent::StreamingSayEvent::MessageStarted { .. }
         | mez_agent::StreamingSayEvent::MessagePayloadComplete { .. }
+        | mez_agent::StreamingSayEvent::ActionComplete { .. }
         | mez_agent::StreamingSayEvent::ActionHeader { .. } => false,
     }
 }
@@ -2553,6 +2554,10 @@ mod tests {
         );
         push_coalesced_streaming_say_event(
             &mut events,
+            mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
+        );
+        push_coalesced_streaming_say_event(
+            &mut events,
             mez_agent::StreamingSayEvent::TextDelta {
                 action_index: 1,
                 text: "gamma".to_string(),
@@ -2568,6 +2573,7 @@ mod tests {
                     text: "alpha beta".to_string(),
                 },
                 mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+                mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
                 mez_agent::StreamingSayEvent::TextDelta {
                     action_index: 1,
                     text: "gamma".to_string(),

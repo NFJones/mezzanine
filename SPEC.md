@@ -2652,8 +2652,14 @@ this streaming path.
 
 Stream-log lifecycle has distinct boundaries. Field closure means only that
 one allowlisted JSON string is complete; whole-action receipt means the direct
-action object has closed, not that its fields form an accepted action. Rich
-render completion means the last current-generation projection of that
+action object has closed, not that its fields form an accepted action.
+The extractor MUST emit one ordered response-local receipt per closed direct
+action object, including actions without a visible preview, after its available
+field events. Nested objects, escaped delimiters, and a closed field inside an
+open action MUST NOT emit a receipt. Response-start barriers reset ordinals;
+receipt MUST survive bounded forwarding and MUST NOT be coalesced with text or
+grant execution, persistence, or display-finalization authority.
+Rich render completion means the last current-generation projection of that
 component has been installed on the pane. Neither receipt nor installation
 finalizes a preview. Visual finalization requires an exact validated batch
 match and that completed projection; authoritative durable promotion also

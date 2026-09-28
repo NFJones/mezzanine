@@ -1168,17 +1168,21 @@ mod streaming_say_progress_tests {
                 text: source.clone(),
             },
             mez_agent::StreamingSayEvent::TextComplete { action_index: 3 },
+            mez_agent::StreamingSayEvent::ActionComplete { action_index: 3 },
         ]);
 
         assert!(events.len() >= 3, "events={events:?}");
-        assert!(events[..events.len() - 1].iter().all(|event| matches!(
+        assert!(events[..events.len() - 2].iter().all(|event| matches!(
             event,
             mez_agent::StreamingSayEvent::TextDelta { text, .. }
                 if text.len() <= STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES
         )));
         assert!(matches!(
-            events.last(),
-            Some(mez_agent::StreamingSayEvent::TextComplete { action_index: 3 })
+            &events[events.len() - 2..],
+            [
+                mez_agent::StreamingSayEvent::TextComplete { action_index: 3 },
+                mez_agent::StreamingSayEvent::ActionComplete { action_index: 3 }
+            ]
         ));
         let reconstructed = events
             .iter()
