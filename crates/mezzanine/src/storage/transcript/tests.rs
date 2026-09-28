@@ -201,6 +201,29 @@ fn transcript_view_separates_first_write_from_committed_rows() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Bounded replay cannot treat a surviving tail as complete committed history
+/// when the archive has lost its leading row.
+#[test]
+fn transcript_view_rejects_missing_committed_prefix_in_latest_read() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("latest-missing-prefix");
+    let store = AgentTranscriptStore::new(root.clone());
+    let second = entry("latest-missing-prefix", 2, TranscriptRole::Assistant);
+    store.append(&second).unwrap();
+    assert!(
+        store
+            .conversation_transcript_view(
+                &second.conversation_id,
+                ConversationTranscriptRead::Latest(1),
+                true,
+                std::slice::from_ref(&second),
+            )
+            .is_err()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Identical outstanding receipts for one first-write row represent one
 /// logical entry, not a missing or conflicting archive prefix.
 #[test]

@@ -2605,6 +2605,15 @@ impl AgentTranscriptStore {
                 "conversation transcript not found",
             ));
         }
+        let mut first_line = String::new();
+        BufReader::new(std_fs::File::open(&path)?).read_line(&mut first_line)?;
+        if !first_line.is_empty()
+            && (decode_transcript_entry(first_line.trim_end_matches(['\r', '\n']))?.sequence != 1)
+        {
+            return Err(MezError::invalid_state(
+                "transcript archive is missing its leading history",
+            ));
+        }
         const READ_CHUNK_BYTES: usize = 64 * 1024;
         let mut file = std_fs::File::open(path)?;
         let mut position = file.metadata()?.len();
