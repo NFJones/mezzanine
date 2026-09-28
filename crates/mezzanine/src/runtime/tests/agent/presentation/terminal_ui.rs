@@ -1098,6 +1098,14 @@ fn runtime_streaming_later_complete_action_waits_for_earlier_source() {
         mez_agent::StreamingSayEvent::TextComplete { action_index: 1 },
         mez_agent::StreamingSayEvent::ActionComplete { action_index: 1 },
     ] {
+        let before_later_start = matches!(
+            event,
+            mez_agent::StreamingSayEvent::Started {
+                action_index: 1,
+                ..
+            }
+        )
+        .then(|| service.agent_pane_screen("%1").unwrap().clone());
         service
             .ingest_provider_log(
                 "%1",
@@ -1105,7 +1113,25 @@ fn runtime_streaming_later_complete_action_waits_for_earlier_source() {
                 crate::runtime::RuntimeProviderLogInput::Progress(&event),
             )
             .unwrap();
+        if let Some(before) = before_later_start {
+            assert_eq!(
+                service.agent_pane_screen("%1").unwrap(),
+                &before,
+                "later Started must not write to the pane before projection"
+            );
+        }
     }
+    let labels_before_projection = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .iter()
+        .filter(|line| line.contains("mez> "))
+        .count();
+    assert!(
+        labels_before_projection <= 1,
+        "later label leaked before projection"
+    );
     let work = service
         .take_agent_streaming_say_projection_work("%1", "turn-order")
         .unwrap()
