@@ -676,6 +676,7 @@ impl RuntimeSessionService {
                 self.agent_turn_executions_mut().remove(&turn.turn_id);
                 return Ok(());
             }
+            self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
             self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
             self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
             self.emit_subagent_task_result_for_execution(turn, &execution)?;
@@ -688,6 +689,7 @@ impl RuntimeSessionService {
         }
 
         self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
+        self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
         self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution.clone());

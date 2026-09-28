@@ -607,6 +607,19 @@ impl RuntimeSessionService {
                     continue;
                 }
                 if *status == SayStatus::Progress
+                    && self.presentation.agent_queued_provider_headers.keys().any(
+                        |(queued_pane, queued_turn, queued_conversation, queued_group, ordinal)| {
+                            queued_pane == pane_id
+                                && queued_turn == &execution.request.turn_id
+                                && owner.as_ref() == Some(queued_conversation)
+                                && queued_group == &group
+                                && *ordinal < action_index
+                        },
+                    )
+                {
+                    continue;
+                }
+                if *status == SayStatus::Progress
                     && !batch.actions[..action_index]
                         .iter()
                         .any(action_holds_later_log)

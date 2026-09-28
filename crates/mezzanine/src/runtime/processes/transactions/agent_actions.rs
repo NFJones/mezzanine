@@ -2870,6 +2870,7 @@ impl RuntimeSessionService {
                 self.agent_turn_executions_mut().remove(turn_id);
                 terminal_state = AgentTurnState::Running;
             } else {
+                self.flush_ordered_provider_headers(pane_id, &execution)?;
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, &execution)?;
                 transcript_entries =
                     self.persist_runtime_agent_turn_execution_transcript(&turn, &execution)?;
@@ -2883,6 +2884,7 @@ impl RuntimeSessionService {
         } else if terminal_state == AgentTurnState::Running {
             self.commit_settled_action_results_context(turn_id, &observed_results)?;
             if let Some(execution) = self.agent_turn_executions().get(turn_id).cloned() {
+                self.flush_ordered_provider_headers(pane_id, &execution)?;
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, &execution)?;
             }
             self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
