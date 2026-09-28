@@ -1601,8 +1601,8 @@ async fn runtime_streaming_say_completion_does_not_append_final_duplicate() {
     );
 }
 
-/// The same validated batch must settle to one rendered and persisted answer
-/// whether optional provider fragments were received or not.
+/// The provider-neutral ingestion boundary must settle a validated batch to
+/// the same styled and persisted answer with or without optional fragments.
 #[test]
 fn runtime_validated_say_settlement_matches_with_and_without_progress() {
     for (case, content_type, source) in [
@@ -1659,7 +1659,11 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                     mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
                 ] {
                     service
-                        .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+                        .ingest_provider_log(
+                            "%1",
+                            "turn-1",
+                            crate::runtime::RuntimeProviderLogInput::Progress(&event),
+                        )
                         .unwrap();
                 }
                 let projection = RuntimeSessionService::build_agent_streaming_say_projection(
@@ -1702,10 +1706,18 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                 terminal_state: AgentTurnState::Completed,
             };
             service
-                .reconcile_agent_streaming_say_completion("%1", "turn-1", &execution)
+                .ingest_provider_log(
+                    "%1",
+                    "turn-1",
+                    crate::runtime::RuntimeProviderLogInput::Validated(&execution),
+                )
                 .unwrap();
             service
-                .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+                .ingest_provider_log(
+                    "%1",
+                    "turn-1",
+                    crate::runtime::RuntimeProviderLogInput::Settled(&execution),
+                )
                 .unwrap();
             let rows = service
                 .agent_pane_screen("%1")

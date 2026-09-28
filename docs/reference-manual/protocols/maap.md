@@ -40,6 +40,11 @@ apply. The live provider schema exposes only the current allowed action
 surface. An absent action type must not be emitted or emulated. When
 `request_capability` is itself exposed, use it to request a coarse action
 family; otherwise the current surface is final for that response.
+Optional provider progress and validated completion feed one MAAP log
+presentation boundary. Effective non-streaming responses and streamed transport
+responses without previewable MAAP fragments present the complete validated
+batch there, without synthetic partial text. Progress never grants action
+authority; its absence cannot suppress authoritative completion.
 
 ## Action catalog
 

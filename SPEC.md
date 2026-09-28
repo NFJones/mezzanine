@@ -2664,8 +2664,13 @@ component has been installed on the pane. Neither receipt nor installation
 finalizes a preview. Visual finalization requires an exact validated batch
 match and that completed projection; authoritative durable promotion also
 requires the relevant runtime acceptance or execution settlement. The actor
-MUST sequence rationale before action ordinals and hold a later received
-action's visible logs until every earlier component crosses its applicable
+MUST present optional provider progress and authoritative validated completion
+through one provider-neutral MAAP log boundary. Effective non-streaming
+responses, including providers that stream transport events without previewable
+MAAP fragments, MUST present the validated complete batch without synthetic
+partial text; missing optional progress MUST NOT suppress completion.
+The actor MUST sequence rationale before action ordinals and hold a later
+received action's visible logs until every earlier component crosses its applicable
 render and finalization boundary. An action without previewable source still
 occupies its ordinal until its validated header or settled result passes that
 boundary. Optional provider deltas MUST NOT delay authoritative completion.

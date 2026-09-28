@@ -49,7 +49,11 @@ their own settlement. Later visible logs wait for earlier visible components to
 finalize; hidden or deduplicated components release their ordering slot after
 validation without a pane projection, while replaceable command-output tails
 and executor progress never hold that permanent-log barrier. Neither failure
-nor a later pane write removes finalized logs. Provisional
+nor a later pane write removes finalized logs. Provider progress is optional:
+providers that return only a complete response, including
+those that stream transport events without MAAP fragments, use the same
+validated log presentation without synthetic streaming previews. Missing
+progress does not suppress or duplicate the completed answer. Provisional
 action previews do not prove execution; rejected source does not become an action
 result. Matching command previews and multiple headers can remain visible
 across acceptance; a final answer following pending actions
