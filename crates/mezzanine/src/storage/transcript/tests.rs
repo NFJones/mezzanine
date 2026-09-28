@@ -216,6 +216,16 @@ fn transcript_view_zero_latest_rejects_damaged_archive() {
             .conversation_transcript_view(
                 &second.conversation_id,
                 ConversationTranscriptRead::Latest(0),
+                false,
+                &[]
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .conversation_transcript_view(
+                &second.conversation_id,
+                ConversationTranscriptRead::Latest(0),
                 true,
                 &[]
             )
