@@ -165,9 +165,9 @@ impl AgentTranscriptStore {
         // Admission must not leave a replayable receipt for a sequence that
         // already belongs to different durable content. Check the complete
         // archive off-actor so an older batch cannot hide behind a long tail.
-        match self.inspect(&receipt.conversation_id) {
+        let committed_count = match self.inspect(&receipt.conversation_id) {
             Ok(durable) => {
-                self.validate_restored_transcript(&receipt.conversation_id)?;
+                let count = self.validate_restored_transcript(&receipt.conversation_id)?;
                 if entries.iter().any(|entry| {
                     durable
                         .iter()
@@ -177,11 +177,36 @@ impl AgentTranscriptStore {
                         "transcript receipt conflicts with durable contents",
                     ));
                 }
+                count
             }
-            Err(error) if error.kind() == MezErrorKind::NotFound => {}
+            Err(error) if error.kind() == MezErrorKind::NotFound => 0,
             Err(error) => return Err(error),
+        };
+        let pending = self.read_append_receipts()?;
+        let mut next_sequence = committed_count
+            .checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("transcript receipt sequence overflow"))?;
+        let covered = pending
+            .iter()
+            .filter(|(_, existing, _)| existing.conversation_id == receipt.conversation_id)
+            .flat_map(|(_, _, rows)| rows.iter().map(|row| row.sequence))
+            .collect::<std::collections::BTreeSet<_>>();
+        if receipt.first_sequence > next_sequence {
+            for sequence in covered.range(next_sequence..receipt.first_sequence) {
+                if *sequence != next_sequence {
+                    break;
+                }
+                next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
+                    MezError::invalid_state("transcript receipt sequence overflow")
+                })?;
+            }
+            if receipt.first_sequence > next_sequence {
+                return Err(MezError::invalid_state(
+                    "transcript receipt is waiting for an earlier entry",
+                ));
+            }
         }
-        for (_, existing, rows) in self.read_append_receipts()? {
+        for (_, existing, rows) in pending {
             if existing.conversation_id != receipt.conversation_id {
                 continue;
             }

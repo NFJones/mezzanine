@@ -1629,6 +1629,36 @@ fn transcript_store_rejects_receipt_conflicting_with_durable_row() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// An orphaned sequence must not become an accepted receipt that prevents
+/// startup replay of other healthy conversations.
+#[test]
+fn transcript_store_rejects_receipt_without_predecessor() {
+    let root = temp_root("receipt-missing-predecessor");
+    let store = AgentTranscriptStore::new(root.clone());
+    let second = entry("conv1", 2, TranscriptRole::Assistant);
+    assert!(
+        store
+            .accept_append_receipt(std::slice::from_ref(&second), 1)
+            .is_err()
+    );
+    assert!(store.pending_append_receipts().unwrap().is_empty());
+
+    let first = entry("conv1", 1, TranscriptRole::User);
+    store
+        .accept_append_receipt(std::slice::from_ref(&first), 1)
+        .unwrap();
+    store
+        .accept_append_receipt(std::slice::from_ref(&second), 1)
+        .unwrap();
+    store.recover_append_receipts().unwrap();
+    store
+        .accept_append_receipt(std::slice::from_ref(&first), 1)
+        .unwrap();
+    store.recover_append_receipts().unwrap();
+    assert_eq!(store.inspect("conv1").unwrap(), vec![first, second]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A worker retry after a partial append must not duplicate its committed
 /// prefix or allow a conflicting sequence to replace that prefix.
 #[test]
