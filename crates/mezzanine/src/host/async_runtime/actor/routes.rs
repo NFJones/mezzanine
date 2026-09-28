@@ -4,6 +4,13 @@ use crate::host::async_runtime::VecDeque;
 use crate::runtime::{PaneProcessInstance, RenderInvalidationReason, RuntimeSideEffect};
 use std::collections::{BTreeMap, HashMap};
 
+/// One ordered persistence effect; recovered claims keep their original owner.
+#[derive(Debug)]
+struct QueuedPersistence {
+    effect: RuntimeSideEffect,
+    recovered_claim: bool,
+}
+
 /// Dedicated worker-owned work that can be drained without inspecting the
 /// compatibility queue used by unrelated runtime services.
 #[derive(Debug, Default)]
@@ -15,7 +22,7 @@ pub(crate) struct RuntimeSideEffectRouter {
     flush_order: VecDeque<crate::host::async_runtime::ClientId>,
     flushes: HashMap<crate::host::async_runtime::ClientId, RuntimeSideEffect>,
     pane_processes: BTreeMap<PaneProcessInstance, VecDeque<RuntimeSideEffect>>,
-    persistence: VecDeque<RuntimeSideEffect>,
+    persistence: VecDeque<QueuedPersistence>,
     /// Ordered transcript effects claimed by a worker but not yet acknowledged.
     claimed_transcripts: VecDeque<RuntimeSideEffect>,
     /// Exact claims with proven permanent failures remain visible but cannot replay.
@@ -88,7 +95,6 @@ impl RuntimeSideEffectRouter {
             &self.clipboard,
             &self.commands,
             &self.hooks,
-            &self.persistence,
             &self.provider,
             &self.status,
             &self.timers,
@@ -96,6 +102,9 @@ impl RuntimeSideEffectRouter {
             for effect in lane {
                 record(effect);
             }
+        }
+        for queued in &self.persistence {
+            record(&queued.effect);
         }
         for lane in self.pane_processes.values() {
             for effect in lane {
@@ -212,11 +221,11 @@ impl RuntimeSideEffectRouter {
         session_id: &str,
         effect: &mut Option<RuntimeSideEffect>,
     ) -> bool {
-        self.persistence.iter_mut().any(|queued_effect| {
+        self.persistence.iter_mut().any(|queued| {
             let RuntimeSideEffect::PersistRegistry {
                 registry: queued_registry,
                 update,
-            } = queued_effect
+            } = &mut queued.effect
             else {
                 return false;
             };
@@ -228,7 +237,7 @@ impl RuntimeSideEffectRouter {
             let Some(replacement) = effect.take() else {
                 return false;
             };
-            *queued_effect = replacement;
+            queued.effect = replacement;
             true
         })
     }
@@ -356,7 +365,7 @@ impl RuntimeSideEffectRouter {
                 .persistence
                 .iter()
                 .enumerate()
-                .find_map(|(position, queued)| match queued {
+                .find_map(|(position, queued)| match &queued.effect {
                     RuntimeSideEffect::PersistAgentSessionMetadata {
                         mezzanine_session_id: queued_session_id,
                         generation: queued_generation,
@@ -372,7 +381,10 @@ impl RuntimeSideEffectRouter {
             }
             self.persistence.remove(position);
         }
-        self.persistence.push_back(effect);
+        self.persistence.push_back(QueuedPersistence {
+            effect,
+            recovered_claim: false,
+        });
     }
 
     /// Enqueues one deferred interactive command for its dedicated worker.
@@ -443,19 +455,16 @@ impl RuntimeSideEffectRouter {
             .persistence
             .drain(..limit.min(self.persistence.len()))
             .collect::<Vec<_>>();
-        for effect in &effects {
-            if matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { .. })
-                && !self.claimed_transcripts.iter().any(|claimed| {
-                    matches!((claimed, effect),
-                        (RuntimeSideEffect::PersistTranscriptEntries { entries: left, path: left_path, .. },
-                         RuntimeSideEffect::PersistTranscriptEntries { entries: right, path: right_path, .. })
-                         if left == right && left_path == right_path)
-                })
+        for queued in &effects {
+            if matches!(
+                queued.effect,
+                RuntimeSideEffect::PersistTranscriptEntries { .. }
+            ) && !queued.recovered_claim
             {
-                self.claimed_transcripts.push_back(effect.clone());
+                self.claimed_transcripts.push_back(queued.effect.clone());
             }
         }
-        effects
+        effects.into_iter().map(|queued| queued.effect).collect()
     }
 
     /// Restores claimed transcript writes ahead of later queued work after a
@@ -470,12 +479,15 @@ impl RuntimeSideEffectRouter {
                 continue;
             }
             if !self.persistence.iter().any(|queued| {
-                matches!((queued, effect),
+                queued.recovered_claim && matches!((&queued.effect, effect),
                     (RuntimeSideEffect::PersistTranscriptEntries { entries: left, path: left_path, .. },
                      RuntimeSideEffect::PersistTranscriptEntries { entries: right, path: right_path, .. })
                      if left == right && left_path == right_path)
             }) {
-                self.persistence.push_front(effect.clone());
+                self.persistence.push_front(QueuedPersistence {
+                    effect: effect.clone(),
+                    recovered_claim: true,
+                });
                 count += 1;
             }
         }
@@ -491,9 +503,10 @@ impl RuntimeSideEffectRouter {
         if !self.owns_claimed_transcript(entries, path) {
             return;
         }
-        self.persistence.retain(|effect| {
-            !matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: queued, path: queued_path, .. }
+        self.persistence.retain(|queued| {
+            !(queued.recovered_claim && matches!(&queued.effect, RuntimeSideEffect::PersistTranscriptEntries { entries: queued, path: queued_path, .. }
                 if queued == entries && queued_path == path)
+            )
         });
         if !self
             .blocked_transcripts
@@ -517,8 +530,10 @@ impl RuntimeSideEffectRouter {
         self.claimed_transcripts.remove(position);
         self.blocked_transcripts
             .retain(|(blocked_path, blocked)| blocked_path != path || blocked != entries);
-        self.persistence.retain(|effect| {
-            !matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { entries: queued, path: queued_path, .. } if queued == entries && queued_path == path)
+        self.persistence.retain(|queued| {
+            !(queued.recovered_claim && matches!(&queued.effect,
+                RuntimeSideEffect::PersistTranscriptEntries { entries: queued, path: queued_path, .. }
+                if queued == entries && queued_path == path))
         });
         true
     }
@@ -536,8 +551,8 @@ impl RuntimeSideEffectRouter {
 
     /// Retires exact persistence work that no worker has claimed yet.
     pub(super) fn retire_queued_provider_settlement(&mut self, turn_id: &str, generation: u64) {
-        self.persistence.retain(|effect| {
-            !matches!(effect, RuntimeSideEffect::SettleAgentProviderPersistence { work }
+        self.persistence.retain(|queued| {
+            !matches!(&queued.effect, RuntimeSideEffect::SettleAgentProviderPersistence { work }
                 if work.turn.turn_id == turn_id && work.generation == generation)
         });
     }
@@ -639,10 +654,20 @@ impl RuntimeSideEffectRouter {
         let mut drained = Vec::new();
         drained.extend(self.drain_renders(limit));
         drained.extend(self.drain_flushes(None, limit.saturating_sub(drained.len())));
+        for lane in [&mut self.clipboard, &mut self.hooks] {
+            let remaining = limit.saturating_sub(drained.len());
+            if remaining == 0 {
+                break;
+            }
+            drained.extend(lane.drain(..remaining.min(lane.len())));
+        }
+        let remaining = limit.saturating_sub(drained.len());
+        drained.extend(
+            self.persistence
+                .drain(..remaining.min(self.persistence.len()))
+                .map(|queued| queued.effect),
+        );
         for lane in [
-            &mut self.clipboard,
-            &mut self.hooks,
-            &mut self.persistence,
             &mut self.commands,
             &mut self.provider,
             &mut self.status,
