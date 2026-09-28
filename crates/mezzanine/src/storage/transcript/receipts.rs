@@ -380,8 +380,15 @@ impl AgentTranscriptStore {
         let _lock = self.acquire_conversation_lock(&receipt.conversation_id)?;
         let directory = self.append_receipt_directory();
         let path = directory.join(receipt.filename());
-        if !path.exists() {
-            return Ok(());
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => {
+                return Err(MezError::invalid_state(
+                    "transcript receipt is not a regular file",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
         }
         let stored = fs::read(&path)?;
         let actual: AppendReceipt = serde_json::from_slice(&stored).map_err(|error| {

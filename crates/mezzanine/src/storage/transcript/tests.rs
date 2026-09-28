@@ -1603,6 +1603,34 @@ fn transcript_store_rejects_symlinked_receipt_directory() {
     let _ = fs::remove_dir_all(outside);
 }
 
+/// Settlement must not follow a receipt symlink even when it names an exact
+/// batch; a redirected file is not actor-owned recovery evidence.
+#[cfg(unix)]
+#[test]
+fn transcript_store_rejects_symlinked_receipt_on_settlement() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_root("symlinked-append-receipt-file");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("conv1", 1, TranscriptRole::User);
+    store
+        .accept_append_receipt(std::slice::from_ref(&row), 1)
+        .unwrap();
+    store.append_many(std::slice::from_ref(&row)).unwrap();
+    let path = root.join(".append-receipts/conv1-00000000000000000001-00000000000000000001.json");
+    let outside = root.join("outside-receipt.json");
+    fs::rename(&path, &outside).unwrap();
+    symlink(&outside, &path).unwrap();
+    assert!(
+        store
+            .settle_append_receipt(std::slice::from_ref(&row), 1)
+            .is_err()
+    );
+    assert!(path.is_symlink());
+    assert!(outside.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Conflicting retained receipts must be rejected before either batch changes
 /// the archive, even if both records are individually valid and well-formed.
 #[test]
