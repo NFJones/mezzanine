@@ -2445,6 +2445,43 @@ mod transcript_settlement_tests {
     use super::*;
     use mez_agent::transcript::TranscriptRole;
 
+    /// Two transient precommit failures leave the worker's exact receipt
+    /// available for restart recovery without repeating a provider action.
+    #[tokio::test]
+    async fn queued_transcript_write_retains_receipt_after_exhausted_retries() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-async-transcript-exhausted-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let row = TranscriptEntry {
+            conversation_id: "exhausted-test".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::Assistant,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted response".to_string(),
+        };
+        store.fail_transcript_append_attempts(2);
+        assert!(
+            persist_transcript_entries(store.clone(), vec![row.clone()])
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![row.clone()]]
+        );
+        let restarted = AgentTranscriptStore::new(root.clone());
+        restarted.recover_append_receipts().unwrap();
+        assert_eq!(restarted.inspect(&row.conversation_id).unwrap(), vec![row]);
+        assert!(restarted.pending_append_receipts().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// A pre-append worker fault may retry the identical batch, but must not
     /// create two records or manufacture a provider failure.
     #[tokio::test]
