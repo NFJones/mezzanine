@@ -1239,10 +1239,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// Verifies durable prompt-history preparation decodes only the captured
-    /// retained tail, not malformed rows in a compacted transcript prefix.
+    /// Malformed committed history cannot be certified by a bounded retained
+    /// tail, even when the requested prompt projection excludes that prefix.
     #[test]
-    fn history_epoch_work_ignores_unretained_durable_prefix() {
+    fn history_epoch_work_rejects_malformed_unretained_durable_prefix() {
         let root = std::env::temp_dir().join(format!(
             "mez-history-epoch-tail-{}-{}",
             std::process::id(),
@@ -1270,7 +1270,7 @@ mod tests {
         let retained = std::fs::read_to_string(&path).unwrap();
         std::fs::write(&path, format!("invalid compacted prefix\n{retained}")).unwrap();
 
-        let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+        let result = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
             store,
             inputs: RuntimeAgentHistoryEpochInputs {
                 pane_id: "%1".to_string(),
@@ -1279,15 +1279,8 @@ mod tests {
                 active_entries: Some(2),
                 pending_entries: Vec::new(),
             },
-        })
-        .unwrap();
-
-        let content = history
-            .blocks
-            .iter()
-            .map(|block| block.content.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(content, ["history 2", "history 3"]);
+        });
+        assert!(result.is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 

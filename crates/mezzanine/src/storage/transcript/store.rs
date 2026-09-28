@@ -1306,6 +1306,12 @@ impl AgentTranscriptStore {
                 "compaction epoch boundary requires a durable transcript",
             ));
         }
+        if latest_sequence.is_some() {
+            // A matching selected range does not prove that unrelated committed
+            // history survived. Check the complete archive under the same lock
+            // before publishing an authoritative replay projection.
+            self.validate_restored_transcript(conversation_id)?;
+        }
         validate_compaction_ranges(
             &epoch.ranges,
             through_sequence,

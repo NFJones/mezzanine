@@ -713,6 +713,47 @@ fn selective_publication_rejects_receipt_only_source() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A selected execution row cannot authorize a selective epoch when another
+/// committed sequence is missing from the archive.
+#[test]
+fn selective_publication_rejects_gapped_committed_archive() {
+    let root = temp_root("selective-gapped-archive");
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("selective-gap", 1, TranscriptRole::User))
+        .unwrap();
+    let mut selected = entry("selective-gap", 3, TranscriptRole::System);
+    selected.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        mez_agent::ContextSourceKind::TranscriptAssistant,
+        "assistant",
+        "selected",
+        mez_agent::ContextExecutionGroupId::new("selected-group").unwrap(),
+        1,
+        None,
+    )
+    .unwrap()
+    .to_transcript_content();
+    store.append(&selected).unwrap();
+    let epoch = super::AgentCompactionEpoch {
+        version: 2,
+        conversation_id: "selective-gap".to_string(),
+        through_sequence: 0,
+        summary: String::new(),
+        ranges: vec![super::AgentCompactionRange {
+            first_sequence: 3,
+            through_sequence: 3,
+            summary: "model summary".to_string(),
+        }],
+    };
+    assert!(
+        store
+            .save_compaction_ranges_with_proof(epoch, &[selected])
+            .is_err()
+    );
+    assert!(store.compaction_epoch("selective-gap").unwrap().is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A later independent compaction task proves only its newly selected rows;
 /// the already published range is validated as part of the existing epoch,
 /// but its source is not part of the new task's frozen selection.
