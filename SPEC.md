@@ -9268,10 +9268,13 @@ The baseline command capabilities are:
   missing suffix. A worker-owned append receipt MUST retain its exact validated
   rows until the complete durable archive matches, and startup recovery MUST
   reconcile retained receipts before validating checkpointed history. An
-  actor-queued append has no crash-recovery guarantee until its worker saves a
-  receipt; missing checkpointed history MUST fail closed. Queued or worker-owned
-  rows MUST NOT prove durability for a
-  selective compaction epoch. When
+  absent receipt MUST NOT acknowledge uncommitted rows; a late duplicate
+  settlement is harmless only if the complete exact batch is already present
+  in valid committed history. An actor-queued append has no crash-recovery
+  guarantee until its worker saves a receipt; missing checkpointed history
+  MUST fail closed. Queued or worker-owned rows MUST NOT prove durability for a
+  selective compaction epoch, and publication MUST reject a damaged committed
+  archive even when the selected rows themselves match. When
   persistent memory is enabled and a config root is available, `/compact`
   SHOULD opportunistically prune expired persistent-memory records before it
   builds compaction context or queues model-backed work.
