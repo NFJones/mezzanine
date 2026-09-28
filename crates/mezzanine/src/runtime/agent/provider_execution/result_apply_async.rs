@@ -94,7 +94,11 @@ impl RuntimeSessionService {
             &execution.response,
             execution.latest_response_usage,
         )?;
-        self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
+        self.ingest_provider_log(
+            &turn.pane_id,
+            &turn.turn_id,
+            super::super::presentation::RuntimeProviderLogInput::Settled(&execution),
+        )?;
         self.append_agent_execution_chronology_for_provider(
             turn,
             &execution,

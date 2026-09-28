@@ -17,6 +17,45 @@ use super::{
     runtime_unrecovered_failure_output_lines,
 };
 
+/// Provider-neutral input to the actor-owned MAAP log presenter. Progress is
+/// optional and never authoritative; completion and static fallback are admitted
+/// only after the provider execution has been validated by its owning caller.
+pub(crate) enum RuntimeProviderLogInput<'a> {
+    /// A source fragment or lifecycle barrier from the current provider claim.
+    Progress(&'a mez_agent::StreamingSayEvent),
+    /// Reconcile installed provisional source with a validated execution.
+    Validated(&'a AgentTurnExecution),
+    /// Present any validated component not already promoted by reconciliation.
+    Settled(&'a AgentTurnExecution),
+}
+
+impl RuntimeSessionService {
+    /// Routes both effective streaming and non-streaming responses through the
+    /// same presentation owner. Callers retain claim fencing and execution
+    /// authority; this boundary only owns visible source and handoff ordering.
+    pub(crate) fn ingest_provider_log(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        input: RuntimeProviderLogInput<'_>,
+    ) -> Result<()> {
+        match input {
+            RuntimeProviderLogInput::Progress(event) => {
+                self.apply_agent_streaming_say_event_to_terminal_buffer(pane_id, turn_id, event)
+            }
+            RuntimeProviderLogInput::Validated(execution) => {
+                self.reconcile_agent_streaming_say_completion_with_render_intent(
+                    pane_id, turn_id, execution,
+                )?;
+                Ok(())
+            }
+            RuntimeProviderLogInput::Settled(execution) => {
+                self.present_agent_response_actions_to_terminal_buffer(pane_id, execution)
+            }
+        }
+    }
+}
+
 /// Formats one last-request context snapshot for pane status.
 ///
 /// The display is a bounded status indicator, so accepted provider responses

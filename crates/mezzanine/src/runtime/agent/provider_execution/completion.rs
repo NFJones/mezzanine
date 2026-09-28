@@ -218,12 +218,11 @@ impl RuntimeSessionService {
         // The streamed header handoff must use the same execution-scoped action
         // identity that runtime dispatch and its authoritative presenter use.
         self.scope_provider_execution_action_ids(&turn, &mut execution)?;
-        let reconciliation = self.reconcile_agent_streaming_say_completion_with_render_intent(
+        self.ingest_provider_log(
             &turn.pane_id,
             turn_id,
-            &execution,
+            super::super::presentation::RuntimeProviderLogInput::Validated(&execution),
         )?;
-        let _ = reconciliation;
         let execution_profile = mez_agent::apply_auto_sizing_execution_profile(
             model_profile.clone(),
             &execution.request,

@@ -117,7 +117,11 @@ impl RuntimeSessionService {
             .get(pane_id)
             .and_then(|session| self.agent_pane_screen_lineage(pane_id, &session.session_id));
         let applied = self
-            .apply_agent_streaming_say_event_to_terminal_buffer(pane_id, turn_id, event)
+            .ingest_provider_log(
+                pane_id,
+                turn_id,
+                super::super::presentation::RuntimeProviderLogInput::Progress(event),
+            )
             .is_ok();
         let lineage_after = self
             .agent_shell_store()
