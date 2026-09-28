@@ -52,8 +52,8 @@ fn runtime_mixed_action_progress_waits_for_preceding_header() {
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: Default::default(),
         action_results: Vec::new(),
-        final_turn: true,
-        terminal_state: AgentTurnState::Completed,
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
     };
     service
         .present_agent_response_actions_to_terminal_buffer("%1", &execution)
@@ -67,8 +67,22 @@ fn runtime_mixed_action_progress_waits_for_preceding_header() {
     service
         .append_agent_action_execution_text_to_terminal_buffer("%1", &action)
         .unwrap();
+    let mut settled = execution.clone();
+    settled.action_results.push(mez_agent::ActionResult {
+        protocol: "maap/1".to_string(),
+        turn_id: "turn-mixed-log".to_string(),
+        agent_id: "agent-%1".to_string(),
+        action_id: action.id.clone(),
+        action_type: "list_agents",
+        status: ActionStatus::Succeeded,
+        content: Vec::new(),
+        structured_content_json: None,
+        permission_evaluation: None,
+        is_error: false,
+        error: None,
+    });
     service
-        .present_deferred_agent_say_actions_to_terminal_buffer("%1", &execution)
+        .present_deferred_agent_say_actions_to_terminal_buffer("%1", &settled)
         .unwrap();
     let after = service
         .agent_pane_screen("%1")
@@ -81,6 +95,7 @@ fn runtime_mixed_action_progress_waits_for_preceding_header() {
         after.find("list agents:").unwrap() < after.find("later progress").unwrap(),
         "{after}"
     );
+    assert_eq!(after.matches("later progress").count(), 1, "{after}");
 }
 
 /// Verifies progress `say` messages continue through durable assistant

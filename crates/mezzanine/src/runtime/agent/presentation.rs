@@ -399,7 +399,10 @@ impl RuntimeSessionService {
                 execution.terminal_state == AgentTurnState::Completed,
             )?;
         }
-        if execution.terminal_state != AgentTurnState::Completed {
+        if !matches!(
+            execution.terminal_state,
+            AgentTurnState::Completed | AgentTurnState::Running
+        ) {
             return Ok(0);
         }
         let Some(batch) = execution.response.action_batch.as_ref() else {
@@ -431,6 +434,17 @@ impl RuntimeSessionService {
                     continue;
                 }
                 if text.trim().is_empty() {
+                    continue;
+                }
+                if execution.terminal_state == AgentTurnState::Running
+                    && (*status != SayStatus::Progress
+                        || !batch.actions[..action_index].iter().all(|prior| {
+                            execution
+                                .action_results
+                                .iter()
+                                .any(|result| result.action_id == prior.id && result.is_terminal())
+                        }))
+                {
                     continue;
                 }
                 if *status == SayStatus::Progress
