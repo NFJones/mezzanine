@@ -112,6 +112,93 @@ fn runtime_mixed_action_progress_waits_for_preceding_header() {
     );
 }
 
+/// Executor traversal must not move a later discovery header past an
+/// interleaved progress say whose predecessor has just settled.
+#[test]
+fn runtime_discovery_headers_preserve_interleaved_progress_order() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "discover peers")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 16).unwrap(), 120).unwrap(),
+    );
+    let discover = |id: &str| mez_agent::AgentAction {
+        id: id.to_string(),
+        payload: mez_agent::AgentActionPayload::ListAgents {
+            agent_type: Some("subagent".to_string()),
+            scope: Some("project".to_string()),
+        },
+    };
+    let first = discover("first-discovery");
+    let last = discover("last-discovery");
+    let progress = mez_agent::AgentAction {
+        id: "middle-progress".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Progress,
+            text: "middle response".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: String::new(),
+                actions: vec![first.clone(), progress.clone(), last.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: [&first, &progress, &last]
+            .into_iter()
+            .map(|action| mez_agent::ActionResult::running(&turn, action, Vec::new(), None))
+            .collect(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    service
+        .execute_running_list_agents_actions_for_turn(&turn, &mut execution)
+        .unwrap();
+    service
+        .present_deferred_agent_say_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    let lines = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let first_row = lines.find("list agents:").unwrap();
+    let progress_row = lines.find("middle response").unwrap();
+    let last_row = lines.rfind("list agents:").unwrap();
+    assert!(
+        first_row < progress_row && progress_row < last_row,
+        "{lines}"
+    );
+}
+
 /// Issue and close-agent actions must release a later progress say after
 /// their runtime-owned results settle, even when no static header exists.
 #[test]
