@@ -713,6 +713,7 @@ async fn async_actor_permanent_failure_preserves_other_identical_claim() {
                 .len(),
             2
         );
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 2);
         let mut events = RuntimeEventBatch::new();
         events.push(RuntimeEvent::Persistence(
             crate::runtime::PersistenceEvent::TranscriptFailed {
@@ -725,7 +726,7 @@ async fn async_actor_permanent_failure_preserves_other_identical_claim() {
             },
         ));
         handle.submit_runtime_events(events).await.unwrap();
-        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
         let replay = handle.drain_persistence_side_effects(2).await.unwrap();
         assert!(
             matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries == &vec![row.clone()])
