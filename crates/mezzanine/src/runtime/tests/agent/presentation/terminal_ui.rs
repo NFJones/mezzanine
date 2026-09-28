@@ -1059,6 +1059,93 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
     assert!(pane_text.contains("▐      delta epsilon"), "{pane_text}");
 }
 
+/// A later complete action must wait while the preceding action still has
+/// unclosed source, even when the later action has a complete renderable body.
+#[test]
+fn runtime_streaming_later_complete_action_waits_for_earlier_source() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(52, 20).unwrap(), 200)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+    );
+    for event in [
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 0,
+            status: mez_agent::SayStatus::Progress,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 0,
+            text: "first still open".to_string(),
+        },
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 1,
+            status: mez_agent::SayStatus::Progress,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 1,
+            text: "second is complete".to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextComplete { action_index: 1 },
+        mez_agent::StreamingSayEvent::ActionComplete { action_index: 1 },
+    ] {
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-order",
+                crate::runtime::RuntimeProviderLogInput::Progress(&event),
+            )
+            .unwrap();
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-order")
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    service
+        .apply_agent_streaming_say_projection_result(projection)
+        .unwrap();
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(visible.contains("first still open"), "{visible}");
+    assert!(!visible.contains("second is complete"), "{visible}");
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-order",
+            crate::runtime::RuntimeProviderLogInput::Progress(
+                &mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+            ),
+        )
+        .unwrap();
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-order")
+        .unwrap()
+        .expect("closing the predecessor releases buffered source");
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    service
+        .apply_agent_streaming_say_projection_result(projection)
+        .unwrap();
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(visible.contains("second is complete"), "{visible}");
+}
+
 /// Verifies every published cumulative Markdown and diff prefix is identical
 /// to a fresh static render of the same source snapshot.
 ///
@@ -3163,6 +3250,7 @@ fn runtime_streaming_summary_and_web_header_match_static_projection_and_restore(
             action_index: 0,
             text: summary.to_string(),
         },
+        mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { action_index: 0 },
         mez_agent::StreamingSayEvent::ActionHeader {
             action_index: 1,
             header: Box::new(mez_agent::StreamingActionHeader::WebSearch {

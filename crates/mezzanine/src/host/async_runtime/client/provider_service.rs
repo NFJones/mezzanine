@@ -48,17 +48,19 @@ fn streaming_presentation_event_changes_projection(event: &mez_agent::StreamingS
         | mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta { text, .. } => {
             !text.is_empty()
         }
+        // A closed field may release a later buffered action without adding
+        // source characters to the component that just closed.
+        mez_agent::StreamingSayEvent::TextComplete { .. }
+        | mez_agent::StreamingSayEvent::MessagePayloadComplete { .. }
+        | mez_agent::StreamingSayEvent::ShellCommandTextComplete { .. }
+        | mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { .. } => true,
         mez_agent::StreamingSayEvent::ResponseStarted { .. }
         | mez_agent::StreamingSayEvent::Started { .. }
         | mez_agent::StreamingSayEvent::RationaleStarted
         | mez_agent::StreamingSayEvent::ShellCommandStarted { .. }
         | mez_agent::StreamingSayEvent::ShellCommandSummaryStarted { .. }
-        | mez_agent::StreamingSayEvent::TextComplete { .. }
         | mez_agent::StreamingSayEvent::RationaleTextComplete
-        | mez_agent::StreamingSayEvent::ShellCommandTextComplete { .. }
-        | mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { .. }
         | mez_agent::StreamingSayEvent::MessageStarted { .. }
-        | mez_agent::StreamingSayEvent::MessagePayloadComplete { .. }
         | mez_agent::StreamingSayEvent::ActionComplete { .. }
         | mez_agent::StreamingSayEvent::ActionHeader { .. } => false,
     }
@@ -2582,8 +2584,8 @@ mod tests {
         );
     }
 
-    /// Verifies outbound message payloads schedule projection only when they
-    /// contribute visible text, while lifecycle events remain barriers.
+    /// Verifies outbound message payloads schedule projection when they
+    /// contribute text or close an ordinal that can release buffered source.
     #[test]
     fn streaming_message_payload_deltas_change_projection() {
         assert!(streaming_presentation_event_changes_projection(
@@ -2605,7 +2607,7 @@ mod tests {
                 content_type: "text/plain; charset=utf-8".to_string(),
             }
         ));
-        assert!(!streaming_presentation_event_changes_projection(
+        assert!(streaming_presentation_event_changes_projection(
             &mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 }
         ));
 

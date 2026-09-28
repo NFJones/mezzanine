@@ -2813,6 +2813,32 @@ impl RuntimeSessionService {
                     )
                 })?;
                 action.complete = true;
+                // Closure may release source buffered behind this ordinal even
+                // though the completed field adds no display characters.
+                let has_later_source = presentation
+                    .actions
+                    .keys()
+                    .any(|index| index > action_index)
+                    || presentation
+                        .outbound_messages
+                        .keys()
+                        .any(|index| index > action_index)
+                    || presentation
+                        .shell_commands
+                        .keys()
+                        .any(|index| index > action_index)
+                    || presentation
+                        .shell_summaries
+                        .keys()
+                        .any(|index| index > action_index)
+                    || presentation
+                        .action_headers
+                        .keys()
+                        .any(|index| index > action_index);
+                if has_later_source {
+                    presentation.revision = presentation.revision.wrapping_add(1);
+                    presentation.projected_revision = None;
+                }
             }
             mez_agent::StreamingSayEvent::MessageStarted {
                 action_index,
@@ -3409,6 +3435,37 @@ impl RuntimeSessionService {
         {
             return Ok(None);
         }
+        // Preserve later source for reconciliation, but do not publish it while
+        // an earlier component is still receiving its direct field. The worker
+        // sees one immutable ordered prefix rather than the entire response.
+        let first_open_action = presentation
+            .actions
+            .iter()
+            .filter(|(_, source)| !source.complete)
+            .map(|(index, _)| *index)
+            .chain(
+                presentation
+                    .outbound_messages
+                    .iter()
+                    .filter(|(_, source)| !source.complete)
+                    .map(|(index, _)| *index),
+            )
+            .chain(
+                presentation
+                    .shell_commands
+                    .iter()
+                    .filter(|(_, source)| !source.complete)
+                    .map(|(index, _)| *index),
+            )
+            .chain(
+                presentation
+                    .shell_summaries
+                    .iter()
+                    .filter(|(_, source)| !source.complete)
+                    .map(|(index, _)| *index),
+            )
+            .min();
+        let visible = |index: &usize| first_open_action.is_none_or(|open| *index <= open);
         Ok(Some(crate::runtime::RuntimeStreamingSayProjectionWork {
             pane_id: pane_id.to_string(),
             turn_id: turn_id.to_string(),
@@ -3418,11 +3475,36 @@ impl RuntimeSessionService {
             installed_lineage: presentation.installed_lineage,
             baseline_screen: presentation.baseline_screen.clone(),
             rationale: presentation.rationale.clone(),
-            actions: presentation.actions.clone(),
-            outbound_messages: presentation.outbound_messages.clone(),
-            shell_commands: presentation.shell_commands.clone(),
-            shell_summaries: presentation.shell_summaries.clone(),
-            action_headers: presentation.action_headers.clone(),
+            actions: presentation
+                .actions
+                .iter()
+                .filter(|(index, _)| visible(index))
+                .map(|(index, source)| (*index, source.clone()))
+                .collect(),
+            outbound_messages: presentation
+                .outbound_messages
+                .iter()
+                .filter(|(index, _)| visible(index))
+                .map(|(index, source)| (*index, source.clone()))
+                .collect(),
+            shell_commands: presentation
+                .shell_commands
+                .iter()
+                .filter(|(index, _)| visible(index))
+                .map(|(index, source)| (*index, source.clone()))
+                .collect(),
+            shell_summaries: presentation
+                .shell_summaries
+                .iter()
+                .filter(|(index, _)| visible(index))
+                .map(|(index, source)| (*index, source.clone()))
+                .collect(),
+            action_headers: presentation
+                .action_headers
+                .iter()
+                .filter(|(index, _)| visible(index))
+                .map(|(index, header)| (*index, header.clone()))
+                .collect(),
             thinking_enabled: projected_context.thinking_enabled,
             shell_classification: projected_context.shell_classification,
             presentation_columns: projected_context.presentation_columns,
