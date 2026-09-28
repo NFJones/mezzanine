@@ -402,7 +402,7 @@ impl RuntimePersistenceComponent {
             .in_flight_transcript_entries
             .iter()
             .filter(|((owner, _), _)| owner == conversation_id)
-            .flat_map(|(_, batches)| batches.iter().flatten().cloned())
+            .flat_map(|(_, batches)| batches.iter().flat_map(|(_, rows)| rows.iter().cloned()))
             .collect::<Vec<_>>();
         entries.extend(
             self.queued_transcript_effects
@@ -460,14 +460,14 @@ impl RuntimePersistenceComponent {
     pub(crate) fn take_transcript_effects(&mut self) -> Vec<RuntimeSideEffect> {
         let effects = std::mem::take(&mut self.queued_transcript_effects);
         for effect in &effects {
-            if let RuntimeSideEffect::PersistTranscriptEntries { entries, .. } = effect
+            if let RuntimeSideEffect::PersistTranscriptEntries { entries, path, .. } = effect
                 && let Some(first) = entries.first()
             {
                 let batches = self
                     .in_flight_transcript_entries
                     .entry((first.conversation_id.clone(), first.sequence))
                     .or_default();
-                batches.push(entries.clone());
+                batches.push((path.clone(), entries.clone()));
             }
         }
         effects
@@ -475,6 +475,50 @@ impl RuntimePersistenceComponent {
 
     /// Settles only a matching worker-owned immutable append, not a replacement
     /// that happens to reuse its conversation and starting sequence.
+    pub(crate) fn owns_transcript_write_at_path(
+        &self,
+        conversation_id: &str,
+        first_sequence: u64,
+        path: &std::path::Path,
+        entries: &[mez_agent::transcript::TranscriptEntry],
+    ) -> bool {
+        self.in_flight_transcript_entries
+            .get(&(conversation_id.to_string(), first_sequence))
+            .is_some_and(|batches| {
+                batches
+                    .iter()
+                    .any(|(owner_path, batch)| owner_path == path && batch == entries)
+            })
+    }
+
+    /// Retires an exact worker-owned append after its completion is accepted.
+    pub(crate) fn settle_transcript_write_at_path(
+        &mut self,
+        conversation_id: &str,
+        first_sequence: u64,
+        path: &std::path::Path,
+        entries: &[mez_agent::transcript::TranscriptEntry],
+    ) -> bool {
+        let key = (conversation_id.to_string(), first_sequence);
+        if !self.owns_transcript_write_at_path(conversation_id, first_sequence, path, entries) {
+            return false;
+        }
+        if let Some(batches) = self.in_flight_transcript_entries.get_mut(&key) {
+            if let Some(position) = batches
+                .iter()
+                .position(|(owner_path, batch)| owner_path == path && batch == entries)
+            {
+                batches.remove(position);
+            }
+            if batches.is_empty() {
+                self.in_flight_transcript_entries.remove(&key);
+            }
+        }
+        true
+    }
+
+    /// Legacy test probe for row-only matching; production settlement always includes the path.
+    #[cfg(test)]
     pub(crate) fn owns_transcript_write(
         &self,
         conversation_id: &str,
@@ -483,29 +527,25 @@ impl RuntimePersistenceComponent {
     ) -> bool {
         self.in_flight_transcript_entries
             .get(&(conversation_id.to_string(), first_sequence))
-            .is_some_and(|batches| batches.iter().any(|batch| batch == entries))
+            .is_some_and(|batches| batches.iter().any(|(_, batch)| batch == entries))
     }
 
-    /// Retires an exact worker-owned append after its completion is accepted.
+    /// Legacy test probe for settling the first matching row batch.
+    #[cfg(test)]
     pub(crate) fn settle_transcript_write(
         &mut self,
         conversation_id: &str,
         first_sequence: u64,
         entries: &[mez_agent::transcript::TranscriptEntry],
     ) -> bool {
-        let key = (conversation_id.to_string(), first_sequence);
-        if !self.owns_transcript_write(conversation_id, first_sequence, entries) {
-            return false;
-        }
-        if let Some(batches) = self.in_flight_transcript_entries.get_mut(&key) {
-            if let Some(position) = batches.iter().position(|batch| batch == entries) {
-                batches.remove(position);
-            }
-            if batches.is_empty() {
-                self.in_flight_transcript_entries.remove(&key);
-            }
-        }
-        true
+        let path = self
+            .in_flight_transcript_entries
+            .get(&(conversation_id.to_string(), first_sequence))
+            .and_then(|batches| batches.iter().find(|(_, batch)| batch == entries))
+            .map(|(path, _)| path.clone());
+        path.is_some_and(|path| {
+            self.settle_transcript_write_at_path(conversation_id, first_sequence, &path, entries)
+        })
     }
 
     /// Returns the newest queued metadata checkpoint record count for tests and

@@ -107,8 +107,14 @@ impl RuntimeSessionService {
                 conversation_id,
                 first_sequence,
                 entries,
+                path,
                 ..
-            } => Some((conversation_id.clone(), *first_sequence, entries.clone())),
+            } => Some((
+                conversation_id.clone(),
+                *first_sequence,
+                path.clone(),
+                entries.clone(),
+            )),
             _ => None,
         };
         let mut schedule_next_retention = false;
@@ -124,9 +130,10 @@ impl RuntimeSessionService {
                 path,
                 bytes,
             } => {
-                if !self.persistence.owns_transcript_write(
+                if !self.persistence.owns_transcript_write_at_path(
                     &conversation_id,
                     first_sequence,
+                    &path,
                     &entries,
                 ) {
                     return Ok(crate::runtime::RuntimeTransition::default());
@@ -149,9 +156,10 @@ impl RuntimeSessionService {
                 error,
                 retryable,
             } => {
-                if !self.persistence.owns_transcript_write(
+                if !self.persistence.owns_transcript_write_at_path(
                     &conversation_id,
                     first_sequence,
+                    &path,
                     &entries,
                 ) {
                     return Ok(crate::runtime::RuntimeTransition::default());
@@ -447,9 +455,13 @@ impl RuntimeSessionService {
         } else {
             self.append_runtime_diagnostic_event(payload)?;
         }
-        if let Some((conversation_id, first_sequence, entries)) = completed_transcript {
-            self.persistence
-                .settle_transcript_write(&conversation_id, first_sequence, &entries);
+        if let Some((conversation_id, first_sequence, path, entries)) = completed_transcript {
+            self.persistence.settle_transcript_write_at_path(
+                &conversation_id,
+                first_sequence,
+                &path,
+                &entries,
+            );
         }
         let mut transition = self.runtime_transition_with_render(
             true,
@@ -885,6 +897,55 @@ mod transcript_settlement_tests {
                 .persistence
                 .pending_transcript_entries("uncertain-write")
                 .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A completion naming a different destination cannot retire this
+    /// service-owned batch, even if its conversation and rows are identical.
+    #[test]
+    fn transcript_completion_rejects_wrong_destination() {
+        let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+        let root = std::env::temp_dir().join(format!(
+            "mez-transcript-wrong-destination-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let row = TranscriptEntry {
+            conversation_id: "wrong-destination".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted".to_string(),
+        };
+        let path = store.transcript_path(&row.conversation_id).unwrap();
+        service.persistence.queue_transcript(
+            crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
+                store,
+                path: path.clone(),
+                entries: vec![row.clone()],
+            },
+        );
+        service.persistence.take_transcript_effects();
+        let transition = service
+            .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptCompleted {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: row.sequence,
+                entries: vec![row.clone()],
+                path: path.with_extension("wrong"),
+                bytes: 1,
+            })
+            .unwrap();
+        assert!(!transition.applied);
+        assert_eq!(
+            service
+                .persistence
+                .pending_transcript_entries(&row.conversation_id),
+            vec![row]
         );
         let _ = std::fs::remove_dir_all(root);
     }

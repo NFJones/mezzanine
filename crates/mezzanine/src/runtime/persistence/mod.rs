@@ -22,6 +22,12 @@ mod adapters;
 mod effects;
 mod stores;
 
+/// One worker-owned transcript append awaiting exact-path settlement.
+type InFlightTranscriptBatch = (
+    std::path::PathBuf,
+    Vec<mez_agent::transcript::TranscriptEntry>,
+);
+
 /// Owns repository handles and deferred effects for one application runtime.
 #[derive(Debug, Default)]
 pub(crate) struct RuntimePersistenceComponent {
@@ -39,8 +45,7 @@ pub(crate) struct RuntimePersistenceComponent {
     queued_audit_effects: Vec<RuntimeSideEffect>,
     queued_transcript_effects: Vec<RuntimeSideEffect>,
     /// Transcript writes handed to the external worker but not yet settled.
-    in_flight_transcript_entries:
-        BTreeMap<(String, u64), Vec<Vec<mez_agent::transcript::TranscriptEntry>>>,
+    in_flight_transcript_entries: BTreeMap<(String, u64), Vec<InFlightTranscriptBatch>>,
     metadata_checkpoint_generations: BTreeMap<String, u64>,
     pending_session_archive_conversation_ids: BTreeSet<String>,
     pending_session_archive_resumes: BTreeMap<String, (ClientId, String)>,
