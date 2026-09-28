@@ -44,13 +44,21 @@ impl RuntimeSessionService {
         else {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             self.agent.claimed_agent_provider_tasks.remove(turn_id);
-            self.discard_agent_streaming_say_presentations_for_turn(turn_id)?;
+            self.ingest_provider_log(
+                "",
+                turn_id,
+                super::super::presentation::RuntimeProviderLogInput::DiscardProvisional,
+            )?;
             return Ok(false);
         };
         if turn.state != AgentTurnState::Running {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             self.agent.claimed_agent_provider_tasks.remove(turn_id);
-            self.discard_agent_streaming_say_presentations_for_turn(turn_id)?;
+            self.ingest_provider_log(
+                "",
+                turn_id,
+                super::super::presentation::RuntimeProviderLogInput::DiscardProvisional,
+            )?;
             return Ok(false);
         }
         if self.subagent_descendant_is_fenced(&turn.agent_id) {
@@ -128,7 +136,11 @@ impl RuntimeSessionService {
         if consumed_high_water_mark.is_some_and(|consumed| current_high_water_mark > consumed) {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             self.agent.claimed_agent_provider_tasks.remove(turn_id);
-            self.discard_agent_streaming_say_presentation(&turn.pane_id, Some(turn_id))?;
+            self.ingest_provider_log(
+                &turn.pane_id,
+                turn_id,
+                super::super::presentation::RuntimeProviderLogInput::Terminal,
+            )?;
             self.agent
                 .pending_agent_provider_tasks
                 .insert(turn_id.to_string());

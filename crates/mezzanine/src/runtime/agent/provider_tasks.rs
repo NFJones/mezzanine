@@ -1753,7 +1753,11 @@ impl RuntimeSessionService {
             provider_raw_text,
         )?;
         if let Some(ref pane_id) = pane_id {
-            self.discard_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
+            self.ingest_provider_log(
+                pane_id,
+                turn_id,
+                super::presentation::RuntimeProviderLogInput::Terminal,
+            )?;
             self.clear_agent_shell_output_status_line(pane_id)?;
         }
         Ok(pane_id.map_or_else(
