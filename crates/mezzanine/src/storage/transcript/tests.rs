@@ -1629,6 +1629,31 @@ fn transcript_store_rejects_conflicting_receipts_before_replay() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A conflict in a later conversation must be found before startup replays
+/// an unrelated accepted batch and changes its archive.
+#[test]
+fn transcript_store_preflights_durable_conflicts_across_conversations() {
+    let root = temp_root("receipt-cross-conversation-conflict");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("aaa", 1, TranscriptRole::User);
+    store
+        .accept_append_receipt(std::slice::from_ref(&first), 1)
+        .unwrap();
+    let later = entry("zzz", 1, TranscriptRole::User);
+    store
+        .accept_append_receipt(std::slice::from_ref(&later), 1)
+        .unwrap();
+    let mut changed = later.clone();
+    changed.content = "different durable row".to_string();
+    store.append(&changed).unwrap();
+
+    assert!(store.recover_append_receipts().is_err());
+    assert!(!store.transcript_path("aaa").unwrap().exists());
+    assert_eq!(store.inspect("zzz").unwrap(), vec![changed]);
+    assert_eq!(store.pending_append_receipts().unwrap().len(), 2);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A damaged accepted receipt cannot be skipped or replayed as a different
 /// batch after restart; its archive remains unchanged for manual recovery.
 #[test]

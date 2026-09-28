@@ -297,12 +297,38 @@ impl AgentTranscriptStore {
         let mut claimed = std::collections::BTreeMap::new();
         for (_, receipt, entries) in &receipts {
             for entry in entries {
-                let key = (&receipt.conversation_id, entry.sequence);
+                let key = (receipt.conversation_id.as_str(), entry.sequence);
                 if claimed.insert(key, entry).is_some_and(|old| old != entry) {
                     return Err(MezError::conflict(
                         "transcript recovery receipts conflict at the same sequence",
                     ));
                 }
+            }
+        }
+        // Detect conflicting committed history across every conversation
+        // before replay mutates any archive. The append path repeats these
+        // checks under its conversation lock when it actually writes.
+        for conversation_id in receipts
+            .iter()
+            .map(|(_, receipt, _)| receipt.conversation_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            match self.inspect(conversation_id) {
+                Ok(durable) => {
+                    self.validate_restored_transcript(conversation_id)?;
+                    for row in durable {
+                        if claimed
+                            .get(&(conversation_id, row.sequence))
+                            .is_some_and(|expected| **expected != row)
+                        {
+                            return Err(MezError::conflict(
+                                "transcript recovery receipt conflicts with durable contents",
+                            ));
+                        }
+                    }
+                }
+                Err(error) if error.kind() == MezErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
         }
         let mut receipts = receipts
