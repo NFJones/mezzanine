@@ -603,6 +603,75 @@ async fn async_actor_does_not_requeue_permanent_transcript_failure() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Row-only blocked ownership currently suppresses both identical claims
+/// when one permanently fails; a generation-fenced claim must correct this.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_permanent_failure_blocks_identical_claims_together() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-identical-permanent-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "identical-permanent".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted".to_string(),
+    };
+    let path = store.transcript_path(&row.conversation_id).unwrap();
+    let effect = RuntimeSideEffect::PersistTranscriptEntries {
+        store,
+        path: path.clone(),
+        entries: vec![row.clone()],
+    };
+    let mut service = test_service_with_event_log();
+    service.queue_transcript_for_tests(effect.clone());
+    service.queue_transcript_for_tests(effect);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        assert_eq!(
+            handle
+                .drain_persistence_side_effects(2)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        let mut events = RuntimeEventBatch::new();
+        events.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptFailed {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: row.sequence,
+                entries: vec![row],
+                path,
+                error: "permanent conflict".to_string(),
+                retryable: false,
+            },
+        ));
+        handle.submit_runtime_events(events).await.unwrap();
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
+        assert!(
+            handle
+                .drain_persistence_side_effects(2)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Permanent transcript failures stay blocked when another claim is retried,
 /// regardless of which failure event arrives first in an actor batch.
 #[tokio::test(flavor = "current_thread")]
