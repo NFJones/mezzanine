@@ -948,9 +948,7 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running MCP result does not match an action")
                 })?;
-            if !self
-                .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
-            {
+            if !self.queue_ordered_provider_header(&turn.pane_id, execution, &action)? {
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,
                     &format!(
@@ -970,6 +968,7 @@ impl RuntimeSessionService {
             let policy_allowed = permission_policy.approval_policy.bypasses_prompts();
             execution.action_results[index] =
                 self.execute_mcp_action_for_turn(turn, &action, auto_allowed || policy_allowed)?;
+            self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
             executed = executed.saturating_add(1);
         }
         let mcp_tool_error = execution.action_results.iter().any(|result| {
@@ -1043,9 +1042,7 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running MCP result does not match an action")
                 })?;
-            if !self
-                .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
-            {
+            if !self.queue_ordered_provider_header(&turn.pane_id, execution, &action)? {
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,
                     &format!(
@@ -1066,6 +1063,7 @@ impl RuntimeSessionService {
             execution.action_results[index] = self
                 .execute_mcp_action_for_turn_async(turn, &action, auto_allowed || policy_allowed)
                 .await?;
+            self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
             executed = executed.saturating_add(1);
         }
         let mcp_tool_error = execution.action_results.iter().any(|result| {
