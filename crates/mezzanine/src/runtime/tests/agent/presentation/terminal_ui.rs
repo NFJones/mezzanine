@@ -1811,6 +1811,31 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                         .map(|entry| (entry.display_lines, entry.copy_lines))
                         .collect::<Vec<_>>(),
                 ));
+                // A later request in the same turn is a distinct response even
+                // if it repeats the same provider-authored batch verbatim.
+                let mut continuation = execution.clone();
+                continuation.request.messages.push(mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::User,
+                    source: mez_agent::ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    content: "new provider request chronology".to_string(),
+                });
+                service
+                    .ingest_provider_log(
+                        "%1",
+                        "turn-1",
+                        crate::runtime::RuntimeProviderLogInput::Settled(&continuation),
+                    )
+                    .unwrap();
+                let continued = store.inspect_presentation(&conversation_id).unwrap();
+                assert_eq!(
+                    continued
+                        .iter()
+                        .filter(|entry| entry.source_text.as_deref() == Some(source))
+                        .count(),
+                    2,
+                    "{case}: {continued:?}"
+                );
             }
         }
         for actual in &settled[1..] {
