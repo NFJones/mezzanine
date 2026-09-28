@@ -192,6 +192,25 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
                 .applied,
             0
         );
+        let mut wrong_path_failure = RuntimeEventBatch::new();
+        wrong_path_failure.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptFailed {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: row.sequence,
+                entries: vec![row.clone()],
+                path: path.with_extension("wrong"),
+                error: "foreign destination".to_string(),
+                retryable: false,
+            },
+        ));
+        assert_eq!(
+            handle
+                .submit_runtime_events(wrong_path_failure)
+                .await
+                .unwrap()
+                .applied,
+            0
+        );
         store.append_many(std::slice::from_ref(&row)).unwrap();
         handle
             .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
