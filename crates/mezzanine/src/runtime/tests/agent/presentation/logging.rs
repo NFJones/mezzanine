@@ -598,6 +598,71 @@ fn runtime_issue_and_close_headers_release_deferred_progress() {
     }
 }
 
+/// Repeated shell settlement must not append a deferred final answer twice.
+#[test]
+fn runtime_deferred_final_say_is_published_once() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 16).unwrap(), 120).unwrap(),
+    );
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-final-once"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: String::new(),
+                actions: vec![
+                    mez_agent::AgentAction {
+                        id: "discovery".to_string(),
+                        payload: mez_agent::AgentActionPayload::ListAgents {
+                            agent_type: None,
+                            scope: None,
+                        },
+                    },
+                    mez_agent::AgentAction {
+                        id: "final".to_string(),
+                        payload: mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Final,
+                            text: "one final answer".to_string(),
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                                .to_string(),
+                        },
+                    },
+                ],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    service
+        .present_deferred_agent_say_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    service
+        .present_deferred_agent_say_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    let text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(text.matches("one final answer").count(), 1, "{text}");
+}
+
 /// Verifies progress `say` messages continue through durable assistant
 /// chronology without a request-local ledger.
 ///

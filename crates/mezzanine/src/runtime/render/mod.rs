@@ -617,7 +617,7 @@ pub(crate) struct RuntimePresentationComponent {
     /// Exact provider responses whose ordinary MAAP source has already settled.
     pub(super) agent_settled_provider_log_groups:
         std::collections::BTreeSet<(String, String, String, mez_agent::ContextExecutionGroupId)>,
-    /// Deferred progress ordinals already appended for one exact provider response.
+    /// Deferred say ordinals already appended for one exact provider response.
     pub(super) agent_deferred_provider_progress: std::collections::BTreeSet<(
         String,
         String,

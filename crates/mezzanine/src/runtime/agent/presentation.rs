@@ -606,17 +606,15 @@ impl RuntimeSessionService {
                 {
                     continue;
                 }
-                if *status == SayStatus::Progress
-                    && self.presentation.agent_queued_provider_headers.keys().any(
-                        |(queued_pane, queued_turn, queued_conversation, queued_group, ordinal)| {
-                            queued_pane == pane_id
-                                && queued_turn == &execution.request.turn_id
-                                && owner.as_ref() == Some(queued_conversation)
-                                && queued_group == &group
-                                && *ordinal < action_index
-                        },
-                    )
-                {
+                if self.presentation.agent_queued_provider_headers.keys().any(
+                    |(queued_pane, queued_turn, queued_conversation, queued_group, ordinal)| {
+                        queued_pane == pane_id
+                            && queued_turn == &execution.request.turn_id
+                            && owner.as_ref() == Some(queued_conversation)
+                            && queued_group == &group
+                            && *ordinal < action_index
+                    },
+                ) {
                     continue;
                 }
                 if *status == SayStatus::Progress
@@ -626,7 +624,7 @@ impl RuntimeSessionService {
                 {
                     continue;
                 }
-                let progress_key = owner.as_ref().map(|conversation_id| {
+                let publication_key = owner.as_ref().map(|conversation_id| {
                     (
                         pane_id.to_string(),
                         execution.request.turn_id.clone(),
@@ -635,13 +633,11 @@ impl RuntimeSessionService {
                         action_index,
                     )
                 });
-                if *status == SayStatus::Progress
-                    && progress_key.as_ref().is_some_and(|key| {
-                        self.presentation
-                            .agent_deferred_provider_progress
-                            .contains(key)
-                    })
-                {
+                if publication_key.as_ref().is_some_and(|key| {
+                    self.presentation
+                        .agent_deferred_provider_progress
+                        .contains(key)
+                }) {
                     continue;
                 }
                 self.append_agent_assistant_content_to_terminal_buffer(
@@ -649,9 +645,7 @@ impl RuntimeSessionService {
                     text,
                     content_type,
                 )?;
-                if *status == SayStatus::Progress
-                    && let Some(key) = progress_key
-                {
+                if let Some(key) = publication_key {
                     self.presentation
                         .agent_deferred_provider_progress
                         .insert(key);
