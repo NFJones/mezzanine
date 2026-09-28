@@ -769,6 +769,8 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     shell_summaries: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
     /// Closed typed execution headers keyed by MAAP action index.
     action_headers: std::collections::BTreeMap<usize, mez_agent::StreamingActionHeader>,
+    /// Direct action objects received in this response, distinct from field closure.
+    received_actions: std::collections::BTreeSet<usize>,
     /// Monotonic render-input generation used to fence worker projections.
     revision: u64,
     /// Newest cumulative-source projection atomically installed in the pane.

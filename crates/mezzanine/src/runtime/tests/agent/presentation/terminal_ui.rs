@@ -1130,10 +1130,26 @@ fn runtime_streaming_later_complete_action_waits_for_earlier_source() {
             ),
         )
         .unwrap();
+    assert!(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-order")
+            .unwrap()
+            .is_none(),
+        "a closed field is not a whole-action receipt"
+    );
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-order",
+            crate::runtime::RuntimeProviderLogInput::Progress(
+                &mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
+            ),
+        )
+        .unwrap();
     let work = service
         .take_agent_streaming_say_projection_work("%1", "turn-order")
         .unwrap()
-        .expect("closing the predecessor releases buffered source");
+        .expect("receiving the predecessor releases buffered source");
     let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
     service
         .apply_agent_streaming_say_projection_result(projection)
@@ -1213,10 +1229,26 @@ fn runtime_streaming_command_closure_releases_later_say() {
             ),
         )
         .unwrap();
+    assert!(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-command-order")
+            .unwrap()
+            .is_none(),
+        "command field closure is not whole-action receipt"
+    );
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-command-order",
+            crate::runtime::RuntimeProviderLogInput::Progress(
+                &mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
+            ),
+        )
+        .unwrap();
     let work = service
         .take_agent_streaming_say_projection_work("%1", "turn-command-order")
         .unwrap()
-        .expect("command closure must release buffered answer");
+        .expect("command receipt must release buffered answer");
     let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
     service
         .apply_agent_streaming_say_projection_result(projection)

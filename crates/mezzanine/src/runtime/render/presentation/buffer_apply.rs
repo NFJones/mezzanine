@@ -101,7 +101,10 @@ fn release_later_streaming_action(
             .action_headers
             .keys()
             .any(|index| *index > action_index);
-    if later {
+    if later
+        && (presentation.received_actions.is_empty()
+            || presentation.received_actions.contains(&action_index))
+    {
         presentation.revision = presentation.revision.wrapping_add(1);
         presentation.projected_revision = None;
     }
@@ -2701,6 +2704,7 @@ impl RuntimeSessionService {
                         shell_commands: std::collections::BTreeMap::new(),
                         shell_summaries: std::collections::BTreeMap::new(),
                         action_headers: std::collections::BTreeMap::new(),
+                        received_actions: std::collections::BTreeSet::new(),
                         revision: 1,
                         projected_revision: None,
                         projected_context: None,
@@ -2767,6 +2771,7 @@ impl RuntimeSessionService {
                             shell_commands: std::collections::BTreeMap::new(),
                             shell_summaries: std::collections::BTreeMap::new(),
                             action_headers: std::collections::BTreeMap::new(),
+                            received_actions: std::collections::BTreeSet::new(),
                             revision: 1,
                             projected_revision: None,
                             projected_context: None,
@@ -3159,8 +3164,19 @@ impl RuntimeSessionService {
                     presentation.projected_revision = None;
                 }
             }
-            // Receipt is an ordering barrier, not source, validation or execution.
-            mez_agent::StreamingSayEvent::ActionComplete { .. } => {}
+            // A whole-action receipt is an ordering barrier, not validation or
+            // execution. A closed field alone cannot release later ordinals.
+            mez_agent::StreamingSayEvent::ActionComplete { action_index } => {
+                if let Some(presentation) = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .filter(|presentation| presentation.turn_id == turn_id)
+                    && presentation.received_actions.insert(*action_index)
+                {
+                    release_later_streaming_action(presentation, *action_index);
+                }
+            }
         }
         Ok(())
     }
@@ -3215,6 +3231,7 @@ impl RuntimeSessionService {
                     shell_commands: std::collections::BTreeMap::new(),
                     shell_summaries: std::collections::BTreeMap::new(),
                     action_headers: std::collections::BTreeMap::new(),
+                    received_actions: std::collections::BTreeSet::new(),
                     revision: 1,
                     projected_revision: None,
                     projected_context: None,
@@ -3475,7 +3492,25 @@ impl RuntimeSessionService {
                     .map(|(index, _)| *index),
             )
             .min();
-        let visible = |index: &usize| first_open_action.is_none_or(|open| *index <= open);
+        let first_unreceived_action = (!presentation.received_actions.is_empty())
+            .then(|| {
+                presentation
+                    .actions
+                    .keys()
+                    .chain(presentation.outbound_messages.keys())
+                    .chain(presentation.shell_commands.keys())
+                    .chain(presentation.shell_summaries.keys())
+                    .chain(presentation.action_headers.keys())
+                    .filter(|index| !presentation.received_actions.contains(index))
+                    .copied()
+                    .min()
+            })
+            .flatten();
+        let first_pending_action = first_open_action
+            .into_iter()
+            .chain(first_unreceived_action)
+            .min();
+        let visible = |index: &usize| first_pending_action.is_none_or(|pending| *index <= pending);
         Ok(Some(crate::runtime::RuntimeStreamingSayProjectionWork {
             pane_id: pane_id.to_string(),
             turn_id: turn_id.to_string(),
