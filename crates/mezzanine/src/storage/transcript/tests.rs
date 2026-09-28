@@ -1544,6 +1544,40 @@ fn transcript_store_receipt_recovers_unwritten_batch_after_restart() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A late acknowledgment for an older generation must leave a newer exact
+/// receipt available until its own matching settlement or startup replay.
+#[test]
+fn transcript_store_receipt_settlement_fences_late_generation() {
+    let root = temp_root("receipt-late-generation");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("conv1", 1, TranscriptRole::User);
+    store
+        .accept_append_receipt(std::slice::from_ref(&row), 1)
+        .unwrap();
+    store
+        .accept_append_receipt(std::slice::from_ref(&row), 2)
+        .unwrap();
+    store.append_many(std::slice::from_ref(&row)).unwrap();
+    store
+        .settle_append_receipt(std::slice::from_ref(&row), 1)
+        .unwrap();
+    assert_eq!(
+        store.pending_append_receipts().unwrap(),
+        vec![vec![row.clone()]]
+    );
+    store
+        .settle_append_receipt(std::slice::from_ref(&row), 1)
+        .unwrap();
+    assert_eq!(
+        store.pending_append_receipts().unwrap(),
+        vec![vec![row.clone()]]
+    );
+    store.recover_append_receipts().unwrap();
+    assert!(store.pending_append_receipts().unwrap().is_empty());
+    assert_eq!(store.inspect("conv1").unwrap(), vec![row]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A damaged accepted receipt cannot be skipped or replayed as a different
 /// batch after restart; its archive remains unchanged for manual recovery.
 #[test]
