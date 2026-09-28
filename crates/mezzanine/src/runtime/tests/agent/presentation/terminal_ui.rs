@@ -1216,6 +1216,61 @@ fn runtime_streaming_no_preview_action_holds_later_say_until_validation() {
         .normal_content_lines()
         .join("\n");
     assert!(!visible.contains("later answer"), "{visible}");
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-empty-order"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "later answer".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: String::new(),
+                actions: vec![
+                    mez_agent::AgentAction {
+                        id: "empty".to_string(),
+                        payload: mez_agent::AgentActionPayload::Complete,
+                    },
+                    mez_agent::AgentAction {
+                        id: "later".to_string(),
+                        payload: mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Progress,
+                            text: "later answer".to_string(),
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                                .to_string(),
+                        },
+                    },
+                ],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-empty-order",
+            crate::runtime::RuntimeProviderLogInput::Validated(&execution),
+        )
+        .unwrap();
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-empty-order",
+            crate::runtime::RuntimeProviderLogInput::Settled(&execution),
+        )
+        .unwrap();
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(visible.matches("mez> later answer").count(), 1, "{visible}");
 }
 
 /// A complete later say remains buffered behind an open command preview and
