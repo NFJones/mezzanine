@@ -4,6 +4,52 @@ use super::super::*;
 use crate::runtime::RuntimeRegistryUpdatePlan;
 use crate::security::project::{ProjectTrustStore, TrustDecision};
 
+/// Construction currently transfers service-queued transcript rows to the
+/// actor without a durable receipt. Keep this earlier crash window explicit
+/// until nonblocking admission covers service and actor producers together.
+#[test]
+fn async_actor_construction_precedes_worker_receipt() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-actor-initial-receipt-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "initial-receipt".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted before actor".to_string(),
+    };
+    let mut service = test_service_with_event_log();
+    service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+        path: store.transcript_path(&row.conversation_id).unwrap(),
+        store: store.clone(),
+        entries: vec![row.clone()],
+    });
+    let (_handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    assert!(store.pending_append_receipts().unwrap().is_empty());
+    drop(actor);
+    AgentTranscriptStore::new(root.clone())
+        .recover_append_receipts()
+        .unwrap();
+    assert!(
+        !store
+            .transcript_path(&row.conversation_id)
+            .unwrap()
+            .exists()
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Actor admission currently acknowledges a batch before the persistence
 /// worker writes its receipt. Keep this crash window visible until a durable
 /// pre-admission handoff covers all actor-produced transcript effects.
