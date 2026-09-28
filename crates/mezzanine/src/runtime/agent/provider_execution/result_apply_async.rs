@@ -273,9 +273,7 @@ impl RuntimeSessionService {
                         "provider memory result does not match an action",
                     )
                 })?;
-            if !self
-                .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
-            {
+            if !self.queue_ordered_provider_header(&turn.pane_id, &execution, &action)? {
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,
                     &format!(
@@ -288,6 +286,7 @@ impl RuntimeSessionService {
             let audit_outcome = format!("{:?}", result.status).to_ascii_lowercase();
             self.append_agent_memory_action_audit(&turn, &action, &audit_outcome)?;
             execution.action_results[index] = result;
+            self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
         }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
             &execution.action_results,
@@ -311,9 +310,7 @@ impl RuntimeSessionService {
                             "provider issue result does not match an action",
                         )
                     })?;
-                if !self
-                    .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
-                {
+                if !self.queue_ordered_provider_header(&turn.pane_id, &execution, &action)? {
                     self.append_agent_status_text_to_terminal_buffer(
                         &turn.pane_id,
                         &format!(
@@ -324,6 +321,7 @@ impl RuntimeSessionService {
                     )?;
                 }
                 execution.action_results[index] = result;
+                self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
             }
             execution.terminal_state = runtime_agent_turn_state_from_action_results(
                 &execution.action_results,
