@@ -702,3 +702,59 @@ impl RuntimeSideEffectRouter {
         drained
     }
 }
+
+#[cfg(test)]
+mod transcript_claim_tests {
+    use super::*;
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    /// Two equal appends must receive independent enqueue-time identities, and
+    /// replay must retain those identities instead of minting fresh claims.
+    #[test]
+    fn identical_transcript_claims_keep_distinct_ids_through_recovery() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-route-claim-ids-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let row = TranscriptEntry {
+            conversation_id: "route-claim-ids".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted".to_string(),
+        };
+        let effect = RuntimeSideEffect::PersistTranscriptEntries {
+            path: store.transcript_path(&row.conversation_id).unwrap(),
+            store,
+            entries: vec![row],
+        };
+        let mut route = RuntimeSideEffectRouter::default();
+        route.push_persistence(effect.clone());
+        route.push_persistence(effect);
+        assert_eq!(
+            route
+                .persistence
+                .iter()
+                .map(|queued| queued.claim_id)
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
+        assert_eq!(route.drain_persistence(2).len(), 2);
+        assert_eq!(route.recover_claimed_transcripts(), 2);
+        assert_eq!(
+            route
+                .persistence
+                .iter()
+                .map(|queued| queued.recovered_claim)
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
+        assert_eq!(route.recover_claimed_transcripts(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
