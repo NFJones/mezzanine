@@ -265,6 +265,39 @@ fn transcript_view_rejects_foreign_committed_prefix_in_latest_read() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A valid leading row cannot authorize a foreign row in a bounded tail.
+#[test]
+fn transcript_view_rejects_foreign_committed_suffix_in_latest_read() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("latest-foreign-suffix");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("target", 1, TranscriptRole::User);
+    let foreign = entry("foreign", 2, TranscriptRole::Assistant);
+    let path = store.transcript_path("target").unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        format!(
+            "{}\n{}\n",
+            encode_transcript_entry(&first).unwrap(),
+            encode_transcript_entry(&foreign).unwrap()
+        ),
+    )
+    .unwrap();
+    assert!(
+        store
+            .conversation_transcript_view(
+                "target",
+                ConversationTranscriptRead::Latest(1),
+                true,
+                &[]
+            )
+            .is_err()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Identical outstanding receipts for one first-write row represent one
 /// logical entry, not a missing or conflicting archive prefix.
 #[test]

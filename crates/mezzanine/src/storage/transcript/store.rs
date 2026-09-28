@@ -2657,7 +2657,13 @@ impl AgentTranscriptStore {
             .into_iter()
             .map(|line| {
                 let text = String::from_utf8_lossy(&line);
-                decode_transcript_entry(&text)
+                let entry = decode_transcript_entry(&text)?;
+                if entry.conversation_id != conversation_id {
+                    return Err(MezError::invalid_state(
+                        "transcript archive contains a foreign entry",
+                    ));
+                }
+                Ok(entry)
             })
             .collect()
     }
