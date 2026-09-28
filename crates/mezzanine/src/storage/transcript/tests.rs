@@ -1868,6 +1868,41 @@ fn transcript_store_rejects_receipt_conflicting_with_durable_row() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Concurrent admission of conflicting claims must leave exactly one valid
+/// receipt; the conversation lock must fence both the scan and installation.
+#[test]
+fn transcript_store_concurrent_receipt_admission_rejects_conflict() {
+    let root = temp_root("receipt-concurrent-conflict");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("conv1", 1, TranscriptRole::User);
+    let mut second = first.clone();
+    second.content = "competing content".to_string();
+    let barrier = Arc::new(Barrier::new(3));
+    let workers = [first.clone(), second.clone()]
+        .into_iter()
+        .map(|row| {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                store.accept_append_receipt(std::slice::from_ref(&row), 1)
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let outcomes = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
+    let pending = store.pending_append_receipts().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert!(pending[0] == vec![first] || pending[0] == vec![second]);
+    store.recover_append_receipts().unwrap();
+    assert_eq!(store.inspect("conv1").unwrap(), pending[0]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// An orphaned sequence must not become an accepted receipt that prevents
 /// startup replay of other healthy conversations.
 #[test]
