@@ -404,7 +404,13 @@ impl AgentTranscriptStore {
         let actual: AppendReceipt = serde_json::from_slice(&stored).map_err(|error| {
             MezError::invalid_state(format!("transcript receipt decode failed: {error}"))
         })?;
-        if actual.digest != receipt.digest || actual.entries()? != entries {
+        if actual.version != receipt.version
+            || actual.conversation_id != receipt.conversation_id
+            || actual.first_sequence != receipt.first_sequence
+            || actual.generation != receipt.generation
+            || actual.digest != receipt.digest
+            || actual.entries()? != entries
+        {
             return Err(MezError::conflict(
                 "transcript receipt changed before settlement",
             ));

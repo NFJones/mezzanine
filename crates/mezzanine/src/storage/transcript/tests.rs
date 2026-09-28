@@ -1578,6 +1578,30 @@ fn transcript_store_receipt_settlement_fences_late_generation() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A receipt moved to an older generation's filename must not be retired by
+/// that older acknowledgment even when its rows and digest are identical.
+#[test]
+fn transcript_store_rejects_receipt_generation_mismatch_on_settlement() {
+    let root = temp_root("receipt-generation-mismatch");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("conv1", 1, TranscriptRole::User);
+    store
+        .accept_append_receipt(std::slice::from_ref(&row), 2)
+        .unwrap();
+    store.append_many(std::slice::from_ref(&row)).unwrap();
+    let directory = root.join(".append-receipts");
+    let newer = directory.join("conv1-00000000000000000001-00000000000000000002.json");
+    let older = directory.join("conv1-00000000000000000001-00000000000000000001.json");
+    fs::rename(newer, &older).unwrap();
+    assert!(
+        store
+            .settle_append_receipt(std::slice::from_ref(&row), 1)
+            .is_err()
+    );
+    assert!(older.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A redirected receipt directory must not carry private transcript content
 /// outside the configured store or be accepted as a recovery source.
 #[cfg(unix)]
