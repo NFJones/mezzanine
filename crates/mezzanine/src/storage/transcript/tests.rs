@@ -2005,6 +2005,10 @@ fn transcript_store_receipt_retry_restores_private_permissions() {
         .unwrap();
     let directory = root.join(".append-receipts");
     let path = directory.join("conv1-00000000000000000001-00000000000000000001.json");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
     store
