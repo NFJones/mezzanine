@@ -2260,6 +2260,115 @@ fn runtime_observed_first_turn_resumes_fitting_local_summary() {
     );
 }
 
+/// Five barrier-separated closed ranges must remain private until the complete
+/// provider request fits; a fixed three-stage ceiling cannot stop progress.
+#[test]
+fn runtime_context_recovery_stages_five_distinct_closed_ranges() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "five-closed-ranges".to_string(),
+        path: None,
+        format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary,
+        trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"five-ranges\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.five-ranges]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 1800\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"five-ranges","method":"agent/shell/command","params":{"idempotency_key":"five-ranges","input":"continue"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let mut blocks = Vec::new();
+    for index in 0..5 {
+        if index > 0 {
+            blocks.push(ContextBlock::user_event(
+                format!("steering {index}"),
+                format!("EXACT_STEERING_{index}"),
+            ));
+        }
+        blocks.push(ContextBlock::assistant_event(
+            format!("decision {index}"),
+            format!("decision-{index} ").repeat(900),
+        ));
+        blocks.push(ContextBlock::evidence_event(
+            ContextSourceKind::ActionResult,
+            format!("outcome {index}"),
+            format!("outcome-{index} ").repeat(900),
+        ));
+    }
+    service
+        .agent_turn_contexts_mut()
+        .get_mut("turn-1")
+        .unwrap()
+        .replace_after_compaction(blocks)
+        .unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    let plan = mez_agent::plan_model_context_compaction_at_consumed_sequence(
+        context,
+        100,
+        1,
+        context.event_sequence_high_water_mark(),
+    )
+    .unwrap();
+    assert!(plan.requires_additional_segments());
+    let profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
+    assert!(
+        service
+            .queue_agent_context_limit_recovery_compaction(
+                "turn-1",
+                "five-ranges".to_string(),
+                profile,
+                1,
+                plan,
+            )
+            .unwrap()
+    );
+    for index in 0..5 {
+        if index == 4 {
+            let mut profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
+            profile
+                .provider_options
+                .insert("max_input_tokens".to_string(), "30000".to_string());
+            service.set_agent_turn_model_profile("turn-1".to_string(), profile);
+        }
+        complete_runtime_test_compaction(&mut service, "%1", &format!("summary-{index}"));
+        if index < 4 {
+            let task = service
+                .pending_agent_compaction_task_for_tests("%1")
+                .expect("next closed range should remain eligible");
+            let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+                staged: Some(staged),
+                ..
+            } = &task.target
+            else {
+                panic!("expected unpublished stage");
+            };
+            assert_eq!(staged.attempts, index + 1);
+            assert!(!service.agent_provider_task_is_pending("turn-1"));
+        }
+    }
+    assert!(service.agent_provider_task_is_pending("turn-1"));
+    let chronology = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .chronology();
+    assert_eq!(chronology.len(), 9);
+    for index in 1..5 {
+        assert_eq!(
+            chronology[index * 2 - 1].block().content,
+            format!("EXACT_STEERING_{index}")
+        );
+    }
+}
+
 /// Verifies an observed-input recovery failure identifies its actual trigger.
 ///
 /// A provider failure while producing the compaction summary must fail the

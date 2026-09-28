@@ -1430,11 +1430,6 @@ impl RuntimeSessionService {
                         }
                         RuntimeAgentCompactionTarget::Conversation => 0,
                     };
-                    if attempts >= 3 {
-                        return Err(MezError::invalid_state(
-                            "pre-summary recovery exhausted its closed-segment limit",
-                        ));
-                    }
                     let projection = if matches!(
                         trigger,
                         RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. }
@@ -1474,7 +1469,8 @@ impl RuntimeSessionService {
                             "pre-summary recovery has no additional closed segment",
                         ));
                     }
-                    if next_plan.replacement_event_sequences() == plan.replacement_event_sequences()
+                    if next_plan.replacement_event_sequences().first()
+                        <= plan.replacement_event_sequences().last()
                     {
                         return Err(MezError::invalid_state(
                             "pre-summary recovery did not advance to another closed segment",
@@ -1507,7 +1503,7 @@ impl RuntimeSessionService {
                             crate::runtime::agent_state::RuntimeStagedCompaction {
                                 context: compacted,
                                 projection,
-                                attempts: attempts + 1,
+                                attempts: attempts.saturating_add(1),
                                 source_high_water,
                             },
                         ));
@@ -1674,12 +1670,7 @@ impl RuntimeSessionService {
                         // search the next closed segment in the unpublished context.
                         // Neither the live context nor its epoch changes until the
                         // combined projection has passed the complete request check.
-                        if next_budget == 0
-                            && projection.is_some()
-                            && let RuntimeAgentCompactionTarget::ActiveTurn { staged, .. } =
-                                &task.target
-                            && staged.as_ref().is_none_or(|state| state.attempts < 3)
-                        {
+                        if next_budget == 0 && projection.is_some() {
                             let budget = model_profile
                                 .max_input_tokens()
                                 .or_else(|| model_profile.context_window_tokens())
@@ -1715,6 +1706,8 @@ impl RuntimeSessionService {
                                 });
                             }
                             let next_range_is_durable = next_plan.changes_context()
+                                && next_plan.replacement_event_sequences().first()
+                                    > plan.replacement_event_sequences().last()
                                 && self
                                     .prospective_observed_compaction_epoch(
                                         &staged_task,
@@ -1754,7 +1747,7 @@ impl RuntimeSessionService {
                                     Box::new(crate::runtime::agent_state::RuntimeStagedCompaction {
                                         context: compacted.clone(),
                                         projection: Some(projection),
-                                        attempts: attempts + 1,
+                                        attempts: attempts.saturating_add(1),
                                         source_high_water,
                                     })
                                 });

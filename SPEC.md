@@ -6891,7 +6891,9 @@ summary MUST remain anchored on its original side of exact barriers. No
 provisional summary may publish or resume a turn until the remaining required
 segments have been summarized and the complete next request fits. Exact,
 incomplete, unconsumed, and mandatory raw-tail context MUST remain protected;
-the number of additional segment attempts MUST be bounded.
+each additional segment MUST select strictly later closed event identities than
+the preceding range. An arbitrary total segment count MUST NOT stop such
+forward progress.
 Temporary compactor-source splitting MUST preserve all frozen source bytes at
 UTF-8 boundaries and bound its total requests, including final synthesis.
 Exhaustion MUST NOT publish a partial summary or resume settled execution.
