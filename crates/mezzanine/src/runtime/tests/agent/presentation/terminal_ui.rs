@@ -1625,163 +1625,190 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
         ),
     ] {
         let mut settled = Vec::new();
-        for streamed in [false, true] {
-            let mut service = test_runtime_service();
-            let store = AgentTranscriptStore::new(temp_root(&format!(
-                "mode-parity-{case}-{}",
-                if streamed { "streamed" } else { "complete" }
-            )));
-            service.set_agent_transcript_store(store.clone());
-            service
-                .attach_primary("primary", true, Size::new(48, 12).unwrap(), 120)
-                .unwrap();
-            let conversation_id = service
-                .agent_shell_store_mut()
-                .enter_or_resume("%1")
-                .unwrap()
-                .session_id
-                .clone();
-            set_agent_pane_screen_for_test(
-                &mut service,
-                "%1",
-                TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
-            );
-            if streamed {
-                for event in [
-                    mez_agent::StreamingSayEvent::Started {
-                        action_index: 0,
-                        status: mez_agent::SayStatus::Final,
-                        content_type: content_type.to_string(),
-                    },
-                    mez_agent::StreamingSayEvent::TextDelta {
-                        action_index: 0,
-                        text: source.to_string(),
-                    },
-                    mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
-                    mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
-                ] {
+        for streamed_rationale in [false, true] {
+            for streamed in [false, true] {
+                let mut service = test_runtime_service();
+                let store = AgentTranscriptStore::new(temp_root(&format!(
+                    "mode-parity-{case}-{}-{}",
+                    if streamed { "streamed" } else { "complete" },
+                    if streamed_rationale {
+                        "rationale"
+                    } else {
+                        "no-rationale"
+                    }
+                )));
+                service.set_agent_transcript_store(store.clone());
+                service
+                    .attach_primary("primary", true, Size::new(48, 12).unwrap(), 120)
+                    .unwrap();
+                let conversation_id = service
+                    .agent_shell_store_mut()
+                    .enter_or_resume("%1")
+                    .unwrap()
+                    .session_id
+                    .clone();
+                set_agent_pane_screen_for_test(
+                    &mut service,
+                    "%1",
+                    TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+                );
+                if streamed_rationale {
+                    for event in [
+                        mez_agent::StreamingSayEvent::RationaleStarted,
+                        mez_agent::StreamingSayEvent::RationaleTextDelta {
+                            text: rationale.to_string(),
+                        },
+                        mez_agent::StreamingSayEvent::RationaleTextComplete,
+                    ] {
+                        service
+                            .ingest_provider_log(
+                                "%1",
+                                "turn-1",
+                                crate::runtime::RuntimeProviderLogInput::Progress(&event),
+                            )
+                            .unwrap();
+                    }
+                }
+                if streamed {
+                    for event in [
+                        mez_agent::StreamingSayEvent::Started {
+                            action_index: 0,
+                            status: mez_agent::SayStatus::Final,
+                            content_type: content_type.to_string(),
+                        },
+                        mez_agent::StreamingSayEvent::TextDelta {
+                            action_index: 0,
+                            text: source.to_string(),
+                        },
+                        mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+                        mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
+                    ] {
+                        service
+                            .ingest_provider_log(
+                                "%1",
+                                "turn-1",
+                                crate::runtime::RuntimeProviderLogInput::Progress(&event),
+                            )
+                            .unwrap();
+                    }
+                    let projection = RuntimeSessionService::build_agent_streaming_say_projection(
+                        service
+                            .take_agent_streaming_say_projection_work("%1", "turn-1")
+                            .unwrap()
+                            .unwrap(),
+                    )
+                    .unwrap();
                     service
-                        .ingest_provider_log(
-                            "%1",
-                            "turn-1",
-                            crate::runtime::RuntimeProviderLogInput::Progress(&event),
-                        )
+                        .apply_agent_streaming_say_projection_result(projection)
                         .unwrap();
                 }
-                let projection = RuntimeSessionService::build_agent_streaming_say_projection(
-                    service
-                        .take_agent_streaming_say_projection_work("%1", "turn-1")
-                        .unwrap()
-                        .unwrap(),
-                )
-                .unwrap();
+                let execution = mez_agent::AgentTurnExecution {
+                    request: runtime_model_request_fixture("turn-1"),
+                    response: mez_agent::ModelResponse {
+                        provider: "runtime-batch".to_string(),
+                        model: "test".to_string(),
+                        raw_text: source.to_string(),
+                        usage: Default::default(),
+                        latest_request_usage: None,
+                        quota_usage: Default::default(),
+                        action_batch: Some(mez_agent::MaapBatch {
+                            rationale: rationale.to_string(),
+                            actions: vec![
+                                mez_agent::AgentAction {
+                                    id: "answer".to_string(),
+                                    payload: mez_agent::AgentActionPayload::Say {
+                                        status: mez_agent::SayStatus::Final,
+                                        text: source.to_string(),
+                                        content_type: content_type.to_string(),
+                                    },
+                                },
+                                mez_agent::AgentAction {
+                                    id: "later".to_string(),
+                                    payload: mez_agent::AgentActionPayload::Say {
+                                        status: mez_agent::SayStatus::Final,
+                                        text: later.to_string(),
+                                        content_type:
+                                            mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                                                .to_string(),
+                                    },
+                                },
+                            ],
+                        }),
+                        provider_transcript_events: Vec::new(),
+                    },
+                    latest_response_usage: Default::default(),
+                    routing_token_usage_by_model: Default::default(),
+                    action_results: Vec::new(),
+                    final_turn: true,
+                    terminal_state: AgentTurnState::Completed,
+                };
                 service
-                    .apply_agent_streaming_say_projection_result(projection)
+                    .ingest_provider_log(
+                        "%1",
+                        "turn-1",
+                        crate::runtime::RuntimeProviderLogInput::Validated(&execution),
+                    )
                     .unwrap();
+                service
+                    .ingest_provider_log(
+                        "%1",
+                        "turn-1",
+                        crate::runtime::RuntimeProviderLogInput::Settled(&execution),
+                    )
+                    .unwrap();
+                let rows = service
+                    .agent_pane_screen("%1")
+                    .unwrap()
+                    .normal_styled_content_lines();
+                let entries = store.inspect_presentation(&conversation_id).unwrap();
+                assert_eq!(
+                    entries
+                        .iter()
+                        .filter(|entry| entry.source_text.as_deref() == Some(rationale))
+                        .count(),
+                    1,
+                    "{case}: {entries:?}"
+                );
+                assert_eq!(
+                    entries
+                        .iter()
+                        .filter(|entry| entry.source_text.as_deref() == Some(source))
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    entries
+                        .iter()
+                        .filter(|entry| entry.source_text.as_deref() == Some(later))
+                        .count(),
+                    1,
+                    "{case}: {entries:?}"
+                );
+                assert_eq!(
+                    entries
+                        .iter()
+                        .filter_map(|entry| entry.source_text.as_deref())
+                        .filter(|text| [rationale, source, later].contains(text))
+                        .collect::<Vec<_>>(),
+                    vec![rationale, source, later],
+                    "{case}: {entries:?}"
+                );
+                settled.push((
+                    rows,
+                    entries
+                        .into_iter()
+                        .filter(|entry| {
+                            [source, rationale, later]
+                                .contains(&entry.source_text.as_deref().unwrap_or(""))
+                        })
+                        .map(|entry| (entry.display_lines, entry.copy_lines))
+                        .collect::<Vec<_>>(),
+                ));
             }
-            let execution = mez_agent::AgentTurnExecution {
-                request: runtime_model_request_fixture("turn-1"),
-                response: mez_agent::ModelResponse {
-                    provider: "runtime-batch".to_string(),
-                    model: "test".to_string(),
-                    raw_text: source.to_string(),
-                    usage: Default::default(),
-                    latest_request_usage: None,
-                    quota_usage: Default::default(),
-                    action_batch: Some(mez_agent::MaapBatch {
-                        rationale: rationale.to_string(),
-                        actions: vec![
-                            mez_agent::AgentAction {
-                                id: "answer".to_string(),
-                                payload: mez_agent::AgentActionPayload::Say {
-                                    status: mez_agent::SayStatus::Final,
-                                    text: source.to_string(),
-                                    content_type: content_type.to_string(),
-                                },
-                            },
-                            mez_agent::AgentAction {
-                                id: "later".to_string(),
-                                payload: mez_agent::AgentActionPayload::Say {
-                                    status: mez_agent::SayStatus::Final,
-                                    text: later.to_string(),
-                                    content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                                        .to_string(),
-                                },
-                            },
-                        ],
-                    }),
-                    provider_transcript_events: Vec::new(),
-                },
-                latest_response_usage: Default::default(),
-                routing_token_usage_by_model: Default::default(),
-                action_results: Vec::new(),
-                final_turn: true,
-                terminal_state: AgentTurnState::Completed,
-            };
-            service
-                .ingest_provider_log(
-                    "%1",
-                    "turn-1",
-                    crate::runtime::RuntimeProviderLogInput::Validated(&execution),
-                )
-                .unwrap();
-            service
-                .ingest_provider_log(
-                    "%1",
-                    "turn-1",
-                    crate::runtime::RuntimeProviderLogInput::Settled(&execution),
-                )
-                .unwrap();
-            let rows = service
-                .agent_pane_screen("%1")
-                .unwrap()
-                .normal_styled_content_lines();
-            let entries = store.inspect_presentation(&conversation_id).unwrap();
-            assert_eq!(
-                entries
-                    .iter()
-                    .filter(|entry| entry.source_text.as_deref() == Some(rationale))
-                    .count(),
-                1,
-                "{case}: {entries:?}"
-            );
-            assert_eq!(
-                entries
-                    .iter()
-                    .filter(|entry| entry.source_text.as_deref() == Some(source))
-                    .count(),
-                1
-            );
-            assert_eq!(
-                entries
-                    .iter()
-                    .filter(|entry| entry.source_text.as_deref() == Some(later))
-                    .count(),
-                1,
-                "{case}: {entries:?}"
-            );
-            assert_eq!(
-                entries
-                    .iter()
-                    .filter_map(|entry| entry.source_text.as_deref())
-                    .filter(|text| [rationale, source, later].contains(text))
-                    .collect::<Vec<_>>(),
-                vec![rationale, source, later],
-                "{case}: {entries:?}"
-            );
-            settled.push((
-                rows,
-                entries
-                    .into_iter()
-                    .filter(|entry| {
-                        [source, rationale, later]
-                            .contains(&entry.source_text.as_deref().unwrap_or(""))
-                    })
-                    .map(|entry| (entry.display_lines, entry.copy_lines))
-                    .collect::<Vec<_>>(),
-            ));
         }
-        assert_eq!(settled[0], settled[1], "{case}");
+        for actual in &settled[1..] {
+            assert_eq!(&settled[0], actual, "{case}");
+        }
     }
 }
 
