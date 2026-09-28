@@ -64,6 +64,7 @@ impl RuntimeSessionService {
                 )?;
             }
             execution.action_results[index] = self.execute_issue_action_for_turn(turn, &action)?;
+            self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, execution)?;
             executed = executed.saturating_add(1);
         }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(

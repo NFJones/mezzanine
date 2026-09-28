@@ -64,6 +64,7 @@ impl RuntimeSessionService {
             let outcome = format!("{:?}", result.status).to_ascii_lowercase();
             self.append_agent_memory_action_audit(turn, &action, &outcome)?;
             execution.action_results[index] = result;
+            self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, execution)?;
             executed = executed.saturating_add(1);
         }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
