@@ -313,6 +313,25 @@ fn specification_lists_all_audit_schema_keys() {
     }
 }
 
+/// Published current-schema declarations must match the executable version;
+/// otherwise a copied project overlay is rejected despite following the docs.
+#[test]
+fn published_current_schema_version_matches_binary() {
+    let version = CURRENT_CONFIG_SCHEMA_VERSION;
+    let spec = include_str!("../../../../../SPEC.md");
+    let reference = include_str!("../../../../../docs/configuration/reference.md");
+    let overview = include_str!("../../../../../docs/configuration/overview.md");
+    let example = include_str!("../../../../../docs/examples/config.toml");
+    assert!(spec.contains(&format!(
+        "schema version {version} is the current implemented configuration schema version"
+    )));
+    assert!(reference.contains(&format!("current config schema version is `{version}`")));
+    assert!(reference.contains(&format!("| `version` | integer | `{version}` |")));
+    assert!(overview.contains(&format!("current schema is version `{version}`")));
+    let example: toml::Value = toml::from_str(example).unwrap();
+    assert_eq!(example["version"].as_integer(), Some(version as i64));
+}
+
 /// Verifies rejects invalid frame display values.
 ///
 /// This regression scenario documents the behavior being protected so a

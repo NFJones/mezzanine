@@ -63,7 +63,7 @@ copy/replace examples such as command-rule arrays, or provider catalog fields
 that are materialized only after authentication; they are not activation
 markers.
 
-The current config schema version is `95`. On launch, Mezzanine migrates an
+The current config schema version is `98`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -74,6 +74,13 @@ The v94-to-v95 primary-config migration removes retired
 slots from active and named theme color tables. It materializes
 `agents.subagent_name_mode = "nonhuman"` only when absent and preserves every
 authored mode value for current-schema validation.
+
+The v95-to-v96 migration promotes backend-specific environment whitelists to
+`permissions.env_whitelist`, preferring an authored shared list, then Bubblewrap,
+then Seatbelt; it removes the backend-specific settings. The v96-to-v97
+migration advances the version without materializing expanded omitted defaults
+or changing authored lists. The v97-to-v98 migration removes
+`host.recover_on_start` while preserving other host settings.
 
 Project overlays can use `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
 `.mezzanine/config.yml`, or `.mezzanine/config.json` under a project directory.
@@ -134,7 +141,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `95` | Config schema version. Do not change this. |
+| `version` | integer | `98` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |

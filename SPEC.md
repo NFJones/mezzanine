@@ -260,7 +260,7 @@ separation with independent terminal-emulation, multiplexer, and
 provider-independent agent crates beneath a product composition crate. Stable
 cross-subsystem identities live in a low-dependency core crate; product policy,
 persistence, transports, host I/O, and cross-crate orchestration remain in the
-composition root. `docs/workspace-architecture.md` records the exact package
+composition root. `docs/contributing/architecture.md` records the exact package
 graph and boundary checks.
 
 ## 5. Session, Client, and Process Lifecycle
@@ -3407,7 +3407,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 95 is the current implemented configuration schema version for this
+schema version 98 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -3429,6 +3429,14 @@ It MUST materialize `agents.subagent_name_mode = "nonhuman"` only when that
 setting is absent. It MUST preserve every authored
 `agents.subagent_name_mode` value so current-schema validation can accept or
 reject that authored value.
+
+The `95 -> 96` migration MUST promote sandbox-specific environment whitelists
+to `permissions.env_whitelist`, preferring an authored shared list, then the
+Bubblewrap list, then the Seatbelt list, and remove the backend-specific leaves.
+The `96 -> 97` migration MUST advance only the version; the expanded omitted
+environment defaults MUST NOT overwrite an authored list. The `97 -> 98`
+migration MUST remove obsolete `host.recover_on_start` while preserving other
+host settings. Current-schema layers MUST reject that removed setting.
 
 The `90 -> 91` migration MUST advance only the schema version. It MUST preserve
 configured and omitted `frames.window.pills.<name>.foreground`,
