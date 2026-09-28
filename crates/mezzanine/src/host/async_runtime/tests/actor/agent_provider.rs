@@ -320,7 +320,7 @@ fn async_actor_applies_agent_provider_completion_events() {
 }
 
 /// Runs the same actor completion with or without optional installed progress.
-async fn actor_provider_completion_case(streamed: bool) -> Vec<String> {
+async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::TerminalStyledLine> {
     let mut service = test_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
@@ -571,18 +571,19 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<String> {
         1,
         "{pane_text}"
     );
+    assert_eq!(
+        pane_text
+            .matches("▐ thinking: test action batch rationale")
+            .count(),
+        1,
+        "{pane_text}"
+    );
     assert_eq!(exit.commands_processed, if streamed { 6 } else { 3 });
     let presented = exit
         .service
         .pane_screen("%1")
         .unwrap()
-        .normal_content_lines()
-        .into_iter()
-        .filter(|line| {
-            line.contains("thinking: test action batch rationale")
-                || line.contains("mez> Typed completion applied.")
-        })
-        .collect();
+        .normal_styled_content_lines();
     exit.service.terminate_all_pane_processes().unwrap();
     presented
 }
