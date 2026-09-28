@@ -6882,6 +6882,8 @@ the complete request check and publishes one atomic epoch. Each attempted
 complete candidate MUST make bounded progress; no failed candidate may publish
 an epoch or resume the provider turn. Exhaustion MUST fail visibly with
 content-free component-size estimates without dropping the original context.
+An additional eligible closed range is not required when the complete refreshed
+request already fits and satisfies the triggering request's reduction rule.
 Before requesting the first summary, a zero allowance for one segment MUST NOT
 be treated as irreducible while later closed, consumed segments remain eligible.
 The planner MAY account for replacing those later segments, but each model

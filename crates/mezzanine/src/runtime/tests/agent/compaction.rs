@@ -212,11 +212,10 @@ fn runtime_context_limit_recovery_skips_earlier_summary_only_segment() {
     assert!(service.agent_provider_task_is_pending("turn-1"));
 }
 
-/// A pre-summary zero budget must stage separate anchored summaries instead
-/// of publishing an earlier summary ahead of exact steering. The first
-/// response cannot resume the turn; the second must retain original order.
+/// A zero planning budget does not require summarizing another segment once
+/// the complete request fits; exact steering and later raw work remain ordered.
 #[test]
-fn runtime_zero_budget_recovery_stages_barrier_separated_segments() {
+fn runtime_zero_budget_recovery_resumes_fitting_first_segment() {
     let mut service = test_runtime_service();
     service.replace_config_layers(vec![ConfigLayer {
         name: "zero-budget-recovery".to_string(),
@@ -279,23 +278,12 @@ fn runtime_zero_budget_recovery_stages_barrier_separated_segments() {
             .unwrap()
     );
     complete_runtime_test_compaction(&mut service, "%1", &first_summary);
-    assert!(!service.agent_provider_task_is_pending("turn-1"));
-    let queued = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        staged, plan, ..
-    } = &queued.target
-    else {
-        panic!("expected staged active-turn compaction")
-    };
-    assert_eq!(staged.as_ref().unwrap().attempts, 1);
+    assert!(service.agent_provider_task_is_pending("turn-1"));
     assert!(
-        plan.replacement_blocks()
-            .iter()
-            .all(|block| block.content.contains("second") || block.content.contains("result"))
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_none()
     );
-    complete_runtime_test_compaction(&mut service, "%1", "Second events summarized.");
     let chronology = service
         .agent_turn_contexts()
         .get("turn-1")
@@ -306,8 +294,8 @@ fn runtime_zero_budget_recovery_stages_barrier_separated_segments() {
         chronology[1].block().content,
         "preserve this exact instruction"
     );
-    assert_eq!(chronology[2].block().content, "Second events summarized.");
-    assert!(service.agent_provider_task_is_pending("turn-1"));
+    assert!(chronology[2].block().content.starts_with("second second"));
+    assert!(chronology[3].block().content.starts_with("result result"));
 }
 
 /// Verifies large bracketed-paste agent prompt input is displayed compactly in
@@ -1310,6 +1298,81 @@ fn runtime_observed_compaction_stages_second_range_before_publication() {
     );
 }
 
+/// A complete refreshed request that already fits must publish its selected
+/// first range even if the planner still sees another eligible closed range.
+#[test]
+fn runtime_observed_compaction_fits_before_staging_another_range() {
+    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        ContextSourceKind::TranscriptAssistant,
+        "second answer",
+        "SECOND_RANGE_SOURCE ".repeat(80),
+        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
+        1,
+        None,
+    )
+    .unwrap()
+    .to_transcript_content();
+    let (mut service, store, turn_id) =
+        queue_observed_input_compaction_with_second_group(Some(second));
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let queued = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap()
+        .clone();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { trigger, .. } =
+        queued.target
+    else {
+        panic!("expected observed-input active turn");
+    };
+    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
+    let projection = mez_agent::ProviderBudgetProjection::new(
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        "runtime-batch",
+    );
+    let plan = (1..20_000)
+        .rev()
+        .find_map(|budget| {
+            mez_agent::plan_model_context_compaction_for_provider_tokens(
+                context,
+                budget,
+                1,
+                context.event_sequence_high_water_mark(),
+                projection,
+            )
+            .ok()
+            .filter(|plan| plan.requires_additional_segments())
+        })
+        .expect("two eligible durable segments must leave a later range");
+    assert!(plan.requires_additional_segments());
+    service.fail_current_agent_compaction_task("%1");
+    assert!(
+        service
+            .queue_agent_active_turn_compaction(
+                &turn_id,
+                queued.model_profile_name,
+                queued.model_profile,
+                trigger,
+                plan,
+            )
+            .unwrap()
+    );
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "30000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    complete_runtime_test_compaction(&mut service, "%1", "short first summary");
+    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
+    assert_eq!(epoch.ranges.len(), 1);
+    assert_eq!(epoch.ranges[0].summary, "short first summary");
+    assert!(service.agent_provider_task_is_pending(&turn_id));
+}
+
 /// A second independently queued observed-input compaction extends a prior
 /// selective epoch without requiring the previous task's frozen source rows.
 /// Each completion publishes only its newly selected durable range.
@@ -2086,10 +2149,10 @@ fn runtime_observed_first_turn_without_archive_recovers_turn_locally() {
     );
 }
 
-/// A first-turn zero-budget plan stages closed segments across exact steering
-/// without inventing durable ranges; only the final complete request resumes.
+/// A first-turn zero-budget plan may resume after one summary when the complete
+/// request fits, while leaving uncommitted source and exact steering intact.
 #[test]
-fn runtime_observed_first_turn_stages_uncommitted_ranges_locally() {
+fn runtime_observed_first_turn_resumes_fitting_local_summary() {
     let mut service = test_runtime_service();
     let store = AgentTranscriptStore::new(temp_root("first-turn-staged-local"));
     service.set_agent_transcript_store(store.clone());
@@ -2142,7 +2205,6 @@ fn runtime_observed_first_turn_stages_uncommitted_ranges_locally() {
     )
     .unwrap();
     assert!(plan.requires_additional_segments());
-    let original = context.clone();
     let profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
     assert!(service.queue_agent_active_turn_compaction(
         "turn-1", "first-turn-staged".to_string(), profile,
@@ -2164,21 +2226,12 @@ fn runtime_observed_first_turn_stages_uncommitted_ranges_locally() {
             .unwrap()
             .is_none()
     );
-    assert_eq!(service.agent_turn_contexts().get("turn-1"), Some(&original));
-    assert!(!service.agent_provider_task_is_pending("turn-1"));
-    let queued = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        staged: Some(staged),
-        ..
-    } = &queued.target
-    else {
-        panic!("second closed segment must be staged");
-    };
-    assert!(staged.projection.is_none());
-    complete_runtime_test_compaction(&mut service, "%1", "x");
     assert!(service.agent_provider_task_is_pending("turn-1"));
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_none()
+    );
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);
     let chronology = service
         .agent_turn_contexts()
@@ -2190,7 +2243,8 @@ fn runtime_observed_first_turn_stages_uncommitted_ranges_locally() {
         chronology[1].block().content,
         "preserve this exact instruction"
     );
-    assert_eq!(chronology[2].block().content, "x");
+    assert!(chronology[2].block().content.starts_with("second second"));
+    assert!(chronology[3].block().content.starts_with("result result"));
     assert!(
         store
             .compaction_epoch(

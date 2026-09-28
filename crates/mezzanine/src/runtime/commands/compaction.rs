@@ -1374,7 +1374,56 @@ impl RuntimeSessionService {
                     &provider_options,
                     estimate_stream,
                 )?;
-                if plan.requires_additional_segments() {
+                // The planner describes additional eligible source, not a
+                // requirement to consume it. Size the complete refreshed
+                // request before staging another unpublished range.
+                let candidate_fits =
+                    if let RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                        observed_input_tokens,
+                        ..
+                    } = trigger
+                    {
+                        let projection = self.prospective_observed_compaction_epoch(
+                            &task,
+                            &context,
+                            plan.as_ref(),
+                            &final_summary,
+                        )?;
+                        if projection.is_some() {
+                            let (tokens, limit, _) = self
+                                .validate_observed_input_compaction_refresh_candidate(
+                                    &task,
+                                    &turn,
+                                    compacted.clone(),
+                                    &final_summary,
+                                    projection,
+                                    observed_input_tokens,
+                                    &model_profile,
+                                    &provider_options,
+                                    api,
+                                    estimate_stream,
+                                )?;
+                            tokens <= limit
+                        } else {
+                            runtime_compaction_safe_input_limit(
+                                model_profile.max_input_tokens(),
+                                model_profile.context_window_tokens(),
+                                model_profile.max_output_tokens(),
+                            )
+                            .is_some_and(|limit| {
+                                retry_estimate.input_tokens <= limit
+                                    && (retry_estimate.input_tokens as u64) < observed_input_tokens
+                            })
+                        }
+                    } else {
+                        runtime_compaction_safe_input_limit(
+                            model_profile.max_input_tokens(),
+                            model_profile.context_window_tokens(),
+                            model_profile.max_output_tokens(),
+                        )
+                        .is_some_and(|limit| retry_estimate.input_tokens <= limit)
+                    };
+                if plan.requires_additional_segments() && !candidate_fits {
                     let attempts = match &task.target {
                         RuntimeAgentCompactionTarget::ActiveTurn { staged, .. } => {
                             staged.as_ref().map_or(0, |state| state.attempts)
