@@ -308,6 +308,16 @@ fn transcript_view_rejects_unterminated_committed_tail() {
             )
             .is_err()
     );
+    assert!(
+        store
+            .conversation_transcript_view(
+                &row.conversation_id,
+                ConversationTranscriptRead::After(0),
+                true,
+                std::slice::from_ref(&row)
+            )
+            .is_err()
+    );
     let _ = fs::remove_dir_all(root);
 }
 

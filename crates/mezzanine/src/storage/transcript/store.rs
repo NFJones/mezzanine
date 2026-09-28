@@ -2655,6 +2655,16 @@ impl AgentTranscriptStore {
         let path = self.existing_transcript_path_for(conversation_id)?;
         let mut file = std_fs::File::open(path)?;
         let mut position = file.metadata()?.len();
+        if position > 0 {
+            file.seek(SeekFrom::End(-1))?;
+            let mut terminator = [0];
+            file.read_exact(&mut terminator)?;
+            if terminator[0] != b'\n' {
+                return Err(MezError::invalid_state(
+                    "transcript archive ends with an incomplete row",
+                ));
+            }
+        }
         let mut prefix = Vec::new();
         let mut entries: Vec<TranscriptEntry> = Vec::new();
         let mut newer_sequence: Option<u64> = None;
