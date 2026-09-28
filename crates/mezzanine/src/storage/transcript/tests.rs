@@ -547,6 +547,52 @@ fn selective_publication_rejects_changed_frozen_source() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// An accepted append receipt is logical recovery evidence, not a committed
+/// execution row eligible for selective epoch publication.
+#[test]
+fn selective_publication_rejects_receipt_only_source() {
+    let root = temp_root("receipt-only-selective-source");
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut row = entry("receipt-only-source", 1, TranscriptRole::System);
+    row.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        mez_agent::ContextSourceKind::TranscriptAssistant,
+        "assistant",
+        "pending source",
+        mez_agent::ContextExecutionGroupId::new("receipt-only-group").unwrap(),
+        1,
+        None,
+    )
+    .unwrap()
+    .to_transcript_content();
+    store
+        .accept_append_receipt(std::slice::from_ref(&row), 1)
+        .unwrap();
+    let epoch = super::AgentCompactionEpoch {
+        version: 2,
+        conversation_id: row.conversation_id.clone(),
+        through_sequence: 0,
+        summary: String::new(),
+        ranges: vec![super::AgentCompactionRange {
+            first_sequence: 1,
+            through_sequence: 1,
+            summary: "model summary".to_string(),
+        }],
+    };
+    assert!(
+        store
+            .save_compaction_ranges_with_proof(epoch, &[row])
+            .is_err()
+    );
+    assert!(
+        store
+            .compaction_epoch("receipt-only-source")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.pending_append_receipts().unwrap().len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A later independent compaction task proves only its newly selected rows;
 /// the already published range is validated as part of the existing epoch,
 /// but its source is not part of the new task's frozen selection.
