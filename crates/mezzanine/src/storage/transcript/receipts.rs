@@ -116,8 +116,15 @@ impl AgentTranscriptStore {
 
     fn read_append_receipts(&self) -> Result<Vec<(PathBuf, AppendReceipt, Vec<TranscriptEntry>)>> {
         let directory = self.append_receipt_directory();
-        if !directory.exists() {
-            return Ok(Vec::new());
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(MezError::invalid_state(
+                    "transcript receipt directory is not a real directory",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
         }
         let mut paths = fs::read_dir(&directory)?
             .map(|result| result.map(|entry| entry.path()))

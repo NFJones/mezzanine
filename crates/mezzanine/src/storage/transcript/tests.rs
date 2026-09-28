@@ -1578,6 +1578,31 @@ fn transcript_store_receipt_settlement_fences_late_generation() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A redirected receipt directory must not carry private transcript content
+/// outside the configured store or be accepted as a recovery source.
+#[cfg(unix)]
+#[test]
+fn transcript_store_rejects_symlinked_receipt_directory() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_root("symlinked-append-receipts");
+    let outside = temp_root("outside-append-receipts");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    symlink(&outside, root.join(".append-receipts")).unwrap();
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("conv1", 1, TranscriptRole::User);
+    assert!(
+        store
+            .accept_append_receipt(std::slice::from_ref(&row), 1)
+            .is_err()
+    );
+    assert!(store.recover_append_receipts().is_err());
+    assert!(fs::read_dir(&outside).unwrap().next().is_none());
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(outside);
+}
+
 /// A damaged accepted receipt cannot be skipped or replayed as a different
 /// batch after restart; its archive remains unchanged for manual recovery.
 #[test]
