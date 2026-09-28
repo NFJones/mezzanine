@@ -931,6 +931,17 @@ mod transcript_settlement_tests {
             },
         );
         service.persistence.take_transcript_effects();
+        let failure = service
+            .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptFailed {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: row.sequence,
+                entries: vec![row.clone()],
+                path: path.with_extension("wrong"),
+                error: "foreign destination".to_string(),
+                retryable: false,
+            })
+            .unwrap();
+        assert!(!failure.applied);
         let transition = service
             .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: row.conversation_id.clone(),
