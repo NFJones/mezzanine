@@ -146,6 +146,137 @@ impl RuntimeSessionService {
         self.presentation
             .agent_deferred_provider_progress
             .retain(|(_, candidate_turn_id, _, _, _)| candidate_turn_id != turn_id);
+        self.presentation
+            .agent_queued_provider_headers
+            .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
+        self.presentation
+            .agent_provider_log_orders
+            .retain(|(_, candidate_turn_id, _, _), _| candidate_turn_id != turn_id);
+        self.presentation
+            .agent_published_provider_headers
+            .retain(|(_, candidate_turn_id, _, _, _)| candidate_turn_id != turn_id);
+    }
+
+    /// Captures an executor-approved header without publishing it ahead of earlier ordinals.
+    pub(crate) fn queue_ordered_provider_header(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        action: &mez_agent::AgentAction,
+    ) -> Result<bool> {
+        let Some(header) = crate::runtime::render::agent_action_execution_display_header(action)
+        else {
+            return Ok(false);
+        };
+        let Some(conversation_id) = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|s| s.session_id.clone())
+        else {
+            return Ok(false);
+        };
+        let group = super::provider_execution::provider_log_execution_group_id(execution)?;
+        let Some(index) = execution.response.action_batch.as_ref().and_then(|batch| {
+            batch
+                .actions
+                .iter()
+                .position(|candidate| candidate.id == action.id)
+        }) else {
+            return Ok(false);
+        };
+        let key = (
+            pane_id.to_string(),
+            execution.request.turn_id.clone(),
+            conversation_id,
+            group,
+            index,
+        );
+        self.presentation
+            .agent_queued_provider_headers
+            .entry(key)
+            .or_insert_with(|| (action.clone(), header));
+        Ok(true)
+    }
+
+    /// Publishes ready executor headers in response order, without delaying execution.
+    pub(crate) fn flush_ordered_provider_headers(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+    ) -> Result<()> {
+        let Some(conversation_id) = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|s| s.session_id.clone())
+        else {
+            return Ok(());
+        };
+        let group = super::provider_execution::provider_log_execution_group_id(execution)?;
+        let owner = (
+            pane_id.to_string(),
+            execution.request.turn_id.clone(),
+            conversation_id,
+            group,
+        );
+        let Some(actions) = self
+            .presentation
+            .agent_provider_log_orders
+            .get(&owner)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        for (index, action) in actions.iter().enumerate() {
+            let key = (
+                owner.0.clone(),
+                owner.1.clone(),
+                owner.2.clone(),
+                owner.3.clone(),
+                index,
+            );
+            if self
+                .presentation
+                .agent_queued_provider_headers
+                .contains_key(&key)
+                && !self
+                    .presentation
+                    .agent_published_provider_headers
+                    .contains(&key)
+            {
+                if actions[..index].iter().any(|prior| {
+                    action_holds_later_log(prior)
+                        && !execution
+                            .action_results
+                            .iter()
+                            .any(|result| result.action_id == prior.id && result.is_terminal())
+                }) {
+                    break;
+                }
+                let Some((approved_action, header)) =
+                    self.presentation.agent_queued_provider_headers.remove(&key)
+                else {
+                    continue;
+                };
+                self.append_agent_action_execution_header_to_terminal_buffer(
+                    pane_id,
+                    &approved_action,
+                    &header,
+                )?;
+                self.presentation
+                    .agent_published_provider_headers
+                    .insert(key);
+                self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
+            } else if action_holds_later_log(action)
+                && !execution
+                    .action_results
+                    .iter()
+                    .any(|result| result.action_id == action.id && result.is_terminal())
+            {
+                break;
+            }
+        }
+        self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
+        Ok(())
     }
 }
 
@@ -285,6 +416,19 @@ impl RuntimeSessionService {
             }
             return Ok(());
         };
+
+        if let Some(session) = self.agent_shell_store().get(pane_id) {
+            let group = super::provider_execution::provider_log_execution_group_id(execution)?;
+            self.presentation
+                .agent_provider_log_orders
+                .entry((
+                    pane_id.to_string(),
+                    execution.request.turn_id.clone(),
+                    session.session_id.clone(),
+                    group,
+                ))
+                .or_insert_with(|| batch.actions.clone());
+        }
 
         let visible_action_texts = runtime_agent_batch_visible_action_texts(batch);
         let streamed_response_was_promoted =

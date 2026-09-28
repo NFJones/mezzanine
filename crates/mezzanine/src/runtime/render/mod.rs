@@ -535,6 +535,15 @@ impl std::ops::DerefMut for RuntimeAgentPromptInputHandle {
     }
 }
 
+/// Pane, turn, conversation, response group and action ordinal for log ordering.
+type RuntimeProviderLogOrdinal = (
+    String,
+    String,
+    String,
+    mez_agent::ContextExecutionGroupId,
+    usize,
+);
+
 #[derive(Debug, Default)]
 pub(crate) struct RuntimePresentationComponent {
     /// Current atomically replaceable presentation configuration.
@@ -610,6 +619,24 @@ pub(crate) struct RuntimePresentationComponent {
         std::collections::BTreeSet<(String, String, String, mez_agent::ContextExecutionGroupId)>,
     /// Deferred progress ordinals already appended for one exact provider response.
     pub(super) agent_deferred_provider_progress: std::collections::BTreeSet<(
+        String,
+        String,
+        String,
+        mez_agent::ContextExecutionGroupId,
+        usize,
+    )>,
+    /// Validated executor headers waiting for preceding action logs to publish.
+    pub(super) agent_queued_provider_headers: std::collections::BTreeMap<
+        RuntimeProviderLogOrdinal,
+        (crate::runtime::AgentAction, String),
+    >,
+    /// Validated response action order, used only to sequence visible logs.
+    pub(super) agent_provider_log_orders: std::collections::BTreeMap<
+        (String, String, String, mez_agent::ContextExecutionGroupId),
+        Vec<crate::runtime::AgentAction>,
+    >,
+    /// Ordinals whose executor-owned headers have been published.
+    pub(super) agent_published_provider_headers: std::collections::BTreeSet<(
         String,
         String,
         String,
@@ -1794,6 +1821,12 @@ impl RuntimePresentationComponent {
         self.agent_settled_provider_log_groups
             .retain(|(candidate_pane_id, _, _, _)| candidate_pane_id != pane_id);
         self.agent_deferred_provider_progress
+            .retain(|(candidate_pane_id, _, _, _, _)| candidate_pane_id != pane_id);
+        self.agent_queued_provider_headers
+            .retain(|(candidate_pane_id, _, _, _, _), _| candidate_pane_id != pane_id);
+        self.agent_provider_log_orders
+            .retain(|(candidate_pane_id, _, _, _), _| candidate_pane_id != pane_id);
+        self.agent_published_provider_headers
             .retain(|(candidate_pane_id, _, _, _, _)| candidate_pane_id != pane_id);
         self.agent_accepted_streaming_headers
             .retain(|(candidate_pane_id, _, _), _| candidate_pane_id != pane_id);
@@ -3514,6 +3547,7 @@ pub(crate) use overlay::{
 };
 #[cfg(test)]
 use overlay::{runtime_agent_shell_markdown_overlay_content, runtime_human_readable_display_lines};
+pub(crate) use presentation::agent_action_execution_display_header;
 use presentation::{
     AgentTerminalPresentationStyle, agent_display_lines_are_error,
     agent_display_lines_are_low_level_status, agent_prompt_error_display_lines,
@@ -3521,11 +3555,11 @@ use presentation::{
 };
 #[cfg(test)]
 use presentation::{
-    agent_action_execution_display_header, agent_action_result_uses_diff_preview,
-    agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
-    readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
-    render_agent_markdown_body_lines, render_command_markdown_body_lines,
-    rendered_line_rendition_at, wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
+    agent_action_result_uses_diff_preview, agent_thinking_display_lines_for_width,
+    command_preview_terminal_rendered_lines, readable_agent_diff_display_lines,
+    readable_agent_diff_display_lines_for_width, render_agent_markdown_body_lines,
+    render_command_markdown_body_lines, rendered_line_rendition_at, wrap_agent_terminal_text,
+    wrapped_prefixed_agent_terminal_lines,
 };
 use time::{runtime_human_system_uptime, runtime_local_datetime_seconds_string};
 
