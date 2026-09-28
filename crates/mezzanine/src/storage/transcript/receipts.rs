@@ -6,6 +6,8 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 use mez_agent::transcript::{TranscriptEntry, validate_conversation_id};
@@ -259,10 +261,11 @@ impl AgentTranscriptStore {
         let bytes = serde_json::to_vec(&receipt).map_err(|error| {
             MezError::invalid_state(format!("transcript receipt encode failed: {error}"))
         })?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&temporary)?;
         set_private_file_permissions(&temporary)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
