@@ -2613,6 +2613,46 @@ mod transcript_settlement_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// A worker failure after row sync but before derived metadata publication
+    /// must reconcile the exact receipt and repair metadata before completion.
+    #[tokio::test]
+    async fn queued_transcript_write_repairs_metadata_after_sync_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-async-transcript-metadata-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let row = TranscriptEntry {
+            conversation_id: "metadata-test".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted".to_string(),
+        };
+        store.fail_transcript_append_before_summary();
+        persist_transcript_entries(store.clone(), vec![row.clone()])
+            .await
+            .unwrap();
+        assert_eq!(
+            store.inspect(&row.conversation_id).unwrap(),
+            vec![row.clone()]
+        );
+        assert!(store.pending_append_receipts().unwrap().is_empty());
+        assert_eq!(
+            store
+                .summary(&row.conversation_id)
+                .unwrap()
+                .unwrap()
+                .entries,
+            1
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// A durable row with the same sequence but different contents is a
     /// permanent conflict, not an uncertain append prefix to replay.
     #[tokio::test]
