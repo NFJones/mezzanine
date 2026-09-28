@@ -1960,6 +1960,38 @@ fn transcript_store_receipt_recovers_overlapping_batches() {
 
 /// A late acknowledgment for an older generation must leave a newer exact
 /// receipt available until its own matching settlement or startup replay.
+/// A lost receipt is not evidence that an append committed. A late duplicate
+/// may be ignored only after its exact rows exist in the durable archive.
+#[test]
+fn transcript_store_missing_receipt_requires_committed_rows() {
+    let root = temp_root("missing-receipt-settlement");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("conv1", 1, TranscriptRole::User);
+    assert!(
+        store
+            .settle_append_receipt(std::slice::from_ref(&row), 1)
+            .is_err()
+    );
+    store
+        .accept_append_receipt(std::slice::from_ref(&row), 1)
+        .unwrap();
+    let receipt =
+        root.join(".append-receipts/conv1-00000000000000000001-00000000000000000001.json");
+    fs::remove_file(&receipt).unwrap();
+    assert!(
+        store
+            .settle_append_receipt(std::slice::from_ref(&row), 1)
+            .is_err()
+    );
+    store.append_many(std::slice::from_ref(&row)).unwrap();
+    store
+        .settle_append_receipt(std::slice::from_ref(&row), 1)
+        .unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A late acknowledgment for an older generation must leave a newer exact
+/// receipt available until its own matching settlement or startup replay.
 #[test]
 fn transcript_store_receipt_settlement_fences_late_generation() {
     let root = temp_root("receipt-late-generation");

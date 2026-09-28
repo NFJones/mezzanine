@@ -390,7 +390,9 @@ impl AgentTranscriptStore {
                     "transcript receipt directory is not a real directory",
                 ));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return self.verify_missing_append_receipt(entries);
+            }
             Err(error) => return Err(error.into()),
         }
         let path = directory.join(receipt.filename());
@@ -401,7 +403,9 @@ impl AgentTranscriptStore {
                     "transcript receipt is not a regular file",
                 ));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return self.verify_missing_append_receipt(entries);
+            }
             Err(error) => return Err(error.into()),
         }
         let stored = fs::read(&path)?;
@@ -435,6 +439,25 @@ impl AgentTranscriptStore {
         }
         fs::remove_file(&path)?;
         fs::File::open(&directory)?.sync_all()?;
+        Ok(())
+    }
+
+    /// Treats an absent receipt as an idempotent late settlement only when the
+    /// entire exact batch is already committed in a valid archive.
+    fn verify_missing_append_receipt(&self, entries: &[TranscriptEntry]) -> Result<()> {
+        let conversation_id = &entries[0].conversation_id;
+        self.validate_restored_transcript(conversation_id)?;
+        let archive = self.inspect(conversation_id)?;
+        if entries.iter().any(|entry| {
+            usize::try_from(entry.sequence - 1)
+                .ok()
+                .and_then(|index| archive.get(index))
+                != Some(entry)
+        }) {
+            return Err(MezError::invalid_state(
+                "missing transcript receipt has uncommitted or conflicting rows",
+            ));
+        }
         Ok(())
     }
 }
