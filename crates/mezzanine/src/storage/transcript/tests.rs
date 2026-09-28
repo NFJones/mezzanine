@@ -201,6 +201,29 @@ fn transcript_view_separates_first_write_from_committed_rows() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A zero-row projection cannot certify an existing damaged archive as sound
+/// merely because it does not need to return any of its committed rows.
+#[test]
+fn transcript_view_zero_latest_rejects_damaged_archive() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("zero-latest-damaged-archive");
+    let store = AgentTranscriptStore::new(root.clone());
+    let second = entry("zero-latest-damaged", 2, TranscriptRole::User);
+    store.append(&second).unwrap();
+    assert!(
+        store
+            .conversation_transcript_view(
+                &second.conversation_id,
+                ConversationTranscriptRead::Latest(0),
+                true,
+                &[]
+            )
+            .is_err()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Bounded replay cannot treat a surviving tail as complete committed history
 /// when the archive has lost its leading row.
 #[test]
