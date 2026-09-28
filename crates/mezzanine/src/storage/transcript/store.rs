@@ -2607,9 +2607,10 @@ impl AgentTranscriptStore {
         }
         let mut first_line = String::new();
         BufReader::new(std_fs::File::open(&path)?).read_line(&mut first_line)?;
-        if !first_line.is_empty()
-            && (decode_transcript_entry(first_line.trim_end_matches(['\r', '\n']))?.sequence != 1)
-        {
+        if !first_line.is_empty() && {
+            let first = decode_transcript_entry(first_line.trim_end_matches(['\r', '\n']))?;
+            first.sequence != 1 || first.conversation_id != conversation_id
+        } {
             return Err(MezError::invalid_state(
                 "transcript archive is missing its leading history",
             ));

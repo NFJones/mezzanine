@@ -234,6 +234,37 @@ fn transcript_view_rejects_missing_committed_prefix_in_latest_read() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A bounded read must reject a sequence-one row belonging to another
+/// conversation even when the tail has the requested owner's content.
+#[test]
+fn transcript_view_rejects_foreign_committed_prefix_in_latest_read() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("latest-foreign-prefix");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("foreign", 1, TranscriptRole::User);
+    let second = entry("target", 2, TranscriptRole::Assistant);
+    let path = store.transcript_path("target").unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let encoded = format!(
+        "{}\n{}\n",
+        encode_transcript_entry(&first).unwrap(),
+        encode_transcript_entry(&second).unwrap()
+    );
+    fs::write(&path, encoded).unwrap();
+    assert!(
+        store
+            .conversation_transcript_view(
+                "target",
+                ConversationTranscriptRead::Latest(1),
+                true,
+                std::slice::from_ref(&second)
+            )
+            .is_err()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Identical outstanding receipts for one first-write row represent one
 /// logical entry, not a missing or conflicting archive prefix.
 #[test]
