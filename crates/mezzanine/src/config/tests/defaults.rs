@@ -577,6 +577,41 @@ fn default_config_matches_documented_example() {
     assert_eq!(generated, documented);
 }
 
+/// The documented optional environment values come from the server-startup
+/// snapshot, while pane evidence supplies shell identity and path authority.
+#[test]
+fn documented_environment_provenance_and_defaults_match_runtime() {
+    let example = include_str!("../../../../../docs/examples/config.toml");
+    let guide = include_str!("../../../../../docs/configuration/permissions-sandbox-and-trust.md");
+    let reference = include_str!("../../../../../docs/configuration/reference.md");
+    let defaults = crate::runtime::ConfiguredSandboxEnvironment::default().requested_names;
+    let expected = ["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"];
+    assert_eq!(defaults, expected);
+    let parsed: toml::Value = toml::from_str(example).unwrap();
+    let listed = parsed["permissions"]["env_whitelist"].as_array().unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    for (name, document) in [
+        ("example", example),
+        ("guide", guide),
+        ("reference", reference),
+    ] {
+        assert!(document.contains("server-startup environment"), "{name}");
+        assert!(document.contains("pane"), "{name}");
+    }
+    assert!(
+        reference.contains(
+            "[\"PATH\", \"HOME\", \"SHELL\", \"TMPDIR\", \"XDG_CACHE_HOME\"]` when omitted"
+        )
+    );
+    assert!(guide.contains("An explicit `[]` forwards none"));
+}
+
 /// Verifies every advertised optional assignment or table can be enabled at
 /// once without producing invalid TOML or an invalid Mezzanine configuration.
 #[test]
