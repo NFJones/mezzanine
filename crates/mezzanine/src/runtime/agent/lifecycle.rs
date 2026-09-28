@@ -112,9 +112,17 @@ impl RuntimeSessionService {
             });
 
         if state == AgentTurnState::Interrupted {
-            self.finalize_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
+            self.ingest_provider_log(
+                pane_id,
+                turn_id,
+                super::presentation::RuntimeProviderLogInput::Interrupted,
+            )?;
         } else if matches!(state, AgentTurnState::Completed | AgentTurnState::Failed) {
-            self.discard_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
+            self.ingest_provider_log(
+                pane_id,
+                turn_id,
+                super::presentation::RuntimeProviderLogInput::Terminal,
+            )?;
         }
 
         if !suppress_exit_output
@@ -297,9 +305,17 @@ impl RuntimeSessionService {
             .is_some_and(|conversation_id| conversation_id != turn.conversation_id);
         let completion_attention_eligible = self.subagent_lineage(&turn.agent_id).is_none();
         if state == AgentTurnState::Interrupted {
-            self.finalize_agent_streaming_say_presentation(&turn.pane_id, Some(&turn.turn_id))?;
+            self.ingest_provider_log(
+                &turn.pane_id,
+                &turn.turn_id,
+                super::presentation::RuntimeProviderLogInput::Interrupted,
+            )?;
         } else if matches!(state, AgentTurnState::Completed | AgentTurnState::Failed) {
-            self.discard_agent_streaming_say_presentation(&turn.pane_id, Some(&turn.turn_id))?;
+            self.ingest_provider_log(
+                &turn.pane_id,
+                &turn.turn_id,
+                super::presentation::RuntimeProviderLogInput::Terminal,
+            )?;
         }
         if pane_present
             && conversation_still_owned

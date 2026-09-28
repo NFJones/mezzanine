@@ -25,6 +25,10 @@ pub(crate) enum RuntimeProviderLogInput<'a> {
     Progress(&'a mez_agent::StreamingSayEvent),
     /// Retire provisional source after the owning caller rejects or loses a response.
     DiscardProvisional,
+    /// Retire ownership after interruption without rewinding already visible rows.
+    Interrupted,
+    /// Remove a still-provisional pane projection when the turn settles.
+    Terminal,
     /// Reconcile installed provisional source with a validated execution.
     Validated(&'a AgentTurnExecution),
     /// Present any validated component not already promoted by reconciliation.
@@ -69,6 +73,14 @@ impl RuntimeSessionService {
             }
             RuntimeProviderLogInput::DiscardProvisional => {
                 self.discard_agent_streaming_say_presentations_for_turn(turn_id)?;
+                Ok(())
+            }
+            RuntimeProviderLogInput::Interrupted => {
+                self.finalize_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
+                Ok(())
+            }
+            RuntimeProviderLogInput::Terminal => {
+                self.discard_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
                 Ok(())
             }
             RuntimeProviderLogInput::Validated(execution) => {
