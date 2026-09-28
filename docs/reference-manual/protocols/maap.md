@@ -45,7 +45,7 @@ family; otherwise the current surface is final for that response.
 
 | Action | Required fields | Contract boundary |
 | --- | --- | --- |
-| `say` | `status`, `content_type`, `text` | Display-only `progress`, `final`, or `blocked` text. Supported plain-text, Markdown, and diff source is rendered while streaming, then validated and promoted in place without truncation or final replay. Commands and patches in text do not execute. |
+| `say` | `status`, `content_type`, `text` | Display-only `progress`, `final`, or `blocked` text. Supported plain-text, Markdown, and diff source may render provisionally while streaming. Field closure and whole-action receipt do not finalize it: exact batch validation and complete current-generation rendering precede permanence; final text following pending runtime-visible work also awaits successful settlement. Commands and patches in text do not execute. |
 | `request_capability` | `capability`, `reason` | When exposed, requests a coarse runtime action family; it is not a user permission request and does not itself grant the family. |
 | `shell_command` | `summary`, `command` | Sends exact local shell input through the effective native or pane shell transport. Optional `interactive`, `stateful`, and `timeout_ms` refine execution. |
 | `apply_patch` | `patch` | The only semantic file-content mutation action; payload uses Mezzanine `*** Begin Patch` format. |

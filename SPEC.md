@@ -2650,6 +2650,60 @@ metadata fields, nested lookalikes, capability/skill controls, private message
 payloads, and every other raw provider field or action payload MUST NOT enter
 this streaming path.
 
+Stream-log lifecycle has distinct boundaries. Field closure means only that
+one allowlisted JSON string is complete; whole-action receipt means the direct
+action object has closed, not that its fields form an accepted action. Rich
+render completion means the last current-generation projection of that
+component has been installed on the pane. Neither receipt nor installation
+finalizes a preview. Visual finalization requires an exact validated batch
+match and that completed projection; authoritative durable promotion also
+requires the relevant runtime acceptance or execution settlement. The actor
+MUST sequence rationale before action ordinals and hold a later received
+action's visible logs until every earlier component crosses its applicable
+render and finalization boundary. An action without previewable source still
+occupies its ordinal until its validated header or settled result passes that
+boundary. Optional provider deltas MUST NOT delay authoritative completion.
+An earlier component suppressed by thinking visibility or exact deduplication
+MUST retire its ordering slot after validation without requiring a pane
+projection or persisting duplicate source; suppression is not visual
+finalization. A component with no visible static header or result likewise
+retires its slot after validation and any required runtime settlement. Live
+command-output tails and executor progress are replaceable overlays outside
+the permanent-component ordering barrier: their updates MUST NOT block later
+validated logs, and their exact owner retires on settlement or cancellation.
+Only finalized rationale, action, and result components are permanent: later
+provider revisions, actions, and unrelated pane writes MUST NOT remove them.
+Source that is merely visible, even if its string or object has closed, remains
+provisional and MAY be removed on malformed or rejected validation, mismatch,
+provider failure, cancellation, retry, claim loss, or interrupted turn. Such
+source MUST NOT authorize execution, prove audit or MMP delivery, enter model
+context, or be restored as a durable presentation record. Reconciliation MAY
+replace only the mutable suffix; it MUST NOT rewind previously finalized
+siblings or intervening durable rows. Resize and replay MUST reflow finalized
+semantic source rather than erase it. Explicit conversation clearing and finite
+terminal history are not rollback. Command-output tails alone remain transient
+replaceable overlays keyed by exact action and transaction ownership.
+
+Component settlement uses the following boundaries. "Exact" below means the
+complete accepted batch matches the component's action ordinal, source and
+visibility; it never means that a field-completion event authorized an action.
+
+| Component | Receipt and render | Validation and finalization | Persistence, fallback and cleanup |
+| --- | --- | --- | --- |
+| Batch rationale | Direct batch string closure; current complete rich projection installed ahead of actions | Exact batch match finalizes its visible source, subject to thinking visibility and deduplication | Persist source once; if no matching projection, render validated source statically; discard only the provisional suffix on rejection or failure |
+| Progress `say` | Direct action object closes; current complete projection installed | Exact action index, status, type and text finalizes the component | Persist once and suppress matching static replay; mismatch uses ordinary validated rendering and removes only its own provisional source |
+| Final or blocked `say` | Direct action object closes; current complete projection installed | Exact validation alone is insufficient while runtime-visible siblings are pending; finalizes only after successful settlement | Persist once after settlement; on denial, failure or cancellation remove its provisional suffix and retain already-finalized siblings |
+| Shell summary and command preview | Each direct string closes, then its current complete projection installs | Exact validated action finalizes each separately; neither claims approval, dispatch or shell completion | Persist each accepted source once; render static fallback when progress is absent; leave result rows to executor settlement |
+| Static action header, including an action with no preview | Complete direct object received; current complete static projection installed | Exact validated action/header finalizes its ordinal, independent of later execution results | Persist accepted header once; mismatch replaces only the mutable header; no header may imply success or suppress a result |
+| Outbound message header | Direct object received; current complete projection installed | Exact validated send and runtime acceptance finalize the sender's acceptance claim, not recipient receipt | Persist the accepted sender row once; denied or failed sends use ordinary result presentation without a delivery claim |
+| Executor result or confirmed mutation diff | Exact attempt/transaction source received; current complete result projection installed | Runtime-owned result or authenticated mutation section settles before finalization; provisional read progress never finalizes | Persist settled semantic source once, including confirmed partial mutations; failure replaces only the unconfirmed result suffix |
+| Command-output tail | Exact turn/action/transaction overlay owner; bounded current projection | Never finalizes, including after the command ends | Never persist; replace or retire only its own overlay without moving finalized rows |
+
+When streaming is unavailable, validated components use the same static
+renderers and finalization gates without fabricated incremental deltas. Finite
+scrollback, semantic resize/reflow, and explicit conversation clearing are not
+provider-driven deletion of finalized records.
+
 For every allowlisted source, Mezzanine MUST decode and apply every source
 character exactly once and in order without dropping or truncating deltas.
 Provider deltas and physical client redraws MAY be coalesced only at bounded
@@ -2730,10 +2784,12 @@ completes successfully. Intervening pane writes retire its provisional screen
 ownership; failure MUST NOT promote its source. Replacement MUST preserve
 static styling, wrapping, copy semantics, action results, and approved dispatch.
 If projection is unavailable, validation fails, or source mismatches cannot be
-reconciled independently, Mezzanine MUST restore the owned pre-stream pane and
-present only validated source through normal renderers. Provider failure, cancellation, retry,
-stale completion, claim loss, or pane/session replacement MUST likewise discard
-unvalidated live state and restore that pre-stream state.
+reconciled independently, Mezzanine MUST remove only the still-provisional
+owned suffix and present validated source through normal renderers. Provider
+failure, cancellation, retry, stale completion, or claim loss MUST likewise
+discard unvalidated live source without removing any finalized component or
+intervening durable pane row. Pane/session replacement retires the old live
+owner; explicit conversation clearing may remove its displayed history.
 Mezzanine MUST NOT impose a total per-turn automatic shell dispatch count cap,
 because broad but finite inspection batches are ordinary agent work. Mezzanine
 MUST still prevent provably duplicate file mutations from replaying after the

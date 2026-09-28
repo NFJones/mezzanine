@@ -42,9 +42,17 @@ visible without a second copy being appended. A matching action header may
 remain while its accepted action is pending, together with matching progress
 text; the action's actual result is still reported separately. A changed header
 can be replaced atomically while matching rationale and progress text stay
-visible. Provisional action previews do not prove execution; rejected source
-does not become an action result. Matching command previews and multiple headers
-can remain visible across acceptance; a final answer following pending actions
+visible. A visible preview is not yet permanent: field closure and whole-action
+receipt do not validate the batch or complete its rich render. Only validated,
+fully rendered components become finalized; result rows additionally require
+their own settlement. Later visible logs wait for earlier visible components to
+finalize; hidden or deduplicated components release their ordering slot after
+validation without a pane projection, while replaceable command-output tails
+and executor progress never hold that permanent-log barrier. Neither failure
+nor a later pane write removes finalized logs. Provisional
+action previews do not prove execution; rejected source does not become an action
+result. Matching command previews and multiple headers can remain visible
+across acceptance; a final answer following pending actions
 stays provisional and is recorded only if those actions complete successfully.
 Failed deferred URL fetches and web searches can enter bounded model correction
 after their in-flight siblings settle. Their results become context rather than
