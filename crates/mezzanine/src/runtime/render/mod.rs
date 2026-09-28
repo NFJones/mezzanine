@@ -605,6 +605,9 @@ pub(crate) struct RuntimePresentationComponent {
     /// Streamed action indices already installed as validated presentation.
     agent_promoted_streaming_say_actions:
         std::collections::BTreeMap<(String, String), std::collections::BTreeSet<usize>>,
+    /// Exact provider responses whose ordinary MAAP source has already settled.
+    pub(super) agent_settled_provider_log_groups:
+        std::collections::BTreeSet<(String, String, String, mez_agent::ContextExecutionGroupId)>,
     /// Accepted headers waiting for their exact execution-owned append.
     agent_accepted_streaming_headers: std::collections::BTreeMap<(String, String, String), String>,
     /// Accepted sender-side message actions already represented in a pane.
@@ -1778,6 +1781,8 @@ impl RuntimePresentationComponent {
         self.agent_pending_final_say_previews.remove(pane_id);
         self.agent_promoted_streaming_say_actions
             .retain(|(candidate_pane_id, _turn_id), _indices| candidate_pane_id != pane_id);
+        self.agent_settled_provider_log_groups
+            .retain(|(candidate_pane_id, _, _, _)| candidate_pane_id != pane_id);
         self.agent_accepted_streaming_headers
             .retain(|(candidate_pane_id, _, _), _| candidate_pane_id != pane_id);
         self.agent_settled_outbound_message_actions

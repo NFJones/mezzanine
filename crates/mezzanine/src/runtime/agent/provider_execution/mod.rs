@@ -14,4 +14,5 @@ mod result_apply;
 mod result_apply_async;
 mod worker;
 
+pub(super) use context::provider_log_execution_group_id;
 pub(crate) use persistence::execute_agent_provider_persistence_work;

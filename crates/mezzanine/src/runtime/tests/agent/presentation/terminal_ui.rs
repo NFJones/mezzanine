@@ -1756,6 +1756,13 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                         crate::runtime::RuntimeProviderLogInput::Settled(&execution),
                     )
                     .unwrap();
+                service
+                    .ingest_provider_log(
+                        "%1",
+                        "turn-1",
+                        crate::runtime::RuntimeProviderLogInput::Settled(&execution),
+                    )
+                    .unwrap();
                 let rows = service
                     .agent_pane_screen("%1")
                     .unwrap()

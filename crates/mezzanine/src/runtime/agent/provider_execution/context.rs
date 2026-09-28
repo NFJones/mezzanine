@@ -42,7 +42,7 @@ impl RuntimeSessionService {
         execution: &mut AgentTurnExecution,
     ) -> Result<()> {
         let identity_content = provider_execution_identity_content(execution);
-        let group_id = provider_execution_group_id(turn, execution, &identity_content)?;
+        let group_id = provider_execution_group_id(&turn.turn_id, execution, &identity_content)?;
         let execution_digest = provider_execution_action_digest(&group_id)?;
         let Some(batch) = execution.response.action_batch.as_mut() else {
             return Ok(());
@@ -175,7 +175,7 @@ impl RuntimeSessionService {
         }
 
         let identity_content = provider_execution_identity_content(execution);
-        let group_id = provider_execution_group_id(turn, execution, &identity_content)?;
+        let group_id = provider_execution_group_id(&turn.turn_id, execution, &identity_content)?;
         let content = assistant_context_content_for_execution(execution);
         let action_ids = execution
             .response
@@ -454,13 +454,21 @@ fn remap_structured_action_id_value(
 /// Exact replay of the same completion produces the same group while two
 /// identical response strings reached from different request chronology remain
 /// distinct because their consumed message sequence differs.
+pub(in crate::runtime::agent) fn provider_log_execution_group_id(
+    execution: &AgentTurnExecution,
+) -> Result<ContextExecutionGroupId> {
+    let identity_content = provider_execution_identity_content(execution);
+    provider_execution_group_id(&execution.request.turn_id, execution, &identity_content)
+}
+
+/// Derives the same group identity used by action-id scoping and chronology.
 fn provider_execution_group_id(
-    turn: &AgentTurnRecord,
+    turn_id: &str,
     execution: &AgentTurnExecution,
     assistant_content: &str,
 ) -> Result<ContextExecutionGroupId> {
     let mut digest = Sha256::new();
-    update_provider_execution_digest(&mut digest, &turn.turn_id);
+    update_provider_execution_digest(&mut digest, turn_id);
     update_provider_execution_digest(&mut digest, &execution.request.provider);
     update_provider_execution_digest(&mut digest, &execution.request.model);
     update_provider_execution_digest(
@@ -485,7 +493,7 @@ fn provider_execution_group_id(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    ContextExecutionGroupId::new(format!("{}:provider-response:{digest}", turn.turn_id))
+    ContextExecutionGroupId::new(format!("{turn_id}:provider-response:{digest}"))
         .map_err(|error| MezError::invalid_state(error.to_string()))
 }
 

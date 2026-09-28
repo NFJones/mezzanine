@@ -90,9 +90,44 @@ impl RuntimeSessionService {
                 Ok(())
             }
             RuntimeProviderLogInput::Settled(execution) => {
-                self.present_agent_response_actions_to_terminal_buffer(pane_id, execution)
+                if turn_id != execution.request.turn_id {
+                    return Ok(());
+                }
+                let Some(conversation_id) = self
+                    .agent_shell_store()
+                    .get(pane_id)
+                    .map(|session| session.session_id.clone())
+                else {
+                    return Ok(());
+                };
+                let group = super::provider_execution::provider_log_execution_group_id(execution)?;
+                let owner = (
+                    pane_id.to_string(),
+                    turn_id.to_string(),
+                    conversation_id,
+                    group,
+                );
+                if self
+                    .presentation
+                    .agent_settled_provider_log_groups
+                    .contains(&owner)
+                {
+                    return Ok(());
+                }
+                self.present_agent_response_actions_to_terminal_buffer(pane_id, execution)?;
+                self.presentation
+                    .agent_settled_provider_log_groups
+                    .insert(owner);
+                Ok(())
             }
         }
+    }
+
+    /// Retires response replay fences after a terminal turn releases ownership.
+    pub(crate) fn clear_settled_provider_log_groups_for_turn(&mut self, turn_id: &str) {
+        self.presentation
+            .agent_settled_provider_log_groups
+            .retain(|(_, candidate_turn_id, _, _)| candidate_turn_id != turn_id);
     }
 }
 

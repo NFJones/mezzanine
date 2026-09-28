@@ -218,6 +218,7 @@ impl RuntimeSessionService {
         let _ = self.retire_action_presentation_progress_for_turn(turn_id);
         self.clear_completed_received_peer_message_presentations_for_turn(turn_id);
         self.clear_settled_outbound_message_actions(turn_id);
+        self.clear_settled_provider_log_groups_for_turn(turn_id);
         self.clear_accepted_streaming_headers_for_turn(turn_id);
         self.clear_pending_final_say_previews_for_turn(turn_id);
         self.agent_turn_contexts_mut().remove(turn_id);
