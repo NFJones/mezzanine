@@ -2290,12 +2290,20 @@ impl AgentTranscriptStore {
         let committed = match committed {
             Ok(rows) => rows,
             Err(error) if error.kind() == MezErrorKind::NotFound && !committed_prefix_required => {
+                let mut next_sequence = 1u64;
+                let mut seen = BTreeMap::new();
+                let invalid_prefix = pending.iter().any(|entry| {
+                    if let Some(previous) = seen.insert(entry.sequence, entry) {
+                        return previous != entry;
+                    }
+                    if entry.sequence != next_sequence {
+                        return true;
+                    }
+                    next_sequence = next_sequence.saturating_add(1);
+                    false
+                });
                 if matches!(read, ConversationTranscriptRead::After(sequence) if sequence > 0)
-                    || pending.first().is_some_and(|entry| entry.sequence != 1)
-                    || pending.windows(2).any(|pair| {
-                        pair[0].sequence.checked_add(1) != Some(pair[1].sequence)
-                            && pair[0] != pair[1]
-                    })
+                    || invalid_prefix
                 {
                     return Err(MezError::invalid_state(
                         "missing transcript cannot be an empty first-write prefix",

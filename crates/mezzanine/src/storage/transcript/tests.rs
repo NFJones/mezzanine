@@ -213,6 +213,52 @@ fn transcript_view_accepts_identical_first_write_receipts() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A repeated multi-row receipt is one logical first-write prefix, while a
+/// conflicting repetition or missing predecessor still fails closed.
+#[test]
+fn transcript_view_merges_repeated_multi_row_first_write_receipts() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("repeated-first-write-batches");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("first-write-batches", 1, TranscriptRole::User);
+    let second = entry("first-write-batches", 2, TranscriptRole::Assistant);
+    let rows = [first.clone(), second.clone(), first.clone(), second.clone()];
+    let view = store
+        .conversation_transcript_view(
+            "first-write-batches",
+            ConversationTranscriptRead::All,
+            false,
+            &rows,
+        )
+        .unwrap();
+    assert!(view.committed.is_empty());
+    assert_eq!(view.logical, vec![first.clone(), second.clone()]);
+    let mut conflicting = rows.to_vec();
+    conflicting[2].content = "conflict".to_string();
+    assert!(
+        store
+            .conversation_transcript_view(
+                "first-write-batches",
+                ConversationTranscriptRead::All,
+                false,
+                &conflicting
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .conversation_transcript_view(
+                "first-write-batches",
+                ConversationTranscriptRead::All,
+                false,
+                std::slice::from_ref(&second)
+            )
+            .is_err()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Restart validation accepts writer-produced large rows while rejecting a
 /// foreign row or an incomplete final record without treating either as history.
 #[test]
