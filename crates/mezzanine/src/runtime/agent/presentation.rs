@@ -128,6 +128,9 @@ impl RuntimeSessionService {
         self.presentation
             .agent_settled_provider_log_groups
             .retain(|(_, candidate_turn_id, _, _)| candidate_turn_id != turn_id);
+        self.presentation
+            .agent_deferred_provider_progress
+            .retain(|(_, candidate_turn_id, _, _, _)| candidate_turn_id != turn_id);
     }
 }
 
@@ -418,6 +421,12 @@ impl RuntimeSessionService {
             return Ok(0);
         }
 
+        let owner = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone());
+        let group = super::provider_execution::provider_log_execution_group_id(execution)?;
+
         let mut emitted = 0usize;
         for (action_index, action) in batch.actions.iter().enumerate() {
             if let AgentActionPayload::Say {
@@ -460,11 +469,36 @@ impl RuntimeSessionService {
                 {
                     continue;
                 }
+                let progress_key = owner.as_ref().map(|conversation_id| {
+                    (
+                        pane_id.to_string(),
+                        execution.request.turn_id.clone(),
+                        conversation_id.clone(),
+                        group.clone(),
+                        action_index,
+                    )
+                });
+                if *status == SayStatus::Progress
+                    && progress_key.as_ref().is_some_and(|key| {
+                        self.presentation
+                            .agent_deferred_provider_progress
+                            .contains(key)
+                    })
+                {
+                    continue;
+                }
                 self.append_agent_assistant_content_to_terminal_buffer(
                     pane_id,
                     text,
                     content_type,
                 )?;
+                if *status == SayStatus::Progress
+                    && let Some(key) = progress_key
+                {
+                    self.presentation
+                        .agent_deferred_provider_progress
+                        .insert(key);
+                }
                 emitted = emitted.saturating_add(1);
             }
         }

@@ -96,6 +96,20 @@ fn runtime_mixed_action_progress_waits_for_preceding_header() {
         "{after}"
     );
     assert_eq!(after.matches("later progress").count(), 1, "{after}");
+    settled.terminal_state = AgentTurnState::Completed;
+    service
+        .present_deferred_agent_say_actions_to_terminal_buffer("%1", &settled)
+        .unwrap();
+    let after_completion = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        after_completion.matches("later progress").count(),
+        1,
+        "{after_completion}"
+    );
 }
 
 /// Verifies progress `say` messages continue through durable assistant

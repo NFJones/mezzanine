@@ -608,6 +608,14 @@ pub(crate) struct RuntimePresentationComponent {
     /// Exact provider responses whose ordinary MAAP source has already settled.
     pub(super) agent_settled_provider_log_groups:
         std::collections::BTreeSet<(String, String, String, mez_agent::ContextExecutionGroupId)>,
+    /// Deferred progress ordinals already appended for one exact provider response.
+    pub(super) agent_deferred_provider_progress: std::collections::BTreeSet<(
+        String,
+        String,
+        String,
+        mez_agent::ContextExecutionGroupId,
+        usize,
+    )>,
     /// Accepted headers waiting for their exact execution-owned append.
     agent_accepted_streaming_headers: std::collections::BTreeMap<(String, String, String), String>,
     /// Accepted sender-side message actions already represented in a pane.
@@ -1785,6 +1793,8 @@ impl RuntimePresentationComponent {
             .retain(|(candidate_pane_id, _turn_id), _indices| candidate_pane_id != pane_id);
         self.agent_settled_provider_log_groups
             .retain(|(candidate_pane_id, _, _, _)| candidate_pane_id != pane_id);
+        self.agent_deferred_provider_progress
+            .retain(|(candidate_pane_id, _, _, _, _)| candidate_pane_id != pane_id);
         self.agent_accepted_streaming_headers
             .retain(|(candidate_pane_id, _, _), _| candidate_pane_id != pane_id);
         self.agent_settled_outbound_message_actions
