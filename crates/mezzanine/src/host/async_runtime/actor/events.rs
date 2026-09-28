@@ -1406,24 +1406,18 @@ impl AsyncRuntimeSessionActor {
         {
             return Ok(RuntimeTransition::default());
         }
-        match &persistence_event {
-            PersistenceEvent::TranscriptCompleted { entries, path, .. } => {
-                if !self
-                    .side_effect_routes
-                    .owns_claimed_transcript(entries, path)
-                {
-                    return Ok(RuntimeTransition::default());
-                }
-            }
-            PersistenceEvent::TranscriptFailed {
-                entries,
-                path,
-                retryable: true,
-                ..
-            } if self
+        if let PersistenceEvent::TranscriptCompleted { entries, path, .. }
+        | PersistenceEvent::TranscriptFailed { entries, path, .. } = &persistence_event
+            && !self
                 .side_effect_routes
-                .owns_claimed_transcript(entries, path) =>
-            {
+                .owns_claimed_transcript(entries, path)
+        {
+            return Ok(RuntimeTransition::default());
+        }
+        match &persistence_event {
+            PersistenceEvent::TranscriptFailed {
+                retryable: true, ..
+            } => {
                 // Reconcile through the sole worker on its next poll, before
                 // later reserved sequences. Stale failures cannot enqueue work.
                 self.side_effect_routes.recover_claimed_transcripts();

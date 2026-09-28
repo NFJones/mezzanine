@@ -135,6 +135,25 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
         .build()
         .unwrap();
     let client = async {
+        let mut unclaimed_failure = RuntimeEventBatch::new();
+        unclaimed_failure.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptFailed {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: row.sequence,
+                entries: vec![row.clone()],
+                path: path.clone(),
+                error: "unclaimed failure".to_string(),
+                retryable: true,
+            },
+        ));
+        assert_eq!(
+            handle
+                .submit_runtime_events(unclaimed_failure)
+                .await
+                .unwrap()
+                .applied,
+            0
+        );
         let mut queued_only = RuntimeEventBatch::new();
         queued_only.push(RuntimeEvent::Persistence(
             crate::runtime::PersistenceEvent::TranscriptCompleted {
