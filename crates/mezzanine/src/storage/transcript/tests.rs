@@ -305,6 +305,16 @@ fn transcript_view_rejects_pending_gap_after_committed_prefix() {
             )
             .is_err()
     );
+    assert!(
+        store
+            .conversation_transcript_view(
+                "pending-gap",
+                ConversationTranscriptRead::Latest(2),
+                true,
+                std::slice::from_ref(&third),
+            )
+            .is_err()
+    );
     let _ = fs::remove_dir_all(root);
 }
 
