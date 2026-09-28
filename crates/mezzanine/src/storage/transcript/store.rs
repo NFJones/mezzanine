@@ -2288,7 +2288,7 @@ impl AgentTranscriptStore {
         pending: &[TranscriptEntry],
     ) -> Result<ConversationTranscriptView> {
         validate_conversation_id(conversation_id)?;
-        if matches!(read, ConversationTranscriptRead::Latest(0)) && committed_prefix_required {
+        if matches!(read, ConversationTranscriptRead::Latest(_)) && committed_prefix_required {
             let path = self.existing_transcript_path_for(conversation_id)?;
             if !path.exists() {
                 return Err(MezError::invalid_state(

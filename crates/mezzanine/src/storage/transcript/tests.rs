@@ -257,6 +257,31 @@ fn transcript_view_rejects_missing_committed_prefix_in_latest_read() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A bounded replay tail cannot certify history with a missing committed
+/// interior row, even when the first and returned last rows are intact.
+#[test]
+fn transcript_view_rejects_interior_committed_gap_in_latest_read() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("latest-interior-gap");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("latest-interior-gap", 1, TranscriptRole::User);
+    let third = entry("latest-interior-gap", 3, TranscriptRole::Assistant);
+    store.append(&first).unwrap();
+    store.append(&third).unwrap();
+    assert!(
+        store
+            .conversation_transcript_view(
+                &first.conversation_id,
+                ConversationTranscriptRead::Latest(1),
+                true,
+                &[]
+            )
+            .is_err()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A bounded read must reject a sequence-one row belonging to another
 /// conversation even when the tail has the requested owner's content.
 #[test]
