@@ -284,6 +284,30 @@ fn transcript_view_rejects_committed_gap_with_pending_row() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Pending rows after a valid committed prefix cannot skip a sequence and
+/// become a model-visible logical history.
+#[test]
+fn transcript_view_rejects_pending_gap_after_committed_prefix() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("pending-gap-after-commit");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("pending-gap", 1, TranscriptRole::User);
+    let third = entry("pending-gap", 3, TranscriptRole::Assistant);
+    store.append(&first).unwrap();
+    assert!(
+        store
+            .conversation_transcript_view(
+                "pending-gap",
+                ConversationTranscriptRead::All,
+                true,
+                std::slice::from_ref(&third),
+            )
+            .is_err()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Restart validation accepts writer-produced large rows while rejecting a
 /// foreign row or an incomplete final record without treating either as history.
 #[test]

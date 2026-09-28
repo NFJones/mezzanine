@@ -2344,6 +2344,16 @@ impl AgentTranscriptStore {
             }
         }
         logical.sort_by_key(|entry| entry.sequence);
+        if matches!(read, ConversationTranscriptRead::All)
+            && (logical.first().is_some_and(|first| first.sequence != 1)
+                || logical
+                    .windows(2)
+                    .any(|pair| pair[0].sequence.checked_add(1) != Some(pair[1].sequence)))
+        {
+            return Err(MezError::invalid_state(
+                "transcript logical history contains a missing sequence",
+            ));
+        }
         if let ConversationTranscriptRead::Latest(count) = read {
             let first = logical.len().saturating_sub(count);
             logical.drain(..first);
