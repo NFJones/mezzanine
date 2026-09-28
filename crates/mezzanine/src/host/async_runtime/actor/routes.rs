@@ -387,6 +387,10 @@ impl RuntimeSideEffectRouter {
             self.persistence.remove(position);
         }
         let claim_id = if matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { .. }) {
+            if self.next_transcript_claim_id == 0 {
+                use rand::RngExt;
+                self.next_transcript_claim_id = rand::rng().random_range(1..=u64::MAX / 2);
+            }
             self.next_transcript_claim_id = self
                 .next_transcript_claim_id
                 .checked_add(1)
@@ -736,14 +740,12 @@ mod transcript_claim_tests {
         let mut route = RuntimeSideEffectRouter::default();
         route.push_persistence(effect.clone());
         route.push_persistence(effect);
-        assert_eq!(
-            route
-                .persistence
-                .iter()
-                .map(|queued| queued.claim_id)
-                .collect::<Vec<_>>(),
-            vec![Some(1), Some(2)]
-        );
+        let ids = route
+            .persistence
+            .iter()
+            .map(|queued| queued.claim_id)
+            .collect::<Vec<_>>();
+        assert!(ids[0].is_some() && ids[0] != ids[1]);
         assert_eq!(route.drain_persistence(2).len(), 2);
         assert_eq!(route.recover_claimed_transcripts(), 2);
         assert_eq!(
@@ -752,9 +754,45 @@ mod transcript_claim_tests {
                 .iter()
                 .map(|queued| queued.recovered_claim)
                 .collect::<Vec<_>>(),
-            vec![Some(1), Some(2)]
+            ids
         );
         assert_eq!(route.recover_claimed_transcripts(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A replacement actor must not reuse an old claim's receipt generation
+    /// for an identical append after process or worker restart.
+    #[test]
+    fn transcript_claim_ids_do_not_restart_at_one() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-route-restart-ids-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let row = TranscriptEntry {
+            conversation_id: "route-restart-ids".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted".to_string(),
+        };
+        let effect = RuntimeSideEffect::PersistTranscriptEntries {
+            path: store.transcript_path(&row.conversation_id).unwrap(),
+            store,
+            entries: vec![row],
+        };
+        let mut first = RuntimeSideEffectRouter::default();
+        let mut replacement = RuntimeSideEffectRouter::default();
+        first.push_persistence(effect.clone());
+        replacement.push_persistence(effect);
+        assert_ne!(
+            first.persistence[0].claim_id,
+            replacement.persistence[0].claim_id
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }
