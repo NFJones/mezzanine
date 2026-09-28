@@ -463,6 +463,51 @@ async fn async_actor_applies_agent_provider_completion_events() {
         assert_eq!(stale.accepted, 1);
         assert_eq!(stale.applied, 0);
 
+        let mut progress = RuntimeEventBatch::new();
+        for event in [
+            mez_agent::StreamingSayEvent::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Final,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: "Typed completion applied.".to_string(),
+            },
+            mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+            mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
+        ] {
+            progress.push(RuntimeEvent::AgentProvider(
+                AgentProviderEvent::StreamingSay {
+                    agent_id: AgentId::opaque(task.agent_id.clone()).unwrap(),
+                    turn_id: task.turn_id.clone(),
+                    pane_id: task.pane_id.clone(),
+                    claim_generation: 1,
+                    event,
+                },
+            ));
+        }
+        assert_eq!(
+            handle
+                .submit_runtime_events(progress)
+                .await
+                .unwrap()
+                .applied,
+            4
+        );
+        let work = handle
+            .take_streaming_say_projection_work(task.pane_id.clone(), task.turn_id.clone())
+            .await
+            .unwrap()
+            .expect("provider progress should project before completion");
+        let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+        assert!(
+            handle
+                .apply_streaming_say_projection(projection)
+                .await
+                .unwrap()
+        );
+
         let report = handle
             .submit_runtime_events(completion(1, execution))
             .await
@@ -495,7 +540,14 @@ async fn async_actor_applies_agent_provider_completion_events() {
         pane_text.contains("Typed completion applied."),
         "{pane_text}"
     );
-    assert_eq!(exit.commands_processed, 3);
+    assert_eq!(
+        pane_text
+            .matches("▐ mez> Typed completion applied.")
+            .count(),
+        1,
+        "{pane_text}"
+    );
+    assert_eq!(exit.commands_processed, 6);
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
