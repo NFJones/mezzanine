@@ -1307,6 +1307,49 @@ fn runtime_compaction_continues_pending_chunk_after_32_responses() {
     assert!(!service.agent_provider_task_is_pending(&turn_id));
 }
 
+/// Two halves of the same repetitive source can have identical text while
+/// representing distinct finite positions; both must reach synthesis.
+#[test]
+fn runtime_compaction_accepts_equal_content_sibling_chunks() {
+    let (mut service, _store, turn_id) = queue_observed_input_compaction_with_exact_history();
+    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let identical = vec![ContextBlock::assistant_event("half", "REPEATED_SOURCE")];
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        current_blocks,
+        pending_blocks,
+        ..
+    } = &mut task.target
+    else {
+        panic!("expected active-turn compaction");
+    };
+    *current_blocks = identical.clone();
+    pending_blocks.push(identical);
+    service.queue_agent_compaction_task(task);
+    complete_runtime_test_compaction(&mut service, "%1", "first half summarized");
+    let second = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("equal-content sibling still owns a distinct source position");
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        current_blocks,
+        pending_blocks,
+        ..
+    } = &second.target
+    else {
+        panic!("expected active-turn compaction");
+    };
+    assert_eq!(current_blocks[0].content, "REPEATED_SOURCE");
+    assert!(pending_blocks.is_empty());
+    complete_runtime_test_compaction(&mut service, "%1", "second half summarized");
+    let synthesis = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("both equal-content halves must reach synthesis");
+    assert!(synthesis.request.messages.iter().any(|message| {
+        message.content.contains("first half summarized")
+            && message.content.contains("second half summarized")
+    }));
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
+}
+
 /// A later active-turn synthesis round cannot repeat or enlarge its previous
 /// source; terminal failure leaves durable replay unchanged.
 #[test]
@@ -1624,6 +1667,15 @@ fn runtime_observed_zero_budget_stages_durable_ranges() {
             )
             .unwrap()
     );
+    let mut first_range = service.take_pending_agent_compaction_task("%1").unwrap();
+    if let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        synthesis_source_bytes,
+        ..
+    } = &mut first_range.target
+    {
+        *synthesis_source_bytes = Some(1);
+    }
+    service.queue_agent_compaction_task(first_range);
     complete_runtime_test_compaction(&mut service, "%1", "x");
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
     assert_eq!(service.agent_turn_contexts().get(&turn_id), Some(&original));
@@ -1633,12 +1685,14 @@ fn runtime_observed_zero_budget_stages_durable_ranges() {
         .expect("later durable segment queued");
     let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
         staged: Some(staged),
+        synthesis_source_bytes,
         ..
     } = &retry.target
     else {
         panic!("first summary must remain provisional")
     };
     assert_eq!(staged.attempts, 1);
+    assert_eq!(*synthesis_source_bytes, None);
     service
         .agent_turn_contexts_mut()
         .get_mut(&turn_id)
@@ -3451,8 +3505,13 @@ max_input_tokens = 20000
     } = &mut initial_task.target
     {
         *compaction_backoff_attempt = mez_agent::DEFAULT_PROVIDER_RETRY_POLICY.max_attempts;
-        *rejected_request_stream = Some(false);
+        assert!(rejected_request_stream.is_none());
     }
+    initial_task.compaction_request_shape = Some((
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        Default::default(),
+        false,
+    ));
     service.claim_agent_compaction_task_state("%1", initial_task);
 
     assert!(

@@ -1178,7 +1178,6 @@ impl RuntimeSessionService {
             if matches!(task.target, RuntimeAgentCompactionTarget::ActiveTurn { .. }) {
                 let (next_blocks, final_summary) = {
                     let RuntimeAgentCompactionTarget::ActiveTurn {
-                        current_blocks,
                         pending_blocks,
                         completed_summaries,
                         synthesis_source_bytes,
@@ -1193,7 +1192,7 @@ impl RuntimeSessionService {
                     })?;
                     completed_summaries.push(summary);
                     if let Some(blocks) = pending_blocks.pop() {
-                        if blocks.is_empty() || blocks == *current_blocks {
+                        if blocks.is_empty() {
                             return Err(MezError::invalid_state(
                                 "active-turn compactor pending source did not advance",
                             ));
@@ -1489,6 +1488,7 @@ impl RuntimeSessionService {
                         final_request_retry,
                         completed_summaries,
                         pending_blocks,
+                        synthesis_source_bytes,
                         ..
                     } = &mut task.target
                     {
@@ -1506,6 +1506,7 @@ impl RuntimeSessionService {
                         final_request_retry.summary_ceiling = None;
                         completed_summaries.clear();
                         pending_blocks.clear();
+                        *synthesis_source_bytes = None;
                         let blocks = runtime_redact_compaction_blocks(plan.replacement_blocks());
                         runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
                         self.queue_agent_compaction_task(task.clone());
@@ -1733,6 +1734,7 @@ impl RuntimeSessionService {
                                     final_request_retry,
                                     completed_summaries,
                                     pending_blocks,
+                                    synthesis_source_bytes,
                                     ..
                                 } = &mut task.target
                                 else {
@@ -1753,6 +1755,7 @@ impl RuntimeSessionService {
                                 final_request_retry.summary_ceiling = None;
                                 completed_summaries.clear();
                                 pending_blocks.clear();
+                                *synthesis_source_bytes = None;
                                 let blocks =
                                     runtime_redact_compaction_blocks(plan.replacement_blocks());
                                 runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
@@ -2579,17 +2582,17 @@ impl RuntimeSessionService {
                     }
                 }
                 let failed_request_bytes = {
-                    let RuntimeAgentCompactionTarget::ActiveTurn {
-                        rejected_request_stream,
-                        ..
-                    } = &task.target
-                    else {
-                        unreachable!("active-turn target was matched above");
-                    };
-                    runtime_openai_compaction_request_bytes(
+                    let (api, options, stream) =
+                        task.compaction_request_shape.as_ref().ok_or_else(|| {
+                            MezError::invalid_state("compactor request wire shape is unavailable")
+                        })?;
+                    mez_agent::provider_request_input_estimate(
                         &task.request,
-                        *rejected_request_stream,
+                        *api,
+                        options,
+                        *stream,
                     )?
+                    .wire_bytes
                 };
                 let mut blocks = {
                     let RuntimeAgentCompactionTarget::ActiveTurn {
@@ -2608,23 +2611,18 @@ impl RuntimeSessionService {
                 while let Some((first, second)) = runtime_split_compaction_blocks(&blocks) {
                     queued_siblings.push(second);
                     runtime_rebuild_active_turn_compaction_request(&mut task, first.clone())?;
-                    let candidate_bytes = {
-                        let RuntimeAgentCompactionTarget::ActiveTurn {
-                            rejected_request_stream,
-                            ..
-                        } = &task.target
-                        else {
-                            unreachable!("active-turn target was matched above");
-                        };
-                        runtime_openai_compaction_request_bytes(
-                            &task.request,
-                            *rejected_request_stream,
-                        )?
-                    };
-                    if failed_request_bytes
-                        .zip(candidate_bytes)
-                        .is_some_and(|(failed, candidate)| candidate < failed)
-                    {
+                    let (api, options, stream) =
+                        task.compaction_request_shape.as_ref().ok_or_else(|| {
+                            MezError::invalid_state("compactor request wire shape is unavailable")
+                        })?;
+                    let candidate_bytes = mez_agent::provider_request_input_estimate(
+                        &task.request,
+                        *api,
+                        options,
+                        *stream,
+                    )?
+                    .wire_bytes;
+                    if candidate_bytes < failed_request_bytes {
                         retry_ready = true;
                         break;
                     }
