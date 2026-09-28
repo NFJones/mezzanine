@@ -2477,6 +2477,41 @@ mod transcript_settlement_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// A later identical claim has a distinct durable generation; a worker
+    /// processing the old claim must not retire the later receipt.
+    #[tokio::test]
+    async fn queued_transcript_write_preserves_newer_identical_receipt() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-async-transcript-newer-receipt-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let row = TranscriptEntry {
+            conversation_id: "newer-receipt".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted".to_string(),
+        };
+        store
+            .accept_append_receipt(std::slice::from_ref(&row), 2)
+            .unwrap();
+        persist_transcript_entries(store.clone(), vec![row.clone()])
+            .await
+            .unwrap();
+        assert_eq!(
+            store.pending_append_receipts().unwrap(),
+            vec![vec![row.clone()]]
+        );
+        store.recover_append_receipts().unwrap();
+        assert_eq!(store.inspect(&row.conversation_id).unwrap(), vec![row]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// Two transient precommit failures leave the worker's exact receipt
     /// available for restart recovery without repeating a provider action.
     #[tokio::test]
