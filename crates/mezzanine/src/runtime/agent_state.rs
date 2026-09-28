@@ -626,6 +626,8 @@ pub struct RuntimeConversationCompactionChunks {
     pub pending: Vec<String>,
     /// Model-authored summaries awaiting final synthesis.
     pub summaries: Vec<String>,
+    /// Length of the prior synthesis source, used to reject nonreducing rounds.
+    pub synthesis_source_bytes: Option<usize>,
     /// Number of provider context-limit retries in this recursive operation.
     pub failures: u32,
     /// Total model responses consumed by this operation.

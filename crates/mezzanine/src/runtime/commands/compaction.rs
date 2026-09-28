@@ -37,9 +37,7 @@ use crate::runtime::{
 };
 use crate::security::auth::AuthProfileCredentialSource;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
-use mez_agent::{
-    DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorRetryClass, apply_model_context_compaction_plan,
-};
+use mez_agent::{ProviderErrorRetryClass, apply_model_context_compaction_plan};
 
 /// Content-free component estimates for a failed complete provider request.
 fn runtime_compaction_candidate_size_diagnostic(
@@ -980,11 +978,6 @@ impl RuntimeSessionService {
                             "conversation compactor temporary source is unavailable",
                         )
                     })?;
-                    if chunks.pending.len() >= 32 {
-                        return Err(MezError::invalid_state(
-                            "conversation compactor exceeded temporary chunk limit",
-                        ));
-                    }
                     chunks.pending.push(second);
                     runtime_rebuild_conversation_compaction_request(&mut task, first)?;
                     continue;
@@ -992,7 +985,6 @@ impl RuntimeSessionService {
                 let RuntimeAgentCompactionTarget::ActiveTurn {
                     current_blocks,
                     pending_blocks,
-                    completed_responses,
                     ..
                 } = &mut task.target
                 else {
@@ -1001,14 +993,6 @@ impl RuntimeSessionService {
                         estimate.input_tokens
                     )));
                 };
-                if !runtime_active_turn_compaction_can_split(
-                    *completed_responses,
-                    pending_blocks.len(),
-                ) {
-                    return Err(MezError::invalid_state(
-                        "active-turn compactor exceeded temporary chunk limit",
-                    ));
-                }
                 let Some((first, second)) = runtime_split_compaction_blocks(current_blocks) else {
                     return Err(MezError::invalid_state(format!(
                         "active-turn compactor request cannot be split below configured input cap: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
@@ -1160,12 +1144,9 @@ impl RuntimeSessionService {
         let application = (|| -> Result<()> {
             let summary = runtime_model_compaction_summary_from_response(&response)?;
             if let Some(chunks) = task.conversation_chunks.as_mut() {
-                chunks.completed = chunks.completed.saturating_add(1);
-                if chunks.completed > 32 {
-                    return Err(MezError::invalid_state(
-                        "conversation compactor exceeded recursive response limit",
-                    ));
-                }
+                chunks.completed = chunks.completed.checked_add(1).ok_or_else(|| {
+                    MezError::invalid_state("conversation compactor response count overflow")
+                })?;
                 chunks.summaries.push(summary.clone());
                 if let Some(next) = chunks.pending.pop() {
                     runtime_rebuild_conversation_compaction_request(&mut task, next)?;
@@ -1182,6 +1163,22 @@ impl RuntimeSessionService {
                         })
                         .collect::<Vec<_>>()
                         .join("\n\n");
+                    if synthesis.len() >= chunks.current.len()
+                        && chunks.synthesis_source_bytes.is_some()
+                    {
+                        return Err(MezError::invalid_state(
+                            "conversation compactor synthesis did not reduce its source",
+                        ));
+                    }
+                    if chunks
+                        .synthesis_source_bytes
+                        .is_some_and(|previous| synthesis.len() >= previous)
+                    {
+                        return Err(MezError::invalid_state(
+                            "conversation compactor synthesis did not make progress",
+                        ));
+                    }
+                    chunks.synthesis_source_bytes = Some(synthesis.len());
                     chunks.summaries.clear();
                     runtime_rebuild_conversation_compaction_request(&mut task, synthesis)?;
                     self.queue_agent_compaction_task(task.clone());
@@ -1191,7 +1188,7 @@ impl RuntimeSessionService {
             if matches!(task.target, RuntimeAgentCompactionTarget::ActiveTurn { .. }) {
                 let (next_blocks, final_summary) = {
                     let RuntimeAgentCompactionTarget::ActiveTurn {
-                        current_blocks: _,
+                        current_blocks,
                         pending_blocks,
                         completed_summaries,
                         completed_responses,
@@ -1200,14 +1197,16 @@ impl RuntimeSessionService {
                     else {
                         unreachable!("active-turn target was matched above");
                     };
-                    *completed_responses = completed_responses.saturating_add(1);
-                    if *completed_responses > 32 {
-                        return Err(MezError::invalid_state(
-                            "active-turn compactor exceeded recursive response limit",
-                        ));
-                    }
+                    *completed_responses = completed_responses.checked_add(1).ok_or_else(|| {
+                        MezError::invalid_state("active-turn compactor response count overflow")
+                    })?;
                     completed_summaries.push(summary);
                     if let Some(blocks) = pending_blocks.pop() {
+                        if blocks.is_empty() || blocks == *current_blocks {
+                            return Err(MezError::invalid_state(
+                                "active-turn compactor pending source did not advance",
+                            ));
+                        }
                         (Some(blocks), None)
                     } else if completed_summaries.len() == 1 {
                         (None, completed_summaries.pop())
@@ -2492,10 +2491,10 @@ impl RuntimeSessionService {
                         "conversation compactor temporary source is unavailable",
                     )
                 })?;
-                if chunks.failures < DEFAULT_PROVIDER_RETRY_POLICY.max_attempts
-                    && chunks.pending.len() < 32
                 {
-                    chunks.failures = chunks.failures.saturating_add(1);
+                    chunks.failures = chunks.failures.checked_add(1).ok_or_else(|| {
+                        MezError::invalid_state("conversation compactor backoff count overflow")
+                    })?;
                     let mut source = chunks.current.clone();
                     let mut siblings = Vec::new();
                     while let Some((first, second)) =
@@ -2516,12 +2515,9 @@ impl RuntimeSessionService {
                                     "conversation compactor temporary source is unavailable",
                                 )
                             })?;
-                            if chunks.pending.len().saturating_add(siblings.len()) <= 32 {
-                                chunks.pending.extend(siblings);
-                                self.queue_agent_compaction_task(task);
-                                return Ok(true);
-                            }
-                            break;
+                            chunks.pending.extend(siblings);
+                            self.queue_agent_compaction_task(task);
+                            return Ok(true);
                         }
                         source = first;
                     }
@@ -2609,30 +2605,12 @@ impl RuntimeSessionService {
                     else {
                         unreachable!("active-turn target was matched above");
                     };
-                    if *compaction_backoff_attempt >= DEFAULT_PROVIDER_RETRY_POLICY.max_attempts {
-                        Vec::new()
-                    } else {
-                        *compaction_backoff_attempt = compaction_backoff_attempt.saturating_add(1);
-                        current_blocks.clone()
-                    }
+                    *compaction_backoff_attempt = compaction_backoff_attempt.saturating_add(1);
+                    current_blocks.clone()
                 };
                 let mut queued_siblings = Vec::new();
                 let mut retry_ready = false;
                 while let Some((first, second)) = runtime_split_compaction_blocks(&blocks) {
-                    let can_split = match &task.target {
-                        RuntimeAgentCompactionTarget::ActiveTurn {
-                            pending_blocks,
-                            completed_responses,
-                            ..
-                        } => runtime_active_turn_compaction_can_split(
-                            *completed_responses,
-                            pending_blocks.len().saturating_add(queued_siblings.len()),
-                        ),
-                        RuntimeAgentCompactionTarget::Conversation => false,
-                    };
-                    if !can_split {
-                        break;
-                    }
                     queued_siblings.push(second);
                     runtime_rebuild_active_turn_compaction_request(&mut task, first.clone())?;
                     let candidate_bytes = {
@@ -2650,7 +2628,7 @@ impl RuntimeSessionService {
                     };
                     if failed_request_bytes
                         .zip(candidate_bytes)
-                        .is_none_or(|(failed, candidate)| candidate < failed)
+                        .is_some_and(|(failed, candidate)| candidate < failed)
                     {
                         retry_ready = true;
                         break;
@@ -2943,6 +2921,7 @@ fn runtime_prepare_conversation_compaction_chunks(
             current,
             pending: Vec::new(),
             summaries: Vec::new(),
+            synthesis_source_bytes: None,
             failures: 0,
             completed: 0,
         });
@@ -3024,15 +3003,6 @@ fn runtime_model_compaction_request_for_blocks(
         &source_context,
         allowed_actions,
     )
-}
-
-/// Leaves one response for the current chunk and one for final synthesis.
-/// The same budget applies to configured-cap and provider-rejection splits.
-fn runtime_active_turn_compaction_can_split(completed_responses: usize, pending: usize) -> bool {
-    completed_responses
-        .saturating_add(pending)
-        .saturating_add(3)
-        <= 32
 }
 
 /// Splits only temporary compactor input while leaving the atomic source plan unchanged.
@@ -3543,17 +3513,6 @@ pub(super) fn runtime_transcript_role_name(role: TranscriptRole) -> &'static str
 #[cfg(test)]
 mod size_diagnostic_tests {
     use super::*;
-
-    /// Splitting reserves dispatches for every pending chunk plus one final
-    /// synthesis even when earlier model responses have used the budget.
-    #[test]
-    fn active_turn_chunk_limit_reserves_final_synthesis() {
-        assert!(runtime_active_turn_compaction_can_split(0, 29));
-        assert!(!runtime_active_turn_compaction_can_split(0, 30));
-        assert!(runtime_active_turn_compaction_can_split(12, 17));
-        assert!(!runtime_active_turn_compaction_can_split(12, 18));
-        assert!(!runtime_active_turn_compaction_can_split(usize::MAX, 0));
-    }
 
     /// A single oversized source can be split repeatedly without cutting a
     /// Unicode scalar or losing its final sentinel between temporary chunks.

@@ -6897,8 +6897,12 @@ each additional segment MUST select strictly later closed event identities than
 the preceding range. An arbitrary total segment count MUST NOT stop such
 forward progress.
 Temporary compactor-source splitting MUST preserve all frozen source bytes at
-UTF-8 boundaries and bound its total requests, including final synthesis.
-Exhaustion MUST NOT publish a partial summary or resume settled execution.
+UTF-8 boundaries. Each temporary split MUST strictly shorten the request's
+current source while retaining the ordered remainder, and every subsequent
+synthesis round MUST reduce its prior synthesis source. An arbitrary total
+chunk, response, or context-limit backoff count MUST NOT stop demonstrable
+forward progress; per-request limits and timeouts still apply. Exhaustion or
+no progress MUST NOT publish a partial summary or resume settled execution.
 Provider-limit and manual compaction MUST expose at most one model-visible
 compaction block per eligible exact-barrier-delimited segment. A prior
 summary-only segment MUST NOT prevent selecting later closed, consumed history

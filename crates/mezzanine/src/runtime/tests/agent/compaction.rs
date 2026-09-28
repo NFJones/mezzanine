@@ -1268,6 +1268,45 @@ fn runtime_observed_compaction_allows_fourth_improving_final_retry() {
     assert!(!service.agent_provider_task_is_pending(&turn_id));
 }
 
+/// A completed temporary chunk advances to a distinct pending source even
+/// after 32 earlier responses; the count alone cannot terminate recovery.
+#[test]
+fn runtime_compaction_continues_pending_chunk_after_32_responses() {
+    let (mut service, _store, turn_id) = queue_observed_input_compaction_with_exact_history();
+    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        current_blocks,
+        pending_blocks,
+        completed_responses,
+        ..
+    } = &mut task.target
+    else {
+        panic!("expected active-turn compaction");
+    };
+    *completed_responses = 32;
+    pending_blocks.push(vec![ContextBlock::assistant_event(
+        "pending source",
+        "DISTINCT_PENDING_CHUNK",
+    )]);
+    assert!(!current_blocks.is_empty());
+    service.queue_agent_compaction_task(task);
+    complete_runtime_test_compaction(&mut service, "%1", "first temporary summary");
+    let next = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("finite pending source must continue beyond 32 responses");
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        completed_responses,
+        current_blocks,
+        ..
+    } = &next.target
+    else {
+        panic!("expected active-turn compaction");
+    };
+    assert_eq!(*completed_responses, 33);
+    assert_eq!(current_blocks[0].content, "DISTINCT_PENDING_CHUNK");
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
+}
+
 /// A second closed segment remains provisional until both anchored summaries
 /// fit the complete refreshed request and can publish as one epoch.
 #[test]
@@ -3363,6 +3402,16 @@ max_input_tokens = 20000
             .len();
     assert!(initial_source.contains("older-backoff-marker"));
     assert!(initial_source.contains("newer-exact-marker"));
+    let mut initial_task = initial_task;
+    if let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        compaction_backoff_attempt,
+        rejected_request_stream,
+        ..
+    } = &mut initial_task.target
+    {
+        *compaction_backoff_attempt = mez_agent::DEFAULT_PROVIDER_RETRY_POLICY.max_attempts;
+        *rejected_request_stream = Some(false);
+    }
     service.claim_agent_compaction_task_state("%1", initial_task);
 
     assert!(
@@ -3410,7 +3459,10 @@ max_input_tokens = 20000
     else {
         panic!("expected active-turn compaction target");
     };
-    assert_eq!(*compaction_backoff_attempt, 1);
+    assert_eq!(
+        *compaction_backoff_attempt,
+        mez_agent::DEFAULT_PROVIDER_RETRY_POLICY.max_attempts + 1
+    );
     assert!(plan.retained_tail().is_empty());
     assert!(
         plan.replacement_blocks()
@@ -5741,7 +5793,7 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
         false,
     )
     .unwrap();
-    let cap = 25_000;
+    let cap = 1_500;
     assert!(estimate.input_tokens > cap, "{estimate:?}");
     service
         .pending_agent_compaction_task_mut_for_tests("%1")
@@ -5779,6 +5831,9 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
     );
     let mut fragments = Vec::new();
     let mut current = dispatch.task;
+    // Prior completed responses are diagnostic, not an admission ceiling for
+    // the finite frozen chunks still owned by this compaction epoch.
+    current.conversation_chunks.as_mut().unwrap().completed = 32;
     let logical_epoch = current.compaction_epoch;
     let steering = service
         .execute_agent_shell_command(&primary, "keep steering across chunks")
@@ -5787,7 +5842,7 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
         steering.contains("\"command\":\"compacting\""),
         "{steering}"
     );
-    for attempt in 0..32 {
+    for attempt in 0..128 {
         assert_eq!(current.compaction_epoch, logical_epoch);
         let source = current.request.messages.last().unwrap().content.clone();
         let synthesis = source.contains("Chunk 1 summary:");
@@ -5799,6 +5854,15 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
         } else {
             "bounded chunk summary"
         };
+        if synthesis {
+            // The small cap exercised every source chunk; give the complete
+            // post-compaction request its ordinary input allowance.
+            current
+                .model_profile
+                .provider_options
+                .insert("max_input_tokens".to_string(), "25000".to_string());
+            service.claim_agent_compaction_task_state("%1", current.clone());
+        }
         assert!(
             service
                 .apply_agent_compaction_transition(
@@ -5829,6 +5893,10 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
             .expect("next bounded chunk or synthesis")
             .task;
     }
+    assert!(
+        fragments.len() > 32,
+        "expected more than 32 finite source chunks"
+    );
     assert_eq!(fragments.concat(), original_source);
     assert!(
         store
@@ -5888,7 +5956,17 @@ fn runtime_manual_compaction_recovers_provider_context_limit() {
         &primary,
     );
     assert!(compact.contains("state=queued"), "{compact}");
-    let task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
+    task.conversation_chunks = Some(
+        crate::runtime::agent_state::RuntimeConversationCompactionChunks {
+            current: task.request.messages.last().unwrap().content.clone(),
+            pending: Vec::new(),
+            summaries: Vec::new(),
+            synthesis_source_bytes: None,
+            failures: mez_agent::DEFAULT_PROVIDER_RETRY_POLICY.max_attempts,
+            completed: 0,
+        },
+    );
     let logical_epoch = task.compaction_epoch;
     let task_generation = task.task_generation;
     let previous_bytes = mez_agent::openai_responses_request_body_with_stream(&task.request, false)
@@ -5922,6 +6000,10 @@ fn runtime_manual_compaction_recovers_provider_context_limit() {
             .pending_agent_compaction_task_for_tests("%1")
             .expect("smaller manual compactor request");
         assert_eq!(retry.compaction_epoch, logical_epoch);
+        assert_eq!(
+            retry.conversation_chunks.as_ref().unwrap().failures,
+            mez_agent::DEFAULT_PROVIDER_RETRY_POLICY.max_attempts + 1
+        );
         mez_agent::openai_responses_request_body_with_stream(&retry.request, false)
             .unwrap()
             .len()
