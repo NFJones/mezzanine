@@ -2361,6 +2361,29 @@ fn transcript_store_append_many_rejects_gapped_durable_history() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A new append cannot extend a valid-looking tail when an older interior
+/// row is missing from the committed archive.
+#[test]
+fn transcript_store_append_many_rejects_interior_gap_before_new_row() {
+    let root = temp_root("append-many-interior-gap");
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("conv1", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .append(&entry("conv1", 3, TranscriptRole::Assistant))
+        .unwrap();
+    let path = store.transcript_path("conv1").unwrap();
+    let before = fs::read(&path).unwrap();
+    assert!(
+        store
+            .append_many(&[entry("conv1", 4, TranscriptRole::Tool)])
+            .is_err()
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// An exact row in a suffix cannot prove that missing earlier archive rows
 /// survived an uncertain write.
 #[test]

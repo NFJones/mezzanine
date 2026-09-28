@@ -1066,6 +1066,10 @@ impl AgentTranscriptStore {
                         "transcript archive is missing its leading history",
                     ));
                 }
+                // A sound first row and tail do not prove the interior survived.
+                // Worker appends run off-actor; validate the complete archive
+                // before extending it or acknowledging a matching receipt.
+                self.validate_restored_transcript(&conversation_id)?;
                 let latest = self.inspect_latest_entries(&conversation_id, 1)?;
                 if latest
                     .last()
