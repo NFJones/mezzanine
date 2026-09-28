@@ -313,9 +313,9 @@ impl AgentTranscriptStore {
             .map(|(_, receipt, _)| receipt.conversation_id.as_str())
             .collect::<std::collections::BTreeSet<_>>()
         {
-            match self.inspect(conversation_id) {
+            let committed_count = match self.inspect(conversation_id) {
                 Ok(durable) => {
-                    self.validate_restored_transcript(conversation_id)?;
+                    let count = self.validate_restored_transcript(conversation_id)?;
                     for row in durable {
                         if claimed
                             .get(&(conversation_id, row.sequence))
@@ -326,9 +326,25 @@ impl AgentTranscriptStore {
                             ));
                         }
                     }
+                    count
                 }
-                Err(error) if error.kind() == MezErrorKind::NotFound => {}
+                Err(error) if error.kind() == MezErrorKind::NotFound => 0,
                 Err(error) => return Err(error),
+            };
+            let mut next = committed_count
+                .checked_add(1)
+                .ok_or_else(|| MezError::invalid_state("transcript recovery sequence overflow"))?;
+            for (&(_, sequence), _) in
+                claimed.range((conversation_id, next)..=(conversation_id, u64::MAX))
+            {
+                if sequence != next {
+                    return Err(MezError::invalid_state(
+                        "transcript recovery receipts are missing an earlier entry",
+                    ));
+                }
+                next = next.checked_add(1).ok_or_else(|| {
+                    MezError::invalid_state("transcript recovery sequence overflow")
+                })?;
             }
         }
         let mut receipts = receipts

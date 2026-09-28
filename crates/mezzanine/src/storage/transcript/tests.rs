@@ -1654,6 +1654,55 @@ fn transcript_store_preflights_durable_conflicts_across_conversations() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A gap in a later conversation's retained receipts must be detected before
+/// recovery writes an unrelated earlier conversation's accepted batch.
+#[test]
+fn transcript_store_preflights_receipt_gaps_across_conversations() {
+    let root = temp_root("receipt-cross-conversation-gap");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("aaa", 1, TranscriptRole::User);
+    store
+        .accept_append_receipt(std::slice::from_ref(&first), 1)
+        .unwrap();
+    let missing = entry("zzz", 1, TranscriptRole::User);
+    let later = entry("zzz", 2, TranscriptRole::Assistant);
+    store
+        .accept_append_receipt(std::slice::from_ref(&missing), 1)
+        .unwrap();
+    store
+        .accept_append_receipt(std::slice::from_ref(&later), 1)
+        .unwrap();
+    fs::remove_file(
+        root.join(".append-receipts/zzz-00000000000000000001-00000000000000000001.json"),
+    )
+    .unwrap();
+
+    assert!(store.recover_append_receipts().is_err());
+    assert!(!store.transcript_path("aaa").unwrap().exists());
+    assert!(!store.transcript_path("zzz").unwrap().exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Independent conversations have independent sequence spaces; preflighting
+/// one receipt must not interpret the next conversation as a missing row.
+#[test]
+fn transcript_store_replays_receipts_for_independent_conversations() {
+    let root = temp_root("receipt-independent-conversations");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("aaa", 1, TranscriptRole::User);
+    let second = entry("zzz", 1, TranscriptRole::Assistant);
+    store
+        .accept_append_receipt(std::slice::from_ref(&first), 1)
+        .unwrap();
+    store
+        .accept_append_receipt(std::slice::from_ref(&second), 1)
+        .unwrap();
+    store.recover_append_receipts().unwrap();
+    assert_eq!(store.inspect("aaa").unwrap(), vec![first]);
+    assert_eq!(store.inspect("zzz").unwrap(), vec![second]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A damaged accepted receipt cannot be skipped or replayed as a different
 /// batch after restart; its archive remains unchanged for manual recovery.
 #[test]
