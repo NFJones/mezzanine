@@ -741,9 +741,7 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running spawn result does not match an action")
                 })?;
-            if !self
-                .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
-            {
+            if !self.queue_ordered_provider_header(&turn.pane_id, execution, &action)? {
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,
                     "agent: spawn agent",
@@ -795,6 +793,7 @@ impl RuntimeSessionService {
                     result
                 }
             };
+            self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
             executed = executed.saturating_add(1);
         }
         if execution.action_results.iter().any(|result| {
