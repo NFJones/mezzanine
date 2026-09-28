@@ -467,9 +467,13 @@ impl RuntimeSideEffectRouter {
         self.hooks.drain(..limit.min(self.hooks.len())).collect()
     }
 
-    /// Drains bounded persistence work in enqueue order without inspecting
-    /// clipboard, hooks, or compatibility-queue effects.
-    pub(super) fn drain_persistence(&mut self, limit: usize) -> Vec<RuntimeSideEffect> {
+    /// Drains bounded persistence work with its exact transcript claim identity.
+    /// Non-transcript operations have no claim id; worker replay retains the
+    /// original id instead of allocating another one.
+    pub(super) fn drain_persistence_claims(
+        &mut self,
+        limit: usize,
+    ) -> Vec<(RuntimeSideEffect, Option<u64>)> {
         let effects = self
             .persistence
             .drain(..limit.min(self.persistence.len()))
@@ -485,7 +489,19 @@ impl RuntimeSideEffectRouter {
                 });
             }
         }
-        effects.into_iter().map(|queued| queued.effect).collect()
+        effects
+            .into_iter()
+            .map(|queued| (queued.effect, queued.claim_id))
+            .collect()
+    }
+
+    /// Drains ordered persistence effects for compatibility callers that do
+    /// not consume claim identities; production workers use the tagged drain.
+    pub(super) fn drain_persistence(&mut self, limit: usize) -> Vec<RuntimeSideEffect> {
+        self.drain_persistence_claims(limit)
+            .into_iter()
+            .map(|(effect, _)| effect)
+            .collect()
     }
 
     /// Restores claimed transcript writes ahead of later queued work after a
@@ -746,7 +762,12 @@ mod transcript_claim_tests {
             .map(|queued| queued.claim_id)
             .collect::<Vec<_>>();
         assert!(ids[0].is_some() && ids[0] != ids[1]);
-        assert_eq!(route.drain_persistence(2).len(), 2);
+        let first_dispatch = route.drain_persistence_claims(2);
+        assert_eq!(first_dispatch.len(), 2);
+        assert_eq!(
+            first_dispatch.iter().map(|(_, id)| *id).collect::<Vec<_>>(),
+            ids
+        );
         assert_eq!(route.recover_claimed_transcripts(), 2);
         assert_eq!(
             route
@@ -757,6 +778,14 @@ mod transcript_claim_tests {
             ids
         );
         assert_eq!(route.recover_claimed_transcripts(), 0);
+        let replacement_dispatch = route.drain_persistence_claims(2);
+        assert_eq!(
+            replacement_dispatch
+                .iter()
+                .map(|(_, id)| *id)
+                .collect::<Vec<_>>(),
+            ids
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
