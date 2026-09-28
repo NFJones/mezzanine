@@ -299,6 +299,16 @@ fn transcript_view_rejects_pending_gap_after_committed_prefix() {
         store
             .conversation_transcript_view(
                 "pending-gap",
+                ConversationTranscriptRead::After(1),
+                true,
+                std::slice::from_ref(&third),
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .conversation_transcript_view(
+                "pending-gap",
                 ConversationTranscriptRead::All,
                 true,
                 std::slice::from_ref(&third),
