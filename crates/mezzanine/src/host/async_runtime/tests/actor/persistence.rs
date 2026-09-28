@@ -230,6 +230,85 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Current row-only settlement removes a later identical batch that was not
+/// claimed by a worker. Retain this ABA characterization until claim identity
+/// travels through the persistence route and completion event.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_completion_discards_queued_identical_transcript() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-transcript-queued-identical-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = TranscriptEntry {
+        conversation_id: "queued-identical".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content: "accepted".to_string(),
+    };
+    let path = store.transcript_path(&row.conversation_id).unwrap();
+    let mut service = test_service_with_event_log();
+    service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+        store: store.clone(),
+        path: path.clone(),
+        entries: vec![row.clone()],
+    });
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        assert_eq!(
+            handle
+                .drain_persistence_side_effects(1)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
+                store: store.clone(),
+                path: path.clone(),
+                entries: vec![row.clone()],
+            }])
+            .await
+            .unwrap();
+        store.append_many(std::slice::from_ref(&row)).unwrap();
+        let mut events = RuntimeEventBatch::new();
+        events.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptCompleted {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: row.sequence,
+                entries: vec![row.clone()],
+                path,
+                bytes: 0,
+            },
+        ));
+        assert_eq!(
+            handle.submit_runtime_events(events).await.unwrap().applied,
+            1
+        );
+        assert!(
+            handle
+                .drain_persistence_side_effects(1)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
+        handle.shutdown().await.unwrap();
+    };
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// A live worker failure must requeue its exact claimed write before later
 /// reserved sequences rather than waiting for a worker restart.
 #[tokio::test(flavor = "current_thread")]
