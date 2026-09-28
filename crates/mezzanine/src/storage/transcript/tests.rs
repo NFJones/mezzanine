@@ -152,6 +152,16 @@ fn transcript_view_separates_first_write_from_committed_rows() {
     let root = temp_root("logical-first-write");
     let store = AgentTranscriptStore::new(root.clone());
     let pending = entry("first-write", 1, TranscriptRole::User);
+    assert!(
+        store
+            .conversation_transcript_view(
+                "first-write",
+                ConversationTranscriptRead::Latest(0),
+                true,
+                std::slice::from_ref(&pending),
+            )
+            .is_err()
+    );
     let view = store
         .conversation_transcript_view(
             "first-write",
