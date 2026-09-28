@@ -517,37 +517,6 @@ impl RuntimePersistenceComponent {
         true
     }
 
-    /// Legacy test probe for row-only matching; production settlement always includes the path.
-    #[cfg(test)]
-    pub(crate) fn owns_transcript_write(
-        &self,
-        conversation_id: &str,
-        first_sequence: u64,
-        entries: &[mez_agent::transcript::TranscriptEntry],
-    ) -> bool {
-        self.in_flight_transcript_entries
-            .get(&(conversation_id.to_string(), first_sequence))
-            .is_some_and(|batches| batches.iter().any(|(_, batch)| batch == entries))
-    }
-
-    /// Legacy test probe for settling the first matching row batch.
-    #[cfg(test)]
-    pub(crate) fn settle_transcript_write(
-        &mut self,
-        conversation_id: &str,
-        first_sequence: u64,
-        entries: &[mez_agent::transcript::TranscriptEntry],
-    ) -> bool {
-        let path = self
-            .in_flight_transcript_entries
-            .get(&(conversation_id.to_string(), first_sequence))
-            .and_then(|batches| batches.iter().find(|(_, batch)| batch == entries))
-            .map(|(path, _)| path.clone());
-        path.is_some_and(|path| {
-            self.settle_transcript_write_at_path(conversation_id, first_sequence, &path, entries)
-        })
-    }
-
     /// Returns the newest queued metadata checkpoint record count for tests and
     /// lightweight checkpoint accounting.
     pub(crate) fn pending_agent_session_metadata_record_count(&self) -> usize {
@@ -641,8 +610,9 @@ mod tests {
             component.deferred_transcript_next_sequence("drained-write"),
             None
         );
+        let path = store.transcript_path("drained-write").unwrap();
         component.queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
-            path: store.transcript_path("drained-write").unwrap(),
+            path: path.clone(),
             store,
             entries: vec![row.clone()],
         });
@@ -663,23 +633,34 @@ mod tests {
             component.pending_transcript_entries("drained-write"),
             vec![row.clone()]
         );
-        component.settle_transcript_write("other-conversation", 1, std::slice::from_ref(&row));
+        component.settle_transcript_write_at_path(
+            "other-conversation",
+            1,
+            &path,
+            std::slice::from_ref(&row),
+        );
         assert_eq!(
             component.pending_transcript_entries("drained-write").len(),
             1
         );
         let mut stale = row.clone();
         stale.content = "stale replacement".to_string();
-        assert!(!component.settle_transcript_write(
+        assert!(!component.settle_transcript_write_at_path(
             "drained-write",
             1,
+            &path,
             std::slice::from_ref(&stale)
         ));
         assert_eq!(
             component.pending_transcript_entries("drained-write"),
             vec![row.clone()]
         );
-        component.settle_transcript_write("drained-write", 1, std::slice::from_ref(&row));
+        component.settle_transcript_write_at_path(
+            "drained-write",
+            1,
+            &path,
+            std::slice::from_ref(&row),
+        );
         assert_eq!(
             component.deferred_transcript_next_sequence("drained-write"),
             Some(2)
@@ -731,7 +712,12 @@ mod tests {
             Some(3)
         );
         assert_eq!(component.take_transcript_effects().len(), 2);
-        assert!(component.settle_transcript_write("high-water", 2, std::slice::from_ref(&second)));
+        assert!(component.settle_transcript_write_at_path(
+            "high-water",
+            2,
+            &path,
+            std::slice::from_ref(&second)
+        ));
         assert_eq!(
             component.pending_transcript_entries("high-water"),
             vec![first.clone()]
@@ -751,7 +737,12 @@ mod tests {
             Some(3),
             "worker-owned and settled sequences survive cancellation of queued work"
         );
-        assert!(component.settle_transcript_write("high-water", 1, std::slice::from_ref(&first)));
+        assert!(component.settle_transcript_write_at_path(
+            "high-water",
+            1,
+            &path,
+            std::slice::from_ref(&first)
+        ));
         assert_eq!(
             component.deferred_transcript_next_sequence("high-water"),
             Some(3)
@@ -781,41 +772,46 @@ mod tests {
         };
         let mut replacement = first.clone();
         replacement.content = "conflicting replacement".to_string();
+        let path = store.transcript_path("claim-collision").unwrap();
         let mut component = RuntimePersistenceComponent::default();
         for row in [&first, &replacement] {
             component.queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
-                path: store.transcript_path("claim-collision").unwrap(),
+                path: path.clone(),
                 store: store.clone(),
                 entries: vec![row.clone()],
             });
         }
         assert_eq!(component.take_transcript_effects().len(), 2);
-        assert!(component.owns_transcript_write(
+        assert!(component.owns_transcript_write_at_path(
             "claim-collision",
             1,
+            &path,
             std::slice::from_ref(&first)
         ));
-        assert!(component.owns_transcript_write(
+        assert!(component.owns_transcript_write_at_path(
             "claim-collision",
             1,
+            &path,
             std::slice::from_ref(&replacement)
         ));
         assert_eq!(
             component.pending_transcript_entries("claim-collision"),
             vec![first.clone(), replacement.clone()]
         );
-        assert!(component.settle_transcript_write(
+        assert!(component.settle_transcript_write_at_path(
             "claim-collision",
             1,
+            &path,
             std::slice::from_ref(&first)
         ));
         assert_eq!(
             component.pending_transcript_entries("claim-collision"),
             vec![replacement.clone()]
         );
-        assert!(component.owns_transcript_write(
+        assert!(component.owns_transcript_write_at_path(
             "claim-collision",
             1,
+            &path,
             std::slice::from_ref(&replacement)
         ));
         let _ = std::fs::remove_dir_all(root);
@@ -841,24 +837,27 @@ mod tests {
             pane_id: "%1".to_string(),
             content: "accepted".to_string(),
         };
+        let path = store.transcript_path("identical-claim").unwrap();
         let effect = RuntimeSideEffect::PersistTranscriptEntries {
-            path: store.transcript_path("identical-claim").unwrap(),
+            path: path.clone(),
             store,
             entries: vec![row.clone()],
         };
         let mut component = RuntimePersistenceComponent::default();
         component.queue_transcript(effect.clone());
         component.take_transcript_effects();
-        assert!(component.settle_transcript_write(
+        assert!(component.settle_transcript_write_at_path(
             "identical-claim",
             1,
+            &path,
             std::slice::from_ref(&row)
         ));
         component.queue_transcript(effect);
         component.take_transcript_effects();
-        assert!(component.settle_transcript_write(
+        assert!(component.settle_transcript_write_at_path(
             "identical-claim",
             1,
+            &path,
             std::slice::from_ref(&row)
         ));
         assert!(
@@ -889,8 +888,9 @@ mod tests {
             pane_id: "%1".to_string(),
             content: "accepted".to_string(),
         };
+        let path = store.transcript_path("duplicate-claims").unwrap();
         let effect = RuntimeSideEffect::PersistTranscriptEntries {
-            path: store.transcript_path("duplicate-claims").unwrap(),
+            path: path.clone(),
             store,
             entries: vec![row.clone()],
         };
@@ -902,18 +902,20 @@ mod tests {
             component.pending_transcript_entries("duplicate-claims"),
             vec![row.clone(), row.clone()]
         );
-        assert!(component.settle_transcript_write(
+        assert!(component.settle_transcript_write_at_path(
             "duplicate-claims",
             1,
+            &path,
             std::slice::from_ref(&row)
         ));
         assert_eq!(
             component.pending_transcript_entries("duplicate-claims"),
             vec![row.clone()]
         );
-        assert!(component.settle_transcript_write(
+        assert!(component.settle_transcript_write_at_path(
             "duplicate-claims",
             1,
+            &path,
             std::slice::from_ref(&row)
         ));
         assert!(
