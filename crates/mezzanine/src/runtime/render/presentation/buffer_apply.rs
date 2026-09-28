@@ -983,29 +983,23 @@ impl RuntimeSessionService {
         text: &str,
         content_type: &str,
     ) -> Result<()> {
-        if agent_output_content_type_is_markdown(content_type)
-            && !agent_say_text_is_displayed_patch_block(text)
-        {
-            return self.append_agent_assistant_markdown_to_terminal_buffer(
-                pane_id,
-                text,
-                content_type,
-            );
-        }
-        if agent_output_content_type_is_diff(content_type) {
-            return self.append_agent_assistant_diff_to_terminal_buffer(
-                pane_id,
-                text,
-                content_type,
-            );
-        }
-        let display_width = self.agent_terminal_markdown_frame_width(pane_id)?;
-        let rendered_lines = wrapped_prefixed_agent_terminal_lines("mez> ", text, display_width);
+        let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
+        let table_width = self.agent_terminal_markdown_terminal_width(pane_id)?;
+        let projection = self.streaming_say_projection(
+            &RuntimeStreamingSayAction {
+                status: mez_agent::SayStatus::Final,
+                content_type: content_type.to_string(),
+                text: text.to_string(),
+                complete: true,
+            },
+            frame_width,
+            table_width,
+        );
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
-            AgentTerminalPresentationStyle::Assistant,
-            rendered_lines.as_slice(),
-            &[],
+            projection.style,
+            &projection.rendered_lines,
+            &projection.copy_lines,
             Some((text, content_type)),
         )
     }
@@ -1988,50 +1982,6 @@ impl RuntimeSessionService {
             self.presentation
                 .agent_presentation_replay_cache
                 .estimated_bytes,
-        )
-    }
-
-    /// Appends markdown assistant output as styled presentation lines.
-    fn append_agent_assistant_markdown_to_terminal_buffer(
-        &mut self,
-        pane_id: &str,
-        markdown: &str,
-        content_type: &str,
-    ) -> Result<()> {
-        let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
-        let table_width = self.agent_terminal_markdown_terminal_width(pane_id)?;
-        let body_rendered_lines = wrap_rich_text_lines_to_width(
-            render_agent_markdown_body_lines(
-                markdown,
-                &self.presentation.settings.ui_theme,
-                table_width,
-            ),
-            frame_width,
-            table_width,
-        );
-        let body_rendered_count = body_rendered_lines.len();
-        let rendered_lines = frame_markdown_lines(body_rendered_lines, frame_width);
-        let trimmed_markdown = markdown.trim_end_matches(['\r', '\n']);
-        let raw_copy_lines = if trimmed_markdown.is_empty() {
-            vec![String::new()]
-        } else {
-            trimmed_markdown
-                .split('\n')
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        };
-        let copy_lines = markdown_block_copy_lines(
-            rendered_lines.as_slice(),
-            body_rendered_count,
-            raw_copy_lines,
-            AGENT_TERMINAL_MESSAGE_PREFIX,
-        );
-        self.append_agent_terminal_rendered_lines_to_buffer(
-            pane_id,
-            AgentTerminalPresentationStyle::Assistant,
-            rendered_lines.as_slice(),
-            &copy_lines,
-            Some((markdown, content_type)),
         )
     }
 
@@ -6289,31 +6239,6 @@ impl RuntimeSessionService {
             &rendered_lines,
             &[],
             Some((text, "text/x-diff; charset=utf-8")),
-        )
-    }
-
-    /// Appends unbounded model-authored diff output as assistant presentation.
-    fn append_agent_assistant_diff_to_terminal_buffer(
-        &mut self,
-        pane_id: &str,
-        text: &str,
-        content_type: &str,
-    ) -> Result<()> {
-        let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
-        let table_width = self.agent_terminal_markdown_terminal_width(pane_id)?;
-        let action = RuntimeStreamingSayAction {
-            status: mez_agent::SayStatus::Final,
-            content_type: content_type.to_string(),
-            text: text.to_string(),
-            complete: true,
-        };
-        let projection = self.streaming_say_projection(&action, frame_width, table_width);
-        self.append_agent_terminal_rendered_lines_to_buffer(
-            pane_id,
-            projection.style,
-            &projection.rendered_lines,
-            &projection.copy_lines,
-            Some((text, content_type)),
         )
     }
 
