@@ -154,6 +154,25 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
                 .applied,
             0
         );
+        let mut unclaimed_permanent_failure = RuntimeEventBatch::new();
+        unclaimed_permanent_failure.push(RuntimeEvent::Persistence(
+            crate::runtime::PersistenceEvent::TranscriptFailed {
+                conversation_id: row.conversation_id.clone(),
+                first_sequence: row.sequence,
+                entries: vec![row.clone()],
+                path: path.clone(),
+                error: "unclaimed permanent failure".to_string(),
+                retryable: false,
+            },
+        ));
+        assert_eq!(
+            handle
+                .submit_runtime_events(unclaimed_permanent_failure)
+                .await
+                .unwrap()
+                .applied,
+            0
+        );
         let mut queued_only = RuntimeEventBatch::new();
         queued_only.push(RuntimeEvent::Persistence(
             crate::runtime::PersistenceEvent::TranscriptCompleted {
