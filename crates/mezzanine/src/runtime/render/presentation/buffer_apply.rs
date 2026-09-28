@@ -4581,6 +4581,25 @@ impl RuntimeSessionService {
             .agent_pane_screen_lineage(pane_id, &presentation.conversation_id)
             == Some(presentation.installed_lineage);
         let batch = execution.response.action_batch.as_ref();
+        // A complete action preview may arrive without optional rationale
+        // fragments. Do not promote it ahead of a validated rationale: restore
+        // only our provisional screen and let the ordinary presenter append
+        // the complete batch in rationale-then-action order.
+        if presentation.rationale.is_none()
+            && batch.is_some_and(|batch| !batch.rationale.trim().is_empty())
+        {
+            if presentation.turn_id == turn_id && conversation_matches && screen_is_owned {
+                self.update_agent_streaming_screen(
+                    pane_id,
+                    &presentation.conversation_id,
+                    presentation.baseline_screen.as_ref().clone(),
+                )?;
+                self.integration
+                    .runtime_metrics_mut()
+                    .record_agent_streaming_settlement_screen_change(false);
+            }
+            return Ok(Default::default());
+        }
         let incomplete_source = presentation
             .rationale
             .as_ref()

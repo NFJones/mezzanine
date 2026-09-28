@@ -1605,6 +1605,7 @@ async fn runtime_streaming_say_completion_does_not_append_final_duplicate() {
 /// the same styled and persisted answer with or without optional fragments.
 #[test]
 fn runtime_validated_say_settlement_matches_with_and_without_progress() {
+    let rationale = "Distinct validated rationale without fragments";
     for (case, content_type, source) in [
         (
             "plain",
@@ -1687,7 +1688,7 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                     latest_request_usage: None,
                     quota_usage: Default::default(),
                     action_batch: Some(mez_agent::MaapBatch {
-                        rationale: String::new(),
+                        rationale: rationale.to_string(),
                         actions: vec![mez_agent::AgentAction {
                             id: "answer".to_string(),
                             payload: mez_agent::AgentActionPayload::Say {
@@ -1727,6 +1728,14 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
             assert_eq!(
                 entries
                     .iter()
+                    .filter(|entry| entry.source_text.as_deref() == Some(rationale))
+                    .count(),
+                1,
+                "{case}: {entries:?}"
+            );
+            assert_eq!(
+                entries
+                    .iter()
                     .filter(|entry| entry.source_text.as_deref() == Some(source))
                     .count(),
                 1
@@ -1735,7 +1744,9 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                 rows,
                 entries
                     .into_iter()
-                    .filter(|entry| entry.source_text.as_deref() == Some(source))
+                    .filter(|entry| {
+                        [source, rationale].contains(&entry.source_text.as_deref().unwrap_or(""))
+                    })
                     .map(|entry| (entry.display_lines, entry.copy_lines))
                     .collect::<Vec<_>>(),
             ));
