@@ -780,4 +780,52 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(root);
     }
+
+    /// An old completion can currently settle a newly claimed identical
+    /// batch: row equality alone cannot distinguish their claim generations.
+    #[test]
+    fn transcript_late_completion_can_settle_identical_replacement() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-transcript-identical-claim-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let row = mez_agent::transcript::TranscriptEntry {
+            conversation_id: "identical-claim".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "accepted".to_string(),
+        };
+        let effect = RuntimeSideEffect::PersistTranscriptEntries {
+            path: store.transcript_path("identical-claim").unwrap(),
+            store,
+            entries: vec![row.clone()],
+        };
+        let mut component = RuntimePersistenceComponent::default();
+        component.queue_transcript(effect.clone());
+        component.take_transcript_effects();
+        assert!(component.settle_transcript_write(
+            "identical-claim",
+            1,
+            std::slice::from_ref(&row)
+        ));
+        component.queue_transcript(effect);
+        component.take_transcript_effects();
+        assert!(component.settle_transcript_write(
+            "identical-claim",
+            1,
+            std::slice::from_ref(&row)
+        ));
+        assert!(
+            component
+                .pending_transcript_entries("identical-claim")
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
