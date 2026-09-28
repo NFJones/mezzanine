@@ -1386,11 +1386,24 @@ impl AsyncRuntimeSessionHandle {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[allow(
+        dead_code,
+        reason = "compatibility and test callers use the untagged drain"
+    )]
     pub async fn drain_persistence_side_effects(
         &self,
         limit: usize,
     ) -> Result<Vec<RuntimeSideEffect>> {
         self.request(|reply| AsyncRuntimeRequest::DrainPersistenceSideEffects { limit, reply })
+            .await?
+    }
+
+    /// Drains the ordered persistence lane with transcript claim identities.
+    pub(crate) async fn drain_persistence_claims(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(RuntimeSideEffect, Option<u64>)>> {
+        self.request(|reply| AsyncRuntimeRequest::DrainPersistenceClaims { limit, reply })
             .await?
     }
 

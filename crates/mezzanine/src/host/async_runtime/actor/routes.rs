@@ -20,6 +20,9 @@ struct ClaimedTranscript {
     blocked: bool,
 }
 
+/// One ordered persistence effect and its optional transcript claim identity.
+pub(in crate::host::async_runtime) type PersistenceClaim = (RuntimeSideEffect, Option<u64>);
+
 /// Dedicated worker-owned work that can be drained without inspecting the
 /// compatibility queue used by unrelated runtime services.
 #[derive(Debug, Default)]

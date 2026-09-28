@@ -1164,6 +1164,10 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "compatibility and test callers use the untagged drain"
+    )]
     DrainPersistenceSideEffects {
         /// Stores the limit value for this data structure.
         ///
@@ -1175,6 +1179,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Vec<RuntimeSideEffect>>>,
+    },
+    /// Drains ordered persistence work with its exact transcript claim identity.
+    DrainPersistenceClaims {
+        /// Maximum number of effects to claim.
+        limit: usize,
+        /// Claim IDs are present only for transcript appends.
+        reply: oneshot::Sender<Result<Vec<super::super::actor::routes::PersistenceClaim>>>,
     },
     /// Restores unacknowledged transcript work when the sole persistence worker starts.
     RecoverClaimedTranscripts {
@@ -1389,6 +1400,7 @@ impl AsyncRuntimeRequest {
             | Self::DrainClientOutputFlushSideEffects { .. }
             | Self::DrainTimerSideEffects { .. }
             | Self::DrainPersistenceSideEffects { .. }
+            | Self::DrainPersistenceClaims { .. }
             | Self::RecoverClaimedTranscripts { .. }
             | Self::DrainHookSideEffects { .. }
             | Self::DrainHostClipboardSideEffects { .. }

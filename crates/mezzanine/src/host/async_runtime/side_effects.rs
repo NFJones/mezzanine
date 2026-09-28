@@ -932,9 +932,7 @@ where
         report.terminal_state = state;
         let stopping = should_stop(report.polls, state);
 
-        let effects = handle
-            .drain_persistence_side_effects(config.drain_limit)
-            .await?;
+        let effects = handle.drain_persistence_claims(config.drain_limit).await?;
         if effects.is_empty() {
             if stopping {
                 return Ok(report);
@@ -963,7 +961,7 @@ where
         let mut batch = RuntimeEventBatch::new();
         let mut effects = effects.into_iter().peekable();
         let persistence_batch_started = std::time::Instant::now();
-        while let Some(effect) = effects.next() {
+        while let Some((effect, claim_id)) = effects.next() {
             let persistence_operation_started = std::time::Instant::now();
             match effect {
                 RuntimeSideEffect::Persist {
@@ -1001,15 +999,18 @@ where
                     let mut byte_counts = vec![bytes.len()];
                     while matches!(
                         effects.peek(),
-                        Some(RuntimeSideEffect::PersistAuditLog {
+                        Some((RuntimeSideEffect::PersistAuditLog {
                             path: next_path,
                             retention: next_retention,
                             ..
-                        }) if next_path == &path && next_retention == &retention
+                        }, _)) if next_path == &path && next_retention == &retention
                     ) {
-                        let Some(RuntimeSideEffect::PersistAuditLog {
-                            bytes: next_bytes, ..
-                        }) = effects.next()
+                        let Some((
+                            RuntimeSideEffect::PersistAuditLog {
+                                bytes: next_bytes, ..
+                            },
+                            _,
+                        )) = effects.next()
                         else {
                             unreachable!(
                                 "peeked audit side effect must remain an audit side effect"
@@ -1074,7 +1075,16 @@ where
                         .first()
                         .map_or(String::new(), |entry| entry.conversation_id.clone());
                     let first_sequence = entries.first().map_or(0, |entry| entry.sequence);
-                    match persist_transcript_entries(store, entries.clone()).await {
+                    let result = match claim_id {
+                        Some(id) => {
+                            persist_transcript_entries_with_generation(store, entries.clone(), id)
+                                .await
+                        }
+                        None => Err(MezError::invalid_state(
+                            "transcript worker received an unclaimed append",
+                        )),
+                    };
+                    match result {
                         Ok(bytes) => {
                             report.completed = report.completed.saturating_add(1);
                             report.bytes_written = report.bytes_written.saturating_add(bytes);
@@ -1163,18 +1173,21 @@ where
                 } => {
                     while matches!(
                         effects.peek(),
-                        Some(RuntimeSideEffect::PersistPresentationEntries {
+                        Some((RuntimeSideEffect::PersistPresentationEntries {
                             store: next_store,
                             entries: next_entries,
                             ..
-                        }) if next_store == &store
+                        }, _)) if next_store == &store
                             && next_entries.first().map(|entry| &entry.conversation_id)
                                 == entries.first().map(|entry| &entry.conversation_id)
                     ) {
-                        let Some(RuntimeSideEffect::PersistPresentationEntries {
-                            entries: next_entries,
-                            ..
-                        }) = effects.next()
+                        let Some((
+                            RuntimeSideEffect::PersistPresentationEntries {
+                                entries: next_entries,
+                                ..
+                            },
+                            _,
+                        )) = effects.next()
                         else {
                             unreachable!("peeked presentation effect must remain compatible");
                         };
@@ -2076,6 +2089,7 @@ fn audit_retention_policy_disabled(retention: &AuditRetentionPolicy) -> bool {
 }
 
 /// Appends transcript entries through the transcript store's async filesystem API.
+#[cfg(test)]
 async fn persist_transcript_entries(
     store: AgentTranscriptStore,
     entries: Vec<TranscriptEntry>,

@@ -224,6 +224,21 @@ impl AsyncRuntimeSessionActor {
         Ok(drained)
     }
 
+    /// Drains the same ordered lane with exact transcript claim identities for the worker.
+    pub(super) fn drain_persistence_claims(
+        &mut self,
+        limit: usize,
+    ) -> Result<Vec<(RuntimeSideEffect, Option<u64>)>> {
+        if limit == 0 {
+            return Err(MezError::invalid_args(
+                "async runtime persistence side-effect drain limit must be greater than zero",
+            ));
+        }
+        let drained = self.side_effect_routes.drain_persistence_claims(limit);
+        self.record_side_effect_drain(drained.len());
+        Ok(drained)
+    }
+
     /// Runs the drain hook side effects operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
