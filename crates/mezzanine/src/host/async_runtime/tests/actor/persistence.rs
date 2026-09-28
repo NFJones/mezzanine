@@ -439,9 +439,19 @@ async fn async_actor_recovers_two_fresh_identical_transcript_claims() {
                 bytes: 0,
             },
         ));
+        let stale_completion = events.clone();
         assert_eq!(
             handle.submit_runtime_events(events).await.unwrap().applied,
             1
+        );
+        assert_eq!(
+            handle
+                .submit_runtime_events(stale_completion)
+                .await
+                .unwrap()
+                .applied,
+            1,
+            "row-only worker events currently settle the other identical claim"
         );
         assert_eq!(
             handle
@@ -449,9 +459,9 @@ async fn async_actor_recovers_two_fresh_identical_transcript_claims() {
                 .await
                 .unwrap()
                 .len(),
-            1
+            0
         );
-        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
+        assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
         handle.shutdown().await.unwrap();
     };
     let ((), _) = tokio::join!(client, actor.run());
