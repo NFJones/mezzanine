@@ -2445,6 +2445,49 @@ mod transcript_settlement_tests {
     use super::*;
     use mez_agent::transcript::TranscriptRole;
 
+    /// A rejected receipt-directory boundary must fail before the worker
+    /// appends any transcript row, preserving the archive for recovery.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn queued_transcript_write_rejects_unjournaled_append() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-async-transcript-unjournaled-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let outside = root.with_extension("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, root.join(".append-receipts")).unwrap();
+        let store = AgentTranscriptStore::new(root.clone());
+        let row = TranscriptEntry {
+            conversation_id: "unjournaled-test".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "must not append".to_string(),
+        };
+        assert!(
+            persist_transcript_entries(store.clone(), vec![row.clone()])
+                .await
+                .is_err()
+        );
+        assert!(
+            !store
+                .transcript_path(&row.conversation_id)
+                .unwrap()
+                .exists()
+        );
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
     /// Repeated worker attempts for the same immutable claim keep one durable
     /// recovery receipt; retries cannot multiply replay work.
     #[tokio::test]
