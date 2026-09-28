@@ -1162,6 +1162,62 @@ fn runtime_streaming_later_complete_action_waits_for_earlier_source() {
     assert!(visible.contains("second is complete"), "{visible}");
 }
 
+/// A received action with no preview still occupies its ordinal until the
+/// validated batch determines whether it has a visible header or result.
+#[test]
+fn runtime_streaming_no_preview_action_holds_later_say_until_validation() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(52, 20).unwrap(), 200)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+    );
+    for event in [
+        mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 1,
+            status: mez_agent::SayStatus::Progress,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 1,
+            text: "later answer".to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextComplete { action_index: 1 },
+        mez_agent::StreamingSayEvent::ActionComplete { action_index: 1 },
+    ] {
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-empty-order",
+                crate::runtime::RuntimeProviderLogInput::Progress(&event),
+            )
+            .unwrap();
+    }
+    if let Some(work) = service
+        .take_agent_streaming_say_projection_work("%1", "turn-empty-order")
+        .unwrap()
+    {
+        let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap();
+    }
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!visible.contains("later answer"), "{visible}");
+}
+
 /// A complete later say remains buffered behind an open command preview and
 /// becomes visible only after the command field closes.
 #[test]

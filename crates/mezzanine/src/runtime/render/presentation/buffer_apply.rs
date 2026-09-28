@@ -3167,6 +3167,7 @@ impl RuntimeSessionService {
             // A whole-action receipt is an ordering barrier, not validation or
             // execution. A closed field alone cannot release later ordinals.
             mez_agent::StreamingSayEvent::ActionComplete { action_index } => {
+                self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
                 if let Some(presentation) = self
                     .presentation
                     .agent_streaming_say_presentations
@@ -3506,9 +3507,24 @@ impl RuntimeSessionService {
                     .min()
             })
             .flatten();
+        // Receipt of an action with no previewable field does not determine
+        // whether validation will supply a header or runtime result for it.
+        let first_no_preview_action = presentation
+            .received_actions
+            .iter()
+            .filter(|index| {
+                !presentation.actions.contains_key(index)
+                    && !presentation.outbound_messages.contains_key(index)
+                    && !presentation.shell_commands.contains_key(index)
+                    && !presentation.shell_summaries.contains_key(index)
+                    && !presentation.action_headers.contains_key(index)
+            })
+            .copied()
+            .min();
         let first_pending_action = first_open_action
             .into_iter()
             .chain(first_unreceived_action)
+            .chain(first_no_preview_action)
             .min();
         let visible = |index: &usize| first_pending_action.is_none_or(|pending| *index <= pending);
         Ok(Some(crate::runtime::RuntimeStreamingSayProjectionWork {
