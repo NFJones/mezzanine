@@ -885,6 +885,19 @@ fn runtime_failed_response_releases_outcome_after_suppressed_say() {
         "{rows}"
     );
     assert_eq!(rows.matches("HTTP 404").count(), 1, "{rows}");
+    execution.terminal_state = AgentTurnState::Running;
+    service
+        .present_deferred_agent_say_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    let after_correction = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !after_correction.contains("do not show progress on failure"),
+        "{after_correction}"
+    );
 }
 
 /// Approval and later failure are distinct settled outcomes for one action;

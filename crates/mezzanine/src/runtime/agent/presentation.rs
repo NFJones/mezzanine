@@ -147,6 +147,9 @@ impl RuntimeSessionService {
             .agent_deferred_provider_progress
             .retain(|(_, candidate_turn_id, _, _, _)| candidate_turn_id != turn_id);
         self.presentation
+            .agent_retired_provider_says
+            .retain(|(_, candidate_turn_id, _, _, _)| candidate_turn_id != turn_id);
+        self.presentation
             .agent_queued_provider_outcomes
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
         self.presentation
@@ -362,6 +365,28 @@ impl RuntimeSessionService {
         else {
             return Ok(());
         };
+        if !matches!(
+            execution.terminal_state,
+            AgentTurnState::Running | AgentTurnState::Completed
+        ) {
+            for (index, action) in actions.iter().enumerate() {
+                if matches!(action.payload, AgentActionPayload::Say { .. })
+                    && !self.agent_streaming_say_action_is_promoted(
+                        pane_id,
+                        &execution.request.turn_id,
+                        index,
+                    )
+                {
+                    self.presentation.agent_retired_provider_says.insert((
+                        owner.0.clone(),
+                        owner.1.clone(),
+                        owner.2.clone(),
+                        owner.3.clone(),
+                        index,
+                    ));
+                }
+            }
+        }
         self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
         for (index, action) in actions.iter().enumerate() {
             let key = (
@@ -392,6 +417,13 @@ impl RuntimeSessionService {
                             prior_index,
                         );
                         if matches!(prior.payload, AgentActionPayload::Say { .. }) {
+                            if self
+                                .presentation
+                                .agent_retired_provider_says
+                                .contains(&prior_key)
+                            {
+                                return false;
+                            }
                             // A failed, blocked, or interrupted response cannot
                             // promote this deferred say. Retire its ordering
                             // slot without presenting successful assistant text.
@@ -819,6 +851,12 @@ impl RuntimeSessionService {
                         action_index,
                     )
                 });
+                if publication_key
+                    .as_ref()
+                    .is_some_and(|key| self.presentation.agent_retired_provider_says.contains(key))
+                {
+                    continue;
+                }
                 if self.agent_streaming_say_action_is_promoted(
                     pane_id,
                     &execution.request.turn_id,

@@ -625,6 +625,8 @@ pub(crate) struct RuntimePresentationComponent {
         mez_agent::ContextExecutionGroupId,
         usize,
     )>,
+    /// Unshown say ordinals retired after a failed or interrupted response.
+    pub(super) agent_retired_provider_says: std::collections::BTreeSet<RuntimeProviderLogOrdinal>,
     /// Validated executor headers waiting for preceding action logs to publish.
     pub(super) agent_queued_provider_headers: std::collections::BTreeMap<
         RuntimeProviderLogOrdinal,
@@ -1838,6 +1840,8 @@ impl RuntimePresentationComponent {
         self.agent_settled_provider_log_groups
             .retain(|(candidate_pane_id, _, _, _)| candidate_pane_id != pane_id);
         self.agent_deferred_provider_progress
+            .retain(|(candidate_pane_id, _, _, _, _)| candidate_pane_id != pane_id);
+        self.agent_retired_provider_says
             .retain(|(candidate_pane_id, _, _, _, _)| candidate_pane_id != pane_id);
         self.agent_queued_provider_headers
             .retain(|(candidate_pane_id, _, _, _, _), _| candidate_pane_id != pane_id);
