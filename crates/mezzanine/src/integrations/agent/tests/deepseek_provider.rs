@@ -5,6 +5,85 @@
 
 use super::*;
 
+/// A configured DeepSeek stream falls back to complete validated source for a
+/// conservative-unknown model, without inventing provider progress events.
+#[tokio::test]
+async fn deepseek_unknown_model_negotiates_unary_maap_without_progress() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-unlisted".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: Default::default(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
+    request.model_capabilities = mez_agent::ModelCapabilities::conservative_unknown_deepseek();
+    let arguments = serde_json::json!({
+        "rationale": "unary fallback",
+        "status": "final",
+        "text": "hello"
+    })
+    .to_string();
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "deepseek-unlisted",
+                "choices": [{"message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "call_1", "type": "function", "function": {
+                        "name": DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
+                        "arguments": arguments
+                    }}]
+                }}]
+            })
+            .to_string(),
+        },
+    };
+    let provider = crate::integrations::agent::provider::DeepSeekChatCompletionsProvider::new(
+        "deepseek-key",
+        transport,
+    )
+    .unwrap()
+    .with_stream(true);
+    assert!(!provider.streams_request(&request));
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+    let response = provider
+        .send_request_async_with_progress(&request, Some(sender))
+        .await
+        .unwrap();
+    assert!(receiver.try_recv().is_err());
+    let batch = response.action_batch.unwrap();
+    assert_eq!(batch.rationale, "unary fallback");
+    assert!(matches!(
+        &batch.actions[0].payload,
+        AgentActionPayload::Say { text, .. } if text == "hello"
+    ));
+    let requests = provider.transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_str(&requests[0].body).unwrap();
+    assert_eq!(body["stream"], false);
+}
+
 #[test]
 /// Verifies an explicit DeepSeek thinking disable overrides configured
 /// reasoning effort before request serialization.
