@@ -2978,6 +2978,9 @@ impl RuntimeSessionService {
                     .ok_or_else(|| {
                         MezError::invalid_state("streaming rationale presentation is unavailable")
                     })?;
+                if presentation.rationale.is_some() {
+                    return Ok(());
+                }
                 presentation.rationale.get_or_insert_with(Default::default);
                 presentation.revision = presentation.revision.wrapping_add(1);
                 presentation.projected_revision = None;
@@ -3134,6 +3137,9 @@ impl RuntimeSessionService {
                             "streaming shell summary presentation is unavailable",
                         )
                     })?;
+                if presentation.shell_summaries.contains_key(action_index) {
+                    return Ok(());
+                }
                 presentation
                     .shell_summaries
                     .entry(*action_index)

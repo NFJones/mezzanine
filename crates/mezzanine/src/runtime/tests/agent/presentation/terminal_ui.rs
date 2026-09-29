@@ -1885,6 +1885,58 @@ fn runtime_streaming_replayed_auxiliary_closure_keeps_projection_current() {
     }
 }
 
+/// Replaying a rationale or summary start must not invalidate an already
+/// acknowledged source projection for the same response component.
+#[test]
+fn runtime_streaming_replayed_rationale_and_summary_starts_keep_projection_current() {
+    for summary in [false, true] {
+        let mut service = test_runtime_service();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+        );
+        let start = if summary {
+            mez_agent::StreamingSayEvent::ShellCommandSummaryStarted { action_index: 0 }
+        } else {
+            mez_agent::StreamingSayEvent::RationaleStarted
+        };
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-start-replay",
+                crate::runtime::RuntimeProviderLogInput::Progress(&start),
+            )
+            .unwrap();
+        let work = service
+            .take_agent_streaming_say_projection_work("%1", "turn-start-replay")
+            .unwrap()
+            .unwrap();
+        let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap();
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-start-replay",
+                crate::runtime::RuntimeProviderLogInput::Progress(&start),
+            )
+            .unwrap();
+        assert!(
+            service
+                .take_agent_streaming_say_projection_work("%1", "turn-start-replay")
+                .unwrap()
+                .is_none(),
+            "summary={summary}: duplicate start dirtied an acknowledged projection"
+        );
+    }
+}
+
 /// A complete later say remains buffered behind an open command preview and
 /// becomes visible only after the command field closes.
 #[test]
