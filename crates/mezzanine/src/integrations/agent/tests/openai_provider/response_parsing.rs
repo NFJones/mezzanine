@@ -537,6 +537,99 @@ fn openai_provider_stream_parses_maap_function_call_arguments() {
     }
 }
 
+/// Native function-call SSE can carry its MAAP arguments only in the completed
+/// item. Transport streaming must still return the validated batch, without
+/// fabricating partial provider progress from that completed item.
+#[tokio::test]
+async fn openai_native_tool_sse_without_argument_deltas_completes_without_progress() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: Default::default(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
+    let arguments = serde_json::json!({
+        "rationale": "native completion",
+        "actions": [{
+            "type": "say",
+            "status": "final",
+            "content_type": "text/plain; charset=utf-8",
+            "text": "hello"
+        }]
+    })
+    .to_string();
+    let body = format!(
+        "event: response.output_item.added\ndata: {}\n\nevent: response.function_call_arguments.done\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
+        serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                "arguments": ""
+            }
+        }),
+        serde_json::json!({
+            "type": "response.function_call_arguments.done",
+            "output_index": 0,
+            "arguments": arguments
+        }),
+        serde_json::json!({
+            "type": "response.completed",
+            "response": {"id": "resp_1", "model": "gpt-test"}
+        })
+    );
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body,
+        },
+    };
+    let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "test-key",
+        "https://example.test/responses",
+        10,
+        Default::default(),
+        true,
+        transport,
+    )
+    .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+    let response = provider
+        .send_request_async_with_progress(&request, Some(sender))
+        .await
+        .unwrap();
+    assert!(receiver.try_recv().is_err());
+    let batch = response.action_batch.unwrap();
+    assert_eq!(batch.rationale, "native completion");
+    assert!(matches!(
+        &batch.actions[0].payload,
+        AgentActionPayload::Say { text, .. } if text == "hello"
+    ));
+}
+
 /// A streaming request may receive complete JSON instead of SSE; completion
 /// remains authoritative and must not fabricate optional progress events.
 #[tokio::test]
