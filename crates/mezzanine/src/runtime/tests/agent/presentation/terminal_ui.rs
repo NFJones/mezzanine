@@ -4107,6 +4107,13 @@ fn runtime_streaming_rationale_and_command_fallback_retains_only_rationale() {
 /// say; both the rationale and say have already crossed validation and render.
 #[test]
 fn runtime_streaming_command_fallback_retains_matching_progress() {
+    for rationale in [false, true] {
+        streaming_command_fallback_progress_case(rationale);
+    }
+}
+
+/// Exercises the exact progress predecessor with and without visible thinking.
+fn streaming_command_fallback_progress_case(rationale: bool) {
     let mut service = test_runtime_service();
     let store = AgentTranscriptStore::new(temp_root("streaming-command-progress-fallback"));
     service.set_agent_transcript_store(store.clone());
@@ -4139,12 +4146,20 @@ fn runtime_streaming_command_fallback_retains_matching_progress() {
             timeout_ms: None,
         },
     };
+    if rationale {
+        for event in [
+            mez_agent::StreamingSayEvent::RationaleStarted,
+            mez_agent::StreamingSayEvent::RationaleTextDelta {
+                text: "matching rationale".to_string(),
+            },
+            mez_agent::StreamingSayEvent::RationaleTextComplete,
+        ] {
+            service
+                .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+                .unwrap();
+        }
+    }
     for event in [
-        mez_agent::StreamingSayEvent::RationaleStarted,
-        mez_agent::StreamingSayEvent::RationaleTextDelta {
-            text: "matching rationale".to_string(),
-        },
-        mez_agent::StreamingSayEvent::RationaleTextComplete,
         mez_agent::StreamingSayEvent::Started {
             action_index: 0,
             status: mez_agent::SayStatus::Progress,
@@ -4184,7 +4199,11 @@ fn runtime_streaming_command_fallback_retains_matching_progress() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                rationale: "matching rationale".to_string(),
+                rationale: if rationale {
+                    "matching rationale".to_string()
+                } else {
+                    String::new()
+                },
                 actions: vec![say.clone(), shell],
             }),
             provider_transcript_events: Vec::new(),
