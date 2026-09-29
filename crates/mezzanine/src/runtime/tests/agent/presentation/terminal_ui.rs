@@ -4924,6 +4924,17 @@ async fn runtime_streaming_header_mismatch_retains_matching_progress() {
             "{entries:?}"
         );
     }
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "later durable row")
+        .unwrap();
+    let appended = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(appended.matches("keep sibling").count(), 1, "{appended}");
+    assert_eq!(appended.matches("right query").count(), 1, "{appended}");
+    assert!(appended.contains("later durable row"), "{appended}");
 }
 
 /// A matching progress say and accepted search header share one projected
