@@ -1481,6 +1481,48 @@ fn runtime_streaming_replayed_command_start_has_one_label() {
     );
 }
 
+/// Replaying a say start for the same response ordinal must not append
+/// another provisional assistant label before its source projection arrives.
+#[test]
+fn runtime_streaming_replayed_say_start_has_one_label() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+    );
+    let start = mez_agent::StreamingSayEvent::Started {
+        action_index: 0,
+        status: mez_agent::SayStatus::Progress,
+        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+    };
+    for _ in 0..2 {
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-say-replay",
+                crate::runtime::RuntimeProviderLogInput::Progress(&start),
+            )
+            .unwrap();
+    }
+    let lines = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.trim_end() == "▐ mez>")
+            .count(),
+        1,
+        "{lines:?}"
+    );
+}
+
 /// A complete later say remains buffered behind an open command preview and
 /// becomes visible only after the command field closes.
 #[test]

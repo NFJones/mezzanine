@@ -2788,6 +2788,9 @@ impl RuntimeSessionService {
                     .ok_or_else(|| {
                         MezError::invalid_state("streaming say presentation state is unavailable")
                     })?;
+                if presentation.actions.contains_key(action_index) {
+                    return Ok(());
+                }
                 presentation
                     .actions
                     .entry(*action_index)
