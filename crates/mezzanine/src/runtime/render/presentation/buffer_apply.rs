@@ -3681,11 +3681,9 @@ impl RuntimeSessionService {
         batch: &mez_agent::MaapBatch,
         execution: &mez_agent::AgentTurnExecution,
     ) -> Result<bool> {
-        let Some(rationale) = presentation.rationale.as_ref().filter(|source| {
+        let rationale = presentation.rationale.as_ref().filter(|source| {
             source.complete && !source.text.trim().is_empty() && source.text == batch.rationale
-        }) else {
-            return Ok(false);
-        };
+        });
         if presentation.turn_id != turn_id
             || self
                 .agent_shell_store()
@@ -3695,14 +3693,13 @@ impl RuntimeSessionService {
                 != Some(presentation.installed_lineage)
             || presentation.projected_revision != Some(presentation.revision)
             || presentation.projected_lineage != Some(presentation.installed_lineage)
-            || presentation.projected_rationale.is_none()
         {
             return Ok(false);
         }
         let Ok(context) = self.agent_streaming_say_projection_context(pane_id) else {
             return Ok(false);
         };
-        if presentation.projected_context.as_ref() != Some(&context) || !context.thinking_enabled {
+        if presentation.projected_context.as_ref() != Some(&context) {
             return Ok(false);
         }
         let first_unpromotable = presentation
@@ -3750,7 +3747,7 @@ impl RuntimeSessionService {
             revision: presentation.revision,
             installed_lineage: presentation.installed_lineage,
             baseline_screen: presentation.baseline_screen.clone(),
-            rationale: Some(rationale.clone()),
+            rationale: rationale.filter(|_| context.thinking_enabled).cloned(),
             actions: retained_actions,
             outbound_messages: std::collections::BTreeMap::new(),
             shell_commands: std::collections::BTreeMap::new(),
@@ -3765,26 +3762,32 @@ impl RuntimeSessionService {
             screen_size: context.screen_size,
         };
         let projection = Self::build_agent_streaming_say_projection(work)?;
-        let Some(row) = projection.projected_rationale else {
+        if projection.projected_rationale.is_none() && projection.projected_actions.is_empty() {
             return Ok(false);
-        };
+        }
         self.update_agent_streaming_screen(
             pane_id,
             &presentation.conversation_id,
             projection.screen,
         )?;
-        self.persist_agent_presentation_entry(
-            pane_id,
-            vec![row.style.clone(); row.rendered_lines.len()],
-            row.rendered_lines,
-            row.copy_lines,
-            String::new(),
-            Some((
-                rationale.text.as_str(),
-                AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
-            )),
-        );
-        let mut promoted = std::collections::BTreeSet::from([STREAMED_RATIONALE_PRESENTED_MARKER]);
+        let mut promoted = std::collections::BTreeSet::new();
+        if let (Some(rationale), Some(row)) = (rationale, projection.projected_rationale) {
+            self.persist_agent_presentation_entry(
+                pane_id,
+                vec![row.style.clone(); row.rendered_lines.len()],
+                row.rendered_lines,
+                row.copy_lines,
+                String::new(),
+                Some((
+                    rationale.text.as_str(),
+                    AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
+                )),
+            );
+            promoted.insert(STREAMED_RATIONALE_PRESENTED_MARKER);
+            self.integration
+                .runtime_metrics_mut()
+                .record_agent_streaming_settled_component("rationale");
+        }
         for projected in projection.projected_actions {
             let Some(source) = presentation.actions.get(&projected.action_index) else {
                 continue;
@@ -3808,9 +3811,6 @@ impl RuntimeSessionService {
         self.integration
             .runtime_metrics_mut()
             .record_agent_streaming_settlement_screen_change(true);
-        self.integration
-            .runtime_metrics_mut()
-            .record_agent_streaming_settled_component("rationale");
         Ok(true)
     }
 

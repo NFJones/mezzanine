@@ -4108,12 +4108,14 @@ fn runtime_streaming_rationale_and_command_fallback_retains_only_rationale() {
 #[test]
 fn runtime_streaming_command_fallback_retains_matching_progress() {
     for rationale in [false, true] {
-        streaming_command_fallback_progress_case(rationale);
+        for thinking in [false, true] {
+            streaming_command_fallback_progress_case(rationale, thinking);
+        }
     }
 }
 
 /// Exercises the exact progress predecessor with and without visible thinking.
-fn streaming_command_fallback_progress_case(rationale: bool) {
+fn streaming_command_fallback_progress_case(rationale: bool, thinking: bool) {
     let mut service = test_runtime_service();
     let store = AgentTranscriptStore::new(temp_root("streaming-command-progress-fallback"));
     service.set_agent_transcript_store(store.clone());
@@ -4123,6 +4125,12 @@ fn streaming_command_fallback_progress_case(rationale: bool) {
         .unwrap()
         .session_id
         .clone();
+    if !thinking {
+        service
+            .agent_shell_store_mut()
+            .set_log_level("%1", AgentLogLevel::Normal)
+            .unwrap();
+    }
     set_agent_pane_screen_for_test(
         &mut service,
         "%1",
@@ -4229,6 +4237,17 @@ fn streaming_command_fallback_progress_case(rationale: bool) {
     service
         .reconcile_agent_streaming_say_completion("%1", "turn-1", &execution)
         .unwrap();
+    let reconciled = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        reconciled.matches("matching progress").count(),
+        1,
+        "{reconciled}"
+    );
+    assert!(service.agent_streaming_say_action_is_promoted("%1", "turn-1", 0));
     service
         .present_agent_response_actions_to_terminal_buffer("%1", &execution)
         .unwrap();
