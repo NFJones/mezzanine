@@ -1694,6 +1694,21 @@ fn runtime_native_shell_redispatch_skips_owned_sibling_and_dispatches_later_acti
         .unwrap()
         .expect("third sibling should be queued after skipping owned predecessors");
 
+    let before_settlement = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let preview_positions = ["first", "second", "third"].map(|label| {
+        before_settlement
+            .find(&format!("$ printf 'native-redispatch-{label}"))
+            .expect("each dispatched sibling must show its preview before settlement")
+    });
+    assert!(
+        preview_positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{before_settlement}"
+    );
+
     for dispatch in [first, second, third] {
         assert!(
             service
