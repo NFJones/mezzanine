@@ -2811,10 +2811,7 @@ impl RuntimeSessionService {
                     .chain(presentation.action_headers.keys())
                     .chain(presentation.received_actions.iter())
                     .any(|index| index < action_index)
-                    || presentation
-                        .rationale
-                        .as_ref()
-                        .is_some_and(|source| !source.complete);
+                    || presentation.rationale.is_some();
                 if !has_predecessor {
                     self.append_agent_streaming_say_started(pane_id)?;
                 }
@@ -3052,10 +3049,7 @@ impl RuntimeSessionService {
                     .chain(presentation.action_headers.keys())
                     .chain(presentation.received_actions.iter())
                     .any(|index| index < action_index)
-                    || presentation
-                        .rationale
-                        .as_ref()
-                        .is_some_and(|source| !source.complete);
+                    || presentation.rationale.is_some();
                 if !has_predecessor {
                     self.append_agent_streaming_plain_started(
                         pane_id,

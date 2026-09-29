@@ -1135,6 +1135,67 @@ fn runtime_streaming_open_rationale_holds_first_say() {
     );
 }
 
+/// Closing a rationale does not allow an action label to precede its
+/// still-outstanding rich projection installation.
+#[test]
+fn runtime_streaming_closed_rationale_holds_action_start_until_projection() {
+    for command in [false, true] {
+        let mut service = test_runtime_service();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+        );
+        for event in [
+            mez_agent::StreamingSayEvent::RationaleStarted,
+            mez_agent::StreamingSayEvent::RationaleTextDelta {
+                text: "rationale awaits rendering".to_string(),
+            },
+            mez_agent::StreamingSayEvent::RationaleTextComplete,
+        ] {
+            service
+                .ingest_provider_log(
+                    "%1",
+                    "turn-rationale-ack",
+                    crate::runtime::RuntimeProviderLogInput::Progress(&event),
+                )
+                .unwrap();
+        }
+        let before = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines();
+        let start = if command {
+            mez_agent::StreamingSayEvent::ShellCommandStarted { action_index: 0 }
+        } else {
+            mez_agent::StreamingSayEvent::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Progress,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            }
+        };
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-rationale-ack",
+                crate::runtime::RuntimeProviderLogInput::Progress(&start),
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .agent_pane_screen("%1")
+                .unwrap()
+                .normal_content_lines(),
+            before,
+            "command={command}: action label preceded rationale projection"
+        );
+    }
+}
+
 /// A later complete action must wait while the preceding action still has
 /// unclosed source, even when the later action has a complete renderable body.
 #[test]
