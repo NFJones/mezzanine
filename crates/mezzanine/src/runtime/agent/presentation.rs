@@ -290,6 +290,7 @@ impl RuntimeSessionService {
         else {
             return Ok(());
         };
+        self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
         for (index, action) in actions.iter().enumerate() {
             let key = (
                 owner.0.clone(),
@@ -318,6 +319,16 @@ impl RuntimeSessionService {
                             owner.3.clone(),
                             prior_index,
                         );
+                        if matches!(prior.payload, AgentActionPayload::Say { .. }) {
+                            return !self.agent_streaming_say_action_is_promoted(
+                                pane_id,
+                                &execution.request.turn_id,
+                                prior_index,
+                            ) && !self
+                                .presentation
+                                .agent_deferred_provider_progress
+                                .contains(&prior_key);
+                        }
                         action_holds_later_log(prior)
                             && !self
                                 .presentation

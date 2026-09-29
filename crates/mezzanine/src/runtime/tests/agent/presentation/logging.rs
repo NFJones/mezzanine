@@ -199,6 +199,114 @@ fn runtime_discovery_headers_preserve_interleaved_progress_order() {
     );
 }
 
+/// A later executor header cannot pass a progress say still waiting for its
+/// earlier shell result, even when that shell's preview is already visible.
+#[test]
+fn runtime_running_shell_holds_interleaved_say_and_discovery_header() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "run and discover")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 16).unwrap(), 120).unwrap(),
+    );
+    let shell = mez_agent::AgentAction {
+        id: "shell-first".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: String::new(),
+            command: "printf first-shell".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let say = mez_agent::AgentAction {
+        id: "say-middle".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Progress,
+            text: "middle progress".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let discovery = mez_agent::AgentAction {
+        id: "discovery-last".to_string(),
+        payload: mez_agent::AgentActionPayload::ListAgents {
+            agent_type: Some("subagent".to_string()),
+            scope: Some("project".to_string()),
+        },
+    };
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: String::new(),
+                actions: vec![shell.clone(), say.clone(), discovery.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: [&shell, &say, &discovery]
+            .into_iter()
+            .map(|action| mez_agent::ActionResult::running(&turn, action, Vec::new(), None))
+            .collect(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    service
+        .queue_ordered_provider_command("%1", &execution, &shell, "printf first-shell")
+        .unwrap();
+    service
+        .execute_running_list_agents_actions_for_turn(&turn, &mut execution)
+        .unwrap();
+    let pending = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pending.contains("$ printf first-shell"), "{pending}");
+    assert!(!pending.contains("middle progress"), "{pending}");
+    assert!(!pending.contains("list agents:"), "{pending}");
+    execution.action_results[0].status = ActionStatus::Succeeded;
+    service
+        .flush_ordered_provider_headers("%1", &execution)
+        .unwrap();
+    let settled = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        settled.find("first-shell").unwrap() < settled.find("middle progress").unwrap(),
+        "{settled}"
+    );
+    assert!(
+        settled.find("middle progress").unwrap() < settled.find("list agents:").unwrap(),
+        "{settled}"
+    );
+}
+
 /// Issue execution must publish a middle progress row before its next header.
 #[test]
 fn runtime_issue_headers_preserve_interleaved_progress_order() {
