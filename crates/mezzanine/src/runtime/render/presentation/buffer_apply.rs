@@ -3671,14 +3671,15 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Retains only an exact, currently owned rationale when a sibling falls
-    /// back to ordinary completion presentation.
+    /// Retains exact installed rationale and successful progress predecessors
+    /// when a later component falls back to ordinary completion presentation.
     fn retain_validated_streaming_rationale_for_fallback(
         &mut self,
         pane_id: &str,
         turn_id: &str,
         presentation: &RuntimeStreamingSayPresentation,
         batch: &mez_agent::MaapBatch,
+        execution: &mez_agent::AgentTurnExecution,
     ) -> Result<bool> {
         let Some(rationale) = presentation.rationale.as_ref().filter(|source| {
             source.complete && !source.text.trim().is_empty() && source.text == batch.rationale
@@ -3704,6 +3705,43 @@ impl RuntimeSessionService {
         if presentation.projected_context.as_ref() != Some(&context) || !context.thinking_enabled {
             return Ok(false);
         }
+        let first_unpromotable = presentation
+            .shell_commands
+            .keys()
+            .chain(presentation.action_headers.keys())
+            .copied()
+            .min()
+            .unwrap_or(usize::MAX);
+        let retained_actions = presentation
+            .actions
+            .iter()
+            .filter(|(index, source)| {
+                **index < first_unpromotable
+                    && source.complete
+                    && source.status == mez_agent::SayStatus::Progress
+                    && presentation.projected_actions.as_ref().is_some_and(|rows| {
+                        rows.iter().any(|row| {
+                            row.action_index == **index
+                                && row.kind
+                                    == crate::runtime::render::RuntimeStreamingSayProjectedActionKind::Say
+                        })
+                    })
+                    && batch.actions.get(**index).is_some_and(|action| {
+                        matches!(&action.payload, AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Progress,
+                            text,
+                            content_type,
+                        } if text == &source.text
+                            && mez_agent::normalize_agent_output_content_type(Some(content_type))
+                                == source.content_type)
+                            && execution.action_results.iter().any(|result| {
+                                result.action_id == action.id
+                                    && result.status == mez_agent::ActionStatus::Succeeded
+                            })
+                    })
+            })
+            .map(|(index, source)| (*index, source.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
         let work = crate::runtime::RuntimeStreamingSayProjectionWork {
             pane_id: pane_id.to_string(),
             turn_id: turn_id.to_string(),
@@ -3713,7 +3751,7 @@ impl RuntimeSessionService {
             installed_lineage: presentation.installed_lineage,
             baseline_screen: presentation.baseline_screen.clone(),
             rationale: Some(rationale.clone()),
-            actions: std::collections::BTreeMap::new(),
+            actions: retained_actions,
             outbound_messages: std::collections::BTreeMap::new(),
             shell_commands: std::collections::BTreeMap::new(),
             shell_summaries: std::collections::BTreeMap::new(),
@@ -3746,12 +3784,27 @@ impl RuntimeSessionService {
                 AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
             )),
         );
+        let mut promoted = std::collections::BTreeSet::from([STREAMED_RATIONALE_PRESENTED_MARKER]);
+        for projected in projection.projected_actions {
+            let Some(source) = presentation.actions.get(&projected.action_index) else {
+                continue;
+            };
+            self.persist_agent_presentation_entry(
+                pane_id,
+                vec![projected.style.clone(); projected.rendered_lines.len()],
+                projected.rendered_lines,
+                projected.copy_lines,
+                String::new(),
+                Some((source.text.as_str(), source.content_type.as_str())),
+            );
+            promoted.insert(projected.action_index);
+            self.integration
+                .runtime_metrics_mut()
+                .record_agent_streaming_settled_component("say");
+        }
         self.presentation
             .agent_promoted_streaming_say_actions
-            .insert(
-                (pane_id.to_string(), turn_id.to_string()),
-                std::collections::BTreeSet::from([STREAMED_RATIONALE_PRESENTED_MARKER]),
-            );
+            .insert((pane_id.to_string(), turn_id.to_string()), promoted);
         self.integration
             .runtime_metrics_mut()
             .record_agent_streaming_settlement_screen_change(true);
@@ -5647,6 +5700,7 @@ impl RuntimeSessionService {
                     turn_id,
                     &presentation,
                     batch,
+                    execution,
                 )?
             } else {
                 false
@@ -5676,6 +5730,7 @@ impl RuntimeSessionService {
                     turn_id,
                     &presentation,
                     batch,
+                    execution,
                 )?
             } else {
                 false
