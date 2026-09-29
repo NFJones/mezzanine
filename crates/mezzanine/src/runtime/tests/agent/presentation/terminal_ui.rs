@@ -2379,6 +2379,27 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
         matching[0].source_content_type.as_deref(),
         Some(mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE)
     );
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "later durable row")
+        .unwrap();
+    let after_append = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    assert_eq!(
+        after_append
+            .iter()
+            .filter(|line| line.text.contains("streamed output"))
+            .count(),
+        1,
+        "{after_append:?}"
+    );
+    assert!(
+        after_append
+            .iter()
+            .any(|line| line.text.contains("later durable row")),
+        "{after_append:?}"
+    );
 }
 
 /// Verifies a newer cumulative source generation that renders identically does
