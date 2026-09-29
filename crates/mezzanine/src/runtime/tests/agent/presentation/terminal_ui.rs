@@ -1624,6 +1624,88 @@ fn runtime_streaming_replayed_say_start_has_one_label() {
     );
 }
 
+/// Replaying field closure after an installed projection cannot make an
+/// unchanged response dirty or request another worker render.
+#[test]
+fn runtime_streaming_replayed_field_closure_keeps_projection_current() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+    );
+    for event in [
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 0,
+            status: mez_agent::SayStatus::Progress,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 0,
+            text: "first source".to_string(),
+        },
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 1,
+            status: mez_agent::SayStatus::Progress,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 1,
+            text: "second source".to_string(),
+        },
+    ] {
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-closure-replay",
+                crate::runtime::RuntimeProviderLogInput::Progress(&event),
+            )
+            .unwrap();
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-closure-replay")
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    service
+        .apply_agent_streaming_say_projection_result(projection)
+        .unwrap();
+    let closure = mez_agent::StreamingSayEvent::TextComplete { action_index: 0 };
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-closure-replay",
+            crate::runtime::RuntimeProviderLogInput::Progress(&closure),
+        )
+        .unwrap();
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-closure-replay")
+        .unwrap()
+        .expect("first closure must acknowledge newly eligible source");
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    service
+        .apply_agent_streaming_say_projection_result(projection)
+        .unwrap();
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-closure-replay",
+            crate::runtime::RuntimeProviderLogInput::Progress(&closure),
+        )
+        .unwrap();
+    assert!(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-closure-replay")
+            .unwrap()
+            .is_none(),
+        "replayed closure cannot dirty the acknowledged projection"
+    );
+}
+
 /// A complete later say remains buffered behind an open command preview and
 /// becomes visible only after the command field closes.
 #[test]

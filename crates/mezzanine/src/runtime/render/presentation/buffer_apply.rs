@@ -2862,6 +2862,9 @@ impl RuntimeSessionService {
                         "streaming say completion arrived before its start event",
                     )
                 })?;
+                if action.complete {
+                    return Ok(());
+                }
                 action.complete = true;
                 // Closure may release source buffered behind this ordinal even
                 // though the completed field adds no display characters.
