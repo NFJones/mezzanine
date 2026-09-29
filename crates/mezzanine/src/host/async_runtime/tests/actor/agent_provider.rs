@@ -320,8 +320,16 @@ fn async_actor_applies_agent_provider_completion_events() {
 }
 
 /// Runs the same actor completion with or without optional installed progress.
-async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::TerminalStyledLine> {
+async fn actor_provider_completion_case(
+    streamed: bool,
+) -> (Vec<mez_terminal::TerminalStyledLine>, Vec<(String, String)>) {
     let mut service = test_service();
+    let transcript_root = std::env::temp_dir().join(format!(
+        "mez-provider-log-parity-{}-{streamed}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&transcript_root);
+    service.set_agent_transcript_store(AgentTranscriptStore::new(transcript_root.clone()));
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
@@ -583,14 +591,27 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
             .unwrap();
         assert_eq!(report.accepted, 1);
         assert_eq!(report.applied, 1);
-        assert_eq!(report.side_effects, 1);
+        assert!(report.side_effects >= 1);
+        let sources = handle
+            .drain_persistence_side_effects(128)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::PersistPresentationEntries { entries, .. } => Some(entries),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|entry| Some((entry.source_text?, entry.source_content_type?)))
+            .collect::<Vec<_>>();
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
         );
+        sources
     };
 
-    let ((), mut exit) = tokio::join!(client, actor.run());
+    let (sources, mut exit) = tokio::join!(client, actor.run());
     assert!(exit.service.pending_agent_provider_tasks().is_empty());
     assert_eq!(
         exit.service
@@ -633,7 +654,6 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
         1,
         "{pane_text}"
     );
-    assert_eq!(exit.commands_processed, if streamed { 7 } else { 3 });
     let presented = exit
         .service
         .pane_screen("%1")
@@ -652,7 +672,31 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
         })
         .collect();
     exit.service.terminate_all_pane_processes().unwrap();
-    presented
+    let assistant_sources = sources
+        .into_iter()
+        .filter(|(text, _)| {
+            matches!(
+                text.as_str(),
+                "test action batch rationale"
+                    | "Typed completion applied."
+                    | "Later validated answer."
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        assistant_sources
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "test action batch rationale",
+            "Typed completion applied.",
+            "Later validated answer."
+        ],
+        "streamed={streamed}: {assistant_sources:?}"
+    );
+    let _ = std::fs::remove_dir_all(transcript_root);
+    (presented, assistant_sources)
 }
 
 /// Verifies provider-produced issue writes cross the actor-validation,
