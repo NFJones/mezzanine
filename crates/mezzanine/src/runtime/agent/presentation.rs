@@ -162,6 +162,9 @@ impl RuntimeSessionService {
             .agent_queued_provider_commands
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
         self.presentation
+            .agent_published_provider_commands
+            .retain(|((_, candidate_turn_id, _, _, _), _)| candidate_turn_id != turn_id);
+        self.presentation
             .agent_queued_provider_results
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
         self.presentation
@@ -266,12 +269,24 @@ impl RuntimeSessionService {
             group,
             index,
         );
+        let source_key = (key.clone(), command.to_string());
+        if self
+            .presentation
+            .agent_published_provider_commands
+            .contains(&source_key)
+        {
+            return Ok(());
+        }
         if self
             .presentation
             .agent_published_provider_headers
             .contains(&key)
         {
-            return self.append_agent_command_preview_to_terminal_buffer(pane_id, command);
+            self.append_agent_command_preview_to_terminal_buffer(pane_id, command)?;
+            self.presentation
+                .agent_published_provider_commands
+                .insert(source_key);
+            return Ok(());
         }
         self.presentation
             .agent_queued_provider_headers
@@ -461,6 +476,9 @@ impl RuntimeSessionService {
                     .remove(&key)
                 {
                     self.append_agent_command_preview_to_terminal_buffer(pane_id, &command)?;
+                    self.presentation
+                        .agent_published_provider_commands
+                        .insert((key.clone(), command));
                 }
                 if let Some((action, result, text)) =
                     self.presentation.agent_queued_provider_results.remove(&key)

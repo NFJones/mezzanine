@@ -635,6 +635,9 @@ pub(crate) struct RuntimePresentationComponent {
     /// Validated shell command previews awaiting their response ordinal.
     pub(super) agent_queued_provider_commands:
         std::collections::BTreeMap<RuntimeProviderLogOrdinal, String>,
+    /// Exact shell preview sources already published for an action ordinal.
+    pub(super) agent_published_provider_commands:
+        std::collections::BTreeSet<(RuntimeProviderLogOrdinal, String)>,
     /// Settled verbose results waiting for their action's published header.
     pub(super) agent_queued_provider_results: std::collections::BTreeMap<
         RuntimeProviderLogOrdinal,

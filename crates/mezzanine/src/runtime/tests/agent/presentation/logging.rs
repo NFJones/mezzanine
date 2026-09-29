@@ -372,11 +372,19 @@ fn runtime_running_shell_holds_interleaved_say_and_discovery_header() {
     service
         .flush_ordered_provider_headers("%1", &execution)
         .unwrap();
+    service
+        .queue_ordered_provider_command("%1", &execution, &shell, "printf first-shell")
+        .unwrap();
     let settled = service
         .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    assert_eq!(
+        settled.matches("$ printf first-shell").count(),
+        1,
+        "{settled}"
+    );
     assert!(
         settled.find("first-shell").unwrap() < settled.find("middle progress").unwrap(),
         "{settled}"
