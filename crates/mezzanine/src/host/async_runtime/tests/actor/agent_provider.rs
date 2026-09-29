@@ -554,6 +554,27 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
                     .await
                     .unwrap()
             );
+            let view = handle
+                .render_client_view(
+                    ClientViewRole::Primary,
+                    Size::new(80, 24).unwrap(),
+                    TerminalClientLoopConfig::default(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let before_completion = view.lines.join("\n");
+            assert_eq!(
+                before_completion
+                    .matches("Typed completion applied.")
+                    .count(),
+                1,
+                "{before_completion}"
+            );
+            assert!(
+                !before_completion.contains("Later validated answer."),
+                "a later final say remains deferred until settlement: {before_completion}"
+            );
         }
 
         let report = handle
@@ -612,7 +633,7 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
         1,
         "{pane_text}"
     );
-    assert_eq!(exit.commands_processed, if streamed { 6 } else { 3 });
+    assert_eq!(exit.commands_processed, if streamed { 7 } else { 3 });
     let presented = exit
         .service
         .pane_screen("%1")
