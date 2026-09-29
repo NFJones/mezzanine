@@ -3024,6 +3024,9 @@ impl RuntimeSessionService {
                         "streaming rationale completion arrived before its start event",
                     )
                 })?;
+                if rationale.complete {
+                    return Ok(());
+                }
                 rationale.complete = true;
                 if !presentation.actions.is_empty()
                     || !presentation.action_headers.is_empty()

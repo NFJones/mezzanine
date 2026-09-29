@@ -1233,6 +1233,22 @@ fn runtime_streaming_closed_rationale_holds_action_start_until_projection() {
             })
             .unwrap();
         assert!(rationale < action, "command={command}: {lines}");
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-rationale-ack",
+                crate::runtime::RuntimeProviderLogInput::Progress(
+                    &mez_agent::StreamingSayEvent::RationaleTextComplete,
+                ),
+            )
+            .unwrap();
+        assert!(
+            service
+                .take_agent_streaming_say_projection_work("%1", "turn-rationale-ack")
+                .unwrap()
+                .is_none(),
+            "command={command}: replayed rationale closure dirtied the installed projection"
+        );
     }
 }
 
