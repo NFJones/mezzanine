@@ -447,10 +447,23 @@ impl RuntimeSessionService {
                                 .presentation
                                 .agent_published_provider_headers
                                 .contains(&prior_key)
-                            && !execution
-                                .action_results
-                                .iter()
-                                .any(|result| result.action_id == prior.id && result.is_terminal())
+                            && !execution.action_results.iter().any(|result| {
+                                result.action_id == prior.id
+                                    && result.is_terminal()
+                                    && runtime_agent_action_outcome_line(
+                                        prior,
+                                        result,
+                                        self.agent_verbose_enabled(pane_id)
+                                            || self.agent_trace_enabled(pane_id),
+                                    )
+                                    .is_none_or(
+                                        |(is_error, line)| {
+                                            self.presentation
+                                                .agent_published_provider_outcomes
+                                                .contains(&(prior_key.clone(), is_error, line))
+                                        },
+                                    )
+                            })
                     })
                 {
                     break;
@@ -515,10 +528,21 @@ impl RuntimeSessionService {
                         .presentation
                         .agent_published_provider_headers
                         .contains(&key))
-                && !execution
-                    .action_results
-                    .iter()
-                    .any(|result| result.action_id == action.id && result.is_terminal())
+                && !execution.action_results.iter().any(|result| {
+                    result.action_id == action.id
+                        && result.is_terminal()
+                        && runtime_agent_action_outcome_line(
+                            action,
+                            result,
+                            self.agent_verbose_enabled(pane_id)
+                                || self.agent_trace_enabled(pane_id),
+                        )
+                        .is_none_or(|(is_error, line)| {
+                            self.presentation
+                                .agent_published_provider_outcomes
+                                .contains(&(key.clone(), is_error, line))
+                        })
+                })
             {
                 break;
             }
