@@ -3037,12 +3037,27 @@ impl RuntimeSessionService {
                     .or_insert_with(Default::default);
                 presentation.revision = presentation.revision.wrapping_add(1);
                 presentation.projected_revision = None;
-                self.append_agent_streaming_plain_started(
-                    pane_id,
-                    AgentTerminalPresentationStyle::Command,
-                    "$ ",
-                    "starting streaming command source",
-                )?;
+                let has_predecessor = presentation
+                    .actions
+                    .keys()
+                    .chain(presentation.outbound_messages.keys())
+                    .chain(presentation.shell_commands.keys())
+                    .chain(presentation.shell_summaries.keys())
+                    .chain(presentation.action_headers.keys())
+                    .chain(presentation.received_actions.iter())
+                    .any(|index| index < action_index)
+                    || presentation
+                        .rationale
+                        .as_ref()
+                        .is_some_and(|source| !source.complete);
+                if !has_predecessor {
+                    self.append_agent_streaming_plain_started(
+                        pane_id,
+                        AgentTerminalPresentationStyle::Command,
+                        "$ ",
+                        "starting streaming command source",
+                    )?;
+                }
             }
             mez_agent::StreamingSayEvent::ShellCommandTextDelta { action_index, text } => {
                 let exists = self

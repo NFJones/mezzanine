@@ -1378,6 +1378,74 @@ fn runtime_streaming_no_preview_action_holds_later_say_until_validation() {
     assert_eq!(visible.matches("mez> later answer").count(), 1, "{visible}");
 }
 
+/// A command label for a later action must wait behind an earlier source;
+/// receiving its start event cannot append directly to the pane.
+#[test]
+fn runtime_streaming_later_command_start_waits_for_earlier_action() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+    );
+    for event in [
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 0,
+            status: mez_agent::SayStatus::Progress,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 0,
+            text: "earlier source".to_string(),
+        },
+    ] {
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-command-label-order",
+                crate::runtime::RuntimeProviderLogInput::Progress(&event),
+            )
+            .unwrap();
+    }
+    let before = service.agent_pane_screen("%1").unwrap().clone();
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-command-label-order",
+            crate::runtime::RuntimeProviderLogInput::Progress(
+                &mez_agent::StreamingSayEvent::ShellCommandStarted { action_index: 1 },
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines(),
+        before.normal_content_lines(),
+        "later command label appeared before earlier action settled"
+    );
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-command-label-order")
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    service
+        .apply_agent_streaming_say_projection_result(projection)
+        .unwrap();
+    let text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(text.contains("earlier source"), "{text}");
+    assert!(!text.contains("$ "), "later command leaked: {text}");
+}
+
 /// A complete later say remains buffered behind an open command preview and
 /// becomes visible only after the command field closes.
 #[test]
