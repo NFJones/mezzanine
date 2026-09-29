@@ -511,6 +511,17 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
                 },
                 mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
                 mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
+                mez_agent::StreamingSayEvent::Started {
+                    action_index: 1,
+                    status: mez_agent::SayStatus::Final,
+                    content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+                },
+                mez_agent::StreamingSayEvent::TextDelta {
+                    action_index: 1,
+                    text: "Later validated answer.".to_string(),
+                },
+                mez_agent::StreamingSayEvent::TextComplete { action_index: 1 },
+                mez_agent::StreamingSayEvent::ActionComplete { action_index: 1 },
             ] {
                 progress.push(RuntimeEvent::AgentProvider(
                     AgentProviderEvent::StreamingSay {
@@ -528,7 +539,7 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
                     .await
                     .unwrap()
                     .applied,
-                4
+                8
             );
             let work = handle
                 .take_streaming_say_projection_work(task.pane_id.clone(), task.turn_id.clone())
