@@ -641,6 +641,9 @@ pub(crate) struct RuntimePresentationComponent {
     /// Runtime outcome rows waiting for preceding accepted action logs.
     pub(super) agent_queued_provider_outcomes:
         std::collections::BTreeMap<RuntimeProviderLogOrdinal, (bool, String)>,
+    /// Outcome ordinals already published for an exact validated response.
+    pub(super) agent_published_provider_outcomes:
+        std::collections::BTreeSet<RuntimeProviderLogOrdinal>,
     /// Validated response action order, used only to sequence visible logs.
     pub(super) agent_provider_log_orders: std::collections::BTreeMap<
         (String, String, String, mez_agent::ContextExecutionGroupId),

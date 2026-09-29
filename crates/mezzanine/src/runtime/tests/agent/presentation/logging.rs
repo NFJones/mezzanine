@@ -112,6 +112,86 @@ fn runtime_mixed_action_progress_waits_for_preceding_header() {
     );
 }
 
+/// A leading validated progress say releases the next action ordinal without
+/// requiring a streamed promotion or a preceding runtime action.
+#[test]
+fn runtime_static_progress_releases_following_discovery_header() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "discover after progress")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 16).unwrap(), 120).unwrap(),
+    );
+    let progress = mez_agent::AgentAction {
+        id: "first-progress".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Progress,
+            text: "first progress".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let discovery = mez_agent::AgentAction {
+        id: "second-discovery".to_string(),
+        payload: mez_agent::AgentActionPayload::ListAgents {
+            agent_type: Some("subagent".to_string()),
+            scope: Some("project".to_string()),
+        },
+    };
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: String::new(),
+                actions: vec![progress.clone(), discovery.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: [&progress, &discovery]
+            .into_iter()
+            .map(|action| mez_agent::ActionResult::running(&turn, action, Vec::new(), None))
+            .collect(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    service
+        .execute_running_list_agents_actions_for_turn(&turn, &mut execution)
+        .unwrap();
+    let text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        text.find("first progress").unwrap() < text.find("list agents:").unwrap(),
+        "{text}"
+    );
+    assert_eq!(text.matches("first progress").count(), 1, "{text}");
+}
+
 /// Executor traversal must not move a later discovery header past an
 /// interleaved progress say whose predecessor has just settled.
 #[test]
@@ -687,6 +767,15 @@ fn runtime_failed_outcome_waits_for_preceding_issue_log() {
         "{rows}"
     );
     assert_eq!(rows.matches("HTTP 404").count(), 1, "{rows}");
+    service
+        .present_agent_action_outcomes_to_terminal_buffer("%1", &settled)
+        .unwrap();
+    let replayed = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(replayed.matches("HTTP 404").count(), 1, "{replayed}");
 }
 
 /// A later discovery header waits for an earlier config action even though

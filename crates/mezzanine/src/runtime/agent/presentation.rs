@@ -150,6 +150,9 @@ impl RuntimeSessionService {
             .agent_queued_provider_outcomes
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
         self.presentation
+            .agent_published_provider_outcomes
+            .retain(|(_, candidate_turn_id, _, _, _)| candidate_turn_id != turn_id);
+        self.presentation
             .agent_queued_provider_headers
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
         self.presentation
@@ -437,6 +440,9 @@ impl RuntimeSessionService {
                     } else {
                         self.append_agent_status_text_to_terminal_buffer(pane_id, &line)?;
                     }
+                    self.presentation
+                        .agent_published_provider_outcomes
+                        .insert(key.clone());
                 }
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
             } else if action_holds_later_log(action)
@@ -669,6 +675,18 @@ impl RuntimeSessionService {
                             text,
                             content_type,
                         )?;
+                        if let Some(session) = self.agent_shell_store().get(pane_id) {
+                            let group = super::provider_execution::provider_log_execution_group_id(
+                                execution,
+                            )?;
+                            self.presentation.agent_deferred_provider_progress.insert((
+                                pane_id.to_string(),
+                                execution.request.turn_id.clone(),
+                                session.session_id.clone(),
+                                group,
+                                action_index,
+                            ));
+                        }
                     }
                 }
                 AgentActionPayload::RequestCapability { .. }
@@ -936,6 +954,13 @@ impl RuntimeSessionService {
                 );
                 if self
                     .presentation
+                    .agent_published_provider_outcomes
+                    .contains(&key)
+                {
+                    continue;
+                }
+                if self
+                    .presentation
                     .agent_published_provider_headers
                     .contains(&key)
                 {
@@ -944,6 +969,9 @@ impl RuntimeSessionService {
                     } else {
                         self.append_agent_status_text_to_terminal_buffer(pane_id, &line)?;
                     }
+                    self.presentation
+                        .agent_published_provider_outcomes
+                        .insert(key);
                     continue;
                 }
                 // A rejected action may have no accepted execution header. Its
