@@ -2962,6 +2962,9 @@ impl RuntimeSessionService {
                     return Ok(());
                 };
                 if let Some(message) = presentation.outbound_messages.get_mut(action_index) {
+                    if message.complete {
+                        return Ok(());
+                    }
                     message.complete = true;
                     release_later_streaming_action(presentation, *action_index);
                 }
@@ -3182,6 +3185,9 @@ impl RuntimeSessionService {
                             "streaming shell summary completion arrived before its start event",
                         )
                     })?;
+                if summary.complete {
+                    return Ok(());
+                }
                 summary.complete = true;
                 release_later_streaming_action(presentation, *action_index);
             }

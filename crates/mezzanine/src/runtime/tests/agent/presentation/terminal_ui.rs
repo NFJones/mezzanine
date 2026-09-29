@@ -1784,6 +1784,107 @@ fn runtime_streaming_replayed_command_closure_keeps_projection_current() {
     );
 }
 
+/// A repeated summary or message closure cannot invalidate a projection
+/// after the first closure has released and rendered its successor.
+#[test]
+fn runtime_streaming_replayed_auxiliary_closure_keeps_projection_current() {
+    for message in [false, true] {
+        let mut service = test_runtime_service();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+        );
+        let start = if message {
+            mez_agent::StreamingSayEvent::MessageStarted {
+                action_index: 0,
+                recipient: "agent-%2".to_string(),
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            }
+        } else {
+            mez_agent::StreamingSayEvent::ShellCommandSummaryStarted { action_index: 0 }
+        };
+        let delta = if message {
+            mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                action_index: 0,
+                text: "sent payload".to_string(),
+            }
+        } else {
+            mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta {
+                action_index: 0,
+                text: "command summary".to_string(),
+            }
+        };
+        let closure = if message {
+            mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 }
+        } else {
+            mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { action_index: 0 }
+        };
+        for event in [
+            start,
+            delta,
+            mez_agent::StreamingSayEvent::Started {
+                action_index: 1,
+                status: mez_agent::SayStatus::Progress,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 1,
+                text: "later source".to_string(),
+            },
+        ] {
+            service
+                .ingest_provider_log(
+                    "%1",
+                    "turn-aux-closure-replay",
+                    crate::runtime::RuntimeProviderLogInput::Progress(&event),
+                )
+                .unwrap();
+        }
+        let work = service
+            .take_agent_streaming_say_projection_work("%1", "turn-aux-closure-replay")
+            .unwrap()
+            .unwrap();
+        let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap();
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-aux-closure-replay",
+                crate::runtime::RuntimeProviderLogInput::Progress(&closure),
+            )
+            .unwrap();
+        let work = service
+            .take_agent_streaming_say_projection_work("%1", "turn-aux-closure-replay")
+            .unwrap()
+            .expect("first closure releases the later ordinal");
+        let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap();
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-aux-closure-replay",
+                crate::runtime::RuntimeProviderLogInput::Progress(&closure),
+            )
+            .unwrap();
+        assert!(
+            service
+                .take_agent_streaming_say_projection_work("%1", "turn-aux-closure-replay")
+                .unwrap()
+                .is_none(),
+            "message={message}: duplicate closure dirtied the installed projection"
+        );
+    }
+}
+
 /// A complete later say remains buffered behind an open command preview and
 /// becomes visible only after the command field closes.
 #[test]
