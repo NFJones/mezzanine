@@ -1193,6 +1193,46 @@ fn runtime_streaming_closed_rationale_holds_action_start_until_projection() {
             before,
             "command={command}: action label preceded rationale projection"
         );
+        let delta = if command {
+            mez_agent::StreamingSayEvent::ShellCommandTextDelta {
+                action_index: 0,
+                text: "printf ready".to_string(),
+            }
+        } else {
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: "action ready".to_string(),
+            }
+        };
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-rationale-ack",
+                crate::runtime::RuntimeProviderLogInput::Progress(&delta),
+            )
+            .unwrap();
+        let work = service
+            .take_agent_streaming_say_projection_work("%1", "turn-rationale-ack")
+            .unwrap()
+            .expect("closed rationale and action source should produce projection work");
+        let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap();
+        let lines = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        let rationale = lines.find("rationale awaits rendering").unwrap();
+        let action = lines
+            .find(if command {
+                "printf ready"
+            } else {
+                "action ready"
+            })
+            .unwrap();
+        assert!(rationale < action, "command={command}: {lines}");
     }
 }
 
