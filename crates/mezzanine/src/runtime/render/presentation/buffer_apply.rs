@@ -5861,6 +5861,18 @@ impl RuntimeSessionService {
             let context = presentation.projected_context.as_ref().ok_or_else(|| {
                 MezError::invalid_state("settled streaming projection context disappeared")
             })?;
+            let settled_actions = presentation
+                .actions
+                .iter()
+                .filter(|(index, _)| promoted.contains(index))
+                .map(|(index, source)| (*index, source.clone()))
+                .collect();
+            let settled_commands = presentation
+                .shell_commands
+                .iter()
+                .filter(|(index, _)| promoted.contains(index))
+                .map(|(index, source)| (*index, source.clone()))
+                .collect();
             let prefix = Self::build_agent_streaming_say_projection(
                 crate::runtime::RuntimeStreamingSayProjectionWork {
                     pane_id: pane_id.to_string(),
@@ -5870,11 +5882,20 @@ impl RuntimeSessionService {
                     revision: presentation.revision,
                     installed_lineage: presentation.installed_lineage,
                     baseline_screen: presentation.baseline_screen.clone(),
-                    rationale: presentation.rationale.clone(),
-                    actions: presentation.actions.clone(),
+                    rationale: presentation
+                        .projected_rationale
+                        .as_ref()
+                        .and(presentation.rationale.as_ref())
+                        .cloned(),
+                    actions: settled_actions,
                     outbound_messages: std::collections::BTreeMap::new(),
-                    shell_commands: presentation.shell_commands.clone(),
-                    shell_summaries: presentation.shell_summaries.clone(),
+                    shell_commands: settled_commands,
+                    shell_summaries: presentation
+                        .shell_summaries
+                        .iter()
+                        .filter(|(index, _)| promoted.contains(index))
+                        .map(|(index, source)| (*index, source.clone()))
+                        .collect(),
                     action_headers: presentation.action_headers.clone(),
                     thinking_enabled: context.thinking_enabled,
                     shell_classification: context.shell_classification,
