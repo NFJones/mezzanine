@@ -587,6 +587,7 @@ async fn runtime_deferred_fetch_url_result_reaches_model_context() {
         vec!["deferred fetch body".to_string()],
         None,
     );
+    let replay_result = succeeded.clone();
     assert!(
         service
             .complete_approved_external_action(
@@ -611,6 +612,24 @@ async fn runtime_deferred_fetch_url_result_reaches_model_context() {
             .unwrap()
             < pane_text.find("deferred fetch body").unwrap(),
         "{pane_text}"
+    );
+    let replay_execution = service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .unwrap()
+        .clone();
+    service
+        .queue_ordered_provider_result("%1", &replay_execution, &action, &replay_result)
+        .unwrap();
+    let replayed = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        replayed.matches("deferred fetch body").count(),
+        1,
+        "{replayed}"
     );
     let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     assert!(

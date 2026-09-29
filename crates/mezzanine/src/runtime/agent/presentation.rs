@@ -151,7 +151,7 @@ impl RuntimeSessionService {
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
         self.presentation
             .agent_published_provider_outcomes
-            .retain(|(_, candidate_turn_id, _, _, _)| candidate_turn_id != turn_id);
+            .retain(|((_, candidate_turn_id, _, _, _), _, _)| candidate_turn_id != turn_id);
         self.presentation
             .agent_queued_provider_headers
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
@@ -161,6 +161,9 @@ impl RuntimeSessionService {
         self.presentation
             .agent_queued_provider_results
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
+        self.presentation
+            .agent_published_provider_results
+            .retain(|((_, candidate_turn_id, _, _, _), _)| candidate_turn_id != turn_id);
         self.presentation
             .agent_provider_log_orders
             .retain(|(_, candidate_turn_id, _, _), _| candidate_turn_id != turn_id);
@@ -302,22 +305,32 @@ impl RuntimeSessionService {
             group,
             index,
         );
+        let text = result.content_text();
+        let source_key = (key.clone(), text.clone());
+        if self
+            .presentation
+            .agent_published_provider_results
+            .contains(&source_key)
+        {
+            return Ok(());
+        }
         if self
             .presentation
             .agent_published_provider_headers
             .contains(&key)
         {
-            return self.append_agent_action_result_text_to_terminal_buffer(
-                pane_id,
-                action,
-                result,
-                &result.content_text(),
-            );
+            self.append_agent_action_result_text_to_terminal_buffer(
+                pane_id, action, result, &text,
+            )?;
+            self.presentation
+                .agent_published_provider_results
+                .insert(source_key);
+            return Ok(());
         }
         self.presentation
             .agent_queued_provider_results
             .entry(key)
-            .or_insert_with(|| (action.clone(), result.clone(), result.content_text()));
+            .or_insert_with(|| (action.clone(), result.clone(), text));
         Ok(())
     }
 
@@ -429,20 +442,27 @@ impl RuntimeSessionService {
                     self.append_agent_action_result_text_to_terminal_buffer(
                         pane_id, &action, &result, &text,
                     )?;
+                    self.presentation
+                        .agent_published_provider_results
+                        .insert((key.clone(), text));
                 }
-                if let Some((is_error, line)) = self
+                if let Some(outcomes) = self
                     .presentation
                     .agent_queued_provider_outcomes
                     .remove(&key)
                 {
-                    if is_error {
-                        self.append_agent_error_text_to_terminal_buffer(pane_id, &line)?;
-                    } else {
-                        self.append_agent_status_text_to_terminal_buffer(pane_id, &line)?;
+                    for (is_error, line) in outcomes {
+                        if is_error {
+                            self.append_agent_error_text_to_terminal_buffer(pane_id, &line)?;
+                        } else {
+                            self.append_agent_status_text_to_terminal_buffer(pane_id, &line)?;
+                        }
+                        self.presentation.agent_published_provider_outcomes.insert((
+                            key.clone(),
+                            is_error,
+                            line,
+                        ));
                     }
-                    self.presentation
-                        .agent_published_provider_outcomes
-                        .insert(key.clone());
                 }
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
             } else if action_holds_later_log(action)
@@ -952,10 +972,11 @@ impl RuntimeSessionService {
                     group,
                     index,
                 );
+                let outcome_key = (key.clone(), is_error, line.clone());
                 if self
                     .presentation
                     .agent_published_provider_outcomes
-                    .contains(&key)
+                    .contains(&outcome_key)
                 {
                     continue;
                 }
@@ -971,7 +992,7 @@ impl RuntimeSessionService {
                     }
                     self.presentation
                         .agent_published_provider_outcomes
-                        .insert(key);
+                        .insert(outcome_key);
                     continue;
                 }
                 // A rejected action may have no accepted execution header. Its
@@ -983,7 +1004,8 @@ impl RuntimeSessionService {
                 self.presentation
                     .agent_queued_provider_outcomes
                     .entry(key)
-                    .or_insert((is_error, line));
+                    .or_default()
+                    .push((is_error, line));
                 self.flush_ordered_provider_headers(pane_id, execution)?;
             } else if is_error {
                 self.append_agent_error_text_to_terminal_buffer(pane_id, &line)?;

@@ -638,12 +638,15 @@ pub(crate) struct RuntimePresentationComponent {
         RuntimeProviderLogOrdinal,
         (crate::runtime::AgentAction, mez_agent::ActionResult, String),
     >,
+    /// Exact verbose result sources already published for an action ordinal.
+    pub(super) agent_published_provider_results:
+        std::collections::BTreeSet<(RuntimeProviderLogOrdinal, String)>,
     /// Runtime outcome rows waiting for preceding accepted action logs.
     pub(super) agent_queued_provider_outcomes:
-        std::collections::BTreeMap<RuntimeProviderLogOrdinal, (bool, String)>,
-    /// Outcome ordinals already published for an exact validated response.
+        std::collections::BTreeMap<RuntimeProviderLogOrdinal, Vec<(bool, String)>>,
+    /// Exact outcome rows already published for a validated response and action.
     pub(super) agent_published_provider_outcomes:
-        std::collections::BTreeSet<RuntimeProviderLogOrdinal>,
+        std::collections::BTreeSet<(RuntimeProviderLogOrdinal, bool, String)>,
     /// Validated response action order, used only to sequence visible logs.
     pub(super) agent_provider_log_orders: std::collections::BTreeMap<
         (String, String, String, mez_agent::ContextExecutionGroupId),
@@ -1842,8 +1845,12 @@ impl RuntimePresentationComponent {
             .retain(|(candidate_pane_id, _, _, _, _), _| candidate_pane_id != pane_id);
         self.agent_queued_provider_results
             .retain(|(candidate_pane_id, _, _, _, _), _| candidate_pane_id != pane_id);
+        self.agent_published_provider_results
+            .retain(|((candidate_pane_id, _, _, _, _), _)| candidate_pane_id != pane_id);
         self.agent_queued_provider_outcomes
             .retain(|(candidate_pane_id, _, _, _, _), _| candidate_pane_id != pane_id);
+        self.agent_published_provider_outcomes
+            .retain(|((candidate_pane_id, _, _, _, _), _, _)| candidate_pane_id != pane_id);
         self.agent_provider_log_orders
             .retain(|(candidate_pane_id, _, _, _), _| candidate_pane_id != pane_id);
         self.agent_published_provider_headers

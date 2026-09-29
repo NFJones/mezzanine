@@ -778,6 +778,94 @@ fn runtime_failed_outcome_waits_for_preceding_issue_log() {
     assert_eq!(replayed.matches("HTTP 404").count(), 1, "{replayed}");
 }
 
+/// Approval and later failure are distinct settled outcomes for one action;
+/// replaying either state must not duplicate its visible row.
+#[test]
+fn runtime_blocked_outcome_then_failure_publishes_each_once() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 16).unwrap(), 120).unwrap(),
+    );
+    let started = service
+        .start_agent_prompt_turn("%1", "fetch approved source")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    let action = mez_agent::AgentAction {
+        id: "fetch-approved".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/approved".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: String::new(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::blocked(
+            &turn,
+            &action,
+            Vec::new(),
+            "{\"approval\":{}}".to_string(),
+        )],
+        final_turn: false,
+        terminal_state: AgentTurnState::Blocked,
+    };
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    for _ in 0..2 {
+        service
+            .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
+            .unwrap();
+    }
+    execution.action_results[0] = mez_agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Failed,
+        "network_http_error",
+        "HTTP 503",
+    )
+    .unwrap();
+    execution.terminal_state = AgentTurnState::Failed;
+    for _ in 0..2 {
+        service
+            .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
+            .unwrap();
+    }
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(rows.matches("awaiting approval").count(), 1, "{rows}");
+    assert_eq!(rows.matches("HTTP 503").count(), 1, "{rows}");
+}
+
 /// A later discovery header waits for an earlier config action even though
 /// discovery executes first; its following progress is published last.
 #[test]
