@@ -364,10 +364,18 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
             content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
         },
     };
+    let later = mez_agent::AgentAction {
+        id: "say-2".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: "Later validated answer.".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
     let response_batch = mez_agent::MaapBatch {
         rationale: "test action batch rationale".to_string(),
 
-        actions: vec![action.clone()],
+        actions: vec![action.clone(), later.clone()],
     };
     let execution = mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {
@@ -392,12 +400,12 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
             temperature: None,
             stop: None,
             prompt_cache_session_id: None,
-                prompt_cache_lineage_id: None,
+            prompt_cache_lineage_id: None,
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
-                memory_actions_enabled: false,
-                issue_actions_enabled: true,
+            memory_actions_enabled: false,
+            issue_actions_enabled: true,
             interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
             allowed_actions: mez_agent::AllowedActionSet::for_capability(
                 mez_agent::AgentCapability::RespondOnly,
@@ -422,15 +430,20 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
         },
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: vec![mez_agent::ActionResult::succeeded(
-            &turn,
-            &action,
-            vec!["Typed completion applied.".to_string()],
-            Some(
-                r#"{"kind":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"Typed completion applied."}"#
-                    .to_string(),
-            ),
-        )],
+        action_results: [&action, &later]
+            .into_iter()
+            .map(|action| {
+                mez_agent::ActionResult::succeeded(
+                    &turn,
+                    action,
+                    vec![match action.id.as_str() {
+                        "say-1" => "Typed completion applied.".to_string(),
+                        _ => "Later validated answer.".to_string(),
+                    }],
+                    None,
+                )
+            })
+            .collect(),
         final_turn: true,
         terminal_state: mez_agent::AgentTurnState::Completed,
     };
@@ -569,6 +582,16 @@ async fn actor_provider_completion_case(streamed: bool) -> Vec<mez_terminal::Ter
             .matches("▐ mez> Typed completion applied.")
             .count(),
         1,
+        "{pane_text}"
+    );
+    assert_eq!(
+        pane_text.matches("▐ mez> Later validated answer.").count(),
+        1,
+        "{pane_text}"
+    );
+    assert!(
+        pane_text.find("▐ mez> Typed completion applied.").unwrap()
+            < pane_text.find("▐ mez> Later validated answer.").unwrap(),
         "{pane_text}"
     );
     assert_eq!(
