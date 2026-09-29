@@ -1590,15 +1590,26 @@ fn runtime_config_change_resumes_after_full_access_change() {
             action_batch: Some(mez_agent::MaapBatch {
                 rationale: "change the requested live configuration".to_string(),
 
-                actions: vec![mez_agent::AgentAction {
-                    id: "config-1".to_string(),
+                actions: vec![
+                    mez_agent::AgentAction {
+                        id: "config-1".to_string(),
 
-                    payload: mez_agent::AgentActionPayload::ConfigChange {
-                        setting_path: "theme.active".to_string(),
-                        operation: "set".to_string(),
-                        value: Some("catppuccin_latte".to_string()),
+                        payload: mez_agent::AgentActionPayload::ConfigChange {
+                            setting_path: "theme.active".to_string(),
+                            operation: "set".to_string(),
+                            value: Some("catppuccin_latte".to_string()),
+                        },
                     },
-                }],
+                    mez_agent::AgentAction {
+                        id: "say-after-config".to_string(),
+                        payload: mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Progress,
+                            text: "Approved theme change in progress".to_string(),
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                                .to_string(),
+                        },
+                    },
+                ],
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1614,6 +1625,14 @@ fn runtime_config_change_resumes_after_full_access_change() {
 
     assert_eq!(execution.terminal_state, AgentTurnState::Blocked);
     assert_eq!(service.blocked_approvals().pending().len(), 1);
+    assert!(
+        !service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("Approved theme change in progress")
+    );
     let approval_change = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-approval","method":"agent/shell/command","params":{"idempotency_key":"agent-approval-full-access","input":"/approval full-access"}}"#,
         &primary,
@@ -1642,6 +1661,18 @@ fn runtime_config_change_resumes_after_full_access_change() {
         "{config_text}"
     );
     assert!(config_text.contains("[theme.colors]"), "{config_text}");
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        pane_text
+            .matches("Approved theme change in progress")
+            .count(),
+        1,
+        "{pane_text}"
+    );
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(config_root);
 }

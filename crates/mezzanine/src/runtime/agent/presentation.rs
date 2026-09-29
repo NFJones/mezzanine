@@ -221,6 +221,13 @@ impl RuntimeSessionService {
             group,
             index,
         );
+        if self
+            .presentation
+            .agent_published_provider_headers
+            .contains(&key)
+        {
+            return Ok(());
+        }
         self.presentation
             .agent_queued_provider_headers
             .entry(key)

@@ -1032,6 +1032,8 @@ impl RuntimeSessionService {
             &execution.action_results,
             execution.final_turn,
         );
+        self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
+        self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
