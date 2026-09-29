@@ -150,6 +150,9 @@ impl RuntimeSessionService {
             .agent_queued_provider_headers
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
         self.presentation
+            .agent_queued_provider_commands
+            .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
+        self.presentation
             .agent_provider_log_orders
             .retain(|(_, candidate_turn_id, _, _), _| candidate_turn_id != turn_id);
         self.presentation
@@ -210,6 +213,55 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Queues a validated shell preview for publication at its action ordinal.
+    pub(crate) fn queue_ordered_provider_command(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        action: &mez_agent::AgentAction,
+        command: &str,
+    ) -> Result<()> {
+        let Some(conversation_id) = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+        else {
+            return Ok(());
+        };
+        let group = super::provider_execution::provider_log_execution_group_id(execution)?;
+        let Some(index) = execution.response.action_batch.as_ref().and_then(|batch| {
+            batch
+                .actions
+                .iter()
+                .position(|candidate| candidate.id == action.id)
+        }) else {
+            return Ok(());
+        };
+        let key = (
+            pane_id.to_string(),
+            execution.request.turn_id.clone(),
+            conversation_id,
+            group,
+            index,
+        );
+        if self
+            .presentation
+            .agent_published_provider_headers
+            .contains(&key)
+        {
+            return self.append_agent_command_preview_to_terminal_buffer(pane_id, command);
+        }
+        self.presentation
+            .agent_queued_provider_headers
+            .entry(key.clone())
+            .or_insert_with(|| (action.clone(), String::new()));
+        self.presentation
+            .agent_queued_provider_commands
+            .entry(key)
+            .or_insert_with(|| command.to_string());
+        self.flush_ordered_provider_headers(pane_id, execution)
+    }
+
     /// Publishes ready executor headers in response order, without delaying execution.
     pub(crate) fn flush_ordered_provider_headers(
         &mut self,
@@ -255,13 +307,28 @@ impl RuntimeSessionService {
                     .agent_published_provider_headers
                     .contains(&key)
             {
-                if actions[..index].iter().any(|prior| {
-                    action_holds_later_log(prior)
-                        && !execution
-                            .action_results
-                            .iter()
-                            .any(|result| result.action_id == prior.id && result.is_terminal())
-                }) {
+                if actions[..index]
+                    .iter()
+                    .enumerate()
+                    .any(|(prior_index, prior)| {
+                        let prior_key = (
+                            owner.0.clone(),
+                            owner.1.clone(),
+                            owner.2.clone(),
+                            owner.3.clone(),
+                            prior_index,
+                        );
+                        action_holds_later_log(prior)
+                            && !self
+                                .presentation
+                                .agent_published_provider_headers
+                                .contains(&prior_key)
+                            && !execution
+                                .action_results
+                                .iter()
+                                .any(|result| result.action_id == prior.id && result.is_terminal())
+                    })
+                {
                     break;
                 }
                 let Some((approved_action, header)) =
@@ -269,16 +336,30 @@ impl RuntimeSessionService {
                 else {
                     continue;
                 };
-                self.append_agent_action_execution_header_to_terminal_buffer(
-                    pane_id,
-                    &approved_action,
-                    &header,
-                )?;
+                if !header.is_empty() {
+                    self.append_agent_action_execution_header_to_terminal_buffer(
+                        pane_id,
+                        &approved_action,
+                        &header,
+                    )?;
+                }
                 self.presentation
                     .agent_published_provider_headers
-                    .insert(key);
+                    .insert(key.clone());
+                if let Some(command) = self
+                    .presentation
+                    .agent_queued_provider_commands
+                    .remove(&key)
+                {
+                    self.append_agent_command_preview_to_terminal_buffer(pane_id, &command)?;
+                }
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
             } else if action_holds_later_log(action)
+                && !(matches!(action.payload, AgentActionPayload::ShellCommand { .. })
+                    && self
+                        .presentation
+                        .agent_published_provider_headers
+                        .contains(&key))
                 && !execution
                     .action_results
                     .iter()

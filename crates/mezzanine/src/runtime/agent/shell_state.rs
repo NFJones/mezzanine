@@ -704,7 +704,11 @@ impl RuntimeSessionService {
                 || !emitted_action_log
                 || self.agent_verbose_enabled(&turn.pane_id))
         {
-            self.append_agent_command_preview_to_terminal_buffer(&turn.pane_id, command)?;
+            if let Some(execution) = execution {
+                self.queue_ordered_provider_command(&turn.pane_id, execution, action, command)?;
+            } else {
+                self.append_agent_command_preview_to_terminal_buffer(&turn.pane_id, command)?;
+            }
         }
         let wrapper_bytes = wrapper.len().saturating_add(payload_len);
         self.revoke_pane_readiness_override(
@@ -981,7 +985,11 @@ impl RuntimeSessionService {
                 || !emitted_action_log
                 || self.agent_verbose_enabled(&turn.pane_id))
         {
-            self.append_agent_command_preview_to_terminal_buffer(&turn.pane_id, command)?;
+            if let Some(execution) = execution {
+                self.queue_ordered_provider_command(&turn.pane_id, execution, action, command)?;
+            } else {
+                self.append_agent_command_preview_to_terminal_buffer(&turn.pane_id, command)?;
+            }
         }
         let marker = runtime_marker_for_action(turn, &action.id)?;
         let mut transaction = ShellTransaction::new(
