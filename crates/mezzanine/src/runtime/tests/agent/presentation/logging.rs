@@ -859,20 +859,21 @@ fn runtime_failed_response_releases_outcome_after_suppressed_say() {
             .unwrap(),
         ],
         final_turn: false,
-        terminal_state: AgentTurnState::Failed,
+        terminal_state: AgentTurnState::Running,
     };
     service
         .present_agent_response_actions_to_terminal_buffer("%1", &execution)
         .unwrap();
     service
-        .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
-        .unwrap();
-    execution.action_results[0].status = ActionStatus::Succeeded;
-    service
         .queue_ordered_provider_header("%1", &execution, &issue)
         .unwrap();
     service
         .flush_ordered_provider_headers("%1", &execution)
+        .unwrap();
+    execution.action_results[0].status = ActionStatus::Succeeded;
+    execution.terminal_state = AgentTurnState::Failed;
+    service
+        .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
         .unwrap();
     let rows = service
         .agent_pane_screen("%1")

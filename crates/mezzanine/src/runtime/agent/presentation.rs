@@ -365,28 +365,6 @@ impl RuntimeSessionService {
         else {
             return Ok(());
         };
-        if !matches!(
-            execution.terminal_state,
-            AgentTurnState::Running | AgentTurnState::Completed
-        ) {
-            for (index, action) in actions.iter().enumerate() {
-                if matches!(action.payload, AgentActionPayload::Say { .. })
-                    && !self.agent_streaming_say_action_is_promoted(
-                        pane_id,
-                        &execution.request.turn_id,
-                        index,
-                    )
-                {
-                    self.presentation.agent_retired_provider_says.insert((
-                        owner.0.clone(),
-                        owner.1.clone(),
-                        owner.2.clone(),
-                        owner.3.clone(),
-                        index,
-                    ));
-                }
-            }
-        }
         self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
         for (index, action) in actions.iter().enumerate() {
             let key = (
@@ -808,6 +786,34 @@ impl RuntimeSessionService {
         pane_id: &str,
         execution: &AgentTurnExecution,
     ) -> Result<usize> {
+        if !matches!(
+            execution.terminal_state,
+            AgentTurnState::Running | AgentTurnState::Completed
+        ) && let (Some(batch), Some(conversation_id)) = (
+            execution.response.action_batch.as_ref(),
+            self.agent_shell_store()
+                .get(pane_id)
+                .map(|session| session.session_id.clone()),
+        ) {
+            let group = super::provider_execution::provider_log_execution_group_id(execution)?;
+            for (index, action) in batch.actions.iter().enumerate() {
+                if matches!(action.payload, AgentActionPayload::Say { .. })
+                    && !self.agent_streaming_say_action_is_promoted(
+                        pane_id,
+                        &execution.request.turn_id,
+                        index,
+                    )
+                {
+                    self.presentation.agent_retired_provider_says.insert((
+                        pane_id.to_string(),
+                        execution.request.turn_id.clone(),
+                        conversation_id.clone(),
+                        group.clone(),
+                        index,
+                    ));
+                }
+            }
+        }
         if execution.terminal_state != AgentTurnState::Running {
             self.settle_pending_final_say_preview(
                 pane_id,
@@ -935,6 +941,14 @@ impl RuntimeSessionService {
         let Some(batch) = execution.response.action_batch.as_ref() else {
             return Ok(());
         };
+        if !matches!(
+            execution.terminal_state,
+            AgentTurnState::Running | AgentTurnState::Completed
+        ) {
+            // Record suppressed say ordinals before an outcome can take the
+            // already-published-header path and bypass the queued log drain.
+            self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
+        }
         let mut aggregated_result_ids = BTreeSet::new();
         for (code, label) in [
             (
