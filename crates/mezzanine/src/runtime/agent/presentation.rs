@@ -904,12 +904,16 @@ impl RuntimeSessionService {
                     continue;
                 }
                 if execution.terminal_state == AgentTurnState::Running
-                    && (*status != SayStatus::Progress
+                    && (execution
+                        .action_results
+                        .iter()
+                        .any(|result| result.is_error)
+                        || *status != SayStatus::Progress
                         || !batch.actions[..action_index].iter().all(|prior| {
-                            execution
-                                .action_results
-                                .iter()
-                                .any(|result| result.action_id == prior.id && result.is_terminal())
+                            execution.action_results.iter().any(|result| {
+                                result.action_id == prior.id
+                                    && result.status == ActionStatus::Succeeded
+                            })
                         }))
                 {
                     continue;
