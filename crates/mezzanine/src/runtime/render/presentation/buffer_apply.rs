@@ -3114,6 +3114,9 @@ impl RuntimeSessionService {
                             "streaming command completion arrived before its start event",
                         )
                     })?;
+                if command.complete {
+                    return Ok(());
+                }
                 command.complete = true;
                 release_later_streaming_action(presentation, *action_index);
             }
