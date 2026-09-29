@@ -3031,6 +3031,9 @@ impl RuntimeSessionService {
                     .ok_or_else(|| {
                         MezError::invalid_state("streaming command presentation is unavailable")
                     })?;
+                if presentation.shell_commands.contains_key(action_index) {
+                    return Ok(());
+                }
                 presentation
                     .shell_commands
                     .entry(*action_index)

@@ -1446,6 +1446,41 @@ fn runtime_streaming_later_command_start_waits_for_earlier_action() {
     assert!(!text.contains("$ "), "later command leaked: {text}");
 }
 
+/// Replayed command start events must not create a second provisional label
+/// before the cumulative source projection replaces that mutable suffix.
+#[test]
+fn runtime_streaming_replayed_command_start_has_one_label() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+    );
+    let start = mez_agent::StreamingSayEvent::ShellCommandStarted { action_index: 0 };
+    for _ in 0..2 {
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-command-replay",
+                crate::runtime::RuntimeProviderLogInput::Progress(&start),
+            )
+            .unwrap();
+    }
+    let lines = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert_eq!(
+        lines.iter().filter(|line| line.trim_end() == "▐ $").count(),
+        1,
+        "{lines:?}"
+    );
+}
+
 /// A complete later say remains buffered behind an open command preview and
 /// becomes visible only after the command field closes.
 #[test]
