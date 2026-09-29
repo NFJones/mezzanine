@@ -213,7 +213,8 @@ async fn async_actor_list_mcp_startup_does_not_block_terminal_commands() {
 /// turn through typed runtime event ingress. The failed event has enough
 /// identity and error information to reuse the configured provider failure
 /// path, including audit, prompt display, scheduler cleanup, and pending-task
-/// removal, without returning an error to the daemon supervisor.
+/// removal, without returning an error to the daemon supervisor. A projected
+/// unvalidated provider preview must disappear while the failure remains.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_applies_agent_provider_failure_events() {
     let mut service = test_service();
@@ -247,6 +248,58 @@ async fn async_actor_applies_agent_provider_failure_events() {
         .unwrap();
 
     let client = async {
+        let mut progress = RuntimeEventBatch::new();
+        for event in [
+            mez_agent::StreamingSayEvent::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Progress,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: "unvalidated preview marker".to_string(),
+            },
+        ] {
+            progress.push(RuntimeEvent::AgentProvider(
+                AgentProviderEvent::StreamingSay {
+                    agent_id: AgentId::opaque(task.agent_id.clone()).unwrap(),
+                    turn_id: task.turn_id.clone(),
+                    pane_id: task.pane_id.clone(),
+                    claim_generation: 1,
+                    event,
+                },
+            ));
+        }
+        assert_eq!(
+            handle
+                .submit_runtime_events(progress)
+                .await
+                .unwrap()
+                .applied,
+            2
+        );
+        let work = handle
+            .take_streaming_say_projection_work(task.pane_id.clone(), task.turn_id.clone())
+            .await
+            .unwrap()
+            .expect("unvalidated progress should project before failure");
+        let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+        assert!(
+            handle
+                .apply_streaming_say_projection(projection)
+                .await
+                .unwrap()
+        );
+        let view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(view.lines.join("\n").contains("unvalidated preview marker"));
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id: AgentId::opaque(task.agent_id).unwrap(),
@@ -289,7 +342,10 @@ async fn async_actor_applies_agent_provider_failure_events() {
         pane_text.contains("provider worker failed before response"),
         "{pane_text}"
     );
-    assert_eq!(exit.commands_processed, 2);
+    assert!(
+        !pane_text.contains("unvalidated preview marker"),
+        "{pane_text}"
+    );
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
