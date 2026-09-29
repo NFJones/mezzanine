@@ -638,6 +638,9 @@ pub(crate) struct RuntimePresentationComponent {
         RuntimeProviderLogOrdinal,
         (crate::runtime::AgentAction, mez_agent::ActionResult, String),
     >,
+    /// Runtime outcome rows waiting for preceding accepted action logs.
+    pub(super) agent_queued_provider_outcomes:
+        std::collections::BTreeMap<RuntimeProviderLogOrdinal, (bool, String)>,
     /// Validated response action order, used only to sequence visible logs.
     pub(super) agent_provider_log_orders: std::collections::BTreeMap<
         (String, String, String, mez_agent::ContextExecutionGroupId),
@@ -1835,6 +1838,8 @@ impl RuntimePresentationComponent {
         self.agent_queued_provider_commands
             .retain(|(candidate_pane_id, _, _, _, _), _| candidate_pane_id != pane_id);
         self.agent_queued_provider_results
+            .retain(|(candidate_pane_id, _, _, _, _), _| candidate_pane_id != pane_id);
+        self.agent_queued_provider_outcomes
             .retain(|(candidate_pane_id, _, _, _, _), _| candidate_pane_id != pane_id);
         self.agent_provider_log_orders
             .retain(|(candidate_pane_id, _, _, _), _| candidate_pane_id != pane_id);

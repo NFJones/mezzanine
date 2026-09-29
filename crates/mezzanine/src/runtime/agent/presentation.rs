@@ -147,6 +147,9 @@ impl RuntimeSessionService {
             .agent_deferred_provider_progress
             .retain(|(_, candidate_turn_id, _, _, _)| candidate_turn_id != turn_id);
         self.presentation
+            .agent_queued_provider_outcomes
+            .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
+        self.presentation
             .agent_queued_provider_headers
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
         self.presentation
@@ -423,6 +426,17 @@ impl RuntimeSessionService {
                     self.append_agent_action_result_text_to_terminal_buffer(
                         pane_id, &action, &result, &text,
                     )?;
+                }
+                if let Some((is_error, line)) = self
+                    .presentation
+                    .agent_queued_provider_outcomes
+                    .remove(&key)
+                {
+                    if is_error {
+                        self.append_agent_error_text_to_terminal_buffer(pane_id, &line)?;
+                    } else {
+                        self.append_agent_status_text_to_terminal_buffer(pane_id, &line)?;
+                    }
                 }
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
             } else if action_holds_later_log(action)
@@ -896,7 +910,54 @@ impl RuntimeSessionService {
             ) else {
                 continue;
             };
-            if is_error {
+            let owner = self
+                .agent_shell_store()
+                .get(pane_id)
+                .map(|session| session.session_id.clone());
+            let group = super::provider_execution::provider_log_execution_group_id(execution)?;
+            let index = batch
+                .actions
+                .iter()
+                .position(|candidate| candidate.id == action.id);
+            if let (Some(conversation_id), Some(index)) = (owner, index)
+                && self.presentation.agent_provider_log_orders.contains_key(&(
+                    pane_id.to_string(),
+                    execution.request.turn_id.clone(),
+                    conversation_id.clone(),
+                    group.clone(),
+                ))
+            {
+                let key = (
+                    pane_id.to_string(),
+                    execution.request.turn_id.clone(),
+                    conversation_id,
+                    group,
+                    index,
+                );
+                if self
+                    .presentation
+                    .agent_published_provider_headers
+                    .contains(&key)
+                {
+                    if is_error {
+                        self.append_agent_error_text_to_terminal_buffer(pane_id, &line)?;
+                    } else {
+                        self.append_agent_status_text_to_terminal_buffer(pane_id, &line)?;
+                    }
+                    continue;
+                }
+                // A rejected action may have no accepted execution header. Its
+                // result still occupies the ordinal without claiming execution.
+                self.presentation
+                    .agent_queued_provider_headers
+                    .entry(key.clone())
+                    .or_insert_with(|| (action.clone(), String::new()));
+                self.presentation
+                    .agent_queued_provider_outcomes
+                    .entry(key)
+                    .or_insert((is_error, line));
+                self.flush_ordered_provider_headers(pane_id, execution)?;
+            } else if is_error {
                 self.append_agent_error_text_to_terminal_buffer(pane_id, &line)?;
             } else {
                 self.append_agent_status_text_to_terminal_buffer(pane_id, &line)?;

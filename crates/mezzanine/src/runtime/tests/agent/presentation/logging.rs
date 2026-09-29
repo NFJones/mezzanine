@@ -586,6 +586,109 @@ fn runtime_issue_then_discovery_then_progress_preserves_log_order() {
     );
 }
 
+/// An outcome for a later action waits behind an earlier runtime-owned log.
+#[test]
+fn runtime_failed_outcome_waits_for_preceding_issue_log() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect then fetch")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 16).unwrap(), 120).unwrap(),
+    );
+    let issue = mez_agent::AgentAction {
+        id: "issue-first".to_string(),
+        payload: mez_agent::AgentActionPayload::IssueQuery {
+            kind: None,
+            state: None,
+            text: Some("FIRST_ISSUE_MARKER".to_string()),
+            limit: None,
+            refresh: false,
+        },
+    };
+    let fetch = mez_agent::AgentAction {
+        id: "fetch-second".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/missing".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: String::new(),
+                actions: vec![issue.clone(), fetch.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![
+            mez_agent::ActionResult::running(&turn, &issue, Vec::new(), None),
+            mez_agent::ActionResult::failed(
+                &turn,
+                &fetch,
+                ActionStatus::Failed,
+                "network_http_error",
+                "HTTP 404",
+            )
+            .unwrap(),
+        ],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    service
+        .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    let pending = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!pending.contains("HTTP 404"), "{pending}");
+    let mut settled = execution.clone();
+    settled.action_results[0].status = ActionStatus::Succeeded;
+    service
+        .queue_ordered_provider_header("%1", &settled, &issue)
+        .unwrap();
+    service
+        .flush_ordered_provider_headers("%1", &settled)
+        .unwrap();
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        rows.find("FIRST_ISSUE_MARKER").unwrap() < rows.find("HTTP 404").unwrap(),
+        "{rows}"
+    );
+    assert_eq!(rows.matches("HTTP 404").count(), 1, "{rows}");
+}
+
 /// A later discovery header waits for an earlier config action even though
 /// discovery executes first; its following progress is published last.
 #[test]
