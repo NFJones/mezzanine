@@ -2905,6 +2905,9 @@ impl RuntimeSessionService {
                             "streaming outbound message presentation is unavailable",
                         )
                     })?;
+                if presentation.outbound_messages.contains_key(action_index) {
+                    return Ok(());
+                }
                 presentation
                     .outbound_messages
                     .entry(*action_index)

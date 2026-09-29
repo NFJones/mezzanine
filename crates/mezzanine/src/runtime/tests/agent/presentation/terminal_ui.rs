@@ -1937,6 +1937,56 @@ fn runtime_streaming_replayed_rationale_and_summary_starts_keep_projection_curre
     }
 }
 
+/// Replaying a visible outbound-message start cannot invalidate the projection
+/// already acknowledged for that same response action.
+#[test]
+fn runtime_streaming_replayed_message_start_keeps_projection_current() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+    );
+    let start = mez_agent::StreamingSayEvent::MessageStarted {
+        action_index: 0,
+        recipient: "agent-%2".to_string(),
+        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+    };
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-message-start-replay",
+            crate::runtime::RuntimeProviderLogInput::Progress(&start),
+        )
+        .unwrap();
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-message-start-replay")
+        .unwrap()
+        .expect("message start should schedule projection");
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    service
+        .apply_agent_streaming_say_projection_result(projection)
+        .unwrap();
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-message-start-replay",
+            crate::runtime::RuntimeProviderLogInput::Progress(&start),
+        )
+        .unwrap();
+    assert!(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-message-start-replay")
+            .unwrap()
+            .is_none(),
+        "replayed message start dirtied the acknowledged projection"
+    );
+}
+
 /// A complete later say remains buffered behind an open command preview and
 /// becomes visible only after the command field closes.
 #[test]
