@@ -786,9 +786,9 @@ impl RuntimeSessionService {
         pane_id: &str,
         execution: &AgentTurnExecution,
     ) -> Result<usize> {
-        if !matches!(
+        if matches!(
             execution.terminal_state,
-            AgentTurnState::Running | AgentTurnState::Completed
+            AgentTurnState::Failed | AgentTurnState::Interrupted
         ) && let (Some(batch), Some(conversation_id)) = (
             execution.response.action_batch.as_ref(),
             self.agent_shell_store()

@@ -901,6 +901,102 @@ fn runtime_failed_response_releases_outcome_after_suppressed_say() {
     );
 }
 
+/// An approval hold must leave its deferred final answer eligible after the
+/// same accepted execution resumes and succeeds.
+#[test]
+fn runtime_blocked_action_preserves_final_say_after_approval() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 16).unwrap(), 120).unwrap(),
+    );
+    let started = service
+        .start_agent_prompt_turn("%1", "fetch after approval")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    let fetch = mez_agent::AgentAction {
+        id: "fetch-pending".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/approved".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let answer = mez_agent::AgentAction {
+        id: "say-after-approval".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: "approved final answer".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: String::new(),
+                actions: vec![fetch.clone(), answer],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::blocked(
+            &turn,
+            &fetch,
+            Vec::new(),
+            "{\"approval\":{}}".to_string(),
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Blocked,
+    };
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    service
+        .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    service
+        .present_deferred_agent_say_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    assert!(
+        !service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("approved final answer")
+    );
+    execution.action_results[0] =
+        mez_agent::ActionResult::succeeded(&turn, &fetch, Vec::new(), None);
+    execution.terminal_state = AgentTurnState::Completed;
+    service
+        .present_deferred_agent_say_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(rows.matches("approved final answer").count(), 1, "{rows}");
+}
+
 /// Approval and later failure are distinct settled outcomes for one action;
 /// replaying either state must not duplicate its visible row.
 #[test]
