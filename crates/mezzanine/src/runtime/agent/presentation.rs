@@ -392,6 +392,15 @@ impl RuntimeSessionService {
                             prior_index,
                         );
                         if matches!(prior.payload, AgentActionPayload::Say { .. }) {
+                            // A failed, blocked, or interrupted response cannot
+                            // promote this deferred say. Retire its ordering
+                            // slot without presenting successful assistant text.
+                            if !matches!(
+                                execution.terminal_state,
+                                AgentTurnState::Running | AgentTurnState::Completed
+                            ) {
+                                return false;
+                            }
                             return !self.agent_streaming_say_action_is_promoted(
                                 pane_id,
                                 &execution.request.turn_id,
