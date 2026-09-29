@@ -499,6 +499,10 @@ async fn runtime_deferred_fetch_url_result_reaches_model_context() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Verbose)
+        .unwrap();
     let start = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-network-deferred","input":"fetch the docs"}}"#,
         &primary,
@@ -595,6 +599,18 @@ async fn runtime_deferred_fetch_url_result_reaches_model_context() {
                 },
             )
             .unwrap()
+    );
+    let pane_text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text
+            .find("agent: fetch url: https://example.test/deferred")
+            .unwrap()
+            < pane_text.find("deferred fetch body").unwrap(),
+        "{pane_text}"
     );
     let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     assert!(

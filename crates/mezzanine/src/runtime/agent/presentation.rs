@@ -153,6 +153,9 @@ impl RuntimeSessionService {
             .agent_queued_provider_commands
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
         self.presentation
+            .agent_queued_provider_results
+            .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
+        self.presentation
             .agent_provider_log_orders
             .retain(|(_, candidate_turn_id, _, _), _| candidate_turn_id != turn_id);
         self.presentation
@@ -262,6 +265,56 @@ impl RuntimeSessionService {
         self.flush_ordered_provider_headers(pane_id, execution)
     }
 
+    /// Queues a settled verbose result behind its accepted action header.
+    pub(crate) fn queue_ordered_provider_result(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        action: &mez_agent::AgentAction,
+        result: &mez_agent::ActionResult,
+    ) -> Result<()> {
+        let Some(conversation_id) = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+        else {
+            return Ok(());
+        };
+        let group = super::provider_execution::provider_log_execution_group_id(execution)?;
+        let Some(index) = execution.response.action_batch.as_ref().and_then(|batch| {
+            batch
+                .actions
+                .iter()
+                .position(|candidate| candidate.id == action.id)
+        }) else {
+            return Ok(());
+        };
+        let key = (
+            pane_id.to_string(),
+            execution.request.turn_id.clone(),
+            conversation_id,
+            group,
+            index,
+        );
+        if self
+            .presentation
+            .agent_published_provider_headers
+            .contains(&key)
+        {
+            return self.append_agent_action_result_text_to_terminal_buffer(
+                pane_id,
+                action,
+                result,
+                &result.content_text(),
+            );
+        }
+        self.presentation
+            .agent_queued_provider_results
+            .entry(key)
+            .or_insert_with(|| (action.clone(), result.clone(), result.content_text()));
+        Ok(())
+    }
+
     /// Publishes ready executor headers in response order, without delaying execution.
     pub(crate) fn flush_ordered_provider_headers(
         &mut self,
@@ -363,6 +416,13 @@ impl RuntimeSessionService {
                     .remove(&key)
                 {
                     self.append_agent_command_preview_to_terminal_buffer(pane_id, &command)?;
+                }
+                if let Some((action, result, text)) =
+                    self.presentation.agent_queued_provider_results.remove(&key)
+                {
+                    self.append_agent_action_result_text_to_terminal_buffer(
+                        pane_id, &action, &result, &text,
+                    )?;
                 }
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
             } else if action_holds_later_log(action)

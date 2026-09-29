@@ -774,12 +774,7 @@ impl RuntimeSessionService {
                 &result,
             )?;
             if !result.is_error && !replay_suppressed && self.agent_verbose_enabled(&turn.pane_id) {
-                self.append_agent_action_result_text_to_terminal_buffer(
-                    &turn.pane_id,
-                    &action,
-                    &result,
-                    &result.content_text(),
-                )?;
+                self.queue_ordered_provider_result(&turn.pane_id, &execution, &action, &result)?;
             }
             self.append_agent_network_action_audit(
                 &turn,
@@ -1215,12 +1210,7 @@ impl RuntimeSessionService {
                 execute_network_action_with_transport_async(turn, &action, &transport).await?;
             self.append_network_action_progress_guidance(&turn.turn_id, &action, &mut result);
             if !result.is_error && self.agent_verbose_enabled(&turn.pane_id) {
-                self.append_agent_action_result_text_to_terminal_buffer(
-                    &turn.pane_id,
-                    &action,
-                    &result,
-                    &result.content_text(),
-                )?;
+                self.queue_ordered_provider_result(&turn.pane_id, execution, &action, &result)?;
             }
             let outcome = if result.is_error {
                 "failed"
@@ -1303,12 +1293,7 @@ impl RuntimeSessionService {
         }
         self.record_network_action_history(&turn.turn_id, action, &plan.policy_command);
         if !result.is_error && self.agent_verbose_enabled(&turn.pane_id) {
-            self.append_agent_action_result_text_to_terminal_buffer(
-                &turn.pane_id,
-                action,
-                result,
-                &result.content_text(),
-            )?;
+            self.queue_ordered_provider_result(&turn.pane_id, execution, action, result)?;
         }
         let outcome = if result.is_error {
             "failed"
