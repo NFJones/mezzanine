@@ -743,6 +743,9 @@ fn runtime_failed_outcome_waits_for_preceding_issue_log() {
     service
         .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
         .unwrap();
+    service
+        .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
+        .unwrap();
     let pending = service
         .agent_pane_screen("%1")
         .unwrap()

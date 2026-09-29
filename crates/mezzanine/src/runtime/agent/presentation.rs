@@ -1001,11 +1001,17 @@ impl RuntimeSessionService {
                     .agent_queued_provider_headers
                     .entry(key.clone())
                     .or_insert_with(|| (action.clone(), String::new()));
-                self.presentation
+                let pending = self
+                    .presentation
                     .agent_queued_provider_outcomes
                     .entry(key)
-                    .or_default()
-                    .push((is_error, line));
+                    .or_default();
+                if !pending
+                    .iter()
+                    .any(|entry| entry == &(is_error, line.clone()))
+                {
+                    pending.push((is_error, line));
+                }
                 self.flush_ordered_provider_headers(pane_id, execution)?;
             } else if is_error {
                 self.append_agent_error_text_to_terminal_buffer(pane_id, &line)?;
