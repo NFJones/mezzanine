@@ -5853,6 +5853,52 @@ impl RuntimeSessionService {
                 presentation_indices,
             );
         if !presentation.outbound_messages.is_empty() {
+            // The message remains provisional, but the already persisted
+            // rationale and action rows are now the immutable prefix. Keep
+            // them in the rollback baseline, not in the mutable source maps:
+            // resizing or rejecting a message must neither erase nor replay
+            // the settled siblings.
+            let context = presentation.projected_context.as_ref().ok_or_else(|| {
+                MezError::invalid_state("settled streaming projection context disappeared")
+            })?;
+            let prefix = Self::build_agent_streaming_say_projection(
+                crate::runtime::RuntimeStreamingSayProjectionWork {
+                    pane_id: pane_id.to_string(),
+                    turn_id: turn_id.to_string(),
+                    response_index: presentation.response_index,
+                    conversation_id: presentation.conversation_id.clone(),
+                    revision: presentation.revision,
+                    installed_lineage: presentation.installed_lineage,
+                    baseline_screen: presentation.baseline_screen.clone(),
+                    rationale: presentation.rationale.clone(),
+                    actions: presentation.actions.clone(),
+                    outbound_messages: std::collections::BTreeMap::new(),
+                    shell_commands: presentation.shell_commands.clone(),
+                    shell_summaries: presentation.shell_summaries.clone(),
+                    action_headers: presentation.action_headers.clone(),
+                    thinking_enabled: context.thinking_enabled,
+                    shell_classification: context.shell_classification,
+                    presentation_columns: context.presentation_columns,
+                    frame_width: context.frame_width,
+                    table_width: context.table_width,
+                    ui_theme: context.ui_theme.clone(),
+                    screen_size: context.screen_size,
+                },
+            )?;
+            let mut presentation = presentation;
+            presentation.baseline_screen = std::sync::Arc::new(prefix.screen);
+            presentation.rationale = None;
+            presentation.actions.clear();
+            presentation.shell_commands.clear();
+            presentation.shell_summaries.clear();
+            presentation.action_headers.clear();
+            presentation
+                .received_actions
+                .retain(|index| presentation.outbound_messages.contains_key(index));
+            presentation.revision = presentation.revision.wrapping_add(1);
+            presentation.projected_revision = None;
+            presentation.projected_actions = None;
+            presentation.projected_rationale = None;
             self.presentation
                 .agent_streaming_say_presentations
                 .insert(pane_id.to_string(), presentation);
