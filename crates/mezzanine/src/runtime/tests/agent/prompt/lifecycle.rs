@@ -2519,7 +2519,7 @@ fn runtime_maap_spawn_accepts_prepared_fork_history() {
         )
         .unwrap_err();
     assert!(
-        format!("{error:?}").contains("requested parent"),
+        format!("{error:?}").contains("parent turn no longer owns"),
         "{error:?}"
     );
     assert_eq!(service.agent_shell_store().sessions().count(), child_count);

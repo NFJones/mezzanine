@@ -977,6 +977,29 @@ impl RuntimeSessionService {
             crate::runtime::control::RuntimeSubagentForkSnapshot,
         )>,
     ) -> std::result::Result<ActionResult, SpawnActionExecutionError> {
+        if prepared_fork.is_some()
+            && (!self
+                .agent_turn_ledger()
+                .turn(&turn.turn_id)
+                .is_some_and(|current| {
+                    current.agent_id == turn.agent_id
+                        && current.pane_id == turn.pane_id
+                        && current.conversation_id == turn.conversation_id
+                        && matches!(
+                            current.state,
+                            AgentTurnState::Queued | AgentTurnState::Running
+                        )
+                })
+                || self
+                    .agent_shell_store()
+                    .get(&turn.pane_id)
+                    .is_none_or(|session| session.session_id != turn.conversation_id))
+        {
+            return Err(MezError::invalid_state(
+                "prepared fork parent turn no longer owns its conversation",
+            )
+            .into());
+        }
         if self.subagent_descendant_is_fenced(&turn.agent_id) {
             return Err(MezError::forbidden(
                 "fenced subagent descendant cannot execute actions after parent conversation replacement",
