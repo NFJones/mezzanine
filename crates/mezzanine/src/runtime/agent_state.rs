@@ -389,6 +389,25 @@ pub enum RuntimeAgentProviderWorkerOutcome {
     RoutingSelected(Box<AutoSizingRoutingSelection>),
 }
 
+/// Captured actor-owned identity for one persistence settlement generation.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeAgentProviderPersistenceOwner {
+    /// Immutable originating turn, including agent, pane, and conversation identity.
+    pub(crate) turn: AgentTurnRecord,
+    /// Exact worker generation admitted for this owner.
+    pub(crate) generation: u64,
+}
+
+impl RuntimeAgentProviderPersistenceOwner {
+    /// Checks immutable identity without treating a reported state as authority.
+    pub(crate) fn matches_turn(&self, turn: &AgentTurnRecord) -> bool {
+        self.turn.turn_id == turn.turn_id
+            && self.turn.agent_id == turn.agent_id
+            && self.turn.pane_id == turn.pane_id
+            && self.turn.conversation_id == turn.conversation_id
+    }
+}
+
 /// Immutable actor-validated SQLite work for one provider completion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeAgentProviderPersistenceWork {

@@ -483,8 +483,9 @@ pub(crate) struct RuntimeAgentComponent {
     /// Provider turns whose actor-validated memory or issue actions are being
     /// settled by the bounded persistence worker.
     pending_agent_provider_persistence: BTreeSet<String>,
-    /// Exact generation of each pending persistence settlement.
-    agent_provider_persistence_generations: BTreeMap<String, u64>,
+    /// Immutable owner and generation of each pending persistence settlement.
+    agent_provider_persistence_generations:
+        BTreeMap<String, super::agent_state::RuntimeAgentProviderPersistenceOwner>,
     /// Monotonic identity for persistence results across turns and retries.
     next_agent_provider_persistence_generation: u64,
     /// Approved network and MCP actions waiting for external worker dispatch.
@@ -2971,9 +2972,12 @@ impl RuntimeSessionService {
         self.agent
             .pending_agent_provider_persistence
             .insert(turn_id.to_string());
-        self.agent
-            .agent_provider_persistence_generations
-            .insert(turn_id.to_string(), generation);
+        if let Some(turn) = self.agent_turn_ledger().turn(turn_id).cloned() {
+            self.agent.agent_provider_persistence_generations.insert(
+                turn_id.to_string(),
+                super::agent_state::RuntimeAgentProviderPersistenceOwner { turn, generation },
+            );
+        }
         generation
     }
 
@@ -2992,7 +2996,7 @@ impl RuntimeSessionService {
         self.agent
             .agent_provider_persistence_generations
             .get(turn_id)
-            .copied()
+            .map(|owner| owner.generation)
     }
 
     /// Clears only the pending worker generation that produced this result.

@@ -216,24 +216,14 @@ impl RuntimeSessionService {
         outcome: crate::runtime::RuntimeAgentProviderPersistenceOutcome,
     ) -> Result<crate::runtime::RuntimeTransition> {
         let turn_id = outcome.turn.turn_id.clone();
-        if !self.clear_agent_provider_persistence_generation(&turn_id, outcome.generation) {
+        let Some(turn) = self.accept_provider_persistence_owner(
+            &turn_id,
+            outcome.generation,
+            Some(&outcome.turn),
+        )?
+        else {
             return Ok(crate::runtime::RuntimeTransition::default());
-        }
-        let current = self.agent_turn_ledger().turn(&turn_id);
-        let current_execution_owns_turn = current.is_some_and(|turn| {
-            turn.state == AgentTurnState::Running
-                && turn.agent_id == outcome.turn.agent_id
-                && turn.conversation_id == outcome.turn.conversation_id
-                && turn.pane_id == outcome.turn.pane_id
-        });
-        let conversation_still_owns_pane = self
-            .agent_shell_store()
-            .get(&outcome.turn.pane_id)
-            .is_some_and(|session| session.session_id == outcome.turn.conversation_id);
-        if !current_execution_owns_turn || !conversation_still_owns_pane {
-            return Ok(crate::runtime::RuntimeTransition::default());
-        }
-        let turn = outcome.turn.clone();
+        };
         let model_profile = outcome.model_profile.clone();
         let provider_id = outcome.provider_id.clone();
         // Keep the phase continuation off the enclosing actor future's stack.
@@ -265,15 +255,7 @@ impl RuntimeSessionService {
         kind: &str,
         message: &str,
     ) -> Result<crate::runtime::RuntimeTransition> {
-        if !self.clear_agent_provider_persistence_generation(turn_id, generation) {
-            return Ok(crate::runtime::RuntimeTransition::default());
-        }
-        let Some(turn) = self
-            .agent_turn_ledger()
-            .turn(turn_id)
-            .filter(|turn| turn.state == AgentTurnState::Running)
-            .cloned()
-        else {
+        let Some(turn) = self.accept_provider_persistence_owner(turn_id, generation, None)? else {
             return Ok(crate::runtime::RuntimeTransition::default());
         };
         let model_profile = self.agent.agent_turn_model_profiles.get(turn_id).cloned();
@@ -291,6 +273,48 @@ impl RuntimeSessionService {
             true,
             Some(crate::runtime::RenderInvalidationReason::FullRedraw),
         ))
+    }
+
+    /// Accepts either settlement shape using actor-captured immutable identity.
+    /// A mismatched report cannot consume a current claim. An exact claim whose
+    /// pane was replaced is retired and its original turn interrupted, without
+    /// applying worker data or failing the replacement conversation.
+    fn accept_provider_persistence_owner(
+        &mut self,
+        turn_id: &str,
+        generation: u64,
+        reported_turn: Option<&mez_agent::AgentTurnRecord>,
+    ) -> Result<Option<mez_agent::AgentTurnRecord>> {
+        let Some(owner) = self
+            .agent
+            .agent_provider_persistence_generations
+            .get(turn_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if owner.generation != generation
+            || reported_turn.is_some_and(|turn| !owner.matches_turn(turn))
+        {
+            return Ok(None);
+        }
+        self.clear_agent_provider_persistence_generation(turn_id, generation);
+        let Some(current) = self.agent_turn_ledger().turn(turn_id).cloned() else {
+            return Ok(None);
+        };
+        if !owner.matches_turn(&current) || current.state != AgentTurnState::Running {
+            return Ok(None);
+        }
+        if self
+            .agent_shell_store()
+            .get(&owner.turn.pane_id)
+            .is_none_or(|session| session.session_id != owner.turn.conversation_id)
+        {
+            let _ = self.agent.agent_scheduler.cancel(&current.turn_id);
+            self.finish_agent_turn_without_shell_session(&current, AgentTurnState::Interrupted)?;
+            return Ok(None);
+        }
+        Ok(Some(current))
     }
 
     /// Runs the execute agent turn with provider operation for this subsystem.
