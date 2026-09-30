@@ -25,13 +25,28 @@ const RUNTIME_PERSISTED_EXECUTION_TRANSCRIPT_LIMIT: usize = 4096;
 struct RuntimeBookkeepingTranscriptReadWork {
     store: crate::storage::transcript::AgentTranscriptStore,
     conversation_id: String,
+    pane_id: String,
     committed_prefix_required: bool,
     pending: Vec<TranscriptEntry>,
 }
 
 impl RuntimeBookkeepingTranscriptReadWork {
+    /// Rejects history after its captured pane changes conversations.
+    fn check_owner(&self, service: &RuntimeSessionService) -> Result<()> {
+        if service
+            .agent_shell_store()
+            .get(&self.pane_id)
+            .is_none_or(|session| session.session_id != self.conversation_id)
+        {
+            return Err(MezError::invalid_state(
+                "bookkeeping conversation changed before transcript acceptance",
+            ));
+        }
+        Ok(())
+    }
+
     /// Reads one coherent logical history without accessing live runtime state.
-    fn execute(self) -> Result<Vec<TranscriptEntry>> {
+    fn execute(&self) -> Result<Vec<TranscriptEntry>> {
         Ok(self
             .store
             .conversation_transcript_view(
@@ -61,6 +76,7 @@ impl RuntimeSessionService {
         RuntimeBookkeepingTranscriptReadWork {
             store,
             conversation_id: turn.conversation_id.clone(),
+            pane_id: turn.pane_id.clone(),
             committed_prefix_required,
             pending,
         }
@@ -97,9 +113,9 @@ impl RuntimeSessionService {
             return Ok(0);
         };
         let persistence_key = (conversation_id.clone(), turn.turn_id.clone());
-        let existing_entries = self
-            .capture_bookkeeping_transcript_read(store.clone(), turn)
-            .execute()?;
+        let read = self.capture_bookkeeping_transcript_read(store.clone(), turn);
+        let existing_entries = read.execute()?;
+        read.check_owner(self)?;
         let created_at_unix_seconds = current_unix_seconds().max(1);
         let entries = if self.persistence.transcript_uses_adapter() {
             let first_sequence = self
@@ -418,9 +434,9 @@ impl RuntimeSessionService {
         };
         interrupted_entry.validate()?;
         entries.push(interrupted_entry);
-        let existing_entries = self
-            .capture_bookkeeping_transcript_read(store.clone(), turn)
-            .execute()?;
+        let read = self.capture_bookkeeping_transcript_read(store.clone(), turn);
+        let existing_entries = read.execute()?;
+        read.check_owner(self)?;
         entries = Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
         if entries.is_empty() {
             return Ok(0);

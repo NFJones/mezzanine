@@ -1339,6 +1339,22 @@ fn runtime_local_transcript_failure_retains_accepted_execution() {
         0
     );
     assert_eq!(store.inspect(&turn.conversation_id).unwrap(), entries);
+    service
+        .agent_shell_store_mut()
+        .finish_turn("%1", &turn.turn_id)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "replacement-conversation", 0)
+        .unwrap();
+    let error = service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &accepted)
+        .unwrap_err();
+    assert!(
+        error.message().contains("conversation no longer owns"),
+        "{error}"
+    );
+    assert_eq!(store.inspect(&turn.conversation_id).unwrap(), entries);
 }
 
 /// Provider completion must retry a proven pre-append failure locally without

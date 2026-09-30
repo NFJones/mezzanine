@@ -2536,6 +2536,10 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
         ["captured parent decision", "captured parent result"]
     );
 
+    let captured = service
+        .prepare_subagent_fork_read_work("agent-%1")
+        .unwrap()
+        .unwrap();
     transcript_store
         .append(&TranscriptEntry {
             conversation_id: parent.session_id.clone(),
@@ -2547,6 +2551,30 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
             pane_id: "%1".to_string(),
             content: "later parent mutation".to_string(),
         })
+        .unwrap();
+    // Reading captured work after the parent changes must still select the
+    // original owner and retained sequence boundary.
+    let delayed = captured.execute().unwrap();
+    assert_eq!(
+        delayed
+            .entries
+            .iter()
+            .map(|entry| entry.content.as_str())
+            .collect::<Vec<_>>(),
+        ["captured parent decision", "captured parent result"]
+    );
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "replacement-conversation", 0)
+        .unwrap();
+    let error = captured.check_owner(&service).unwrap_err();
+    assert!(
+        error.message().contains("parent conversation changed"),
+        "{error}"
+    );
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", &parent.session_id, 2)
         .unwrap();
 
     // The actor's retained count still covers only the first two rows. A
@@ -2600,9 +2628,24 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
         )
         .unwrap();
 
+    let before_epoch = service
+        .prepare_subagent_fork_read_work("agent-%1")
+        .unwrap()
+        .unwrap();
     transcript_store
         .save_compaction_epoch(&parent.session_id, 1, "summarized first row")
         .unwrap();
+    // A newly published epoch must not move an already captured fork boundary.
+    assert_eq!(
+        before_epoch
+            .execute()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|entry| entry.content.as_str())
+            .collect::<Vec<_>>(),
+        ["captured parent decision", "captured parent result"]
+    );
     service
         .agent_shell_store_mut()
         .retain_recent_transcript_entries("%1", 2)
