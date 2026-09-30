@@ -13,9 +13,9 @@ use super::{
     provider_error_retry_class_from_parts, provider_event_error_from_parts,
     provider_event_error_kind,
 };
-use crate::integrations::agent::actions::recovery::maap_provider_error_is_repairable;
 use crate::runtime::AgentCompactionEvent;
 use crate::runtime::PaneProcessEvent;
+use crate::runtime::{ProviderFailureRecoveryDecision, decide_provider_failure_recovery};
 
 /// Annotates a side-effect queue failure with the number of events already
 /// applied in this batch.
@@ -1558,7 +1558,19 @@ impl AsyncRuntimeSessionActor {
                 if let Some(turn) = self.service.agent_turn_ledger().turn(&turn_id).cloned() {
                     self.service.record_agent_output_cutoff_usage(&turn, &error);
                 }
-                if maap_provider_error_is_repairable(&error)
+                let recovery = decide_provider_failure_recovery(
+                    &error,
+                    retry_class,
+                    self.service
+                        .provider_failure_recovery_eligibility(agent_id.as_str(), &turn_id),
+                );
+                if recovery == ProviderFailureRecoveryDecision::Ignore {
+                    return Ok(RuntimeTransition {
+                        applied: false,
+                        side_effects: claim_cancellations,
+                    });
+                }
+                if recovery == ProviderFailureRecoveryDecision::RepairMaap
                     && let Some(mut application) = self
                         .service
                         .schedule_agent_provider_repair_transition(&agent_id, &turn_id, &error)?
@@ -1574,20 +1586,14 @@ impl AsyncRuntimeSessionActor {
                     application.side_effects.extend(claim_cancellations);
                     return Ok(application);
                 }
-                if matches!(retry_class, ProviderErrorRetryClass::OutputLimit) {
-                    let attempt = self
-                        .service
-                        .next_agent_output_limit_recovery_attempt(&turn_id);
-                    if attempt <= 2
-                        && self.service.recover_agent_provider_output_limit_failure(
-                            &agent_id, &turn_id, &error, attempt,
-                        )?
-                        && self.service.queue_agent_provider_retry_task(
-                            &turn_id,
-                            u64::from(attempt),
-                            None,
-                        )?
-                    {
+                if let ProviderFailureRecoveryDecision::OutputLimit { attempt } = recovery {
+                    if self.service.recover_agent_provider_output_limit_failure(
+                        &agent_id, &turn_id, &error, attempt,
+                    )? && self.service.queue_agent_provider_retry_task(
+                        &turn_id,
+                        u64::from(attempt),
+                        None,
+                    )? {
                         let mut side_effects =
                             self.render_side_effects(RenderInvalidationReason::FullRedraw);
                         side_effects.extend(self.pending_provider_dispatch_side_effects()?);
@@ -1611,7 +1617,11 @@ impl AsyncRuntimeSessionActor {
                     transition.side_effects.extend(claim_cancellations);
                     return Ok(transition);
                 }
-                if let Some(mut application) =
+                if matches!(
+                    recovery,
+                    ProviderFailureRecoveryDecision::ContextLimit
+                        | ProviderFailureRecoveryDecision::RetryTransport
+                ) && let Some(mut application) =
                     self.service.schedule_agent_provider_retry_transition(
                         &agent_id,
                         &turn_id,

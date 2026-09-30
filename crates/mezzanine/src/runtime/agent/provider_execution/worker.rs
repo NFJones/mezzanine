@@ -5,8 +5,7 @@ use super::super::{
 };
 #[cfg(test)]
 use super::super::{
-    AgentTurnLedger, HookEvent, ModelProfile, RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT,
-    RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT, assemble_model_request,
+    AgentTurnLedger, HookEvent, ModelProfile, assemble_model_request,
     runtime_agent_turn_start_hook_payload, runtime_execute_auto_sizing_with_provider,
     runtime_mezzanine_error_code,
 };
@@ -16,9 +15,67 @@ use crate::integrations::agent::actions::AgentTurnRunner;
 use crate::integrations::agent::provider::{ModelProvider, provider_error_retry_class};
 
 #[cfg(test)]
-use mez_agent::ProviderErrorRetryClass;
+use super::recovery::{ProviderFailureRecoveryDecision, decide_provider_failure_recovery};
 
 impl RuntimeSessionService {
+    /// Selects runtime recovery after the lower runner has exhausted negotiation.
+    /// Retry eligibility comes from the production policy; malformed repair
+    /// remains owned by the canonical lower turn runner.
+    #[cfg(test)]
+    fn test_provider_failure_recovery_decision(
+        &self,
+        turn: &mez_agent::AgentTurnRecord,
+        error: &MezError,
+        context_attempts: u32,
+        output_attempts: u32,
+    ) -> ProviderFailureRecoveryDecision {
+        let mut eligibility =
+            self.provider_failure_recovery_eligibility(&turn.agent_id, &turn.turn_id);
+        eligibility.repair_available = false;
+        let policy = self.agent.provider_retry_scheduler.policy();
+        eligibility.context_available = policy.should_retry(
+            u64::from(context_attempts),
+            mez_agent::ProviderErrorRetryClass::ContextLimit,
+        );
+        eligibility.output_attempt = output_attempts.saturating_add(1);
+        eligibility.transport_available = policy.should_retry(
+            u64::from(context_attempts),
+            mez_agent::ProviderErrorRetryClass::RetryableTransport,
+        );
+        decide_provider_failure_recovery(error, provider_error_retry_class(error), eligibility)
+    }
+
+    /// Applies a selected transport retry for an in-process fake provider.
+    /// The combined context/transport counter uses the same configured policy
+    /// as the actor scheduler; fake-provider execution needs no real backoff.
+    #[cfg(test)]
+    fn test_retry_provider_transport_failure(
+        &mut self,
+        turn: &mez_agent::AgentTurnRecord,
+        error: &MezError,
+        retry_attempts: &mut u32,
+        output_attempts: u32,
+    ) -> Result<bool> {
+        if self.test_provider_failure_recovery_decision(
+            turn,
+            error,
+            *retry_attempts,
+            output_attempts,
+        ) != ProviderFailureRecoveryDecision::RetryTransport
+        {
+            return Ok(false);
+        }
+        *retry_attempts = retry_attempts.saturating_add(1);
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "provider_request retrying reason=retryable_transport attempt={retry_attempts}"
+            ),
+        )?;
+        Ok(true)
+    }
+
     /// Completes queued context-limit compaction before a synchronous test
     /// provider retries the original turn.
     ///
@@ -496,11 +553,12 @@ impl RuntimeSessionService {
                         provider.provider_id(),
                         &error,
                     )?;
-                    if matches!(
-                        provider_error_retry_class(&error),
-                        ProviderErrorRetryClass::ContextLimit
-                    ) && context_limit_recovery_attempts
-                        < RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT
+                    if self.test_provider_failure_recovery_decision(
+                        &turn,
+                        &error,
+                        context_limit_recovery_attempts,
+                        output_limit_recovery_attempts,
+                    ) == ProviderFailureRecoveryDecision::ContextLimit
                     {
                         context_limit_recovery_attempts =
                             context_limit_recovery_attempts.saturating_add(1);
@@ -543,11 +601,14 @@ impl RuntimeSessionService {
                         }
                     }
                     if matches!(
-                        provider_error_retry_class(&error),
-                        ProviderErrorRetryClass::OutputLimit
-                    ) && output_limit_recovery_attempts
-                        < RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT
-                    {
+                        self.test_provider_failure_recovery_decision(
+                            &turn,
+                            &error,
+                            context_limit_recovery_attempts,
+                            output_limit_recovery_attempts,
+                        ),
+                        ProviderFailureRecoveryDecision::OutputLimit { .. }
+                    ) {
                         output_limit_recovery_attempts =
                             output_limit_recovery_attempts.saturating_add(1);
                         let agent_id = AgentId::opaque(turn.agent_id.clone()).ok_or_else(|| {
@@ -596,6 +657,14 @@ impl RuntimeSessionService {
                             )?;
                             continue;
                         }
+                    }
+                    if self.test_retry_provider_transport_failure(
+                        &turn,
+                        &error,
+                        &mut context_limit_recovery_attempts,
+                        output_limit_recovery_attempts,
+                    )? {
+                        continue;
                     }
                     self.integration
                         .runtime_metrics_mut()
@@ -829,11 +898,12 @@ impl RuntimeSessionService {
                         provider.provider_id(),
                         &error,
                     )?;
-                    if matches!(
-                        provider_error_retry_class(&error),
-                        ProviderErrorRetryClass::ContextLimit
-                    ) && context_limit_recovery_attempts
-                        < RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT
+                    if self.test_provider_failure_recovery_decision(
+                        &turn,
+                        &error,
+                        context_limit_recovery_attempts,
+                        output_limit_recovery_attempts,
+                    ) == ProviderFailureRecoveryDecision::ContextLimit
                     {
                         context_limit_recovery_attempts =
                             context_limit_recovery_attempts.saturating_add(1);
@@ -876,11 +946,14 @@ impl RuntimeSessionService {
                         }
                     }
                     if matches!(
-                        provider_error_retry_class(&error),
-                        ProviderErrorRetryClass::OutputLimit
-                    ) && output_limit_recovery_attempts
-                        < RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT
-                    {
+                        self.test_provider_failure_recovery_decision(
+                            &turn,
+                            &error,
+                            context_limit_recovery_attempts,
+                            output_limit_recovery_attempts,
+                        ),
+                        ProviderFailureRecoveryDecision::OutputLimit { .. }
+                    ) {
                         output_limit_recovery_attempts =
                             output_limit_recovery_attempts.saturating_add(1);
                         let agent_id = AgentId::opaque(turn.agent_id.clone()).ok_or_else(|| {
@@ -929,6 +1002,14 @@ impl RuntimeSessionService {
                             )?;
                             continue;
                         }
+                    }
+                    if self.test_retry_provider_transport_failure(
+                        &turn,
+                        &error,
+                        &mut context_limit_recovery_attempts,
+                        output_limit_recovery_attempts,
+                    )? {
+                        continue;
                     }
                     self.integration
                         .runtime_metrics_mut()

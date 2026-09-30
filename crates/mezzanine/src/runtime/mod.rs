@@ -390,6 +390,7 @@ mod status_pills;
 /// Exposes transport-neutral runtime event, transition, and side-effect types.
 mod transitions;
 
+pub(crate) use agent::{ProviderFailureRecoveryDecision, decide_provider_failure_recovery};
 pub(crate) use agent::{
     RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
     RuntimeBookkeepingTranscriptReadWork,

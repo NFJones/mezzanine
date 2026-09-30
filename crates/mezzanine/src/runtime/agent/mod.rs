@@ -220,6 +220,9 @@ mod provider_context;
 mod provider_events;
 mod provider_execution;
 pub(crate) use provider_execution::execute_agent_provider_persistence_work;
+pub(crate) use provider_execution::{
+    ProviderFailureRecoveryDecision, decide_provider_failure_recovery,
+};
 mod provider_tasks;
 mod routed_workflow;
 mod sandbox_assessment;
@@ -4381,10 +4384,3 @@ use trace::{
 };
 
 // Agent turn execution, provider polling, action dispatch, and approvals.
-
-/// Maximum in-process provider context-limit retries for test providers.
-#[cfg(test)]
-const RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT: u32 = 3;
-/// Maximum in-process provider output-limit retries for test providers.
-#[cfg(test)]
-const RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT: u32 = 2;

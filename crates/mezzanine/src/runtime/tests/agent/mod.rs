@@ -16,6 +16,7 @@ mod overlay_refresh;
 mod presentation;
 mod prompt;
 mod provider_failure_audit;
+mod provider_recovery;
 mod scheduling;
 mod shell;
 mod skills;
