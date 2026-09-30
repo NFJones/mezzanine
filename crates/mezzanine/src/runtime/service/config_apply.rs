@@ -231,6 +231,15 @@ impl RuntimeSessionService {
             .set_prompt_history_preparation_probe(started, release);
     }
 
+    /// Signals when fork transcript work enters its blocking worker in actor tests.
+    #[cfg(test)]
+    pub(crate) fn set_fork_history_started_for_tests(
+        &mut self,
+        started: std::sync::Arc<tokio::sync::Notify>,
+    ) {
+        self.integration.set_fork_history_started(started);
+    }
+
     /// Injects a deterministic off-actor frame-composition gate for actor tests.
     #[cfg(test)]
     pub(crate) fn set_client_render_composition_probe_for_tests(

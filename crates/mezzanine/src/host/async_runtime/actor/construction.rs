@@ -115,12 +115,16 @@ pub(super) async fn execute_snapshot_control_async_work(
         RuntimeSnapshotControlAsyncWorkKind::ForkSpawn { read } => {
             let read = read.clone();
             RuntimeSnapshotControlAsyncOutcome::ForkSpawn(
-                tokio::task::spawn_blocking(move || read.execute())
-                    .await
-                    .map_err(|error| {
-                        MezError::invalid_state(format!("fork history worker failed: {error}"))
-                    })
-                    .and_then(|result| result),
+                tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    read.signal_worker_started();
+                    read.execute()
+                })
+                .await
+                .map_err(|error| {
+                    MezError::invalid_state(format!("fork history worker failed: {error}"))
+                })
+                .and_then(|result| result),
             )
         }
         RuntimeSnapshotControlAsyncWorkKind::ConfigReload { layers, .. } => {

@@ -1883,6 +1883,8 @@ async fn async_actor_fork_history_lock_does_not_block_lifecycle() {
         .agent_shell_store_mut()
         .record_transcript_entries("%1", 1)
         .unwrap();
+    let worker_started = StdArc::new(tokio::sync::Notify::new());
+    service.set_fork_history_started_for_tests(worker_started.clone());
     let lock_path = store
         .root()
         .join(".conversation-locks")
@@ -1905,6 +1907,9 @@ async fn async_actor_fork_history_lock_does_not_block_lifecycle() {
                 SnapshotRepository::new(root.join("snapshots")),
             ).await.unwrap()
         });
+        tokio::time::timeout(Duration::from_secs(5), worker_started.notified())
+            .await
+            .expect("fork history worker should start before lifecycle inspection");
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(2), handle.lifecycle_state())
                 .await

@@ -83,6 +83,8 @@ pub(crate) struct RuntimeSubagentForkSnapshot {
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeSubagentForkReadWork {
     store: crate::storage::transcript::AgentTranscriptStore,
+    #[cfg(test)]
+    worker_started: Option<std::sync::Arc<tokio::sync::Notify>>,
     parent_pane_id: String,
     parent_conversation_id: String,
     parent_compaction_epoch: u64,
@@ -95,6 +97,14 @@ pub(crate) struct RuntimeSubagentForkReadWork {
 }
 
 impl RuntimeSubagentForkReadWork {
+    /// Signals that the blocking reader has started in actor tests.
+    #[cfg(test)]
+    pub(crate) fn signal_worker_started(&self) {
+        if let Some(started) = &self.worker_started {
+            started.notify_one();
+        }
+    }
+
     /// Rejects a prepared snapshot after its parent pane changes conversations.
     pub(crate) fn check_owner(&self, service: &RuntimeSessionService) -> Result<()> {
         if service
@@ -1885,6 +1895,8 @@ impl RuntimeSessionService {
         };
         Ok(Some(RuntimeSubagentForkReadWork {
             store,
+            #[cfg(test)]
+            worker_started: self.integration.fork_history_started(),
             parent_pane_id: parent_pane_id.to_string(),
             parent_conversation_id: parent_session.session_id.clone(),
             parent_compaction_epoch: self.agent_compaction_epoch(parent_pane_id.as_str()),

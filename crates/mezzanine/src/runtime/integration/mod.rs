@@ -72,6 +72,8 @@ pub(crate) struct RuntimeIntegrationComponent {
     #[cfg(test)]
     prompt_history_preparation_release: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
+    fork_history_started: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
     client_render_composition_started: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
     client_render_composition_release: Option<RuntimeClientRenderCompositionGate>,
@@ -109,6 +111,8 @@ impl RuntimeIntegrationComponent {
             prompt_history_preparation_started: None,
             #[cfg(test)]
             prompt_history_preparation_release: None,
+            #[cfg(test)]
+            fork_history_started: None,
             #[cfg(test)]
             client_render_composition_started: None,
             #[cfg(test)]
@@ -210,6 +214,18 @@ impl RuntimeIntegrationComponent {
             self.prompt_history_preparation_started.clone(),
             self.prompt_history_preparation_release.clone(),
         )
+    }
+
+    /// Installs a worker-start signal for a fork-history actor regression.
+    #[cfg(test)]
+    pub(crate) fn set_fork_history_started(&mut self, started: Arc<tokio::sync::Notify>) {
+        self.fork_history_started = Some(started);
+    }
+
+    /// Clones the fork-history start signal into captured work.
+    #[cfg(test)]
+    pub(crate) fn fork_history_started(&self) -> Option<Arc<tokio::sync::Notify>> {
+        self.fork_history_started.clone()
     }
 
     /// Installs a deterministic off-actor frame-composition gate for actor tests.
