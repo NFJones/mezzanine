@@ -143,6 +143,66 @@ fn entry(conversation_id: &str, sequence: u64, role: TranscriptRole) -> Transcri
     }
 }
 
+/// A checked reader waits for an append's row terminator under the same
+/// conversation lock instead of classifying the in-flight row as corruption.
+#[test]
+fn transcript_view_waits_for_in_flight_row_terminator() {
+    use super::ConversationTranscriptRead;
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    let root = temp_root("view-in-flight-row");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("in-flight", 1, TranscriptRole::User);
+    let lock = store
+        .acquire_conversation_lock(&row.conversation_id)
+        .unwrap();
+    let path = store.transcript_path(&row.conversation_id).unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap();
+    file.write_all(encode_transcript_entry(&row).unwrap().as_bytes())
+        .unwrap();
+    file.flush().unwrap();
+
+    let (started, ready) = mpsc::channel();
+    let (finished, result) = mpsc::channel();
+    let reader = store.clone();
+    let worker = thread::spawn(move || {
+        started.send(()).unwrap();
+        finished
+            .send(reader.conversation_transcript_view(
+                "in-flight",
+                ConversationTranscriptRead::All,
+                true,
+                &[],
+            ))
+            .unwrap();
+    });
+    ready.recv().unwrap();
+    assert!(
+        result
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err()
+    );
+    file.write_all(b"\n").unwrap();
+    file.sync_all().unwrap();
+    drop(lock);
+    assert_eq!(
+        result
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .logical,
+        vec![row]
+    );
+    worker.join().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// An absent first archive can expose queued rows logically, but cannot prove
 /// that those rows are committed for a selective compaction epoch.
 #[test]

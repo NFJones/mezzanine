@@ -2276,6 +2276,41 @@ impl AgentTranscriptStore {
         Ok(count)
     }
 
+    /// Reads a complete committed archive once while validating its chronology.
+    /// The caller holds the conversation lock through this scan and merge.
+    fn inspect_validated_transcript(&self, conversation_id: &str) -> Result<Vec<TranscriptEntry>> {
+        let path = self.existing_transcript_path_for(conversation_id)?;
+        if !path.exists() {
+            return Err(MezError::new(
+                MezErrorKind::NotFound,
+                "conversation transcript not found",
+            ));
+        }
+        let mut entries = Vec::new();
+        let mut reader = BufReader::new(std_fs::File::open(path)?);
+        let mut line = String::new();
+        while reader.read_line(&mut line)? != 0 {
+            if !line.ends_with('\n') {
+                return Err(MezError::invalid_state(
+                    "restored transcript has an unterminated row",
+                ));
+            }
+            let entry = decode_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
+            let expected = u64::try_from(entries.len())
+                .ok()
+                .and_then(|count| count.checked_add(1))
+                .ok_or_else(|| MezError::invalid_state("restored transcript sequence overflow"))?;
+            if entry.conversation_id != conversation_id || entry.sequence != expected {
+                return Err(MezError::invalid_state(
+                    "restored transcript contains missing, reordered, or foreign rows",
+                ));
+            }
+            entries.push(entry);
+            line.clear();
+        }
+        Ok(entries)
+    }
+
     /// Reads a bounded durable projection and merges captured queued or worker-owned
     /// rows for replay. Only `committed` may justify a selective publication.
     /// An absent archive is an empty first write only if no committed prefix was
@@ -2288,6 +2323,10 @@ impl AgentTranscriptStore {
         pending: &[TranscriptEntry],
     ) -> Result<ConversationTranscriptView> {
         validate_conversation_id(conversation_id)?;
+        // Hold the append lane throughout validation and inspection. A writer
+        // emits the row and its terminator in separate writes, so an unlocked
+        // scan can otherwise mistake a healthy in-flight append for corruption.
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
         if matches!(read, ConversationTranscriptRead::Latest(_)) {
             let path = self.existing_transcript_path_for(conversation_id)?;
             if !path.exists() {
@@ -2313,16 +2352,10 @@ impl AgentTranscriptStore {
         {
             self.validate_restored_transcript(conversation_id)?;
         }
-        // Pending receipts may fill a gap in the logical projection, but they
-        // cannot repair missing committed history. The full-history read is
-        // already off the actor and must validate the archive independently.
-        if matches!(read, ConversationTranscriptRead::All)
-            && self.existing_transcript_path_for(conversation_id)?.exists()
-        {
-            self.validate_restored_transcript(conversation_id)?;
-        }
+        // Pending receipts may fill a logical gap but cannot repair missing
+        // committed history. The full read validates and collects in one pass.
         let committed = match read {
-            ConversationTranscriptRead::All => self.inspect(conversation_id),
+            ConversationTranscriptRead::All => self.inspect_validated_transcript(conversation_id),
             ConversationTranscriptRead::Latest(count) => {
                 self.inspect_latest_entries(conversation_id, count)
             }
