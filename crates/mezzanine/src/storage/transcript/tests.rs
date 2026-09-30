@@ -542,6 +542,69 @@ fn transcript_view_through_captured_fork_boundary() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Bookkeeping retains only its turn and global catalog rows while validating
+/// unrelated durable chronology and conflicting queued receipts.
+#[test]
+fn transcript_view_for_turn_preserves_identities_and_integrity() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("bookkeeping-turn-view");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("bookkeeping-turn", 1, TranscriptRole::User);
+    let second = entry("bookkeeping-turn", 2, TranscriptRole::Assistant);
+    store.append(&first).unwrap();
+    store.append(&second).unwrap();
+    let third = entry("bookkeeping-turn", 3, TranscriptRole::Tool);
+    let mut catalog = third.clone();
+    catalog.content = mez_agent::TranscriptContextEvent::mcp_catalog_snapshot("catalog", 3)
+        .unwrap()
+        .to_transcript_content();
+    let view = store
+        .conversation_transcript_view(
+            &first.conversation_id,
+            ConversationTranscriptRead::ForTurn(&first.turn_id),
+            true,
+            &[catalog.clone(), catalog.clone()],
+        )
+        .unwrap();
+    assert_eq!(view.committed, vec![first.clone()]);
+    assert_eq!(view.logical, vec![first.clone(), catalog]);
+    let mut conflicting = second.clone();
+    conflicting.content = "conflicting receipt".to_string();
+    assert!(
+        store
+            .conversation_transcript_view(
+                &first.conversation_id,
+                ConversationTranscriptRead::ForTurn(&first.turn_id),
+                true,
+                &[conflicting],
+            )
+            .is_err()
+    );
+    fs::remove_file(store.transcript_path(&first.conversation_id).unwrap()).unwrap();
+    assert!(
+        store
+            .conversation_transcript_view(
+                &first.conversation_id,
+                ConversationTranscriptRead::ForTurn(&first.turn_id),
+                true,
+                std::slice::from_ref(&first),
+            )
+            .is_err()
+    );
+    let first_write = store
+        .conversation_transcript_view(
+            &first.conversation_id,
+            ConversationTranscriptRead::ForTurn(&first.turn_id),
+            false,
+            &[first.clone(), second.clone(), first.clone(), second],
+        )
+        .unwrap();
+    assert!(first_write.committed.is_empty());
+    assert_eq!(first_write.logical, vec![first]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A repeated multi-row receipt is one logical first-write prefix, while a
 /// conflicting repetition or missing predecessor still fails closed.
 #[test]

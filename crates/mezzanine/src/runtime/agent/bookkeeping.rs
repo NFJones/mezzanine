@@ -26,6 +26,7 @@ struct RuntimeBookkeepingTranscriptReadWork {
     store: crate::storage::transcript::AgentTranscriptStore,
     conversation_id: String,
     pane_id: String,
+    turn_id: String,
     committed_prefix_required: bool,
     pending: Vec<TranscriptEntry>,
 }
@@ -51,7 +52,7 @@ impl RuntimeBookkeepingTranscriptReadWork {
             .store
             .conversation_transcript_view(
                 &self.conversation_id,
-                ConversationTranscriptRead::All,
+                ConversationTranscriptRead::ForTurn(&self.turn_id),
                 self.committed_prefix_required,
                 &self.pending,
             )?
@@ -77,6 +78,7 @@ impl RuntimeSessionService {
             store,
             conversation_id: turn.conversation_id.clone(),
             pane_id: turn.pane_id.clone(),
+            turn_id: turn.turn_id.clone(),
             committed_prefix_required,
             pending,
         }

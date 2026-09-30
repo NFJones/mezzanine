@@ -1841,6 +1841,99 @@ async fn async_actor_fork_spawn_reads_history_and_reuses_cached_response() {
 /// path when serving live `mez snapshot` requests, so `snapshot/list` must not
 /// fail with the repository-missing error that applies to generic control
 /// dispatch.
+/// A blocked parent archive lock must delay only the fork worker, not the actor.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_fork_history_lock_does_not_block_lifecycle() {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use crate::storage::snapshot::SnapshotRepository;
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-fork-lock-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.join("transcripts"));
+    let mut service = test_service();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    store
+        .append(&TranscriptEntry {
+            conversation_id: conversation.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "parent-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "locked parent row".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    let lock_path = store
+        .root()
+        .join(".conversation-locks")
+        .join(format!("{conversation}.lock"));
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let fork_handle = handle.clone();
+        let fork = tokio::spawn(async move {
+            fork_handle.handle_control_input_for_connection_with_snapshots(
+                encode_control_body(r#"{"jsonrpc":"2.0","id":"fork-lock","method":"agent/spawn","params":{"parent_agent":{"agent_id":"agent-%1"},"placement":{"mode":"new-pane"},"role":"explorer","session":"fork","prompt":"inspect","skip_initial_turn":true,"idempotency_key":"fork-lock"}}"#),
+                4096, ControlConnectionState::trusted_existing_client(primary),
+                SnapshotRepository::new(root.join("snapshots")),
+            ).await.unwrap()
+        });
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), handle.lifecycle_state())
+                .await
+                .unwrap()
+                .unwrap(),
+            RuntimeLifecycleState::Running
+        );
+        assert!(
+            !fork.is_finished(),
+            "fork read must wait on the parent archive lock"
+        );
+        drop(lock);
+        let result = tokio::time::timeout(Duration::from_secs(5), fork)
+            .await
+            .unwrap()
+            .unwrap();
+        let (body, _) = decode_control_frame(&result.output, 4096).unwrap();
+        assert!(body.contains("\"result\""), "{body}");
+        handle.shutdown().await.unwrap();
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies that actor-owned control dispatch can route snapshot requests
+/// through a configured repository. The async daemon control service uses this
+/// path when serving live `mez snapshot` requests, so `snapshot/list` must not
+/// fail with the repository-missing error that applies to generic control
+/// dispatch.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_handles_control_requests_with_snapshot_repository() {
     use crate::control::{decode_control_frame, encode_control_body};

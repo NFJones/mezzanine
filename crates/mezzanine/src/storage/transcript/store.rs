@@ -57,8 +57,10 @@ pub(crate) struct ConversationTranscriptView {
 
 /// Bounded read shape for a captured conversation history snapshot.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum ConversationTranscriptRead {
+pub(crate) enum ConversationTranscriptRead<'a> {
     All,
+    /// Validated rows owned by one turn plus global catalog snapshots.
+    ForTurn(&'a str),
     /// Validated committed rows through an actor-captured fork boundary.
     Through(u64),
     Latest(usize),
@@ -2313,6 +2315,102 @@ impl AgentTranscriptStore {
         Ok(entries)
     }
 
+    /// Validates the complete archive and every captured receipt under the append lock,
+    /// retaining only turn-owned rows and conversation-wide catalog identities.
+    fn inspect_validated_transcript_for_turn(
+        &self,
+        conversation_id: &str,
+        turn_id: &str,
+        committed_prefix_required: bool,
+        pending: &[TranscriptEntry],
+    ) -> Result<ConversationTranscriptView> {
+        let path = self.existing_transcript_path_for(conversation_id)?;
+        if !path.exists() && committed_prefix_required {
+            return Err(MezError::invalid_state(
+                "required transcript archive is missing",
+            ));
+        }
+        let mut receipts = BTreeMap::<u64, &TranscriptEntry>::new();
+        for entry in pending {
+            if entry.conversation_id != conversation_id {
+                return Err(MezError::invalid_state(
+                    "transcript snapshot contains a foreign conversation",
+                ));
+            }
+            if let Some(previous) = receipts.insert(entry.sequence, entry)
+                && previous != entry
+            {
+                return Err(MezError::invalid_state(
+                    "transcript snapshot sequence has conflicting contents",
+                ));
+            }
+        }
+        let mut committed = Vec::new();
+        let mut line = String::new();
+        let mut expected = 0u64;
+        if path.exists() {
+            let mut reader = BufReader::new(std_fs::File::open(path)?);
+            while reader.read_line(&mut line)? != 0 {
+                if !line.ends_with('\n') {
+                    return Err(MezError::invalid_state(
+                        "restored transcript has an unterminated row",
+                    ));
+                }
+                let entry = decode_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
+                expected = expected.checked_add(1).ok_or_else(|| {
+                    MezError::invalid_state("restored transcript sequence overflow")
+                })?;
+                if entry.conversation_id != conversation_id || entry.sequence != expected {
+                    return Err(MezError::invalid_state(
+                        "restored transcript contains missing, reordered, or foreign rows",
+                    ));
+                }
+                if let Some(receipt) = receipts.get(&entry.sequence)
+                    && **receipt != entry
+                {
+                    return Err(MezError::invalid_state(
+                        "transcript snapshot sequence has conflicting contents",
+                    ));
+                }
+                if entry.turn_id == turn_id
+                    || matches!(
+                        mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                        Some(mez_agent::TranscriptContextEvent::McpCatalogSnapshot { .. })
+                    )
+                {
+                    committed.push(entry);
+                }
+                line.clear();
+            }
+        }
+        let mut next = expected
+            .checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("restored transcript sequence overflow"))?;
+        let mut logical = committed.clone();
+        for (sequence, receipt) in receipts {
+            if sequence <= expected {
+                continue;
+            }
+            if sequence != next {
+                return Err(MezError::invalid_state(
+                    "transcript logical history contains a missing sequence",
+                ));
+            }
+            next = next.checked_add(1).ok_or_else(|| {
+                MezError::invalid_state("transcript logical history sequence overflow")
+            })?;
+            if receipt.turn_id == turn_id
+                || matches!(
+                    mez_agent::TranscriptContextEvent::from_transcript_content(&receipt.content),
+                    Some(mez_agent::TranscriptContextEvent::McpCatalogSnapshot { .. })
+                )
+            {
+                logical.push(receipt.clone());
+            }
+        }
+        Ok(ConversationTranscriptView { committed, logical })
+    }
+
     /// Reads a validated committed prefix through an inclusive captured boundary.
     /// A later append cannot change the fork source even if it is on disk by read time.
     fn inspect_validated_transcript_through(
@@ -2400,6 +2498,14 @@ impl AgentTranscriptStore {
         // committed history. The full read validates and collects in one pass.
         let committed = match read {
             ConversationTranscriptRead::All => self.inspect_validated_transcript(conversation_id),
+            ConversationTranscriptRead::ForTurn(turn_id) => {
+                return self.inspect_validated_transcript_for_turn(
+                    conversation_id,
+                    turn_id,
+                    committed_prefix_required,
+                    pending,
+                );
+            }
             ConversationTranscriptRead::Through(sequence) => {
                 self.inspect_validated_transcript_through(conversation_id, sequence)
             }
