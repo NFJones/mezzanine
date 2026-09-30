@@ -1144,6 +1144,7 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn deferred_service_side_effects_from_service(&mut self) -> Vec<RuntimeSideEffect> {
+        self.dispatch_bookkeeping_candidates();
         self.service
             .drain_deferred_effects_transition()
             .side_effects

@@ -36,6 +36,11 @@ range. A missing first archive is empty only before any committed history or
 required epoch; missing older history fails visibly. Selective publication
 checks frozen committed source under the conversation lock before writing an
 epoch, even if subsequent entries arrived during summarization.
+Execution and interruption bookkeeping check archive history outside the runtime
+actor. Captured chronology awaiting that check is not an accepted append or a
+durable receipt: later history admission waits until the checked rows enter the
+ordinary append lane. A failed check keeps that conversation fenced and reports
+the error rather than silently admitting incomplete history or replaying actions.
 The complete model-facing result, including shell observation fields, is bounded
 before first exposure. Control characters such as NUL remain part of the exact
 model-visible content: typed execution blocks JSON-escape them and NUL-bearing

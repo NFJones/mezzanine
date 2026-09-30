@@ -1906,6 +1906,14 @@ impl RuntimeSessionService {
             .ephemeral_transcript_source_conversation_id
             .clone()
             .unwrap_or_else(|| parent_session.session_id.clone());
+        if self
+            .persistence
+            .bookkeeping_pending(&source_conversation_id)
+        {
+            return Err(MezError::conflict(
+                "conversation bookkeeping must settle before fork capture",
+            ));
+        }
         let source_entries = if parent_session.ephemeral
             && parent_session
                 .ephemeral_transcript_source_conversation_id

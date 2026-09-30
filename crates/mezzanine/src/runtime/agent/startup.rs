@@ -463,6 +463,12 @@ impl RuntimeSessionService {
             .iter()
             .filter(|(_, startup)| !startup.is_ready())
             .map(|(pane_id, _)| pane_id.clone())
+            .chain(
+                self.agent_shell_store()
+                    .sessions()
+                    .filter(|session| self.persistence.bookkeeping_pending(&session.session_id))
+                    .map(|session| session.pane_id.clone()),
+            )
             .collect()
     }
 

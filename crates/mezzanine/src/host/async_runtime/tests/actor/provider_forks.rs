@@ -258,6 +258,409 @@ async fn async_actor_maap_fork_history_lock_preserves_phase_order() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Terminal provider bookkeeping must wait on the worker, not the actor. The
+/// turn remains owned until checked history returns; only then may transcript
+/// rows be admitted and terminal state settled. Duplicate outcomes are inert.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_terminal_bookkeeping_lock_preserves_ownership() {
+    run_terminal_bookkeeping_lock(false).await;
+}
+
+/// Expiring a bookkeeping lease while its archive stays locked must not send
+/// failure containment back through an actor-owned read of the same archive.
+/// The failed turn's chronology remains queued and late old outcomes are inert.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_terminal_bookkeeping_timeout_does_not_read_archive() {
+    run_terminal_bookkeeping_lock(true).await;
+}
+
+/// Exercises normal acceptance and deadline containment against one held lock.
+async fn run_terminal_bookkeeping_lock(expire: bool) {
+    let root = std::env::temp_dir().join(format!(
+        "mez-bookkeeping-lock-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut service = test_service();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    store
+        .append(&mez_agent::TranscriptEntry {
+            conversation_id: conversation.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::TranscriptRole::User,
+            turn_id: "prior-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "prior history".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "finish with an answer")
+        .unwrap();
+    let task = service.pending_agent_provider_tasks()[0].clone();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&task.turn_id)
+        .unwrap()
+        .clone();
+    let mut execution = fork_issue_execution(&task, &turn);
+    let action = mez_agent::AgentAction {
+        id: "answer".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: "Checked terminal answer.".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    execution.response.action_batch.as_mut().unwrap().actions = vec![action.clone()];
+    execution.action_results = vec![mez_agent::ActionResult::succeeded(
+        &turn,
+        &action,
+        vec!["Checked terminal answer.".to_string()],
+        None,
+    )];
+    execution.final_turn = true;
+    execution.terminal_state = mez_agent::AgentTurnState::Completed;
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(
+            store
+                .root()
+                .join(".conversation-locks")
+                .join(format!("{conversation}.lock")),
+        )
+        .unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(task.turn_id.clone(), 1)
+            .await
+            .unwrap();
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
+            agent_id: AgentId::opaque(task.agent_id.clone()).unwrap(),
+            turn_id: task.turn_id.clone(),
+            claim_generation: 1,
+            execution: Box::new(execution),
+        }));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), handle.submit_runtime_events(batch))
+                .await
+                .expect("terminal completion must not read the locked archive on actor")
+                .unwrap()
+                .applied,
+            1
+        );
+        assert!(handle.agent_turn_is_running(&task.turn_id).await.unwrap());
+        let effects = handle.drain_persistence_side_effects(64).await.unwrap();
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { .. }))
+        );
+        let work = effects
+            .into_iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::SettleAgentProviderPersistence { work } => Some(work),
+                _ => None,
+            })
+            .expect("terminal completion must queue checked bookkeeping");
+        assert!(work.bookkeeping_read.is_some());
+        let (started, worker_started) = tokio::sync::oneshot::channel();
+        let worker = tokio::task::spawn_blocking(move || {
+            started.send(()).unwrap();
+            crate::runtime::execute_agent_provider_persistence_work(*work)
+        });
+        worker_started.await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), handle.lifecycle_state())
+                .await
+                .unwrap()
+                .unwrap(),
+            RuntimeLifecycleState::Running
+        );
+        assert!(!worker.is_finished());
+        if expire {
+            let key = handle
+                .drain_timer_side_effects(64)
+                .await
+                .unwrap()
+                .into_iter()
+                .find_map(|effect| match effect {
+                    RuntimeSideEffect::ScheduleTimer { key, .. }
+                        if key.kind == RuntimeTimerKind::ProviderPersistence =>
+                    {
+                        Some(key)
+                    }
+                    _ => None,
+                })
+                .expect("bookkeeping must have a lease");
+            let mut expired = RuntimeEventBatch::new();
+            expired.push(RuntimeEvent::Timer(TimerEvent { key, now_ms: 1 }));
+            assert_eq!(
+                tokio::time::timeout(
+                    Duration::from_secs(2),
+                    handle.submit_runtime_events(expired)
+                )
+                .await
+                .expect("timeout containment must not read the locked archive")
+                .unwrap()
+                .applied,
+                1
+            );
+            assert!(!handle.agent_turn_is_running(&task.turn_id).await.unwrap());
+            assert_eq!(
+                handle.lifecycle_state().await.unwrap(),
+                RuntimeLifecycleState::Running
+            );
+        }
+        drop(lock);
+        let outcome = tokio::time::timeout(Duration::from_secs(5), worker)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::AgentProvider(
+            AgentProviderEvent::PersistenceSettled {
+                outcome: Box::new(outcome.clone()),
+            },
+        ));
+        assert_eq!(
+            handle.submit_runtime_events(batch).await.unwrap().applied,
+            usize::from(!expire)
+        );
+        assert!(!handle.agent_turn_is_running(&task.turn_id).await.unwrap());
+        if expire {
+            let rows = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let rows = handle
+                        .drain_persistence_side_effects(64)
+                        .await
+                        .unwrap()
+                        .into_iter()
+                        .filter_map(|effect| match effect {
+                            RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => {
+                                Some(entries)
+                            }
+                            _ => None,
+                        })
+                        .flatten()
+                        .collect::<Vec<_>>();
+                    if !rows.is_empty() {
+                        break rows;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("captured failure chronology must be admitted after lock release");
+            assert!(rows.iter().any(|row| {
+                row.content
+                    .contains("persistence worker result was not delivered")
+            }));
+            let mut late = RuntimeEventBatch::new();
+            late.push(RuntimeEvent::AgentProvider(
+                AgentProviderEvent::PersistenceSettled {
+                    outcome: Box::new(outcome),
+                },
+            ));
+            assert_eq!(handle.submit_runtime_events(late).await.unwrap().applied, 0);
+            handle.shutdown().await.unwrap();
+            return;
+        }
+        let rows = handle
+            .drain_persistence_side_effects(64)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => Some(entries),
+                _ => None,
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        assert!(!rows.is_empty());
+        assert_eq!(rows.first().unwrap().sequence, 2);
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.role == mez_agent::TranscriptRole::Assistant
+                    && row
+                        .content
+                        .lines()
+                        .any(|line| line == "Checked terminal answer."))
+                .count(),
+            1
+        );
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::AgentProvider(
+            AgentProviderEvent::PersistenceSettled {
+                outcome: Box::new(outcome),
+            },
+        ));
+        assert_eq!(handle.submit_runtime_events(late).await.unwrap().applied, 0);
+        assert!(
+            handle
+                .drain_persistence_side_effects(64)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Interruption chronology remains conversation-owned when `/new` replaces its
+/// pane binding during a locked worker read. Neither command may block on the
+/// archive, and acceptance must create a receipt for the original conversation.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_interruption_bookkeeping_survives_locked_replacement() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-interruption-replacement-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut service = test_service();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let original = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    store
+        .append(&mez_agent::TranscriptEntry {
+            conversation_id: original.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::TranscriptRole::User,
+            turn_id: "prior-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "prior history".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "retain stopped prompt across replacement")
+        .unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(
+            store
+                .root()
+                .join(".conversation-locks")
+                .join(format!("{original}.lock")),
+        )
+        .unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let stopped = tokio::time::timeout(
+            Duration::from_secs(2),
+            handle.execute_agent_shell_command(primary.clone(), "/stop".to_string()),
+        )
+        .await
+        .expect("interruption must not read the archive on actor")
+        .unwrap();
+        assert!(stopped.contains("state=cancelled"), "{stopped}");
+        let replaced = tokio::time::timeout(
+            Duration::from_secs(2),
+            handle.execute_agent_shell_command(primary.clone(), "/new".to_string()),
+        )
+        .await
+        .expect("replacement must not wait for old archive checking")
+        .unwrap();
+        assert!(replaced.contains("new=true"), "{replaced}");
+        assert_eq!(
+            handle.lifecycle_state().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+        drop(lock);
+        let rows = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let rows = handle
+                    .drain_persistence_side_effects(64)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .filter_map(|effect| match effect {
+                        RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => {
+                            Some(entries)
+                        }
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect::<Vec<_>>();
+                if !rows.is_empty() {
+                    break rows;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("original interruption must enter the append lane after lock release");
+        assert!(rows.iter().all(|row| row.conversation_id == original));
+        assert!(rows.iter().any(|row| {
+            row.content
+                .contains("retain stopped prompt across replacement")
+        }));
+        assert!(!store.pending_append_receipts().unwrap().is_empty());
+        store.append_many(&rows).unwrap();
+        handle.shutdown().await.unwrap();
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    let replacement = exit.service.agent_shell_store().get("%1").unwrap();
+    assert_ne!(replacement.session_id, original);
+    assert_eq!(replacement.transcript_entries, 0);
+    assert!(store.inspect(&original).unwrap().iter().any(|row| {
+        row.content
+            .contains("retain stopped prompt across replacement")
+    }));
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Builds a provider execution with a fork before a durable issue action.
 fn fork_issue_execution(
     task: &crate::runtime::RuntimeAgentProviderTask,

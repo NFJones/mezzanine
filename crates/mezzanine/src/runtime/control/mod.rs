@@ -662,6 +662,15 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> Result<RuntimeAgentTranscriptContext> {
+        if self
+            .agent_shell_store()
+            .get(pane_id)
+            .is_some_and(|session| self.persistence.bookkeeping_pending(&session.session_id))
+        {
+            return Err(MezError::conflict(
+                "conversation bookkeeping must settle before history admission",
+            ));
+        }
         execute_runtime_agent_prompt_history_work(
             self.prepare_runtime_agent_prompt_history_work(pane_id),
         )

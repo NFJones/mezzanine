@@ -768,6 +768,9 @@ impl RuntimeSessionService {
         if self.agent_is_compacting(&turn.pane_id) {
             return Ok(None);
         }
+        if self.persistence.bookkeeping_pending(&turn.conversation_id) {
+            return Ok(None);
+        }
         if self
             .agent_turn_executions()
             .get(turn_id)
@@ -1788,6 +1791,13 @@ impl RuntimeSessionService {
             .iter()
             .filter_map(|turn_id| self.runtime_agent_provider_task(turn_id))
             .filter(|task| !self.agent_is_compacting(&task.pane_id))
+            .filter(|task| {
+                self.agent_shell_store()
+                    .get(&task.pane_id)
+                    .is_none_or(|session| {
+                        !self.persistence.bookkeeping_pending(&session.session_id)
+                    })
+            })
             .filter(|task| {
                 !self.routed_provider_task_waits_for_managed_shell_startup(&task.turn_id)
             })

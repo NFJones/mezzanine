@@ -420,7 +420,32 @@ impl RuntimeSessionService {
     pub(crate) fn take_pending_agent_prompt_history(
         &mut self,
     ) -> Vec<crate::runtime::RuntimeAgentPromptHistoryDispatch> {
-        std::mem::take(&mut self.presentation.pending_agent_prompt_history)
+        let pending = std::mem::take(&mut self.presentation.pending_agent_prompt_history);
+        let mut ready = Vec::new();
+        for mut dispatch in pending {
+            if self
+                .persistence
+                .bookkeeping_pending(&dispatch.conversation_id)
+            {
+                self.presentation
+                    .pending_agent_prompt_history
+                    .push(dispatch);
+            } else {
+                if let Some(session) = self.agent_shell_store().get(&dispatch.pane_id)
+                    && session.session_id == dispatch.conversation_id
+                {
+                    dispatch.transcript_entries = if session.ephemeral {
+                        session.ephemeral_transcript_source_entries
+                    } else {
+                        session.transcript_entries
+                    };
+                    dispatch.history_work =
+                        self.prepare_runtime_agent_prompt_history_work(&dispatch.pane_id);
+                }
+                ready.push(dispatch);
+            }
+        }
+        ready
     }
 
     /// Drains deferred record-browser refreshes queued by overlay flows.

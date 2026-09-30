@@ -402,6 +402,8 @@ pub struct RuntimeAgentProviderPersistenceWork {
     pub execution: AgentTurnExecution,
     /// Fork-only read phase; later persistence actions must wait for actor spawn settlement.
     pub(crate) fork_read: Option<crate::runtime::control::RuntimeSubagentForkReadWork>,
+    /// Terminal bookkeeping read; actor settlement waits for checked chronology.
+    pub(crate) bookkeeping_read: Option<crate::runtime::RuntimeBookkeepingTranscriptReadWork>,
     /// Whether persistent-memory actions were enabled for this execution.
     pub memory_enabled: bool,
     /// Persistent-memory repository when memory actions are available.
@@ -442,6 +444,10 @@ pub struct RuntimeAgentProviderPersistenceOutcome {
     /// Checked fork history or bounded diagnostic; never authorizes worker-side spawning.
     pub(crate) fork_snapshot:
         Option<std::result::Result<crate::runtime::control::RuntimeSubagentForkSnapshot, String>>,
+    /// Exact captured history owner for terminal bookkeeping acceptance.
+    pub(crate) bookkeeping_read: Option<crate::runtime::RuntimeBookkeepingTranscriptReadWork>,
+    /// Checked turn rows and the store's next sequence, prepared without live runtime state.
+    pub(crate) bookkeeping_history: Option<(Vec<mez_agent::TranscriptEntry>, u64)>,
     /// Memory results keyed by their original execution result indexes.
     pub memory_results: Vec<(usize, mez_agent::ActionResult)>,
     /// Issue results keyed by their original execution result indexes.

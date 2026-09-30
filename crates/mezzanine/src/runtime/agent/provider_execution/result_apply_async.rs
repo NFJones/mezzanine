@@ -170,6 +170,7 @@ impl RuntimeSessionService {
                 &terminal_observations,
                 actions_before_spawn,
                 Some(read),
+                None,
             );
             return Ok(execution);
         }
@@ -257,6 +258,7 @@ impl RuntimeSessionService {
                 provider_id: provider_id.to_string(),
                 execution: execution.clone(),
                 fork_read: None,
+                bookkeeping_read: None,
                 memory_enabled: self.runtime_persistent_memory_enabled(),
                 memory_store,
                 memory_scopes: self.memory_action_search_scopes(turn),
@@ -313,6 +315,7 @@ impl RuntimeSessionService {
         observations: &RuntimeTerminalActionObservations,
         actions_before_spawn: usize,
         fork_read: Option<crate::runtime::control::RuntimeSubagentForkReadWork>,
+        bookkeeping_read: Option<crate::runtime::RuntimeBookkeepingTranscriptReadWork>,
     ) {
         let work = RuntimeAgentProviderPersistenceWork {
             turn: turn.clone(),
@@ -321,6 +324,7 @@ impl RuntimeSessionService {
             provider_id: provider_id.to_string(),
             execution: execution.clone(),
             fork_read,
+            bookkeeping_read,
             memory_enabled: false,
             memory_store: None,
             memory_scopes: Vec::new(),
@@ -352,6 +356,8 @@ impl RuntimeSessionService {
             mut execution,
             fork_read,
             fork_snapshot,
+            bookkeeping_read,
+            bookkeeping_history,
             memory_results,
             issue_results,
             issue_query_freshness,
@@ -359,6 +365,25 @@ impl RuntimeSessionService {
             actions_executed_before_persistence,
             settled_action_results_before_persistence,
         } = outcome;
+        if let Some(read) = bookkeeping_read {
+            let (history, sequence) = bookkeeping_history.ok_or_else(|| {
+                super::super::MezError::invalid_state("bookkeeping outcome has no checked history")
+            })?;
+            let entries = self.persist_runtime_agent_turn_execution_transcript_with_read(
+                &turn,
+                &execution,
+                Some((read, history, sequence)),
+            )?;
+            return self.finish_agent_provider_execution_state(
+                &turn,
+                &model_profile,
+                &provider_id,
+                execution,
+                actions_executed_before_persistence,
+                entries,
+                false,
+            );
+        }
         let batch = execution.response.action_batch.clone().ok_or_else(|| {
             super::super::MezError::invalid_state(
                 "provider persistence outcome has no action batch",
@@ -492,7 +517,6 @@ impl RuntimeSessionService {
         mut terminal_observations: RuntimeTerminalActionObservations,
         actions_executed_before_shell: usize,
     ) -> Result<AgentTurnExecution> {
-        let turn_id = turn.turn_id.as_str();
         let shell_actions_dispatched =
             self.dispatch_running_shell_actions_to_panes(turn, &mut execution)?;
         terminal_observations.observe(&execution);
@@ -524,12 +548,63 @@ impl RuntimeSessionService {
             "provider_execution_failed_action",
         )?;
         self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
-        let mut persisted_transcript_entries = 0usize;
+        let actions_executed =
+            shell_actions_dispatched.saturating_add(actions_executed_before_shell);
+        let needs_bookkeeping =
+            !failure_feedback_queued && execution.terminal_state != AgentTurnState::Running;
+        if needs_bookkeeping
+            && self.persistence.provider_settlement_uses_adapter()
+            && self
+                .agent_shell_store()
+                .get(&turn.pane_id)
+                .is_some_and(|session| !session.ephemeral)
+            && let Some(store) = self.persistence.cloned_transcript_store()
+        {
+            let read = self.capture_bookkeeping_transcript_read(store, turn);
+            self.queue_provider_settlement_phase(
+                turn,
+                model_profile,
+                provider_id,
+                &execution,
+                &terminal_observations,
+                actions_executed,
+                None,
+                Some(read),
+            );
+            return Ok(execution);
+        }
+        let persisted_transcript_entries = if needs_bookkeeping {
+            self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?
+        } else {
+            0
+        };
+        self.finish_agent_provider_execution_state(
+            turn,
+            model_profile,
+            provider_id,
+            execution,
+            actions_executed,
+            persisted_transcript_entries,
+            failure_feedback_queued,
+        )
+    }
+
+    /// Settles scheduler and terminal state only after bookkeeping history is accepted.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_agent_provider_execution_state(
+        &mut self,
+        turn: &AgentTurnRecord,
+        model_profile: &ModelProfile,
+        provider_id: &str,
+        execution: AgentTurnExecution,
+        actions_executed: usize,
+        persisted_transcript_entries: usize,
+        failure_feedback_queued: bool,
+    ) -> Result<AgentTurnExecution> {
+        let turn_id = turn.turn_id.as_str();
         if failure_feedback_queued {
             self.agent_turn_executions_mut().remove(turn_id);
         } else if execution.terminal_state == AgentTurnState::Blocked {
-            persisted_transcript_entries =
-                self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
             self.queue_blocked_approvals_for_execution(turn, &execution)?;
             self.agent_turn_executions_mut()
                 .insert(turn_id.to_string(), execution.clone());
@@ -570,8 +645,6 @@ impl RuntimeSessionService {
                     runtime_agent_turn_state_name(execution.terminal_state)
                 ),
             )?;
-            persisted_transcript_entries =
-                self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
             self.emit_subagent_task_result_for_execution(turn, &execution)?;
             if !self.complete_routed_presentation(turn_id, execution.terminal_state)? {
                 self.complete_running_agent_turn_and_start_ready(
@@ -685,8 +758,7 @@ impl RuntimeSessionService {
                 runtime_agent_turn_state_name(execution.terminal_state),
                 json_escape(provider_id),
                 execution.action_results.len(),
-                shell_actions_dispatched
-                    .saturating_add(actions_executed_before_shell),
+                actions_executed,
                 persisted_transcript_entries
             ),
         )?;
@@ -696,7 +768,7 @@ impl RuntimeSessionService {
                 turn_id,
                 provider_id,
                 &execution,
-                shell_actions_dispatched.saturating_add(actions_executed_before_shell),
+                actions_executed,
                 persisted_transcript_entries,
             ),
         )?;

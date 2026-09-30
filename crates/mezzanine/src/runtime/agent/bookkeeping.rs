@@ -22,6 +22,7 @@ const RUNTIME_PERSISTED_EXECUTION_TRANSCRIPT_LIMIT: usize = 4096;
 
 /// Immutable chronology read captured before execution or interruption bookkeeping.
 /// The checked store projection owns archive integrity; queued rows remain logical only.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeBookkeepingTranscriptReadWork {
     store: crate::storage::transcript::AgentTranscriptStore,
     conversation_id: String,
@@ -53,7 +54,7 @@ impl RuntimeBookkeepingTranscriptReadWork {
     }
 
     /// Reads one coherent logical history without accessing live runtime state.
-    fn execute(&self) -> Result<Vec<TranscriptEntry>> {
+    pub(crate) fn execute(&self) -> Result<Vec<TranscriptEntry>> {
         Ok(self
             .store
             .conversation_transcript_view(
@@ -64,9 +65,140 @@ impl RuntimeBookkeepingTranscriptReadWork {
             )?
             .logical)
     }
+
+    /// Reads the store sequence on the same worker that checks turn chronology.
+    pub(crate) fn next_sequence(&self) -> Result<u64> {
+        next_transcript_sequence(&self.store, &self.conversation_id)
+    }
+}
+
+/// Immutable chronology retained independently of terminal turn cleanup.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeBookkeepingCandidate {
+    pub(crate) generation: u64,
+    pub(crate) turn: AgentTurnRecord,
+    /// Conversation evidence retained even if its pane is replaced or removed.
+    pub(crate) read: RuntimeBookkeepingTranscriptReadWork,
+    pub(crate) persistence_key: (String, String),
+    pub(crate) entries: Vec<TranscriptEntry>,
+    pub(crate) directory: Option<TranscriptEntry>,
+    pub(crate) blocked: bool,
+}
+
+/// Exact candidate and actor-captured history checked by a blocking worker.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeBookkeepingCandidateWork {
+    pub(crate) candidate: RuntimeBookkeepingCandidate,
+    pub(crate) read: RuntimeBookkeepingTranscriptReadWork,
+}
+
+impl RuntimeBookkeepingCandidateWork {
+    /// Returns checked turn history and store sequence without accessing actor state.
+    pub(crate) fn execute(&self) -> Result<(Vec<TranscriptEntry>, u64)> {
+        Ok((self.read.execute()?, self.read.next_sequence()?))
+    }
 }
 
 impl RuntimeSessionService {
+    /// Claims ordered chronology candidates using current accepted pending rows.
+    pub(crate) fn claim_bookkeeping_candidates(&mut self) -> Vec<RuntimeBookkeepingCandidateWork> {
+        self.persistence
+            .claim_bookkeeping_candidates()
+            .into_iter()
+            .map(|candidate| {
+                let mut read = if self
+                    .agent_shell_store()
+                    .get(&candidate.turn.pane_id)
+                    .is_some_and(|session| session.session_id == candidate.turn.conversation_id)
+                {
+                    self.capture_bookkeeping_transcript_read(
+                        candidate.read.store.clone(),
+                        &candidate.turn,
+                    )
+                } else {
+                    candidate.read.clone()
+                };
+                read.pending.extend(
+                    self.persistence
+                        .pending_transcript_entries(&candidate.turn.conversation_id),
+                );
+                RuntimeBookkeepingCandidateWork { candidate, read }
+            })
+            .collect()
+    }
+
+    /// Accepts one checked candidate, preserving exact owner and append sequencing.
+    pub(crate) fn complete_bookkeeping_candidate(
+        &mut self,
+        work: RuntimeBookkeepingCandidateWork,
+        history: Result<(Vec<TranscriptEntry>, u64)>,
+    ) -> Result<bool> {
+        let Some(mut candidate) = self
+            .persistence
+            .take_bookkeeping_candidate(work.candidate.generation)
+        else {
+            return Ok(false);
+        };
+        let turn = candidate.turn.clone();
+        let still_bound = self
+            .agent_shell_store()
+            .get(&turn.pane_id)
+            .is_some_and(|session| session.session_id == turn.conversation_id);
+        let (history, sequence) = match history.and_then(|history| {
+            if still_bound {
+                work.read.check_owner(self)?;
+            }
+            Ok(history)
+        }) {
+            Ok(history) => history,
+            Err(error) => {
+                self.persistence.block_bookkeeping_candidate(candidate);
+                self.append_agent_error_text_to_terminal_buffer(
+                    &turn.pane_id,
+                    &format!("agent: transcript bookkeeping blocked: {}", error.message()),
+                )?;
+                return Err(error);
+            }
+        };
+        let first_sequence = self
+            .persistence
+            .deferred_transcript_next_sequence(&turn.conversation_id)
+            .unwrap_or(sequence)
+            .max(sequence);
+        if first_sequence == 1
+            && let Some(directory) = candidate.directory.take()
+        {
+            candidate.entries.insert(0, directory);
+        }
+        let entries =
+            Self::new_runtime_transcript_entries(candidate.entries, &history, first_sequence);
+        if entries.is_empty() {
+            return Ok(true);
+        }
+        let store = work.read.store;
+        self.persistence
+            .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+                path: store.transcript_path(&turn.conversation_id)?,
+                store,
+                entries: entries.clone(),
+            });
+        self.agent
+            .agent_persisted_execution_transcripts
+            .insert(candidate.persistence_key);
+        if still_bound {
+            self.agent_shell_store_mut()
+                .record_transcript_entries(&turn.pane_id, entries.len())?;
+            self.record_pane_transcript_ref(
+                &turn.pane_id,
+                format!("transcript:{}:{}", turn.pane_id, turn.conversation_id),
+            )?;
+        }
+        if first_sequence == 1 {
+            self.queue_saved_session_retention_operation(current_unix_seconds().max(1), false)?;
+        }
+        Ok(true)
+    }
+
     /// Captures the current transcript owner and pending receipts for checked bookkeeping.
     pub(crate) fn capture_bookkeeping_transcript_read(
         &self,
@@ -112,6 +244,21 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
     ) -> Result<usize> {
+        self.persist_runtime_agent_turn_execution_transcript_with_read(turn, execution, None)
+    }
+
+    /// Accepts worker-checked chronology and sequence evidence before queuing an append.
+    /// The synchronous path is retained for callers without prepared worker history.
+    pub(crate) fn persist_runtime_agent_turn_execution_transcript_with_read(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+        prepared: Option<(
+            RuntimeBookkeepingTranscriptReadWork,
+            Vec<TranscriptEntry>,
+            u64,
+        )>,
+    ) -> Result<usize> {
         let Some((session_conversation_id, session_ephemeral)) = self
             .agent_shell_store()
             .get(&turn.pane_id)
@@ -133,14 +280,48 @@ impl RuntimeSessionService {
             return Ok(0);
         };
         let persistence_key = (conversation_id.clone(), turn.turn_id.clone());
-        let read = self.capture_bookkeeping_transcript_read(store.clone(), turn);
-        let existing_entries = read.execute()?;
+        if prepared.is_none() && self.persistence.transcript_uses_adapter() {
+            let timestamp = current_unix_seconds().max(1);
+            let entries = self.runtime_transcript_entries_for_execution(
+                &conversation_id,
+                2,
+                timestamp,
+                turn,
+                execution,
+            )?;
+            let directory = self.runtime_session_directory_transcript_entry(
+                &conversation_id,
+                1,
+                timestamp,
+                turn,
+            );
+            self.persistence
+                .queue_bookkeeping_candidate(RuntimeBookkeepingCandidate {
+                    generation: 0,
+                    turn: turn.clone(),
+                    read: self.capture_bookkeeping_transcript_read(store.clone(), turn),
+                    persistence_key,
+                    entries,
+                    directory,
+                    blocked: false,
+                });
+            return Ok(0);
+        }
+        let (read, existing_entries, prepared_sequence) =
+            if let Some((read, entries, sequence)) = prepared {
+                (read, entries, Some(sequence))
+            } else {
+                let read = self.capture_bookkeeping_transcript_read(store.clone(), turn);
+                let entries = read.execute()?;
+                (read, entries, None)
+            };
         read.check_owner(self)?;
         let created_at_unix_seconds = current_unix_seconds().max(1);
         let entries = if self.persistence.transcript_uses_adapter() {
             let first_sequence = self
                 .persistence
                 .deferred_transcript_next_sequence(&conversation_id)
+                .or(prepared_sequence)
                 .map(Ok)
                 .unwrap_or_else(|| next_transcript_sequence(&store, &conversation_id))?;
             let first_persistence = first_sequence == 1;
@@ -416,10 +597,8 @@ impl RuntimeSessionService {
             .unwrap_or_default();
         let created_at_unix_seconds = current_unix_seconds().max(1);
         let first_sequence = if self.persistence.transcript_uses_adapter() {
-            self.persistence
-                .deferred_transcript_next_sequence(&turn.conversation_id)
-                .map(Ok)
-                .unwrap_or_else(|| next_transcript_sequence(&store, &turn.conversation_id))?
+            // Candidate sequences are placeholders until checked actor acceptance.
+            1
         } else {
             next_transcript_sequence(&store, &turn.conversation_id)?
         };
@@ -454,6 +633,19 @@ impl RuntimeSessionService {
         };
         interrupted_entry.validate()?;
         entries.push(interrupted_entry);
+        if self.persistence.transcript_uses_adapter() {
+            self.persistence
+                .queue_bookkeeping_candidate(RuntimeBookkeepingCandidate {
+                    generation: 0,
+                    turn: turn.clone(),
+                    read: self.capture_bookkeeping_transcript_read(store.clone(), turn),
+                    persistence_key,
+                    entries,
+                    directory: None,
+                    blocked: false,
+                });
+            return Ok(0);
+        }
         let read = self.capture_bookkeeping_transcript_read(store.clone(), turn);
         let existing_entries = read.execute()?;
         read.check_owner(self)?;

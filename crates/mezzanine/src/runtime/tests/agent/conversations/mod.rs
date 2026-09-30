@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod bookkeeping;
 mod lifecycle;
 mod metadata;
 mod resume_prompt;

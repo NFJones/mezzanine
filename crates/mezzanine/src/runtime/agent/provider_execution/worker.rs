@@ -179,7 +179,8 @@ impl RuntimeSessionService {
         let turn = outcome.turn.clone();
         let model_profile = outcome.model_profile.clone();
         let provider_id = outcome.provider_id.clone();
-        let applied = match self.apply_agent_provider_persistence_outcome(outcome).await {
+        // Keep the phase continuation off the enclosing actor future's stack.
+        let applied = match Box::pin(self.apply_agent_provider_persistence_outcome(outcome)).await {
             Ok(_) => true,
             Err(error) => {
                 self.fail_agent_turn_after_provider_completion_application_error(

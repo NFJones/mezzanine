@@ -19,6 +19,7 @@ use mez_terminal::TerminalSize;
 use super::RuntimeSideEffect;
 
 mod adapters;
+mod bookkeeping;
 mod effects;
 mod stores;
 
@@ -44,6 +45,11 @@ pub(crate) struct RuntimePersistenceComponent {
     queued_pane_pipe_effects: Vec<(String, RuntimeSideEffect)>,
     queued_audit_effects: Vec<RuntimeSideEffect>,
     queued_transcript_effects: Vec<RuntimeSideEffect>,
+    /// Unchecked chronology candidates; never exposed as accepted transcript rows.
+    bookkeeping_candidates: Vec<crate::runtime::RuntimeBookkeepingCandidate>,
+    /// Exact worker generations currently checking candidates.
+    bookkeeping_claims: BTreeSet<u64>,
+    next_bookkeeping_generation: u64,
     /// Transcript writes handed to the external worker but not yet settled.
     in_flight_transcript_entries: BTreeMap<(String, u64), Vec<InFlightTranscriptBatch>>,
     metadata_checkpoint_generations: BTreeMap<String, u64>,

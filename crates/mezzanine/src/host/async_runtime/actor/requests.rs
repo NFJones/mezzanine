@@ -119,6 +119,29 @@ impl AsyncRuntimeSessionActor {
         }
     }
 
+    /// Checks retained chronology outside the actor, one candidate per conversation.
+    pub(super) fn dispatch_bookkeeping_candidates(&mut self) {
+        for work in self.service.claim_bookkeeping_candidates() {
+            let sender = self.sender.clone();
+            tokio::spawn(async move {
+                let read_work = work.clone();
+                let history = tokio::task::spawn_blocking(move || read_work.execute())
+                    .await
+                    .map_err(|error| {
+                        crate::error::MezError::invalid_state(format!(
+                            "bookkeeping worker failed: {error}"
+                        ))
+                    })
+                    .and_then(|history| history);
+                let _ = sender
+                    .send(AsyncRuntimeRequestEnvelope::new(
+                        AsyncRuntimeRequest::CompleteBookkeepingCandidate { work, history },
+                    ))
+                    .await;
+            });
+        }
+    }
+
     /// Removes one clipboard route only when the requesting event-stream
     /// generation still owns it.
     pub(super) fn cleanup_client_clipboard_route(
@@ -1591,6 +1614,23 @@ impl AsyncRuntimeSessionActor {
                     self.notify_event_delivery();
                 }
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                false
+            }
+            AsyncRuntimeRequest::CompleteBookkeepingCandidate { work, history } => {
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
+                let result = self.service.complete_bookkeeping_candidate(work, history);
+                if result.as_ref().is_ok_and(|applied| *applied) {
+                    let _ = self.service.start_ready_agent_turns();
+                    let _ = self.queue_deferred_pane_io_side_effects_from_service();
+                    let _ = self.queue_pending_provider_dispatch_side_effects();
+                    let _ = self.start_transcript_receipt_admission(
+                        previous_id,
+                        TranscriptReceiptReply::Startup,
+                    );
+                    self.dispatch_pending_agent_prompt_history();
+                }
+                self.dispatch_bookkeeping_candidates();
+                self.notify_event_delivery();
                 false
             }
             AsyncRuntimeRequest::CompleteAgentPromptHistoryPreparation { dispatch, history } => {

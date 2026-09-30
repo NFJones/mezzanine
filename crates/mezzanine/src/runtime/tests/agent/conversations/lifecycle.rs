@@ -1650,6 +1650,14 @@ fn runtime_interrupted_turn_pending_transcript_is_visible_to_immediate_continuat
         .clone();
     assert!(transcript_store.inspect(&conversation_id).is_err());
 
+    assert!(service.start_agent_prompt_turn("%1", "Continue").is_err());
+    let work = service.claim_bookkeeping_candidates().pop().unwrap();
+    let history = work.execute();
+    assert!(
+        service
+            .complete_bookkeeping_candidate(work, history)
+            .unwrap()
+    );
     let continuation = service.start_agent_prompt_turn("%1", "Continue").unwrap();
     let context = service
         .agent_turn_contexts()

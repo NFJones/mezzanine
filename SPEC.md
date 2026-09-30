@@ -2149,6 +2149,11 @@ MUST be appended to that retained chronology as the new active user event so it
 can continue or redirect the interrupted work. Mezzanine MUST also durably
 retain the original user prompt, interruption reason, and safely serializable
 action observations as fallback conversation context across runtime recovery.
+Archive checks for execution and interruption bookkeeping MUST run outside the
+serialized runtime actor. Unchecked chronology candidates MUST NOT be exposed as
+accepted transcript rows or used to authorize durable history publication. Later
+history admission MUST wait for checked append acceptance; a failed archive check
+MUST report an error and fail closed rather than admit incomplete chronology.
 Context continuation MUST NOT restart cancelled actions or processes.
 When the interrupted turn belongs to a managed routed-worker workflow, the
 runtime MUST keep the child pane and parent workflow open for pane-local user

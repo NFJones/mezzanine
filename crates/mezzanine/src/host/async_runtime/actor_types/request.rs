@@ -821,6 +821,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Canonical history epoch prepared without accessing live actor state.
         history: Result<crate::runtime::RuntimeAgentTranscriptContext>,
     },
+    /// Admits checked chronology retained before terminal turn cleanup.
+    CompleteBookkeepingCandidate {
+        /// Exact candidate generation and captured conversation history owner.
+        work: crate::runtime::RuntimeBookkeepingCandidateWork,
+        /// Worker-checked turn rows and next store sequence.
+        history: Result<(Vec<mez_agent::TranscriptEntry>, u64)>,
+    },
     /// Represents the Pending Agent Provider Tasks case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1412,6 +1419,7 @@ impl AsyncRuntimeRequest {
             | Self::CompleteAgentShellProviderInfoRefresh { .. }
             | Self::CompleteAgentPromptProviderInfoRefresh { .. }
             | Self::CompleteAgentPromptHistoryPreparation { .. }
+            | Self::CompleteBookkeepingCandidate { .. }
             | Self::PendingAgentProviderTasks { .. }
             | Self::AgentTurnIsRunning { .. }
             | Self::QueueProviderPollTimerIfNeeded { .. }

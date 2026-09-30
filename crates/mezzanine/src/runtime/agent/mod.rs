@@ -198,6 +198,10 @@ struct RuntimeInterruptedRoutedOwnership {
 mod approvals;
 mod audit;
 mod bookkeeping;
+pub(crate) use bookkeeping::{
+    RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
+    RuntimeBookkeepingTranscriptReadWork,
+};
 mod config_change;
 mod context_documents;
 mod discovery;

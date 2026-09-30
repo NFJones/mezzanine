@@ -391,6 +391,10 @@ mod status_pills;
 /// Exposes transport-neutral runtime event, transition, and side-effect types.
 mod transitions;
 
+pub(crate) use agent::{
+    RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
+    RuntimeBookkeepingTranscriptReadWork,
+};
 pub(crate) use agent::{RuntimeProviderLogInput, execute_agent_provider_persistence_work};
 #[cfg(test)]
 pub(crate) use agent::{SessionTitleDenial, session_title_task_id};

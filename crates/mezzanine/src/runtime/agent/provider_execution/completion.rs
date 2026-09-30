@@ -266,16 +266,17 @@ impl RuntimeSessionService {
             "provider_task completed reason=typed_provider_event",
         )?;
         let provider_id = execution.response.provider.clone();
-        if let Err(error) = self
-            .apply_agent_provider_execution_async(
-                &turn,
-                &model_profile,
-                &provider_id,
-                provider_owner,
-                execution,
-                true,
-            )
-            .await
+        // Settlement carries captured history; do not inline its future into
+        // every actor request and event handler.
+        if let Err(error) = Box::pin(self.apply_agent_provider_execution_async(
+            &turn,
+            &model_profile,
+            &provider_id,
+            provider_owner,
+            execution,
+            true,
+        ))
+        .await
         {
             self.fail_agent_turn_after_provider_completion_application_error(
                 &turn,
