@@ -136,6 +136,8 @@ pub(crate) struct RuntimeNativeShellFailure {
     pub(crate) kind: String,
     /// Human-readable worker failure diagnostic.
     pub(crate) message: String,
+    /// Bounded lifecycle evidence; absent for failures unrelated to sandbox status.
+    pub(crate) lifecycle: Option<crate::security::sandbox::SandboxLifecycleFailure>,
 }
 
 /// Bounded cumulative progress observed while a native shell worker is running.

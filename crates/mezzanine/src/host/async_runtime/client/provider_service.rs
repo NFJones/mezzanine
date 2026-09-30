@@ -912,6 +912,7 @@ async fn execute_native_shell_action(
             result: Err(RuntimeNativeShellFailure {
                 kind: "invalid_state".to_string(),
                 message: format!("native shell worker join failed: {error}"),
+                lifecycle: None,
             }),
         },
     };

@@ -543,6 +543,8 @@ pub struct MezError {
     local_transcript_precommit_retryable: bool,
     /// This failure originated in the I/O backend owned by one pane worker.
     pane_backend_failure: bool,
+    /// Bounded native sandbox lifecycle diagnostics, separate from provider errors.
+    sandbox_lifecycle_failure: Option<Box<crate::security::sandbox::SandboxLifecycleFailure>>,
 }
 
 impl MezError {
@@ -561,6 +563,7 @@ impl MezError {
             provider_output_limit_state: None,
             local_transcript_precommit_retryable: false,
             pane_backend_failure: false,
+            sandbox_lifecycle_failure: None,
         }
     }
 
@@ -658,6 +661,22 @@ impl MezError {
         self.pane_backend_failure
     }
 
+    /// Attaches bounded evidence without authorizing retry or weakening confinement.
+    pub(crate) fn with_sandbox_lifecycle_failure(
+        mut self,
+        failure: crate::security::sandbox::SandboxLifecycleFailure,
+    ) -> Self {
+        self.sandbox_lifecycle_failure = Some(Box::new(failure));
+        self
+    }
+
+    /// Returns native lifecycle evidence independently of provider diagnostics.
+    pub(crate) fn sandbox_lifecycle_failure(
+        &self,
+    ) -> Option<&crate::security::sandbox::SandboxLifecycleFailure> {
+        self.sandbox_lifecycle_failure.as_deref()
+    }
+
     /// Marks a transcript failure proven to precede any durable append.
     pub(crate) fn mark_local_transcript_precommit_retryable(mut self) -> Self {
         self.local_transcript_precommit_retryable = true;
@@ -732,6 +751,7 @@ impl From<io::Error> for MezError {
             provider_output_limit_state: None,
             local_transcript_precommit_retryable: false,
             pane_backend_failure: false,
+            sandbox_lifecycle_failure: None,
         }
     }
 }

@@ -299,6 +299,18 @@ impl RuntimeSessionService {
                     failure.kind,
                     failure.message.clone(),
                 )?;
+                if let Some(lifecycle) = failure.lifecycle.as_ref()
+                    && let Some(error) = result.error.as_mut()
+                {
+                    error.data_json = Some(
+                        serde_json::json!({
+                            "sandbox_lifecycle": lifecycle,
+                            "automatic_replay": false,
+                            "partial_effect_warning": true,
+                        })
+                        .to_string(),
+                    );
+                }
                 result.structured_content_json =
                     Some(mez_agent::shell_action_structured_content_json(
                         &action,
@@ -315,7 +327,8 @@ impl RuntimeSessionService {
                             "source": "spawned_shell_worker",
                             "marker": outcome.marker,
                             "boundary_state": "worker_failed",
-                            "error": failure.message
+                            "error": failure.message,
+                            "sandbox_lifecycle": failure.lifecycle
                         }),
                     ));
                 self.attach_effective_sandbox_to_shell_result(

@@ -8148,6 +8148,12 @@ transactions, and capture trusted backend-tagged lifecycle status outside
 command output. Native Seatbelt execution MUST use the same code-owned profile,
 minimal environment, managed-home semantics, and fail-closed lifecycle contract
 as pane-shell execution.
+When native lifecycle completion cannot be proven, action errors MUST retain
+bounded, credential-redacted stderr separately from trusted status facts, outer
+exit/signal, and the status parse or transport failure classification. Invalid
+status MUST leave record presence unknown. Missing completion evidence MUST NOT
+claim that the payload did not run, authorize automatic replay, or weaken the
+sandbox boundary; stdout MUST NOT substitute for trusted lifecycle status.
 
 The native workload environment contract MUST be owned by one code path shared
 by the native policy-only, host-access, Bubblewrap, and Seatbelt launch paths,

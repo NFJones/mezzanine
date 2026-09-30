@@ -569,12 +569,24 @@ impl SpawnedShellExecutor {
             },
         };
         if let Some(status_reader) = status_reader {
-            let status_capture = join_output_reader(status_reader)?;
+            let backend = sandbox_backend.unwrap_or(crate::runtime::SandboxBackend::Bubblewrap);
+            let status_complete = status_reader.completed;
+            let status_capture = join_output_reader(status_reader).map_err(|_| {
+                spawned_lifecycle_error(
+                    backend,
+                    crate::security::sandbox::SandboxLifecycleFailureClass::Transport,
+                    None,
+                    &output,
+                    stderr_capture.dropped,
+                )
+            })?;
             validate_spawned_child_status(
-                sandbox_backend.unwrap_or(crate::runtime::SandboxBackend::Bubblewrap),
+                backend,
                 &status_capture.bytes,
                 status_capture.dropped,
+                status_complete,
                 &output,
+                stderr_capture.dropped,
             )?;
         }
         Ok(output)
@@ -799,6 +811,7 @@ fn execute_native_shell_dispatch_inner(
     .map_err(|error| crate::runtime::RuntimeNativeShellFailure {
         kind: format!("{:?}", error.kind()).to_ascii_lowercase(),
         message: error.message().to_string(),
+        lifecycle: error.sandbox_lifecycle_failure().cloned(),
     });
     crate::runtime::RuntimeNativeShellOutcome {
         turn_id,
@@ -1003,39 +1016,97 @@ fn validate_spawned_child_status(
     backend: crate::runtime::SandboxBackend,
     status_bytes: &[u8],
     status_dropped: usize,
+    status_complete: bool,
     output: &ShellExecutionOutput,
+    stderr_dropped: usize,
 ) -> Result<()> {
+    use crate::security::sandbox::SandboxLifecycleFailureClass as Class;
     if output.timed_out || output.interrupted {
         return Ok(());
     }
+    let failure =
+        |class, status| spawned_lifecycle_error(backend, class, status, output, stderr_dropped);
     if status_dropped > 0 {
-        return Err(MezError::invalid_state(
-            "spawned shell lifecycle status exceeded its capture limit",
-        ));
+        return Err(failure(Class::Truncated, None));
     }
-    let status_text = std::str::from_utf8(status_bytes).map_err(|_| {
-        MezError::invalid_state("spawned shell lifecycle status was not valid UTF-8")
-    })?;
+    if !status_complete {
+        return Err(failure(Class::Transport, None));
+    }
+    let status_text =
+        std::str::from_utf8(status_bytes).map_err(|_| failure(Class::InvalidUtf8, None))?;
     let status = crate::security::sandbox::parse_sandbox_lifecycle_status(backend, status_text)
-        .map_err(|error| MezError::invalid_state(error.message()))?;
-    let reported_exit_code = status.exit_code().ok_or_else(|| {
-        let message = if status.payload_established() {
-            format!(
-                "{} payload execution was established but lifecycle completion was not proven",
-                backend.as_str()
-            )
-        } else {
-            format!("{} failed before payload execution", backend.as_str())
-        };
-        MezError::invalid_state(message)
-    })?;
+        .map_err(|_| failure(Class::Malformed, None))?;
+    let reported_exit_code = status
+        .exit_code()
+        .ok_or_else(|| failure(Class::MissingExit, Some(status)))?;
     if output.exit_code != Some(reported_exit_code) {
-        return Err(MezError::invalid_state(format!(
-            "{} status exit code contradicts the spawned process",
-            backend.as_str()
-        )));
+        return Err(failure(Class::ContradictoryExit, Some(status)));
     }
     Ok(())
+}
+
+/// Retains bounded status facts without promoting stdout or stderr to trusted evidence.
+/// Invalid status leaves record presence unknown, and no failure authorizes replay.
+fn spawned_lifecycle_error(
+    backend: crate::runtime::SandboxBackend,
+    class: crate::security::sandbox::SandboxLifecycleFailureClass,
+    status: Option<crate::security::sandbox::SandboxLifecycleStatus>,
+    output: &ShellExecutionOutput,
+    stderr_dropped: usize,
+) -> MezError {
+    use crate::security::sandbox::{
+        SandboxLifecycleFailure, SandboxLifecycleFailureClass as Class,
+    };
+    const DIAGNOSTIC_LIMIT: usize = 4096;
+    let sanitized = sanitize_spawned_lifecycle_diagnostic(&output.stderr);
+    let mut end = sanitized.len().min(DIAGNOSTIC_LIMIT);
+    while !sanitized.is_char_boundary(end) {
+        end -= 1;
+    }
+    let message = if class == Class::ContradictoryExit {
+        format!(
+            "{} status exit code contradicts the spawned process; payload completion was not proven",
+            backend.as_str()
+        )
+    } else {
+        format!(
+            "{} lifecycle completion was not proven ({class:?}); payload execution or effects may be uncertain; do not automatically replay",
+            backend.as_str()
+        )
+    };
+    MezError::invalid_state(message).with_sandbox_lifecycle_failure(SandboxLifecycleFailure {
+        backend: backend.as_str().to_string(),
+        class,
+        outer_exit_code: output.exit_code,
+        outer_signal: output.signal,
+        child_record_present: status.map(|status| status.child_pid().is_some()),
+        exit_record_present: status.map(|status| status.exit_code().is_some()),
+        stderr: sanitized[..end].to_string(),
+        stderr_truncated: stderr_dropped > 0
+            || output.stderr.len() > DIAGNOSTIC_LIMIT
+            || sanitized.len() > end,
+    })
+}
+
+/// Redacts structured credentials before retaining launcher diagnostics.
+/// Whole JSON and JSON-lines use the shared recursive sanitizer. Mixed or
+/// incomplete structured fragments are withheld rather than guessed at; this
+/// also prevents pretty-printed fragments from leaking secrets on later lines.
+fn sanitize_spawned_lifecycle_diagnostic(text: &str) -> String {
+    if serde_json::from_str::<serde_json::Value>(text).is_ok() {
+        return mez_agent::sanitize_provider_diagnostic_text(text);
+    }
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        if serde_json::from_str::<serde_json::Value>(line).is_ok() {
+            lines.push(mez_agent::sanitize_provider_diagnostic_text(line));
+        } else if line.contains(['{', '[', '"']) {
+            return "[redacted: mixed or incomplete structured diagnostic]".to_string();
+        } else {
+            lines.push(mez_agent::sanitize_provider_primary_error_text(line));
+        }
+    }
+    lines.join("\n")
 }
 
 /// Kills the entire process group led by `pid` so command children are
@@ -1847,6 +1918,169 @@ mod tests {
             !artifact_path.parent().unwrap().exists(),
             "launch directory was not cleaned up"
         );
+    }
+
+    /// An incomplete status after child establishment must not claim that the
+    /// payload never ran; stdout cannot supply the missing completion evidence.
+    #[test]
+    fn native_worker_incomplete_lifecycle_reports_uncertain_completion() {
+        let mut dispatch = dispatch_with_probe("true", None);
+        dispatch.sandbox_backend = Some(crate::runtime::SandboxBackend::Bubblewrap);
+        dispatch.request.transaction = dispatch.request.transaction.with_child_launch(
+            ShellChildLaunch::new(
+                "/bin/sh",
+                vec![
+                    ShellChildArgument::Literal("-c".to_string()),
+                    ShellChildArgument::Literal("printf '{\"child-pid\":%s}\\n' \"$$\" >&3; printf 'untrusted stdout'; printf 'launcher diagnostic' >&2; exit 7".to_string()),
+                ],
+            ).unwrap().with_status_fd(3).unwrap(),
+        );
+        let failure = execute_native_shell_dispatch(dispatch).result.unwrap_err();
+        assert!(
+            failure.message.contains("completion was not proven"),
+            "{failure:?}"
+        );
+        assert!(
+            !failure.message.contains("before payload execution"),
+            "{failure:?}"
+        );
+        let evidence = failure.lifecycle.unwrap();
+        assert_eq!(evidence.outer_exit_code, Some(7));
+        assert_eq!(evidence.child_record_present, Some(true));
+        assert_eq!(evidence.exit_record_present, Some(false));
+        assert_eq!(evidence.stderr, "launcher diagnostic");
+        assert!(!evidence.stderr.contains("untrusted stdout"));
+    }
+
+    /// Invalid, truncated and unclosed status cannot establish trusted record
+    /// presence. Diagnostic stderr remains bounded/redacted and stdout is ignored.
+    #[test]
+    fn native_lifecycle_failures_classify_and_bound_evidence() {
+        use crate::security::sandbox::SandboxLifecycleFailureClass as Class;
+        let mut output = ShellExecutionOutput::new(
+            Some(7),
+            "{\"exit-code\":7}".to_string(),
+            "diagnostic ".repeat(1000),
+            false,
+            false,
+        );
+        for (bytes, dropped, complete, class, child) in [
+            (&b""[..], 0, true, Class::MissingExit, Some(false)),
+            (
+                &b"{\"child-pid\":1}\n"[..],
+                0,
+                true,
+                Class::MissingExit,
+                Some(true),
+            ),
+            (
+                &b"{\"child-pid\":1}\n{"[..],
+                0,
+                true,
+                Class::Malformed,
+                None,
+            ),
+            (&b"\xff"[..], 0, true, Class::InvalidUtf8, None),
+            (&b"{\"child-pid\":1}\n"[..], 1, true, Class::Truncated, None),
+            (
+                &b"{\"child-pid\":1}\n"[..],
+                0,
+                false,
+                Class::Transport,
+                None,
+            ),
+        ] {
+            let error = validate_spawned_child_status(
+                crate::runtime::SandboxBackend::Bubblewrap,
+                bytes,
+                dropped,
+                complete,
+                &output,
+                0,
+            )
+            .unwrap_err();
+            let evidence = error.sandbox_lifecycle_failure().unwrap();
+            assert_eq!(evidence.class, class);
+            assert_eq!(evidence.child_record_present, child);
+            assert_eq!(evidence.outer_exit_code, Some(7));
+            assert!(evidence.stderr.len() <= 4096);
+            assert!(evidence.stderr_truncated);
+        }
+        output.stderr = "password = opaque-secret".to_string();
+        for diagnostic in [
+            r#"{"nested":{"password":"opaque-secret","access_token":"opaque-credential"}}"#,
+            "launcher detail\n{\"nested\":{\"password\":\"opaque-secret\"}}",
+            "launcher: {\"access_token\":\"opaque-credential\"}",
+            "launcher: {\"password\":\"opaque-secret",
+        ] {
+            output.stderr = diagnostic.to_string();
+            let error = validate_spawned_child_status(
+                crate::runtime::SandboxBackend::Bubblewrap,
+                b"",
+                0,
+                true,
+                &output,
+                0,
+            )
+            .unwrap_err();
+            let evidence = error.sandbox_lifecycle_failure().unwrap();
+            assert!(!evidence.stderr.contains("opaque-secret"), "{evidence:?}");
+            assert!(
+                !evidence.stderr.contains("opaque-credential"),
+                "{evidence:?}"
+            );
+        }
+        output.stderr = "password = opaque-secret".to_string();
+        let error = validate_spawned_child_status(
+            crate::runtime::SandboxBackend::Bubblewrap,
+            b"",
+            0,
+            true,
+            &output,
+            0,
+        )
+        .unwrap_err();
+        assert!(
+            !error
+                .sandbox_lifecycle_failure()
+                .unwrap()
+                .stderr
+                .contains("opaque-secret")
+        );
+    }
+
+    /// Seatbelt launcher failures and outer signals retain backend-specific
+    /// trusted record facts without substituting an outer status for completion.
+    #[test]
+    fn native_lifecycle_failure_preserves_seatbelt_and_signal_facts() {
+        let mut output = ShellExecutionOutput::new(
+            None,
+            String::new(),
+            "wait diagnostic".to_string(),
+            false,
+            false,
+        );
+        output.signal = Some(libc::SIGTERM);
+        let status = b"{\"version\":1,\"event\":\"sandbox-entered\"}\n{\"version\":1,\"event\":\"child-established\",\"child-pid\":42}\n{\"version\":1,\"event\":\"wait-failed\",\"code\":\"payload-wait\"}\n";
+        let error = validate_spawned_child_status(
+            crate::runtime::SandboxBackend::Seatbelt,
+            status,
+            0,
+            true,
+            &output,
+            0,
+        )
+        .unwrap_err();
+        let evidence = error.sandbox_lifecycle_failure().unwrap();
+        assert_eq!(evidence.backend, "seatbelt");
+        assert_eq!(
+            evidence.class,
+            crate::security::sandbox::SandboxLifecycleFailureClass::MissingExit
+        );
+        assert_eq!(evidence.outer_exit_code, None);
+        assert_eq!(evidence.outer_signal, Some(libc::SIGTERM));
+        assert_eq!(evidence.child_record_present, Some(true));
+        assert_eq!(evidence.exit_record_present, Some(false));
     }
 
     /// Verifies direct typed-child execution supplies the selected status

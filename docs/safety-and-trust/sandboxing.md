@@ -137,6 +137,11 @@ payload output. Only separately proven eligible pre-payload failures may offer
 one exact approval-gated unsandboxed retry. An established nonzero payload may
 receive one bounded sandbox-failure assessment. No retry is automatic, and a
 warning is required when partial effects may already exist.
+Native incomplete lifecycle errors retain bounded, credential-redacted stderr,
+outer process exit/signal, and trusted child/exit-record facts when parsing is
+valid. Malformed, truncated, or unclosed status leaves those facts unknown.
+These diagnostics do not prove that the payload did not run: completion or
+effects may be uncertain, and neither stdout nor stderr authorizes replay.
 
 `host-access` is a separate primary-user-only approval mode that intentionally
 runs local shell work outside the configured sandbox. It should be used only

@@ -33,6 +33,7 @@ use crate::runtime::{
 
 mod effective;
 mod identity;
+mod lifecycle_failure;
 mod managed_home;
 pub(crate) mod seatbelt;
 pub(crate) mod seatbelt_child;
@@ -47,6 +48,7 @@ pub(crate) use effective::{
 pub(crate) use identity::{
     ResolvedSandboxIdentity, resolve_group_name, resolve_sandbox_identity, resolve_user_name,
 };
+pub(crate) use lifecycle_failure::{SandboxLifecycleFailure, SandboxLifecycleFailureClass};
 #[cfg(test)]
 pub(crate) use managed_home::{
     BubblewrapManagedHome, prepare_bubblewrap_managed_home,
