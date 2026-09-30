@@ -260,7 +260,6 @@ mod control;
 pub(crate) use control::RuntimeControlComponent;
 pub(crate) use control::{
     RuntimeAgentTranscriptContext, execute_runtime_agent_prompt_history_work,
-    runtime_agent_transcript_context_blocks,
 };
 /// Exposes deferred runtime side-effect value types.
 ///

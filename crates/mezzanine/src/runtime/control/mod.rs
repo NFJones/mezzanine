@@ -73,7 +73,7 @@ use crate::control::{
 use crate::integrations::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
 pub(crate) use component::RuntimeControlComponent;
 #[cfg(test)]
-use context::runtime_agent_transcript_context;
+pub(in crate::runtime) use context::runtime_agent_transcript_context;
 pub(crate) use context::{
     PEER_MESSAGE_TURN_CONTEXT_HINT, PEER_MESSAGE_TURN_CONTEXT_LABEL,
     runtime_bridge_extension_fields, runtime_bridge_initial_spawn_extension_fields,
@@ -83,7 +83,7 @@ pub(crate) use context::{
 pub(crate) use context::{
     RuntimeAgentHistoryEpochInputs, RuntimeAgentHistoryEpochWork, RuntimeAgentPromptHistoryWork,
     RuntimeAgentTranscriptContext, execute_runtime_agent_prompt_history_work,
-    runtime_agent_transcript_context_blocks,
+    runtime_agent_compaction_replay_context,
 };
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,

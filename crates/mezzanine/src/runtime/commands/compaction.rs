@@ -31,10 +31,8 @@ use crate::runtime::agent_state::{
     RuntimeActiveTurnCompactionTrigger, RuntimeConversationCompactionChunks,
 };
 use crate::runtime::config::runtime_effective_provider_options;
-use crate::runtime::{
-    AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition,
-    runtime_agent_transcript_context_blocks,
-};
+use crate::runtime::control::runtime_agent_compaction_replay_context;
+use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
 use crate::security::auth::AuthProfileCredentialSource;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 use mez_agent::{ProviderErrorRetryClass, apply_model_context_compaction_plan};
@@ -2089,6 +2087,17 @@ impl RuntimeSessionService {
         task: &RuntimeAgentCompactionTask,
         summary: &str,
     ) -> Result<(usize, usize, String)> {
+        let candidate_context = self.manual_compaction_candidate_context(task, summary)?;
+        self.estimate_manual_compaction_candidate(task, candidate_context)
+    }
+
+    /// Builds the prospective manual-compaction context without publishing its epoch.
+    /// Captured base policy and the current retained transcript tail remain distinct.
+    pub(crate) fn manual_compaction_candidate_context(
+        &self,
+        task: &RuntimeAgentCompactionTask,
+        summary: &str,
+    ) -> Result<AgentContext> {
         let summary_words = model_context_text_word_count(summary);
         let summary_budget_words = task.request.max_output_tokens.unwrap_or(usize::MAX);
         if summary_words > summary_budget_words {
@@ -2130,6 +2139,22 @@ impl RuntimeSessionService {
         let retained_count = usize::try_from(retained_count).unwrap_or(usize::MAX);
         let first_retained = entries.len().saturating_sub(retained_count);
         let retained_entries = &entries[first_retained..];
+        let previous_epoch = store.compaction_epoch(&task.conversation_id)?;
+        let boundary = task.compacted_through_sequence.unwrap_or_else(|| {
+            previous_epoch
+                .as_ref()
+                .map_or(0, |epoch| epoch.through_sequence)
+        });
+        let ranges = previous_epoch.as_ref().map_or(Vec::new(), |epoch| {
+            epoch
+                .ranges
+                .iter()
+                .filter(|range| range.first_sequence > boundary)
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        let replay =
+            runtime_agent_compaction_replay_context(&task.pane_id, retained_entries, &ranges);
         let compact_memory_id =
             mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
         let mut blocks = base_context
@@ -2160,11 +2185,7 @@ impl RuntimeSessionService {
                 summary,
             ),
         ));
-        blocks.extend(
-            runtime_agent_transcript_context_blocks(&task.pane_id, retained_entries)
-                .into_iter()
-                .filter(|block| block.source != ContextSourceKind::McpRetrievedManifest),
-        );
+        blocks.extend(replay.blocks);
         let steering = self.agent_compaction_steering_for_candidate(
             &task.pane_id,
             &task.conversation_id,
@@ -2181,7 +2202,6 @@ impl RuntimeSessionService {
         ) {
             mez_agent::insert_context_block_by_placement(&mut blocks, block);
         }
-        blocks.push(ContextBlock::user_event("user prompt", prompt));
         if let Some(catalog) = mez_agent::configured_mcp_catalog_snapshot_content(
             &self.mcp_registry().prompt_summary(),
             self.integration.always_exposed_mcp_servers(),
@@ -2198,8 +2218,12 @@ impl RuntimeSessionService {
             label: "MCP compaction re-retrieval guidance".to_string(),
             content: "Conversation compaction cleared previously retrieved MCP tool contracts. Before using mcp_call, retrieve the needed server again with mcp_server_get; existing directory, reference, and search evidence may still make a server referencable.".to_string(),
         });
-        let candidate_context = AgentContext::import_durable_blocks(blocks)?
+        blocks.push(ContextBlock::user_event("user prompt", prompt));
+        let mut candidate_context = AgentContext::import_durable_blocks(blocks)?
             .with_metadata(base_context.metadata().clone());
+        candidate_context
+            .restore_imported_execution_events(&replay.execution_events)
+            .map_err(|error| MezError::invalid_state(error.to_string()))?;
         let mcp_summary = self.mcp_registry().prompt_summary();
         let configured_servers = self.integration.always_exposed_mcp_servers().to_vec();
         let candidate_context = mez_agent::append_mcp_context_with_configured(
@@ -2207,6 +2231,17 @@ impl RuntimeSessionService {
             &mcp_summary,
             &configured_servers,
         )?;
+        Ok(candidate_context)
+    }
+
+    /// Sizes the complete provider request built from a prospective replay context.
+    fn estimate_manual_compaction_candidate(
+        &self,
+        task: &RuntimeAgentCompactionTask,
+        candidate_context: AgentContext,
+    ) -> Result<(usize, usize, String)> {
+        let mcp_summary = self.mcp_registry().prompt_summary();
+        let configured_servers = self.integration.always_exposed_mcp_servers().to_vec();
         let available_mcp_tools = mez_agent::invoked_mcp_tools_for_context_with_configured(
             &candidate_context,
             &mcp_summary,

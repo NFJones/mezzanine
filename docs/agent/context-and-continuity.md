@@ -165,6 +165,10 @@ their original order. On restart or resume, Mez loads this committed projection;
 optional pane memory is not needed to recover the summary. Corrupt epoch data
 or unreadable required history stops context construction rather than silently
 dropping older context.
+Prepublication candidate sizing uses the same typed replay projection as
+published history. Retained native call/result groups keep their provider
+ownership and ordered identity; prospective MCP invalidation drops obsolete
+manifest-bearing groups atomically, just as the stored compaction boundary does.
 If an initial model summary leaves the complete next request oversized, Mez can
 retry the same frozen source with a smaller summary-output ceiling or summarize
 another eligible closed range beyond an exact barrier. Earlier summaries remain

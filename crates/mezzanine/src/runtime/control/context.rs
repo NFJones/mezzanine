@@ -22,9 +22,9 @@ const LEGACY_MAAP_ASSISTANT_CONTEXT: &str =
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeAgentTranscriptContext {
     /// Provider-visible blocks in durable transcript order.
-    pub(super) blocks: Vec<ContextBlock>,
+    pub(in crate::runtime) blocks: Vec<ContextBlock>,
     /// Typed causal metadata for exact execution blocks.
-    pub(super) execution_events: Vec<mez_agent::ImportedExecutionEvent>,
+    pub(in crate::runtime) execution_events: Vec<mez_agent::ImportedExecutionEvent>,
     /// Stable identity of malformed typed execution groups excluded from replay.
     pub(super) provider_history_repair_identity: Option<String>,
 }
@@ -236,7 +236,7 @@ pub(super) fn runtime_agent_history_epoch_from_entries(
 }
 
 /// Builds exact model context and typed execution ownership from transcripts.
-pub(super) fn runtime_agent_transcript_context(
+pub(in crate::runtime) fn runtime_agent_transcript_context(
     pane_id: &str,
     entries: &[TranscriptEntry],
 ) -> RuntimeAgentTranscriptContext {
@@ -249,6 +249,26 @@ pub(super) fn runtime_agent_transcript_context_with_ranges(
     entries: &[TranscriptEntry],
     ranges: &[crate::storage::transcript::AgentCompactionRange],
 ) -> RuntimeAgentTranscriptContext {
+    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(pane_id, entries, ranges, false)
+}
+
+/// Projects a prospective compaction with the same MCP invalidation as a stored epoch.
+/// The virtual boundary affects filtering only; it does not create a durable row.
+pub(crate) fn runtime_agent_compaction_replay_context(
+    pane_id: &str,
+    entries: &[TranscriptEntry],
+    ranges: &[crate::storage::transcript::AgentCompactionRange],
+) -> RuntimeAgentTranscriptContext {
+    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(pane_id, entries, ranges, true)
+}
+
+/// Owns canonical block and execution projection for real and prospective epochs.
+fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
+    pane_id: &str,
+    entries: &[TranscriptEntry],
+    ranges: &[crate::storage::transcript::AgentCompactionRange],
+    prospective_mcp_epoch: bool,
+) -> RuntimeAgentTranscriptContext {
     let mut blocks = Vec::new();
     let mut execution_events = Vec::new();
     let transcript_events = entries
@@ -259,9 +279,13 @@ pub(super) fn runtime_agent_transcript_context_with_ranges(
                 .flatten()
         })
         .collect::<Vec<_>>();
-    let latest_mcp_compaction_epoch = transcript_events
-        .iter()
-        .rposition(|event| matches!(event, Some(TranscriptContextEvent::McpCompactionEpoch)));
+    let latest_mcp_compaction_epoch = if prospective_mcp_epoch {
+        Some(entries.len())
+    } else {
+        transcript_events
+            .iter()
+            .rposition(|event| matches!(event, Some(TranscriptContextEvent::McpCompactionEpoch)))
+    };
     let mut latest_execution_group_ordinals = BTreeMap::new();
     let mut execution_groups_with_assistant = BTreeSet::new();
     let mut excluded_execution_groups = BTreeSet::new();
@@ -516,14 +540,6 @@ pub(super) fn runtime_agent_transcript_context_with_ranges(
                 .collect()
         }),
     }
-}
-
-/// Projects durable transcript entries into the canonical provider-visible blocks.
-pub(crate) fn runtime_agent_transcript_context_blocks(
-    pane_id: &str,
-    entries: &[TranscriptEntry],
-) -> Vec<ContextBlock> {
-    runtime_agent_transcript_context(pane_id, entries).blocks
 }
 
 /// Maps a stored transcript role to a model-context source that preserves the

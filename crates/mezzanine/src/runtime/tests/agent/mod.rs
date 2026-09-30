@@ -6,6 +6,7 @@ use crate::runtime::commands_support;
 
 mod commands;
 mod compaction;
+mod compaction_candidate;
 mod context;
 mod conversations;
 mod macros;
