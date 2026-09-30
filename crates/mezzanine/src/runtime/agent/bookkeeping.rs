@@ -20,7 +20,52 @@ use mez_agent::TranscriptContextEvent;
 /// Maximum recent execution groups retained for in-process idempotency.
 const RUNTIME_PERSISTED_EXECUTION_TRANSCRIPT_LIMIT: usize = 4096;
 
+/// Immutable chronology read captured before execution or interruption bookkeeping.
+/// The checked store projection owns archive integrity; queued rows remain logical only.
+struct RuntimeBookkeepingTranscriptReadWork {
+    store: crate::storage::transcript::AgentTranscriptStore,
+    conversation_id: String,
+    committed_prefix_required: bool,
+    pending: Vec<TranscriptEntry>,
+}
+
+impl RuntimeBookkeepingTranscriptReadWork {
+    /// Reads one coherent logical history without accessing live runtime state.
+    fn execute(self) -> Result<Vec<TranscriptEntry>> {
+        Ok(self
+            .store
+            .conversation_transcript_view(
+                &self.conversation_id,
+                ConversationTranscriptRead::All,
+                self.committed_prefix_required,
+                &self.pending,
+            )?
+            .logical)
+    }
+}
+
 impl RuntimeSessionService {
+    /// Captures the current transcript owner and pending receipts for checked bookkeeping.
+    fn capture_bookkeeping_transcript_read(
+        &self,
+        store: crate::storage::transcript::AgentTranscriptStore,
+        turn: &AgentTurnRecord,
+    ) -> RuntimeBookkeepingTranscriptReadWork {
+        let pending = self
+            .persistence
+            .pending_transcript_entries(&turn.conversation_id);
+        let committed_prefix_required = self
+            .agent_shell_store()
+            .get(&turn.pane_id)
+            .is_some_and(|session| session.transcript_entries > pending.len() as u64);
+        RuntimeBookkeepingTranscriptReadWork {
+            store,
+            conversation_id: turn.conversation_id.clone(),
+            committed_prefix_required,
+            pending,
+        }
+    }
+
     /// Runs the persist runtime agent turn execution transcript operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -52,19 +97,9 @@ impl RuntimeSessionService {
             return Ok(0);
         };
         let persistence_key = (conversation_id.clone(), turn.turn_id.clone());
-        let pending = self
-            .persistence
-            .pending_transcript_entries(&conversation_id);
-        let existing_entries = store
-            .conversation_transcript_view(
-                &conversation_id,
-                ConversationTranscriptRead::All,
-                self.agent_shell_store()
-                    .get(&turn.pane_id)
-                    .is_some_and(|session| session.transcript_entries > pending.len() as u64),
-                &pending,
-            )?
-            .logical;
+        let existing_entries = self
+            .capture_bookkeeping_transcript_read(store.clone(), turn)
+            .execute()?;
         let created_at_unix_seconds = current_unix_seconds().max(1);
         let entries = if self.persistence.transcript_uses_adapter() {
             let first_sequence = self
@@ -383,19 +418,9 @@ impl RuntimeSessionService {
         };
         interrupted_entry.validate()?;
         entries.push(interrupted_entry);
-        let pending = self
-            .persistence
-            .pending_transcript_entries(&turn.conversation_id);
-        let existing_entries = store
-            .conversation_transcript_view(
-                &turn.conversation_id,
-                ConversationTranscriptRead::All,
-                self.agent_shell_store()
-                    .get(&turn.pane_id)
-                    .is_some_and(|session| session.transcript_entries > pending.len() as u64),
-                &pending,
-            )?
-            .logical;
+        let existing_entries = self
+            .capture_bookkeeping_transcript_read(store.clone(), turn)
+            .execute()?;
         entries = Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
         if entries.is_empty() {
             return Ok(0);
