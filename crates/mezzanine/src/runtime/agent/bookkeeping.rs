@@ -22,25 +22,31 @@ const RUNTIME_PERSISTED_EXECUTION_TRANSCRIPT_LIMIT: usize = 4096;
 
 /// Immutable chronology read captured before execution or interruption bookkeeping.
 /// The checked store projection owns archive integrity; queued rows remain logical only.
-struct RuntimeBookkeepingTranscriptReadWork {
+pub(crate) struct RuntimeBookkeepingTranscriptReadWork {
     store: crate::storage::transcript::AgentTranscriptStore,
     conversation_id: String,
     pane_id: String,
     turn_id: String,
+    transcript_entries: u64,
+    compaction_epoch: u64,
     committed_prefix_required: bool,
     pending: Vec<TranscriptEntry>,
 }
 
 impl RuntimeBookkeepingTranscriptReadWork {
     /// Rejects history after its captured pane changes conversations.
-    fn check_owner(&self, service: &RuntimeSessionService) -> Result<()> {
+    pub(crate) fn check_owner(&self, service: &RuntimeSessionService) -> Result<()> {
         if service
             .agent_shell_store()
             .get(&self.pane_id)
-            .is_none_or(|session| session.session_id != self.conversation_id)
+            .is_none_or(|session| {
+                session.session_id != self.conversation_id
+                    || session.transcript_entries != self.transcript_entries
+            })
+            || service.agent_compaction_epoch(&self.pane_id) != self.compaction_epoch
         {
             return Err(MezError::invalid_state(
-                "bookkeeping conversation changed before transcript acceptance",
+                "bookkeeping conversation or history changed before transcript acceptance",
             ));
         }
         Ok(())
@@ -62,7 +68,7 @@ impl RuntimeBookkeepingTranscriptReadWork {
 
 impl RuntimeSessionService {
     /// Captures the current transcript owner and pending receipts for checked bookkeeping.
-    fn capture_bookkeeping_transcript_read(
+    pub(crate) fn capture_bookkeeping_transcript_read(
         &self,
         store: crate::storage::transcript::AgentTranscriptStore,
         turn: &AgentTurnRecord,
@@ -86,6 +92,11 @@ impl RuntimeSessionService {
             conversation_id: turn.conversation_id.clone(),
             pane_id: turn.pane_id.clone(),
             turn_id: turn.turn_id.clone(),
+            transcript_entries: self
+                .agent_shell_store()
+                .get(&turn.pane_id)
+                .map_or(0, |session| session.transcript_entries),
+            compaction_epoch: self.agent_compaction_epoch(&turn.pane_id),
             committed_prefix_required,
             pending,
         }

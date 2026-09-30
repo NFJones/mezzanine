@@ -1339,6 +1339,17 @@ fn runtime_local_transcript_failure_retains_accepted_execution() {
         0
     );
     assert_eq!(store.inspect(&turn.conversation_id).unwrap(), entries);
+    let captured = service.capture_bookkeeping_transcript_read(store.clone(), &turn);
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    let error = captured.check_owner(&service).unwrap_err();
+    assert!(error.message().contains("history changed"), "{error}");
+    service
+        .agent_shell_store_mut()
+        .retain_recent_transcript_entries("%1", entries.len() as u64)
+        .unwrap();
     service
         .agent_shell_store_mut()
         .finish_turn("%1", &turn.turn_id)
