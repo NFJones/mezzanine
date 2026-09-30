@@ -555,6 +555,25 @@ pub fn runtime_action_result_is_feedback_candidate(result: &ActionResult) -> boo
     if !result.is_error {
         return false;
     }
+    if matches!(
+        error.code.as_str(),
+        "sandbox_lifecycle_incomplete" | "sandbox_lifecycle_untrusted"
+    ) {
+        // Runtime-selected guidance is bounded feedback, not permission to
+        // replay. Invalid lifecycle evidence is terminal even for apply_patch.
+        return result.status == ActionStatus::Failed
+            && matches!(result.action_type, "shell_command" | "apply_patch")
+            && error.code == "sandbox_lifecycle_incomplete"
+            && error
+                .data_json
+                .as_deref()
+                .and_then(|data| serde_json::from_str::<serde_json::Value>(data).ok())
+                .is_some_and(|data| {
+                    data["model_guidance"] == true
+                        && data["automatic_replay"] == false
+                        && data["sandbox_lifecycle"]["class"] == "missing_exit"
+                });
+    }
     if result.action_type == "shell_command"
         && result.status == ActionStatus::Failed
         && error.code == "pane_not_ready"
@@ -1600,6 +1619,67 @@ mod tests {
         )
         .unwrap();
         assert!(runtime_action_result_is_feedback_candidate(&result));
+    }
+
+    /// Shell timeouts permit bounded model correction, but cancellation and
+    /// policy denials must never become retries merely because of their type.
+    /// Incomplete lifecycle feedback is advice only, never automatic replay;
+    /// malformed evidence and cancelled actions cannot enter that path.
+    #[test]
+    fn lifecycle_guidance_requires_valid_evidence_without_replay() {
+        for (status, code, class, guidance, replay, expected) in [
+            (
+                ActionStatus::Failed,
+                "sandbox_lifecycle_incomplete",
+                "missing_exit",
+                true,
+                false,
+                true,
+            ),
+            (
+                ActionStatus::Failed,
+                "sandbox_lifecycle_untrusted",
+                "malformed",
+                false,
+                false,
+                false,
+            ),
+            (
+                ActionStatus::Failed,
+                "sandbox_lifecycle_incomplete",
+                "truncated",
+                true,
+                false,
+                false,
+            ),
+            (
+                ActionStatus::Failed,
+                "sandbox_lifecycle_incomplete",
+                "missing_exit",
+                true,
+                true,
+                false,
+            ),
+            (
+                ActionStatus::Interrupted,
+                "sandbox_lifecycle_incomplete",
+                "missing_exit",
+                true,
+                false,
+                false,
+            ),
+        ] {
+            let mut result =
+                ActionResult::failed(&turn(), &shell_action(), status, code, "uncertain effects")
+                    .unwrap();
+            result.error.as_mut().unwrap().data_json = Some(serde_json::json!({
+                "sandbox_lifecycle":{"class":class}, "model_guidance":guidance, "automatic_replay":replay
+            }).to_string());
+            assert_eq!(
+                runtime_action_result_is_feedback_candidate(&result),
+                expected
+            );
+        }
     }
 
     /// Shell timeouts permit bounded model correction, but cancellation and

@@ -302,11 +302,20 @@ impl RuntimeSessionService {
                 if let Some(lifecycle) = failure.lifecycle.as_ref()
                     && let Some(error) = result.error.as_mut()
                 {
+                    let model_guidance = lifecycle.permits_model_guidance();
+                    error.code = if model_guidance {
+                        "sandbox_lifecycle_incomplete"
+                    } else {
+                        "sandbox_lifecycle_untrusted"
+                    }
+                    .to_string();
                     error.data_json = Some(
                         serde_json::json!({
                             "sandbox_lifecycle": lifecycle,
                             "automatic_replay": false,
                             "partial_effect_warning": true,
+                            "model_guidance": model_guidance,
+                            "recovery_constraints": "Completion and effects are uncertain. Do not replay the original command. Choose a narrower read-only diagnostic, a sandbox-preserving alternative, or report a blocker. This evidence does not authorize host access, sandbox weakening, or an unsandboxed approval retry. Every new action remains subject to current permissions and approvals.",
                         })
                         .to_string(),
                     );

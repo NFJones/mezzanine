@@ -142,6 +142,11 @@ outer process exit/signal, and trusted child/exit-record facts when parsing is
 valid. Malformed, truncated, or unclosed status leaves those facts unknown.
 These diagnostics do not prove that the payload did not run: completion or
 effects may be uncertain, and neither stdout nor stderr authorizes replay.
+Valid, closed missing-exit reports can reach the acting model through bounded
+failure feedback. Guidance favors a narrower read-only diagnostic, a
+sandbox-preserving alternative, or a blocker report, never replay of the
+uncertain action or implicit host access. Invalid or insufficient evidence
+remains terminal. Any new action still uses normal permissions and approvals.
 
 `host-access` is a separate primary-user-only approval mode that intentionally
 runs local shell work outside the configured sandbox. It should be used only

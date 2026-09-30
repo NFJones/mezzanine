@@ -41,3 +41,74 @@ pub(crate) struct SandboxLifecycleFailure {
     /// Whether diagnostic bytes were dropped or withheld by bounding.
     pub(crate) stderr_truncated: bool,
 }
+
+impl SandboxLifecycleFailure {
+    /// Permits bounded advice only for a complete, valid missing-exit report.
+    /// This is not execution authority: unknown effects forbid automatic replay.
+    pub(crate) fn permits_model_guidance(&self) -> bool {
+        self.class == SandboxLifecycleFailureClass::MissingExit
+            && self.child_record_present.is_some()
+            && self.exit_record_present == Some(false)
+            && self.outer_exit_code.is_some()
+            && self.outer_signal.is_none()
+            && !self.stderr_truncated
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Advice requires valid closed missing-exit status and bounded diagnostics;
+    /// unknown facts, transport faults, signals and truncation remain fail-closed.
+    #[test]
+    fn lifecycle_guidance_is_not_authorized_by_insufficient_evidence() {
+        let valid = SandboxLifecycleFailure {
+            backend: "bubblewrap".to_string(),
+            class: SandboxLifecycleFailureClass::MissingExit,
+            outer_exit_code: Some(7),
+            outer_signal: None,
+            child_record_present: Some(true),
+            exit_record_present: Some(false),
+            stderr: "diagnostic".to_string(),
+            stderr_truncated: false,
+        };
+        assert!(valid.permits_model_guidance());
+        for class in [
+            SandboxLifecycleFailureClass::Malformed,
+            SandboxLifecycleFailureClass::Transport,
+            SandboxLifecycleFailureClass::Truncated,
+            SandboxLifecycleFailureClass::InvalidUtf8,
+            SandboxLifecycleFailureClass::ContradictoryExit,
+        ] {
+            assert!(
+                !SandboxLifecycleFailure {
+                    class,
+                    ..valid.clone()
+                }
+                .permits_model_guidance()
+            );
+        }
+        assert!(
+            !SandboxLifecycleFailure {
+                child_record_present: None,
+                ..valid.clone()
+            }
+            .permits_model_guidance()
+        );
+        assert!(
+            !SandboxLifecycleFailure {
+                outer_signal: Some(15),
+                ..valid.clone()
+            }
+            .permits_model_guidance()
+        );
+        assert!(
+            !SandboxLifecycleFailure {
+                stderr_truncated: true,
+                ..valid
+            }
+            .permits_model_guidance()
+        );
+    }
+}

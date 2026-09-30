@@ -8154,6 +8154,12 @@ exit/signal, and the status parse or transport failure classification. Invalid
 status MUST leave record presence unknown. Missing completion evidence MUST NOT
 claim that the payload did not run, authorize automatic replay, or weaken the
 sandbox boundary; stdout MUST NOT substitute for trusted lifecycle status.
+Valid, closed missing-exit evidence MAY enter bounded action-failure feedback
+to the acting model for a narrower diagnostic or sandbox-preserving alternative.
+This guidance MUST consume the existing failure-feedback budget and MUST NOT
+create an unsandboxed approval or replay the original action. Malformed,
+truncated, unclosed, signalled, or otherwise insufficient evidence MUST remain
+fail-closed; later model-authored actions MUST undergo normal permission checks.
 
 The native workload environment contract MUST be owned by one code path shared
 by the native policy-only, host-access, Bubblewrap, and Seatbelt launch paths,
