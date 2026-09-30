@@ -1355,6 +1355,27 @@ fn runtime_local_transcript_failure_retains_accepted_execution() {
         "{error}"
     );
     assert_eq!(store.inspect(&turn.conversation_id).unwrap(), entries);
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", &turn.conversation_id, entries.len() as u64)
+        .unwrap();
+    service
+        .persistence
+        .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+            path: store.transcript_path(&turn.conversation_id).unwrap(),
+            store: store.clone(),
+            entries: vec![entries[0].clone(), entries[0].clone()],
+        });
+    std::fs::remove_file(store.transcript_path(&turn.conversation_id).unwrap()).unwrap();
+    let error = service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &accepted)
+        .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("required transcript archive is missing"),
+        "{error}"
+    );
 }
 
 /// Provider completion must retry a proven pre-append failure locally without

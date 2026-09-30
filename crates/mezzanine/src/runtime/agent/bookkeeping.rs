@@ -70,10 +70,17 @@ impl RuntimeSessionService {
         let pending = self
             .persistence
             .pending_transcript_entries(&turn.conversation_id);
-        let committed_prefix_required = self
-            .agent_shell_store()
-            .get(&turn.pane_id)
-            .is_some_and(|session| session.transcript_entries > pending.len() as u64);
+        let committed_prefix_required =
+            self.agent_shell_store()
+                .get(&turn.pane_id)
+                .is_some_and(|session| {
+                    session.transcript_entries
+                        > pending
+                            .iter()
+                            .map(|entry| entry.sequence)
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .len() as u64
+                });
         RuntimeBookkeepingTranscriptReadWork {
             store,
             conversation_id: turn.conversation_id.clone(),
