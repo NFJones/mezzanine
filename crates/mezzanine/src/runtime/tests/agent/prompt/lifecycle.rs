@@ -2711,6 +2711,29 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
         .agent_shell_store_mut()
         .retain_recent_transcript_entries("%1", 2)
         .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation_with_lineage(
+            "%1",
+            &parent.session_id,
+            2,
+            Some("replacement-cache-lineage".to_string()),
+        )
+        .unwrap();
+    let error = captured.check_owner(&service).unwrap_err();
+    assert!(
+        error.message().contains("parent conversation changed"),
+        "{error}"
+    );
+    service
+        .agent_shell_store_mut()
+        .bind_conversation_with_lineage(
+            "%1",
+            &parent.session_id,
+            2,
+            Some(parent.prompt_cache_lineage_id.clone()),
+        )
+        .unwrap();
 
     // The actor's retained count still covers only the first two rows. A
     // later durable append must not replace either captured parent row.
