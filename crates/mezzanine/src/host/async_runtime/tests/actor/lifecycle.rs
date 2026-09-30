@@ -1732,6 +1732,110 @@ async fn async_actor_config_reload_preserves_unaffected_mcp_state() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A forked control spawn reads parent history outside the actor, then installs
+/// one child and returns the same child for a repeated idempotency key.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_fork_spawn_reads_history_and_reuses_cached_response() {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use crate::storage::snapshot::SnapshotRepository;
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-fork-history-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.join("transcripts"));
+    let snapshots = SnapshotRepository::new(root.join("snapshots"));
+    let mut service = test_service();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    store
+        .append(&TranscriptEntry {
+            conversation_id: conversation.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "parent-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "frozen parent row".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let input = encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"fork","method":"agent/spawn","params":{"parent_agent":{"agent_id":"agent-%1"},"placement":{"mode":"new-pane"},"role":"explorer","session":"fork","prompt":"inspect inherited history","skip_initial_turn":true,"idempotency_key":"fork-once"}}"#,
+        );
+        let connection = ControlConnectionState::trusted_existing_client(primary);
+        let first = handle
+            .handle_control_input_for_connection_with_snapshots(
+                input.clone(),
+                4096,
+                connection,
+                snapshots.clone(),
+            )
+            .await
+            .unwrap();
+        let (body, _) = decode_control_frame(&first.output, 4096).unwrap();
+        assert!(body.contains("\"result\""), "{body}");
+        // A completed retry must use the cached child even if its parent
+        // archive is no longer readable; it must not launch another read.
+        std::fs::remove_file(store.transcript_path(&conversation).unwrap()).unwrap();
+        let second = handle
+            .handle_control_input_for_connection_with_snapshots(
+                input,
+                4096,
+                first.connection,
+                snapshots,
+            )
+            .await
+            .unwrap();
+        let (second_body, _) = decode_control_frame(&second.output, 4096).unwrap();
+        assert_eq!(second_body, body);
+        handle.shutdown().await.unwrap();
+        body
+    };
+    let (body, mut exit) = tokio::join!(client, actor.run());
+    let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let child_pane = response["result"]["pane"]["pane_id"].as_str().unwrap();
+    let child_conversation = &exit
+        .service
+        .agent_shell_store()
+        .get(child_pane)
+        .unwrap()
+        .session_id;
+    assert_eq!(
+        store
+            .pending_append_receipts()
+            .unwrap()
+            .iter()
+            .flat_map(|batch| batch.iter())
+            .filter(|row| &row.conversation_id == child_conversation)
+            .map(|row| row.content.as_str())
+            .collect::<Vec<_>>(),
+        ["frozen parent row"]
+    );
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that actor-owned control dispatch can route snapshot requests
 /// through a configured repository. The async daemon control service uses this
 /// path when serving live `mez snapshot` requests, so `snapshot/list` must not

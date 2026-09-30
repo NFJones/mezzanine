@@ -66,6 +66,19 @@ impl RuntimeSessionService {
         request: crate::control::JsonRpcRequest,
         caller_client_id: &mez_core::ids::ClientId,
     ) -> String {
+        self.dispatch_runtime_mutating_request_with_fork(request, caller_client_id, None)
+    }
+
+    /// Uses the same idempotency lane for a worker-prepared fork as for a direct spawn.
+    pub(super) fn dispatch_runtime_mutating_request_with_fork(
+        &mut self,
+        request: crate::control::JsonRpcRequest,
+        caller_client_id: &mez_core::ids::ClientId,
+        prepared: Option<(
+            &super::RuntimeSubagentForkReadWork,
+            Result<super::RuntimeSubagentForkSnapshot>,
+        )>,
+    ) -> String {
         let params = request.params.clone().unwrap_or_else(|| "{}".to_string());
         let idempotency_key = match runtime_json_string_field(&params, "idempotency_key") {
             Some(value) => value,
@@ -93,11 +106,27 @@ impl RuntimeSessionService {
             }
         }
 
-        let result = self.dispatch_runtime_mutating_result(
-            request.method.as_str(),
-            caller_client_id,
-            &params,
-        );
+        let result = if let Some((read, snapshot)) = prepared {
+            let focus_before = self.capture_zen_focus_snapshots();
+            let result = snapshot.and_then(|snapshot| {
+                self.dispatch_runtime_agent_spawn_with_fork_snapshot(
+                    caller_client_id,
+                    &params,
+                    read,
+                    snapshot,
+                )
+            });
+            if result.is_ok() {
+                self.reconcile_zen_focus_snapshots(focus_before);
+            }
+            result
+        } else {
+            self.dispatch_runtime_mutating_result(
+                request.method.as_str(),
+                caller_client_id,
+                &params,
+            )
+        };
         let response = match result {
             Ok(result) => format!(
                 r#"{{"jsonrpc":"2.0","id":{},"result":{result}}}"#,

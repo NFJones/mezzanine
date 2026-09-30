@@ -93,6 +93,7 @@ use protocol::{
     pane_id_from_runtime_agent_id, paths_equivalent, runtime_project_trust_read_method,
     runtime_snapshot_resume_plan_json,
 };
+pub(crate) use subagents::{RuntimeSubagentForkReadWork, RuntimeSubagentForkSnapshot};
 
 // Runtime control, message, event, and mutation dispatch.
 

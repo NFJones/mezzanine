@@ -143,6 +143,11 @@ pub(crate) struct RuntimeSnapshotControlAsyncWork {
 /// Repository work shape for actor-deferred snapshot control operations.
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeSnapshotControlAsyncWorkKind {
+    /// Actor-captured parent transcript input for one forked control spawn.
+    ForkSpawn {
+        /// Parent history and owner identity selected before the worker read.
+        read: Box<crate::runtime::control::RuntimeSubagentForkReadWork>,
+    },
     /// Configuration reload whose disk layers are prepared off actor ownership.
     ConfigReload {
         /// Configuration generation captured before preparation began.
@@ -742,6 +747,8 @@ pub(crate) struct RuntimeRecordBrowserRefreshDispatch {
 /// Repository result returned to the actor after async snapshot control work.
 #[derive(Debug)]
 pub(crate) enum RuntimeSnapshotControlAsyncOutcome {
+    /// Checked parent history prepared outside the actor for child creation.
+    ForkSpawn(Result<crate::runtime::control::RuntimeSubagentForkSnapshot>),
     /// Prepared and validated configuration reload candidate.
     ConfigReload(Result<RuntimePreparedConfigReload>),
     /// JSON result body produced by the snapshot dispatcher.

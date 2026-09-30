@@ -112,6 +112,17 @@ pub(super) async fn execute_snapshot_control_async_work(
     work: &RuntimeSnapshotControlAsyncWork,
 ) -> RuntimeSnapshotControlAsyncOutcome {
     match &work.kind {
+        RuntimeSnapshotControlAsyncWorkKind::ForkSpawn { read } => {
+            let read = read.clone();
+            RuntimeSnapshotControlAsyncOutcome::ForkSpawn(
+                tokio::task::spawn_blocking(move || read.execute())
+                    .await
+                    .map_err(|error| {
+                        MezError::invalid_state(format!("fork history worker failed: {error}"))
+                    })
+                    .and_then(|result| result),
+            )
+        }
         RuntimeSnapshotControlAsyncWorkKind::ConfigReload { layers, .. } => {
             #[cfg(test)]
             if let RuntimeSnapshotControlAsyncWorkKind::ConfigReload {

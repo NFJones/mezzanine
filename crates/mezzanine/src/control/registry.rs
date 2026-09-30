@@ -527,6 +527,8 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
             "read_scopes",
             "write_scopes",
             "prompt",
+            "session",
+            "skip_initial_turn",
             "idempotency_key",
         ]),
     },

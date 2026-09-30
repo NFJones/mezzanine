@@ -16,7 +16,9 @@ use super::super::{
     runtime_json_rpc_error,
 };
 use super::protocol::runtime_snapshot_id_from_request;
+use super::{runtime_json_string_field, runtime_subagent_spawn_request};
 use crate::control::{authorize_control_request, validate_control_method_params_schema};
+use mez_agent::{SubagentApprovalProvenance, SubagentSessionMode};
 
 impl RuntimeSessionService {
     /// Runs the handle control input operation for this subsystem.
@@ -211,7 +213,7 @@ impl RuntimeSessionService {
     /// JSON-RPC response body because they are successful protocol handling,
     /// not actor transport failures.
     pub(crate) fn prepare_runtime_snapshot_control_async_work(
-        &self,
+        &mut self,
         body: &str,
         connection: &ControlConnectionState,
     ) -> Option<std::result::Result<RuntimeSnapshotControlAsyncWork, String>> {
@@ -227,9 +229,10 @@ impl RuntimeSessionService {
         };
         let is_snapshot = request.method.starts_with("snapshot/");
         let is_config_reload = request.method == "config/reload";
+        let is_fork_spawn = request.method == "agent/spawn";
         if !connection.initialized()
             || request.method == "control/initialize"
-            || (!is_snapshot && !is_config_reload)
+            || (!is_snapshot && !is_config_reload && !is_fork_spawn)
         {
             return None;
         }
@@ -253,6 +256,59 @@ impl RuntimeSessionService {
                 error.kind(),
                 error.message(),
             )));
+        }
+        if is_fork_spawn {
+            let params = request.params.as_deref().unwrap_or("{}");
+            // Leave malformed and non-fork requests in the ordinary dispatcher,
+            // which owns response caching and precise control error semantics.
+            let provenance = self
+                .session
+                .clients()
+                .iter()
+                .find(|client| client.id == caller_client_id)
+                .map_or(SubagentApprovalProvenance::Requested, |client| {
+                    if client.role == super::super::ClientRole::Primary {
+                        SubagentApprovalProvenance::ExplicitUserApproval
+                    } else {
+                        SubagentApprovalProvenance::Requested
+                    }
+                });
+            let spawn = runtime_subagent_spawn_request(params, provenance).ok()?;
+            if spawn.session_mode != SubagentSessionMode::Fork
+                || runtime_json_string_field(params, "idempotency_key").is_none()
+            {
+                return None;
+            }
+            let cache_key = format!(
+                "{caller_client_id}:{}",
+                runtime_json_string_field(params, "idempotency_key")?
+            );
+            if self
+                .control
+                .idempotency_mut()
+                .cached_response(&cache_key, &request.method, &request.params)
+                .is_ok_and(|cached| cached.is_some())
+            {
+                return None;
+            }
+            let read = match self.prepare_subagent_fork_read_work(&spawn.parent_agent_id) {
+                Ok(Some(read)) => read,
+                Ok(None) => return None,
+                Err(error) => {
+                    return Some(Err(runtime_json_rpc_error(
+                        &request.id,
+                        error.kind(),
+                        error.message(),
+                    )));
+                }
+            };
+            return Some(Ok(RuntimeSnapshotControlAsyncWork {
+                request,
+                caller_client_id,
+                kind: RuntimeSnapshotControlAsyncWorkKind::ForkSpawn {
+                    read: Box::new(read),
+                },
+            }));
         }
         let kind = if is_config_reload {
             #[cfg(test)]
@@ -304,6 +360,25 @@ impl RuntimeSessionService {
         connection: &mut ControlConnectionState,
     ) -> String {
         let _ = connection;
+        if let RuntimeSnapshotControlAsyncWorkKind::ForkSpawn { read } = &work.kind {
+            let RuntimeSnapshotControlAsyncOutcome::ForkSpawn(snapshot) = outcome else {
+                return runtime_json_rpc_error(
+                    &work.request.id,
+                    crate::error::MezErrorKind::InvalidState,
+                    "fork history worker returned an incompatible outcome",
+                );
+            };
+            if let Err(error) =
+                authorize_control_request(&self.session, &work.caller_client_id, &work.request)
+            {
+                return runtime_json_rpc_error(&work.request.id, error.kind(), error.message());
+            }
+            return self.dispatch_runtime_mutating_request_with_fork(
+                work.request,
+                &work.caller_client_id,
+                Some((read, snapshot)),
+            );
+        }
         if let RuntimeSnapshotControlAsyncWorkKind::ConfigReload {
             config_generation, ..
         } = &work.kind
@@ -323,6 +398,11 @@ impl RuntimeSessionService {
             );
         }
         let result = match outcome {
+            RuntimeSnapshotControlAsyncOutcome::ForkSpawn(_) => {
+                Err(crate::error::MezError::invalid_state(
+                    "fork history worker returned an incompatible outcome",
+                ))
+            }
             RuntimeSnapshotControlAsyncOutcome::ConfigReload(_) => {
                 Err(crate::error::MezError::invalid_state(
                     "snapshot worker returned a configuration reload outcome",

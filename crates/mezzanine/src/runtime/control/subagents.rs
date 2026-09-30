@@ -345,6 +345,52 @@ impl RuntimeSessionService {
         self.spawn_runtime_subagent(&controller, spawn, placement)
     }
 
+    /// Applies a worker-read fork only after current caller authority is checked.
+    pub(super) fn dispatch_runtime_agent_spawn_with_fork_snapshot(
+        &mut self,
+        caller_client_id: &mez_core::ids::ClientId,
+        params: &str,
+        work: &RuntimeSubagentForkReadWork,
+        snapshot: RuntimeSubagentForkSnapshot,
+    ) -> Result<String> {
+        self.require_live()?;
+        let caller = self
+            .session
+            .clients()
+            .iter()
+            .find(|client| client.id == *caller_client_id)
+            .ok_or_else(|| MezError::forbidden("unknown control client"))?;
+        if !matches!(caller.role, ClientRole::Primary | ClientRole::Agent) {
+            return Err(MezError::forbidden(
+                "agent/spawn requires a primary or agent client",
+            ));
+        }
+        let provenance = if caller.role == ClientRole::Primary {
+            SubagentApprovalProvenance::ExplicitUserApproval
+        } else {
+            SubagentApprovalProvenance::Requested
+        };
+        let controller = self
+            .session
+            .layout_owner_client_id()
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("agent/spawn requires an attached primary"))?;
+        let spawn = runtime_subagent_spawn_request(params, provenance)?;
+        let placement = runtime_subagent_placement_mode(params)?;
+        if spawn.session_mode != mez_agent::SubagentSessionMode::Fork {
+            return Err(MezError::invalid_state(
+                "prepared fork does not match spawn mode",
+            ));
+        }
+        self.spawn_runtime_subagent_with_fork_snapshot(
+            &controller,
+            spawn,
+            placement,
+            work,
+            snapshot,
+        )
+    }
+
     /// Returns lineage metadata for an agent id, treating untracked pane agents
     /// as delegation roots.
     fn subagent_lineage_for_agent(&self, agent_id: &str) -> RuntimeSubagentLineage {
@@ -458,7 +504,27 @@ impl RuntimeSessionService {
         spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
-        self.spawn_runtime_subagent_internal(Some(controller), spawn, placement, false, None)
+        self.spawn_runtime_subagent_internal(Some(controller), spawn, placement, false, None, None)
+    }
+
+    /// Installs a worker-checked fork snapshot only if its parent still owns the pane.
+    pub(crate) fn spawn_runtime_subagent_with_fork_snapshot(
+        &mut self,
+        controller: &mez_core::ids::ClientId,
+        spawn: SubagentSpawnRequest,
+        placement: RuntimeSubagentPlacement,
+        work: &RuntimeSubagentForkReadWork,
+        snapshot: RuntimeSubagentForkSnapshot,
+    ) -> Result<String> {
+        work.check_owner(self)?;
+        self.spawn_runtime_subagent_internal(
+            Some(controller),
+            spawn,
+            placement,
+            false,
+            None,
+            Some(snapshot),
+        )
     }
 
     /// Creates a child subagent for already-authorized session-owned orchestration.
@@ -467,7 +533,7 @@ impl RuntimeSessionService {
         spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
-        self.spawn_runtime_subagent_internal(None, spawn, placement, false, None)
+        self.spawn_runtime_subagent_internal(None, spawn, placement, false, None, None)
     }
 
     /// Creates a reusable child owned by one durable parent conversation.
@@ -485,6 +551,7 @@ impl RuntimeSessionService {
             placement,
             false,
             Some((parent_conversation_id.to_string(), objective)),
+            None,
         )
     }
 
@@ -494,7 +561,7 @@ impl RuntimeSessionService {
         spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
-        self.spawn_runtime_subagent_internal(None, spawn, placement, true, None)
+        self.spawn_runtime_subagent_internal(None, spawn, placement, true, None, None)
     }
 
     /// Implements client-authenticated and session-owned subagent creation.
@@ -505,6 +572,7 @@ impl RuntimeSessionService {
         placement: RuntimeSubagentPlacement,
         routed_root: bool,
         persistent: Option<(String, String)>,
+        prepared_fork_snapshot: Option<RuntimeSubagentForkSnapshot>,
     ) -> Result<String> {
         let profile = self
             .integration
@@ -672,7 +740,14 @@ impl RuntimeSessionService {
             self.provider_registry().resolve_profile(profile_name)?;
         }
         let fork_snapshot = if spawn.session_mode == mez_agent::SubagentSessionMode::Fork {
-            Some(self.capture_subagent_fork_snapshot(&spawn.parent_agent_id)?)
+            Some(match prepared_fork_snapshot {
+                Some(snapshot) => snapshot,
+                None => self.capture_subagent_fork_snapshot(&spawn.parent_agent_id)?,
+            })
+        } else if prepared_fork_snapshot.is_some() {
+            return Err(MezError::invalid_state(
+                "non-fork spawn received a fork snapshot",
+            ));
         } else {
             None
         };

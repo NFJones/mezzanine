@@ -2572,6 +2572,40 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
         error.message().contains("parent conversation changed"),
         "{error}"
     );
+    let child_count = service.agent_shell_store().sessions().count();
+    let error = service
+        .spawn_runtime_subagent_with_fork_snapshot(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::Fork,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "reject stale fork".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+            &captured,
+            delayed,
+        )
+        .unwrap_err();
+    assert!(
+        error.message().contains("parent conversation changed"),
+        "{error}"
+    );
+    assert_eq!(service.agent_shell_store().sessions().count(), child_count);
     service
         .agent_shell_store_mut()
         .bind_conversation("%1", &parent.session_id, 2)
