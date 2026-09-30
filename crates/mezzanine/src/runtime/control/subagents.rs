@@ -555,6 +555,26 @@ impl RuntimeSessionService {
         self.spawn_runtime_subagent_internal(None, spawn, placement, false, None, None)
     }
 
+    /// Creates a session-owned child from a worker-checked parent history prefix.
+    pub(crate) fn spawn_runtime_subagent_session_owned_with_fork_snapshot(
+        &mut self,
+        spawn: SubagentSpawnRequest,
+        placement: RuntimeSubagentPlacement,
+        work: &RuntimeSubagentForkReadWork,
+        snapshot: RuntimeSubagentForkSnapshot,
+        persistent: Option<(String, String)>,
+    ) -> Result<String> {
+        work.check_owner(self)?;
+        self.spawn_runtime_subagent_internal(
+            None,
+            spawn,
+            placement,
+            false,
+            persistent,
+            Some(snapshot),
+        )
+    }
+
     /// Creates a reusable child owned by one durable parent conversation.
     pub(crate) fn spawn_runtime_persistent_subagent_session_owned(
         &mut self,

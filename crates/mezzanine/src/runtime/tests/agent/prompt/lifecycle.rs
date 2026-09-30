@@ -2435,6 +2435,72 @@ fn runtime_subagent_sessions_are_durable_but_hidden_from_resume() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// A worker-checked parent prefix retains MAAP spawn result shape and child history.
+#[test]
+fn runtime_maap_spawn_accepts_prepared_fork_history() {
+    let store = AgentTranscriptStore::new(temp_root("maap-prepared-fork"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    store
+        .append(&TranscriptEntry {
+            conversation_id: conversation,
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "prior-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "prior parent history".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "spawn a child")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
+    let work = service
+        .prepare_subagent_fork_read_work("agent-%1")
+        .unwrap()
+        .unwrap();
+    let snapshot = work.execute().unwrap();
+    let mut action = runtime_spawn_agent_action("prepared-fork", "inspect inherited work");
+    let mez_agent::AgentActionPayload::SpawnAgent { session_mode, .. } = &mut action.payload else {
+        unreachable!("spawn fixture must contain spawn_agent");
+    };
+    *session_mode = Some(SubagentSessionMode::Fork);
+    let result = service
+        .execute_spawn_action_for_turn_with_fork(&turn, &action, Some((&work, snapshot)))
+        .unwrap();
+    assert!(!result.is_error);
+    let structured: serde_json::Value =
+        serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+    let child_pane = structured["spawn"]["pane"]["pane_id"].as_str().unwrap();
+    let child = service.agent_shell_store().get(child_pane).unwrap();
+    assert_eq!(
+        store.inspect(&child.session_id).unwrap()[0].content,
+        "prior parent history"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies forked children copy the parent’s bounded durable transcript into
 /// their own subagent conversation while new children remain isolated.
 ///

@@ -964,6 +964,19 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action: &AgentAction,
     ) -> std::result::Result<ActionResult, SpawnActionExecutionError> {
+        self.execute_spawn_action_for_turn_with_fork(turn, action, None)
+    }
+
+    /// Applies a previously checked fork prefix without reading its archive on the actor.
+    pub(crate) fn execute_spawn_action_for_turn_with_fork(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        prepared_fork: Option<(
+            &crate::runtime::control::RuntimeSubagentForkReadWork,
+            crate::runtime::control::RuntimeSubagentForkSnapshot,
+        )>,
+    ) -> std::result::Result<ActionResult, SpawnActionExecutionError> {
         if self.subagent_descendant_is_fenced(&turn.agent_id) {
             return Err(MezError::forbidden(
                 "fenced subagent descendant cannot execute actions after parent conversation replacement",
@@ -1033,7 +1046,30 @@ impl RuntimeSessionService {
             mez_agent::SubagentApprovalProvenance::Requested,
         )?;
         let placement_mode = runtime_subagent_placement_mode(&params)?;
-        let spawn_json = if *lifetime == mez_agent::SubagentLifetime::Persistent {
+        let spawn_json = if let Some((read, snapshot)) = prepared_fork {
+            let persistent = if *lifetime == mez_agent::SubagentLifetime::Persistent {
+                Some((
+                    turn.conversation_id.clone(),
+                    mez_agent::messaging::normalize_objective(objective.as_deref().ok_or_else(
+                        || {
+                            SpawnActionExecutionError::before_allocation(MezError::invalid_args(
+                                "persistent subagent spawn requires an objective",
+                            ))
+                        },
+                    )?)
+                    .map_err(MezError::from)?,
+                ))
+            } else {
+                None
+            };
+            self.spawn_runtime_subagent_session_owned_with_fork_snapshot(
+                spawn,
+                placement_mode,
+                read,
+                snapshot,
+                persistent,
+            )
+        } else if *lifetime == mez_agent::SubagentLifetime::Persistent {
             self.spawn_runtime_persistent_subagent_session_owned(
                 spawn,
                 placement_mode,
