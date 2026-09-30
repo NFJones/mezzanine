@@ -78,6 +78,67 @@ struct RuntimeSubagentForkSnapshot {
     entries: Vec<mez_agent::TranscriptEntry>,
 }
 
+/// Immutable parent-history read input captured before child pane allocation.
+/// Only the actor may select the parent conversation, retained count and pending rows.
+#[derive(Debug, Clone)]
+struct RuntimeSubagentForkReadWork {
+    store: crate::storage::transcript::AgentTranscriptStore,
+    source_conversation_id: String,
+    source_entries: u64,
+    ephemeral_source: bool,
+    pending: Vec<mez_agent::TranscriptEntry>,
+    prompt_cache_lineage_id: String,
+}
+
+impl RuntimeSubagentForkReadWork {
+    /// Checks the captured history without accessing live runtime state.
+    fn execute(self) -> Result<RuntimeSubagentForkSnapshot> {
+        let Self {
+            store,
+            source_conversation_id,
+            source_entries,
+            ephemeral_source,
+            pending,
+            prompt_cache_lineage_id,
+        } = self;
+        let mut entries = store
+            .conversation_transcript_view(
+                &source_conversation_id,
+                ConversationTranscriptRead::All,
+                source_entries > pending.len() as u64,
+                &pending,
+            )?
+            .logical;
+        // Limit by the actor-captured owner before selecting the retained tail.
+        let source_high_water = if ephemeral_source {
+            source_entries
+        } else {
+            store
+                .compaction_epoch(&source_conversation_id)?
+                .map_or(0, |epoch| epoch.through_sequence)
+                .saturating_add(source_entries)
+        };
+        if entries
+            .last()
+            .is_none_or(|entry| entry.sequence < source_high_water)
+        {
+            return Err(MezError::invalid_state(
+                "fork source transcript is missing its captured high-water row",
+            ));
+        }
+        entries.retain(|entry| entry.sequence <= source_high_water);
+        if !ephemeral_source {
+            let retained_entries = usize::try_from(source_entries).unwrap_or(usize::MAX);
+            let first_retained = entries.len().saturating_sub(retained_entries);
+            entries.drain(..first_retained);
+        }
+        Ok(RuntimeSubagentForkSnapshot {
+            prompt_cache_lineage_id,
+            entries,
+        })
+    }
+}
+
 /// Layout choice for adding one pane to a dedicated subagent bucket window.
 #[derive(Debug, Clone, Copy)]
 struct RuntimeSubagentBucketLayout {
@@ -1685,51 +1746,18 @@ impl RuntimeSessionService {
         let pending = self
             .persistence
             .pending_transcript_entries(&source_conversation_id);
-        let mut entries = store
-            .conversation_transcript_view(
-                &source_conversation_id,
-                ConversationTranscriptRead::All,
-                source_entries > pending.len() as u64,
-                &pending,
-            )?
-            .logical;
-        // The retained count is captured under the actor, not a request for
-        // the latest rows at read time. Exclude external appends that landed
-        // after this snapshot before selecting its retained tail.
-        let source_high_water = if parent_session.ephemeral
-            && parent_session
-                .ephemeral_transcript_source_conversation_id
-                .is_some()
-        {
-            source_entries
-        } else {
-            store
-                .compaction_epoch(&source_conversation_id)?
-                .map_or(0, |epoch| epoch.through_sequence)
-                .saturating_add(source_entries)
-        };
-        if entries
-            .last()
-            .is_none_or(|entry| entry.sequence < source_high_water)
-        {
-            return Err(MezError::invalid_state(
-                "fork source transcript is missing its captured high-water row",
-            ));
-        }
-        entries.retain(|entry| entry.sequence <= source_high_water);
-        if !(parent_session.ephemeral
-            && parent_session
-                .ephemeral_transcript_source_conversation_id
-                .is_some())
-        {
-            let retained_entries = usize::try_from(source_entries).unwrap_or(usize::MAX);
-            let first_retained = entries.len().saturating_sub(retained_entries);
-            entries.drain(..first_retained);
-        }
-        Ok(RuntimeSubagentForkSnapshot {
+        RuntimeSubagentForkReadWork {
+            store,
+            source_conversation_id,
+            source_entries,
+            ephemeral_source: parent_session.ephemeral
+                && parent_session
+                    .ephemeral_transcript_source_conversation_id
+                    .is_some(),
+            pending,
             prompt_cache_lineage_id: parent_session.prompt_cache_lineage_id,
-            entries,
-        })
+        }
+        .execute()
     }
 
     /// Persists a fork snapshot as an independent child conversation prefix.
