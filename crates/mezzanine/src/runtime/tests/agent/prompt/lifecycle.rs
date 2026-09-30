@@ -2610,6 +2610,16 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
         .agent_shell_store_mut()
         .bind_conversation("%1", &parent.session_id, 2)
         .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    let error = captured.check_owner(&service).unwrap_err();
+    assert!(error.message().contains("history advanced"), "{error}");
+    service
+        .agent_shell_store_mut()
+        .retain_recent_transcript_entries("%1", 2)
+        .unwrap();
 
     // The actor's retained count still covers only the first two rows. A
     // later durable append must not replace either captured parent row.

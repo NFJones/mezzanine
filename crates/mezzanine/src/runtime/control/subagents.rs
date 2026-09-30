@@ -85,6 +85,7 @@ pub(crate) struct RuntimeSubagentForkReadWork {
     store: crate::storage::transcript::AgentTranscriptStore,
     parent_pane_id: String,
     parent_conversation_id: String,
+    parent_compaction_epoch: u64,
     source_conversation_id: String,
     source_entries: u64,
     source_high_water: u64,
@@ -99,10 +100,18 @@ impl RuntimeSubagentForkReadWork {
         if service
             .agent_shell_store()
             .get(&self.parent_pane_id)
-            .is_none_or(|session| session.session_id != self.parent_conversation_id)
+            .is_none_or(|session| {
+                session.session_id != self.parent_conversation_id
+                    || (if self.ephemeral_source {
+                        session.ephemeral_transcript_source_entries
+                    } else {
+                        session.transcript_entries
+                    }) != self.source_entries
+            })
+            || service.agent_compaction_epoch(&self.parent_pane_id) != self.parent_compaction_epoch
         {
             return Err(MezError::invalid_state(
-                "fork parent conversation changed before snapshot acceptance",
+                "fork parent conversation changed or history advanced before snapshot acceptance",
             ));
         }
         Ok(())
@@ -1878,6 +1887,7 @@ impl RuntimeSessionService {
             store,
             parent_pane_id: parent_pane_id.to_string(),
             parent_conversation_id: parent_session.session_id.clone(),
+            parent_compaction_epoch: self.agent_compaction_epoch(parent_pane_id.as_str()),
             source_conversation_id,
             source_entries,
             source_high_water,
