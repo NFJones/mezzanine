@@ -67,6 +67,7 @@ const DEFAULT_PROVIDER_PERSISTENCE_TIMEOUT_MS: u64 = 120_000;
 /// boundary and avoids relying on call-site inference.
 const DEFAULT_PANE_PIPE_HEALTH_DELAY_MS: u64 = 50;
 
+mod claim_admission;
 mod coalesce;
 mod construction;
 mod drain;

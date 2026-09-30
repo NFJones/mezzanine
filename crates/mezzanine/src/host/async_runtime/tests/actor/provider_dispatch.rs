@@ -494,6 +494,18 @@ async fn async_actor_optional_provider_progress_pressure_preserves_failure() {
 /// bounded claim, whose exact timer releases the marker and fails the turn.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_lost_compaction_failure_expires_claim() {
+    run_compaction_claim_admission(false).await;
+}
+
+/// Saturated admission must retire the undispatched compaction claim while
+/// preserving unrelated queued work and rejecting later claims of that generation.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_compaction_claim_timer_admission_failure_settles_turn() {
+    run_compaction_claim_admission(true).await;
+}
+
+/// Exercises expiry and saturated admission with the same compaction owner.
+async fn run_compaction_claim_admission(saturate: bool) {
     let mut service = test_service();
     service.replace_config_layers(vec![ConfigLayer {
         name: "compaction-claim-test".to_string(), path: None,
@@ -549,9 +561,43 @@ async fn async_actor_lost_compaction_failure_expires_claim() {
         .pending_agent_compaction_task_generation("%1")
         .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: if saturate { 1 } else { 512 },
+            ..AsyncRuntimeActorConfig::default()
+        })
         .build()
         .unwrap();
     let client = async {
+        if saturate {
+            handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: AgentId::opaque("agent-%1").unwrap(),
+                    turn_id: "unrelated-turn".to_string(),
+                }])
+                .await
+                .unwrap();
+            assert!(
+                handle
+                    .claim_agent_compaction_task("%1".to_string(), generation)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            let queued = handle.drain_runtime_side_effects(16).await.unwrap();
+            assert!(queued.iter().any(|effect| matches!(effect,
+                RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } if turn_id == "unrelated-turn")));
+            assert!(!queued.iter().any(|effect| matches!(effect,
+                RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::CompactionClaim)));
+            assert!(
+                handle
+                    .claim_agent_compaction_task("%1".to_string(), generation)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            handle.shutdown().await.unwrap();
+            return;
+        }
         assert!(
             handle
                 .claim_agent_compaction_task("%1".to_string(), generation)

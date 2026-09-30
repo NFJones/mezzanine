@@ -1,6 +1,7 @@
 //! Serialized request dispatch for the runtime actor.
 
 use super::TranscriptReceiptReply;
+use super::claim_admission::WorkerClaimLease;
 use super::construction::execute_snapshot_control_async_work;
 use super::{
     AsyncControlInputResult, AsyncIrohRenderSnapshot, AsyncMessageFanout, AsyncMessageInputResult,
@@ -1723,13 +1724,14 @@ impl AsyncRuntimeSessionActor {
                             }
                         };
                         dispatch.claim_generation = generation;
-                        if let Err(error) = self.queue_runtime_side_effects(transition.side_effects)
-                        {
-                            // The worker has not received the dispatch. Without its
-                            // claim timer this lease would otherwise be treated as
-                            // progress forever, so settle the exact turn instead.
-                            self.service
-                                .fail_configured_agent_provider_task(&turn_id, &error)?;
+                        if !self.admit_worker_claim_lease(
+                            WorkerClaimLease::Provider {
+                                agent_id: &agent_id,
+                                turn_id: &turn_id,
+                                generation,
+                            },
+                            transition.side_effects,
+                        )? {
                             self.queue_deferred_pane_io_side_effects_from_service()?;
                             self.queue_shell_transaction_timer_side_effects()?;
                             return Ok(None);
@@ -1918,18 +1920,24 @@ impl AsyncRuntimeSessionActor {
                         ),
                         delay_ms: DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
                     };
-                    if let Err(error) = self.queue_runtime_side_effects(vec![timer]) {
-                        let settled = self
-                            .service
-                            .expire_claimed_agent_compaction_task(&pane_id, task_generation);
-                        let _ = reply.send(settled.map(|_| None).map_err(|settlement_error| {
-                            MezError::invalid_state(format!(
-                                "compaction claim timer admission failed: {}; settlement failed: {}",
-                                error.message(), settlement_error.message()
-                            ))
-                        }));
-                        self.notify_event_delivery();
-                        return false;
+                    match self.admit_worker_claim_lease(
+                        WorkerClaimLease::Compaction {
+                            pane_id: &pane_id,
+                            generation: task_generation,
+                        },
+                        vec![timer],
+                    ) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            let _ = reply.send(Ok(None));
+                            self.notify_event_delivery();
+                            return false;
+                        }
+                        Err(error) => {
+                            let _ = reply.send(Err(error));
+                            self.notify_event_delivery();
+                            return false;
+                        }
                     }
                 }
                 let should_notify = result.is_ok();
