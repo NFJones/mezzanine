@@ -1693,13 +1693,27 @@ impl RuntimeSessionService {
                 &pending,
             )?
             .logical;
-        if parent_session.ephemeral
+        // The retained count is captured under the actor, not a request for
+        // the latest rows at read time. Exclude external appends that landed
+        // after this snapshot before selecting its retained tail.
+        let source_high_water = if parent_session.ephemeral
             && parent_session
                 .ephemeral_transcript_source_conversation_id
                 .is_some()
         {
-            entries.retain(|entry| entry.sequence <= source_entries);
+            source_entries
         } else {
+            store
+                .compaction_epoch(&source_conversation_id)?
+                .map_or(0, |epoch| epoch.through_sequence)
+                .saturating_add(source_entries)
+        };
+        entries.retain(|entry| entry.sequence <= source_high_water);
+        if !(parent_session.ephemeral
+            && parent_session
+                .ephemeral_transcript_source_conversation_id
+                .is_some())
+        {
             let retained_entries = usize::try_from(source_entries).unwrap_or(usize::MAX);
             let first_retained = entries.len().saturating_sub(retained_entries);
             entries.drain(..first_retained);

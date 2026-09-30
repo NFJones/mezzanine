@@ -2549,6 +2549,51 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
         })
         .unwrap();
 
+    // The actor's retained count still covers only the first two rows. A
+    // later durable append must not replace either captured parent row.
+    let second_fork = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::Fork,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "retain the captured parent prefix".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let second_response = serde_json::from_str::<serde_json::Value>(&second_fork).unwrap();
+    let second_pane = second_response["pane"]["pane_id"].as_str().unwrap();
+    let second_conversation = &service
+        .agent_shell_store()
+        .get(second_pane)
+        .unwrap()
+        .session_id;
+    assert_eq!(
+        transcript_store
+            .inspect(second_conversation)
+            .unwrap()
+            .iter()
+            .map(|entry| entry.content.as_str())
+            .collect::<Vec<_>>(),
+        ["captured parent decision", "captured parent result"]
+    );
+
     let forked_context = service
         .agent_context_for_pane_prompt(&forked_pane, "continue", 0)
         .unwrap();
