@@ -2498,6 +2498,31 @@ fn runtime_maap_spawn_accepts_prepared_fork_history() {
         store.inspect(&child.session_id).unwrap()[0].content,
         "prior parent history"
     );
+    let child_count = service.agent_shell_store().sessions().count();
+    let mut mismatched = runtime_spawn_agent_action("mismatched-fork", "inspect another parent");
+    let mez_agent::AgentActionPayload::SpawnAgent { session_mode, .. } = &mut mismatched.payload
+    else {
+        unreachable!("spawn fixture must contain spawn_agent");
+    };
+    *session_mode = Some(SubagentSessionMode::Fork);
+    let mut other_turn = turn.clone();
+    other_turn.agent_id = "agent-%2".to_string();
+    let work = service
+        .prepare_subagent_fork_read_work("agent-%1")
+        .unwrap()
+        .unwrap();
+    let error = service
+        .execute_spawn_action_for_turn_with_fork(
+            &other_turn,
+            &mismatched,
+            Some((&work, work.execute().unwrap())),
+        )
+        .unwrap_err();
+    assert!(
+        format!("{error:?}").contains("requested parent"),
+        "{error:?}"
+    );
+    assert_eq!(service.agent_shell_store().sessions().count(), child_count);
     service.terminate_all_pane_processes().unwrap();
 }
 

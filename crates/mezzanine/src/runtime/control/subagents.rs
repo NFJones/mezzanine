@@ -564,6 +564,14 @@ impl RuntimeSessionService {
         snapshot: RuntimeSubagentForkSnapshot,
         persistent: Option<(String, String)>,
     ) -> Result<String> {
+        if pane_id_from_runtime_agent_id(&spawn.parent_agent_id)
+            .is_none_or(|pane| pane.to_string() != work.parent_pane_id)
+            || spawn.session_mode != mez_agent::SubagentSessionMode::Fork
+        {
+            return Err(MezError::invalid_state(
+                "prepared fork does not match the requested parent and session mode",
+            ));
+        }
         work.check_owner(self)?;
         self.spawn_runtime_subagent_internal(
             None,
