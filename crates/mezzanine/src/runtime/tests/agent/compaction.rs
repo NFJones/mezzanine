@@ -819,6 +819,18 @@ fn queue_observed_input_compaction_with_second_group(
     AgentTranscriptStore,
     String,
 ) {
+    queue_observed_input_compaction_with_groups(None, second_group)
+}
+
+/// Builds distinct historical groups with optional identical typed content.
+fn queue_observed_input_compaction_with_groups(
+    first_group: Option<String>,
+    second_group: Option<String>,
+) -> (
+    crate::runtime::RuntimeSessionService,
+    AgentTranscriptStore,
+    String,
+) {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -861,16 +873,18 @@ max_input_tokens = 20000
         ),
         (
             mez_agent::transcript::TranscriptRole::System,
-            mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-                ContextSourceKind::TranscriptAssistant,
-                "historical answer",
-                "TYPED_OLD_WORK ".repeat(80),
-                mez_agent::ContextExecutionGroupId::new("historical-group-1").unwrap(),
-                1,
-                None,
-            )
-            .unwrap()
-            .to_transcript_content(),
+            first_group.unwrap_or_else(|| {
+                mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                    ContextSourceKind::TranscriptAssistant,
+                    "historical answer",
+                    "TYPED_OLD_WORK ".repeat(80),
+                    mez_agent::ContextExecutionGroupId::new("historical-group-1").unwrap(),
+                    1,
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content()
+            }),
             "historical-turn-1",
         ),
         (
@@ -1465,6 +1479,65 @@ fn runtime_observed_compaction_stages_second_range_before_publication() {
             .iter()
             .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
     );
+}
+
+/// Identical source/label/content in different groups must map to each group's
+/// own durable row, including a second provisional range after the first summary.
+#[test]
+fn runtime_observed_compaction_stages_repeated_content_by_group_identity() {
+    let repeated = |group| {
+        mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+            ContextSourceKind::TranscriptAssistant,
+            "repeated answer",
+            "REPEATED_RANGE_SOURCE ".repeat(1_200),
+            mez_agent::ContextExecutionGroupId::new(group).unwrap(),
+            1,
+            None,
+        )
+        .unwrap()
+        .to_transcript_content()
+    };
+    let (mut service, store, turn_id) = queue_observed_input_compaction_with_groups(
+        Some(repeated("historical-group-1")),
+        Some(repeated("historical-group-2")),
+    );
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "17000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    complete_runtime_test_compaction(&mut service, "%1", "first summary");
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some(),
+        "the repeated later group must remain eligible after staging the first"
+    );
+    complete_runtime_test_compaction(&mut service, "%1", "second summary");
+    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
+    assert_eq!(epoch.ranges.len(), 2);
+    assert_eq!(
+        (
+            epoch.ranges[0].first_sequence,
+            epoch.ranges[0].through_sequence
+        ),
+        (2, 2)
+    );
+    assert_eq!(
+        (
+            epoch.ranges[1].first_sequence,
+            epoch.ranges[1].through_sequence
+        ),
+        (4, 4)
+    );
+    assert!(service.agent_provider_task_is_pending(&turn_id));
 }
 
 /// A complete refreshed request that already fits must publish its selected

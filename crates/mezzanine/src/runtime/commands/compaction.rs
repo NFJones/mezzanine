@@ -99,8 +99,8 @@ fn selected_durable_compaction_range(
                 source,
                 label,
                 content,
-                execution_group_id: Some(_),
-                ordinal: Some(_),
+                execution_group_id: Some(group),
+                ordinal: Some(ordinal),
                 ..
             }) = mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content)
             else {
@@ -109,6 +109,8 @@ fn selected_durable_compaction_range(
             selected[0].source == source
                 && selected[0].label == label
                 && selected[0].content == content
+                && selected_events[0].execution_group_id() == Some(&group)
+                && ordinal == 1
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
@@ -3552,6 +3554,92 @@ pub(super) fn runtime_transcript_role_name(role: TranscriptRole) -> &'static str
 #[cfg(test)]
 mod size_diagnostic_tests {
     use super::*;
+
+    /// Group-aware start matching must still reject missing rows, duplicate
+    /// owner identities, sequence gaps, and incomplete execution groups.
+    #[test]
+    fn durable_compaction_mapping_rejects_incomplete_or_ambiguous_identity() {
+        let group = mez_agent::ContextExecutionGroupId::new("mapping-group").unwrap();
+        let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "retain this exact instruction",
+        )])
+        .unwrap();
+        context
+            .append_assistant_event("answer", "answer ".repeat(300), group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "result",
+                "result ".repeat(300),
+                group.clone(),
+                None,
+                true,
+            )
+            .unwrap();
+        let plan = mez_agent::plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            1_000,
+            1,
+            context.event_sequence_high_water_mark(),
+        )
+        .unwrap();
+        assert_eq!(plan.replacement_blocks().len(), 2);
+        let rows = plan
+            .replacement_blocks()
+            .iter()
+            .enumerate()
+            .map(|(index, block)| TranscriptEntry {
+                conversation_id: "mapping-conversation".to_string(),
+                sequence: index as u64 + 1,
+                created_at_unix_seconds: 1,
+                role: TranscriptRole::System,
+                turn_id: "mapping-turn".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                    block.source,
+                    block.label.clone(),
+                    block.content.clone(),
+                    group.clone(),
+                    index as u64 + 1,
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content(),
+            })
+            .collect::<Vec<_>>();
+        assert!(selected_durable_compaction_range(&plan, &context, &rows, "summary").is_some());
+        assert!(
+            selected_durable_compaction_range(&plan, &context, &rows[..1], "summary").is_none()
+        );
+        let mut duplicate = rows.clone();
+        duplicate.push(rows[0].clone());
+        assert!(
+            selected_durable_compaction_range(&plan, &context, &duplicate, "summary").is_none()
+        );
+        let mut gap = rows.clone();
+        gap[1].sequence = 3;
+        assert!(selected_durable_compaction_range(&plan, &context, &gap, "summary").is_none());
+        let mut incomplete = rows.clone();
+        let mut extra = rows[1].clone();
+        extra.sequence = 3;
+        extra.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+            ContextSourceKind::ActionResult,
+            "later result",
+            "not selected",
+            group,
+            3,
+            None,
+        )
+        .unwrap()
+        .to_transcript_content();
+        incomplete.push(extra);
+        assert!(
+            selected_durable_compaction_range(&plan, &context, &incomplete, "summary").is_none()
+        );
+    }
 
     /// A synthesis round must shrink the frozen source; equal, growing, and
     /// empty candidates cannot cause another model request.
