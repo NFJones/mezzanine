@@ -2779,6 +2779,50 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
     service
         .persistence
         .cancel_queued_transcript_entries_for_conversation(&parent.session_id);
+    let path = transcript_store
+        .transcript_path(&parent.session_id)
+        .unwrap();
+    let archive = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        format!(
+            "{}\n",
+            archive.lines().take(2).collect::<Vec<_>>().join("\n")
+        ),
+    )
+    .unwrap();
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::Fork,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "reject missing captured row".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("missing its captured high-water row"),
+        "{error}"
+    );
     fs::remove_file(
         transcript_store
             .transcript_path(&parent.session_id)

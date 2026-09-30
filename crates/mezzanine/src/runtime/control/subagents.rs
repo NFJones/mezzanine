@@ -1708,6 +1708,14 @@ impl RuntimeSessionService {
                 .map_or(0, |epoch| epoch.through_sequence)
                 .saturating_add(source_entries)
         };
+        if entries
+            .last()
+            .is_none_or(|entry| entry.sequence < source_high_water)
+        {
+            return Err(MezError::invalid_state(
+                "fork source transcript is missing its captured high-water row",
+            ));
+        }
         entries.retain(|entry| entry.sequence <= source_high_water);
         if !(parent_session.ephemeral
             && parent_session
