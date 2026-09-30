@@ -2593,6 +2593,62 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
             .collect::<Vec<_>>(),
         ["captured parent decision", "captured parent result"]
     );
+    service
+        .dispatch_runtime_pane_close(
+            &primary,
+            &format!(r#"{{"pane_id":"{second_pane}","force":true}}"#),
+        )
+        .unwrap();
+
+    transcript_store
+        .save_compaction_epoch(&parent.session_id, 1, "summarized first row")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .retain_recent_transcript_entries("%1", 2)
+        .unwrap();
+    let compacted_fork = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::Fork,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "retain the compacted parent tail".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let compacted_response = serde_json::from_str::<serde_json::Value>(&compacted_fork).unwrap();
+    let compacted_pane = compacted_response["pane"]["pane_id"].as_str().unwrap();
+    let compacted_conversation = &service
+        .agent_shell_store()
+        .get(compacted_pane)
+        .unwrap()
+        .session_id;
+    assert_eq!(
+        transcript_store
+            .inspect(compacted_conversation)
+            .unwrap()
+            .iter()
+            .map(|entry| entry.content.as_str())
+            .collect::<Vec<_>>(),
+        ["captured parent result", "later parent mutation"]
+    );
 
     let forked_context = service
         .agent_context_for_pane_prompt(&forked_pane, "continue", 0)
