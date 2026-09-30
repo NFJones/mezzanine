@@ -203,6 +203,42 @@ fn transcript_view_waits_for_in_flight_row_terminator() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// An incomplete row remains corrupt after its writer releases the lock;
+/// pending rows cannot turn that durable failure into a logical first write.
+#[test]
+fn transcript_view_rejects_abandoned_unterminated_row() {
+    use super::ConversationTranscriptRead;
+    use std::io::Write;
+
+    let root = temp_root("view-abandoned-row");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("abandoned", 1, TranscriptRole::User);
+    let lock = store
+        .acquire_conversation_lock(&row.conversation_id)
+        .unwrap();
+    let path = store.transcript_path(&row.conversation_id).unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap();
+    file.write_all(encode_transcript_entry(&row).unwrap().as_bytes())
+        .unwrap();
+    file.sync_all().unwrap();
+    drop(lock);
+    let error = store
+        .conversation_transcript_view(
+            &row.conversation_id,
+            ConversationTranscriptRead::All,
+            false,
+            std::slice::from_ref(&row),
+        )
+        .unwrap_err();
+    assert!(error.message().contains("unterminated row"), "{error}");
+    let _ = fs::remove_dir_all(root);
+}
+
 /// An absent first archive can expose queued rows logically, but cannot prove
 /// that those rows are committed for a selective compaction epoch.
 #[test]
