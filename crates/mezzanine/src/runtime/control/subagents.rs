@@ -114,8 +114,15 @@ impl RuntimeSubagentForkReadWork {
             .store
             .conversation_transcript_view(
                 &self.source_conversation_id,
-                ConversationTranscriptRead::All,
-                self.source_entries > self.pending.len() as u64,
+                ConversationTranscriptRead::Through(self.source_high_water),
+                self.source_high_water
+                    > self
+                        .pending
+                        .iter()
+                        .filter(|row| row.sequence <= self.source_high_water)
+                        .map(|row| row.sequence)
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len() as u64,
                 &self.pending,
             )?
             .logical;

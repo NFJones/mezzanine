@@ -59,6 +59,8 @@ pub(crate) struct ConversationTranscriptView {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ConversationTranscriptRead {
     All,
+    /// Validated committed rows through an actor-captured fork boundary.
+    Through(u64),
     Latest(usize),
     After(u64),
 }
@@ -2311,6 +2313,48 @@ impl AgentTranscriptStore {
         Ok(entries)
     }
 
+    /// Reads a validated committed prefix through an inclusive captured boundary.
+    /// A later append cannot change the fork source even if it is on disk by read time.
+    fn inspect_validated_transcript_through(
+        &self,
+        conversation_id: &str,
+        through_sequence: u64,
+    ) -> Result<Vec<TranscriptEntry>> {
+        let path = self.existing_transcript_path_for(conversation_id)?;
+        if !path.exists() {
+            return Err(MezError::new(
+                MezErrorKind::NotFound,
+                "conversation transcript not found",
+            ));
+        }
+        let mut entries = Vec::new();
+        let mut reader = BufReader::new(std_fs::File::open(path)?);
+        let mut line = String::new();
+        while reader.read_line(&mut line)? != 0 {
+            if !line.ends_with('\n') {
+                return Err(MezError::invalid_state(
+                    "restored transcript has an unterminated row",
+                ));
+            }
+            let entry = decode_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
+            let expected = u64::try_from(entries.len())
+                .ok()
+                .and_then(|count| count.checked_add(1))
+                .ok_or_else(|| MezError::invalid_state("restored transcript sequence overflow"))?;
+            if entry.conversation_id != conversation_id || entry.sequence != expected {
+                return Err(MezError::invalid_state(
+                    "restored transcript contains missing, reordered, or foreign rows",
+                ));
+            }
+            entries.push(entry);
+            line.clear();
+            if expected == through_sequence {
+                break;
+            }
+        }
+        Ok(entries)
+    }
+
     /// Reads a bounded durable projection and merges captured queued or worker-owned
     /// rows for replay. Only `committed` may justify a selective publication.
     /// An absent archive is an empty first write only if no committed prefix was
@@ -2356,6 +2400,9 @@ impl AgentTranscriptStore {
         // committed history. The full read validates and collects in one pass.
         let committed = match read {
             ConversationTranscriptRead::All => self.inspect_validated_transcript(conversation_id),
+            ConversationTranscriptRead::Through(sequence) => {
+                self.inspect_validated_transcript_through(conversation_id, sequence)
+            }
             ConversationTranscriptRead::Latest(count) => {
                 self.inspect_latest_entries(conversation_id, count)
             }
@@ -2406,6 +2453,11 @@ impl AgentTranscriptStore {
             {
                 continue;
             }
+            if let ConversationTranscriptRead::Through(sequence) = read
+                && entry.sequence > sequence
+            {
+                continue;
+            }
             if let Some(existing) = logical.iter().find(|row| row.sequence == entry.sequence) {
                 if existing != entry {
                     return Err(MezError::invalid_state(
@@ -2417,8 +2469,17 @@ impl AgentTranscriptStore {
             }
         }
         logical.sort_by_key(|entry| entry.sequence);
-        if (matches!(read, ConversationTranscriptRead::All)
-            && logical.first().is_some_and(|first| first.sequence != 1))
+        if let ConversationTranscriptRead::Through(sequence) = read
+            && logical.last().is_none_or(|entry| entry.sequence < sequence)
+        {
+            return Err(MezError::invalid_state(
+                "fork source transcript is missing its captured high-water row",
+            ));
+        }
+        if (matches!(
+            read,
+            ConversationTranscriptRead::All | ConversationTranscriptRead::Through(_)
+        ) && logical.first().is_some_and(|first| first.sequence != 1))
             || (matches!(read, ConversationTranscriptRead::After(sequence)
                 if logical.first().is_some_and(|first| sequence.checked_add(1) != Some(first.sequence))))
             || logical

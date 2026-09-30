@@ -474,6 +474,74 @@ fn transcript_view_accepts_identical_first_write_receipts() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A fork's captured high-water excludes later parent rows while preserving
+/// conflict detection and rejecting a missing captured boundary.
+#[test]
+fn transcript_view_through_captured_fork_boundary() {
+    use super::ConversationTranscriptRead;
+
+    let root = temp_root("captured-fork-boundary");
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("captured-fork", 1, TranscriptRole::User);
+    let second = entry("captured-fork", 2, TranscriptRole::Assistant);
+    store.append(&first).unwrap();
+    store.append(&second).unwrap();
+    let view = store
+        .conversation_transcript_view(
+            &first.conversation_id,
+            ConversationTranscriptRead::Through(1),
+            true,
+            std::slice::from_ref(&second),
+        )
+        .unwrap();
+    assert_eq!(view.committed, vec![first.clone()]);
+    assert_eq!(view.logical, vec![first.clone()]);
+    let mut conflicting = first.clone();
+    conflicting.content = "changed first row".to_string();
+    assert!(
+        store
+            .conversation_transcript_view(
+                &first.conversation_id,
+                ConversationTranscriptRead::Through(1),
+                true,
+                &[conflicting],
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .conversation_transcript_view(
+                &first.conversation_id,
+                ConversationTranscriptRead::Through(3),
+                true,
+                &[],
+            )
+            .is_err()
+    );
+    fs::remove_file(store.transcript_path(&first.conversation_id).unwrap()).unwrap();
+    assert!(
+        store
+            .conversation_transcript_view(
+                &first.conversation_id,
+                ConversationTranscriptRead::Through(2),
+                true,
+                &[first.clone(), second.clone(), first.clone(), second.clone()],
+            )
+            .is_err()
+    );
+    let first_write = store
+        .conversation_transcript_view(
+            &first.conversation_id,
+            ConversationTranscriptRead::Through(2),
+            false,
+            &[first.clone(), second.clone(), first.clone(), second.clone()],
+        )
+        .unwrap();
+    assert!(first_write.committed.is_empty());
+    assert_eq!(first_write.logical, vec![first, second]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// A repeated multi-row receipt is one logical first-write prefix, while a
 /// conflicting repetition or missing predecessor still fails closed.
 #[test]
