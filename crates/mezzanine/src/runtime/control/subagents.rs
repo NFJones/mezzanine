@@ -70,7 +70,7 @@ fn select_subagent_display_name_from_corpus<R: rand::Rng + ?Sized>(
 ///
 /// The copied records preserve their original role and authorship while the
 /// target conversation receives independent sequence ownership.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeSubagentForkSnapshot {
     /// Parent cache lineage retained by the child’s inherited prompt prefix.
     prompt_cache_lineage_id: String,
@@ -95,6 +95,23 @@ pub(crate) struct RuntimeSubagentForkReadWork {
     pending: Vec<mez_agent::TranscriptEntry>,
     prompt_cache_lineage_id: String,
 }
+
+impl PartialEq for RuntimeSubagentForkReadWork {
+    fn eq(&self, other: &Self) -> bool {
+        self.store == other.store
+            && self.parent_pane_id == other.parent_pane_id
+            && self.parent_conversation_id == other.parent_conversation_id
+            && self.parent_compaction_epoch == other.parent_compaction_epoch
+            && self.source_conversation_id == other.source_conversation_id
+            && self.source_entries == other.source_entries
+            && self.source_high_water == other.source_high_water
+            && self.ephemeral_source == other.ephemeral_source
+            && self.pending == other.pending
+            && self.prompt_cache_lineage_id == other.prompt_cache_lineage_id
+    }
+}
+
+impl Eq for RuntimeSubagentForkReadWork {}
 
 impl RuntimeSubagentForkReadWork {
     /// Signals that the blocking reader has started in actor tests.

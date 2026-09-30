@@ -400,6 +400,8 @@ pub struct RuntimeAgentProviderPersistenceWork {
     pub provider_id: String,
     /// Provider execution whose running memory and issue results need settling.
     pub execution: AgentTurnExecution,
+    /// Fork-only read phase; later persistence actions must wait for actor spawn settlement.
+    pub(crate) fork_read: Option<crate::runtime::control::RuntimeSubagentForkReadWork>,
     /// Whether persistent-memory actions were enabled for this execution.
     pub memory_enabled: bool,
     /// Persistent-memory repository when memory actions are available.
@@ -435,6 +437,11 @@ pub struct RuntimeAgentProviderPersistenceOutcome {
     pub provider_id: String,
     /// Original execution retained until actor-owned family boundaries apply results.
     pub execution: AgentTurnExecution,
+    /// Captured fork owner returned for actor freshness validation.
+    pub(crate) fork_read: Option<crate::runtime::control::RuntimeSubagentForkReadWork>,
+    /// Checked fork history or bounded diagnostic; never authorizes worker-side spawning.
+    pub(crate) fork_snapshot:
+        Option<std::result::Result<crate::runtime::control::RuntimeSubagentForkSnapshot, String>>,
     /// Memory results keyed by their original execution result indexes.
     pub memory_results: Vec<(usize, mez_agent::ActionResult)>,
     /// Issue results keyed by their original execution result indexes.

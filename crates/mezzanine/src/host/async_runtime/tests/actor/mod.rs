@@ -7,5 +7,6 @@ mod lifecycle;
 mod panes;
 mod persistence;
 mod provider_dispatch;
+mod provider_forks;
 mod provider_retries;
 mod rendering;

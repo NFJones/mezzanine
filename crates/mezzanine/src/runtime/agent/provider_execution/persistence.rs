@@ -1,8 +1,9 @@
 //! Blocking provider-settlement persistence work.
 //!
 //! The serialized runtime actor validates provider completions and prepares
-//! immutable repository/action context. This module performs only SQLite-backed
-//! memory and issue actions, preserving family ordering before returning typed
+//! immutable repository/action context. This module prepares checked fork history
+//! or performs SQLite-backed memory and issue actions in separate phases,
+//! preserving family ordering before returning typed
 //! results for actor-owned audit, presentation, scheduler, and continuation
 //! application.
 
@@ -12,7 +13,7 @@ use super::super::{
 };
 use crate::runtime::{RuntimeAgentProviderPersistenceOutcome, RuntimeAgentProviderPersistenceWork};
 
-/// Executes actor-validated memory and issue actions on a blocking worker.
+/// Reads actor-captured fork history or settles memory and issue actions on a worker.
 pub(crate) fn execute_agent_provider_persistence_work(
     work: RuntimeAgentProviderPersistenceWork,
 ) -> Result<RuntimeAgentProviderPersistenceOutcome> {
@@ -22,6 +23,7 @@ pub(crate) fn execute_agent_provider_persistence_work(
         model_profile,
         provider_id,
         execution,
+        fork_read,
         memory_enabled,
         memory_store,
         memory_scopes,
@@ -33,6 +35,26 @@ pub(crate) fn execute_agent_provider_persistence_work(
         actions_executed_before_persistence,
         settled_action_results_before_persistence,
     } = work;
+    if let Some(read) = fork_read {
+        #[cfg(test)]
+        read.signal_worker_started();
+        let snapshot = read.execute().map_err(|error| error.message().to_string());
+        return Ok(RuntimeAgentProviderPersistenceOutcome {
+            turn,
+            generation,
+            model_profile,
+            provider_id,
+            execution,
+            fork_read: Some(read),
+            fork_snapshot: Some(snapshot),
+            memory_results: Vec::new(),
+            issue_results: Vec::new(),
+            issue_query_freshness,
+            issue_records_changed: false,
+            actions_executed_before_persistence,
+            settled_action_results_before_persistence,
+        });
+    }
     let Some(batch) = execution.response.action_batch.as_ref() else {
         return Ok(RuntimeAgentProviderPersistenceOutcome {
             turn,
@@ -40,6 +62,8 @@ pub(crate) fn execute_agent_provider_persistence_work(
             model_profile,
             provider_id,
             execution,
+            fork_read: None,
+            fork_snapshot: None,
             memory_results: Vec::new(),
             issue_results: Vec::new(),
             issue_query_freshness,
@@ -127,6 +151,8 @@ pub(crate) fn execute_agent_provider_persistence_work(
         model_profile,
         provider_id,
         execution,
+        fork_read: None,
+        fork_snapshot: None,
         memory_results,
         issue_results,
         issue_query_freshness,

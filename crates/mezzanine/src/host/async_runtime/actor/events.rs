@@ -1679,36 +1679,7 @@ impl AsyncRuntimeSessionActor {
                     .service
                     .apply_agent_provider_completed_transition(&agent_id, &turn_id, *execution)
                     .await?;
-                if let Some(generation) =
-                    self.service.agent_provider_persistence_generation(&turn_id)
-                {
-                    let deadline = RuntimeSideEffect::ScheduleTimer {
-                        key: RuntimeTimerKey::new(
-                            RuntimeTimerKind::ProviderPersistence,
-                            &turn_id,
-                            generation,
-                        ),
-                        delay_ms: super::DEFAULT_PROVIDER_PERSISTENCE_TIMEOUT_MS,
-                    };
-                    if let Err(error) = self.queue_runtime_side_effects(vec![deadline]) {
-                        self.service
-                            .retire_queued_provider_settlement(&turn_id, generation);
-                        self.side_effect_routes
-                            .retire_queued_provider_settlement(&turn_id, generation);
-                        let failure = self.service.apply_agent_provider_persistence_failed_transition(
-                            &turn_id,
-                            generation,
-                            "persistence_deadline_admission",
-                            "persistence_deadline_admission",
-                            &format!(
-                                "persistence deadline could not be admitted: {}; writes may have committed and must not be replayed",
-                                error.message()
-                            ),
-                        )?;
-                        transition.applied |= failure.applied;
-                        transition.side_effects.extend(failure.side_effects);
-                    }
-                }
+                self.admit_provider_settlement_deadline(&turn_id, &mut transition)?;
                 if transition.applied {
                     transition
                         .side_effects
@@ -1720,6 +1691,10 @@ impl AsyncRuntimeSessionActor {
             AgentProviderEvent::PersistenceSettled { outcome } => {
                 let turn_id = outcome.turn.turn_id.clone();
                 let generation = outcome.generation;
+                if self.service.agent_provider_persistence_generation(&turn_id) != Some(generation)
+                {
+                    return Ok(RuntimeTransition::default());
+                }
                 let mut transition = self
                     .service
                     .apply_agent_provider_persistence_settled_transition(*outcome)
@@ -1729,6 +1704,7 @@ impl AsyncRuntimeSessionActor {
                     transition.side_effects.extend(
                         self.provider_persistence_cancel_timer_side_effects(&turn_id, generation),
                     );
+                    self.admit_provider_settlement_deadline(&turn_id, &mut transition)?;
                 }
                 if transition.applied {
                     transition
@@ -1767,6 +1743,36 @@ impl AsyncRuntimeSessionActor {
                 Ok(transition)
             }
         }
+    }
+
+    /// Admits a lease for the current settlement phase before worker dispatch.
+    /// Failed admission retires only that undispatched generation, including
+    /// a second memory/issue phase created after a fork-history continuation.
+    fn admit_provider_settlement_deadline(
+        &mut self,
+        turn_id: &str,
+        transition: &mut RuntimeTransition,
+    ) -> Result<()> {
+        let Some(generation) = self.service.agent_provider_persistence_generation(turn_id) else {
+            return Ok(());
+        };
+        let deadline = RuntimeSideEffect::ScheduleTimer {
+            key: RuntimeTimerKey::new(RuntimeTimerKind::ProviderPersistence, turn_id, generation),
+            delay_ms: super::DEFAULT_PROVIDER_PERSISTENCE_TIMEOUT_MS,
+        };
+        if let Err(error) = self.queue_runtime_side_effects(vec![deadline]) {
+            self.service
+                .retire_queued_provider_settlement(turn_id, generation);
+            self.side_effect_routes
+                .retire_queued_provider_settlement(turn_id, generation);
+            let failure = self.service.apply_agent_provider_persistence_failed_transition(
+                turn_id, generation, "persistence_deadline_admission", "persistence_deadline_admission",
+                &format!("persistence deadline could not be admitted: {}; writes may have committed and must not be replayed", error.message()),
+            )?;
+            transition.applied |= failure.applied;
+            transition.side_effects.extend(failure.side_effects);
+        }
+        Ok(())
     }
 
     /// Runs the apply runtime shutdown event operation for this subsystem.

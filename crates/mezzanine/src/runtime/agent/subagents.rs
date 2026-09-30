@@ -715,6 +715,7 @@ impl RuntimeSessionService {
     /// status, and audit record through the shared runtime spawn helper;
     /// failures are returned as action-level errors so the parent turn can be
     /// transcripted normally.
+    #[cfg(test)]
     pub(crate) fn execute_running_spawn_actions_for_turn(
         &mut self,
         turn: &AgentTurnRecord,

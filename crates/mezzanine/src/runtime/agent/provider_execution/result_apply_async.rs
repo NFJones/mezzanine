@@ -133,8 +133,82 @@ impl RuntimeSessionService {
                 .await?
         };
         terminal_observations.observe(&execution);
-        let spawn_actions_executed =
-            self.execute_running_spawn_actions_for_turn(turn, &mut execution)?;
+        let actions_before_spawn = skill_actions_executed
+            .saturating_add(message_actions_executed)
+            .saturating_add(network_actions_executed)
+            .saturating_add(mcp_discovery_actions_executed)
+            .saturating_add(mcp_actions_executed);
+        let needs_fork = execution.terminal_state == AgentTurnState::Running
+            && execution
+                .response
+                .action_batch
+                .as_ref()
+                .is_some_and(|batch| {
+                    batch.actions.iter().any(|action| {
+                        matches!(
+                            action.payload,
+                            super::super::AgentActionPayload::SpawnAgent {
+                                session_mode: Some(mez_agent::SubagentSessionMode::Fork),
+                                ..
+                            }
+                        ) && execution.action_results.iter().any(|result| {
+                            result.action_id == action.id
+                                && result.status == super::super::ActionStatus::Running
+                        })
+                    })
+                });
+        if defer_external_actions
+            && self.persistence.provider_settlement_uses_adapter()
+            && needs_fork
+            && let Some(read) = self.prepare_subagent_fork_read_work(&turn.agent_id)?
+        {
+            self.queue_provider_settlement_phase(
+                turn,
+                model_profile,
+                provider_id,
+                &execution,
+                &terminal_observations,
+                actions_before_spawn,
+                Some(read),
+            );
+            return Ok(execution);
+        }
+        self.resume_agent_provider_execution_at_spawn(
+            turn,
+            model_profile,
+            provider_id,
+            execution,
+            terminal_observations,
+            actions_before_spawn,
+            defer_external_actions,
+            None,
+        )
+        .await
+    }
+
+    /// Resumes at the spawn family after an optional off-actor fork read.
+    /// Earlier action families and provider accounting must never be replayed.
+    #[allow(clippy::too_many_arguments)]
+    async fn resume_agent_provider_execution_at_spawn(
+        &mut self,
+        turn: &AgentTurnRecord,
+        model_profile: &ModelProfile,
+        provider_id: &str,
+        mut execution: AgentTurnExecution,
+        mut terminal_observations: RuntimeTerminalActionObservations,
+        actions_before_spawn: usize,
+        defer_external_actions: bool,
+        prepared_fork: Option<(
+            &crate::runtime::control::RuntimeSubagentForkReadWork,
+            &Result<crate::runtime::control::RuntimeSubagentForkSnapshot>,
+        )>,
+    ) -> Result<AgentTurnExecution> {
+        let turn_id = turn.turn_id.as_str();
+        let spawn_actions_executed = self.execute_running_spawn_actions_for_turn_with_fork(
+            turn,
+            &mut execution,
+            prepared_fork,
+        )?;
         terminal_observations.observe(&execution);
         let close_agent_actions_executed =
             self.execute_running_close_agent_actions_for_turn(turn, &mut execution)?;
@@ -142,11 +216,7 @@ impl RuntimeSessionService {
         let config_actions_executed =
             self.execute_running_config_change_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
-        let actions_executed_before_persistence = skill_actions_executed
-            .saturating_add(message_actions_executed)
-            .saturating_add(network_actions_executed)
-            .saturating_add(mcp_discovery_actions_executed)
-            .saturating_add(mcp_actions_executed)
+        let actions_executed_before_persistence = actions_before_spawn
             .saturating_add(spawn_actions_executed)
             .saturating_add(close_agent_actions_executed)
             .saturating_add(config_actions_executed);
@@ -186,6 +256,7 @@ impl RuntimeSessionService {
                 model_profile: model_profile.clone(),
                 provider_id: provider_id.to_string(),
                 execution: execution.clone(),
+                fork_read: None,
                 memory_enabled: self.runtime_persistent_memory_enabled(),
                 memory_store,
                 memory_scopes: self.memory_action_search_scopes(turn),
@@ -231,7 +302,44 @@ impl RuntimeSessionService {
         .await
     }
 
-    /// Applies worker-settled memory and issue results, then resumes ordinary settlement.
+    /// Queues a fork-only phase under the existing persistence generation lease.
+    #[allow(clippy::too_many_arguments)]
+    fn queue_provider_settlement_phase(
+        &mut self,
+        turn: &AgentTurnRecord,
+        model_profile: &ModelProfile,
+        provider_id: &str,
+        execution: &AgentTurnExecution,
+        observations: &RuntimeTerminalActionObservations,
+        actions_before_spawn: usize,
+        fork_read: Option<crate::runtime::control::RuntimeSubagentForkReadWork>,
+    ) {
+        let work = RuntimeAgentProviderPersistenceWork {
+            turn: turn.clone(),
+            generation: self.mark_agent_provider_persistence_pending(&turn.turn_id),
+            model_profile: model_profile.clone(),
+            provider_id: provider_id.to_string(),
+            execution: execution.clone(),
+            fork_read,
+            memory_enabled: false,
+            memory_store: None,
+            memory_scopes: Vec::new(),
+            memory_default_ttl_days: 0,
+            issues_enabled: false,
+            issue_store: None,
+            issue_project: String::new(),
+            issue_query_freshness: Default::default(),
+            actions_executed_before_persistence: actions_before_spawn,
+            settled_action_results_before_persistence: observations.results().to_vec(),
+        };
+        self.persistence.queue_provider_settlement(
+            RuntimeSideEffect::SettleAgentProviderPersistence {
+                work: Box::new(work),
+            },
+        );
+    }
+
+    /// Applies checked fork history or settled memory/issue results at their family boundary.
     pub(super) async fn apply_agent_provider_persistence_outcome(
         &mut self,
         outcome: RuntimeAgentProviderPersistenceOutcome,
@@ -242,6 +350,8 @@ impl RuntimeSessionService {
             model_profile,
             provider_id,
             mut execution,
+            fork_read,
+            fork_snapshot,
             memory_results,
             issue_results,
             issue_query_freshness,
@@ -256,6 +366,27 @@ impl RuntimeSessionService {
         })?;
         let mut terminal_observations = RuntimeTerminalActionObservations::default();
         terminal_observations.observe_results(&settled_action_results_before_persistence);
+        if let Some(read) = fork_read {
+            let snapshot = fork_snapshot
+                .ok_or_else(|| {
+                    super::super::MezError::invalid_state(
+                        "fork settlement outcome has no checked snapshot",
+                    )
+                })?
+                .map_err(super::super::MezError::invalid_state);
+            return self
+                .resume_agent_provider_execution_at_spawn(
+                    &turn,
+                    &model_profile,
+                    &provider_id,
+                    execution,
+                    terminal_observations,
+                    actions_executed_before_persistence,
+                    true,
+                    Some((&read, &snapshot)),
+                )
+                .await;
+        }
         let memory_actions_executed = memory_results.len();
         for (index, result) in memory_results {
             let pending = execution.action_results.get(index).ok_or_else(|| {
