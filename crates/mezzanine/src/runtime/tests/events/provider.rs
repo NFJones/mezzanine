@@ -1963,6 +1963,20 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
     assert_eq!(plan_states.len(), 2, "{:#?}", disabled.blocks());
     assert!(plan_states[0].contains("state=enabled"));
     assert!(plan_states[1].contains("state=disabled"));
+    let mut conflicting = entries[0].clone();
+    conflicting.content = "conflicting queued execution row".to_string();
+    service
+        .persistence
+        .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+            path: transcript_store.transcript_path(&conversation_id).unwrap(),
+            store: transcript_store.clone(),
+            entries: vec![conflicting],
+        });
+    let error = service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
+        .unwrap_err();
+    assert!(error.message().contains("conflicting contents"), "{error}");
+    assert_eq!(transcript_store.inspect(&conversation_id).unwrap(), entries);
     let _ = std::fs::remove_dir_all(transcript_root);
     let _ = std::fs::remove_dir_all(environment_root);
     let _ = std::fs::remove_dir_all(skill_root);

@@ -23,6 +23,7 @@ use super::{
 };
 use crate::runtime::config::SubagentNameMode;
 use crate::runtime::{RuntimeAgentPromptTurnStart, SandboxConfig};
+use crate::storage::transcript::ConversationTranscriptRead;
 use mez_agent::{
     AllowedAction, AllowedActionSet, SubagentApprovalProvenance, SubagentParentAuthority,
     SubagentParentFilesystemBounds,
@@ -1681,17 +1682,17 @@ impl RuntimeSessionService {
                 "forked subagent sessions require the parent durable transcript store",
             )
         })?;
-        let mut entries = match store.inspect(&source_conversation_id) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
-            Err(error) => return Err(error),
-        };
-        entries.extend(
-            self.persistence
-                .pending_transcript_entries(&source_conversation_id),
-        );
-        entries.sort_by_key(|entry| entry.sequence);
-        entries.dedup_by_key(|entry| entry.sequence);
+        let pending = self
+            .persistence
+            .pending_transcript_entries(&source_conversation_id);
+        let mut entries = store
+            .conversation_transcript_view(
+                &source_conversation_id,
+                ConversationTranscriptRead::All,
+                source_entries > pending.len() as u64,
+                &pending,
+            )?
+            .logical;
         if parent_session.ephemeral
             && parent_session
                 .ephemeral_transcript_source_conversation_id

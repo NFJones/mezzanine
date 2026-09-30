@@ -14,6 +14,7 @@ use super::{
     runtime_unrecovered_action_failure_output, transcript_entries_for_execution,
 };
 use crate::storage::token_usage::{TokenUsageEvent, new_token_usage_event_id};
+use crate::storage::transcript::ConversationTranscriptRead;
 use mez_agent::TranscriptContextEvent;
 
 /// Maximum recent execution groups retained for in-process idempotency.
@@ -51,15 +52,19 @@ impl RuntimeSessionService {
             return Ok(0);
         };
         let persistence_key = (conversation_id.clone(), turn.turn_id.clone());
-        let mut existing_entries = match store.inspect(&conversation_id) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
-            Err(error) => return Err(error),
-        };
-        existing_entries.extend(
-            self.persistence
-                .pending_transcript_entries(&conversation_id),
-        );
+        let pending = self
+            .persistence
+            .pending_transcript_entries(&conversation_id);
+        let existing_entries = store
+            .conversation_transcript_view(
+                &conversation_id,
+                ConversationTranscriptRead::All,
+                self.agent_shell_store()
+                    .get(&turn.pane_id)
+                    .is_some_and(|session| session.transcript_entries > pending.len() as u64),
+                &pending,
+            )?
+            .logical;
         let created_at_unix_seconds = current_unix_seconds().max(1);
         let entries = if self.persistence.transcript_uses_adapter() {
             let first_sequence = self
@@ -378,15 +383,19 @@ impl RuntimeSessionService {
         };
         interrupted_entry.validate()?;
         entries.push(interrupted_entry);
-        let mut existing_entries = match store.inspect(&turn.conversation_id) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
-            Err(error) => return Err(error),
-        };
-        existing_entries.extend(
-            self.persistence
-                .pending_transcript_entries(&turn.conversation_id),
-        );
+        let pending = self
+            .persistence
+            .pending_transcript_entries(&turn.conversation_id);
+        let existing_entries = store
+            .conversation_transcript_view(
+                &turn.conversation_id,
+                ConversationTranscriptRead::All,
+                self.agent_shell_store()
+                    .get(&turn.pane_id)
+                    .is_some_and(|session| session.transcript_entries > pending.len() as u64),
+                &pending,
+            )?
+            .logical;
         entries = Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
         if entries.is_empty() {
             return Ok(0);

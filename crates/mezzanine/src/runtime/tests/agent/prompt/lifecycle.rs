@@ -2637,6 +2637,85 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
     assert!(fresh_context.blocks().iter().all(|block| {
         block.content != "captured parent decision" && block.content != "later parent mutation"
     }));
+    let mut conflicting = transcript_store.inspect(&parent.session_id).unwrap()[1].clone();
+    conflicting.content = "conflicting queued parent row".to_string();
+    service
+        .persistence
+        .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+            path: transcript_store
+                .transcript_path(&parent.session_id)
+                .unwrap(),
+            store: transcript_store.clone(),
+            entries: vec![conflicting],
+        });
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::Fork,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "reject conflicting parent history".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+    assert!(error.message().contains("conflicting contents"), "{error}");
+    service
+        .persistence
+        .cancel_queued_transcript_entries_for_conversation(&parent.session_id);
+    fs::remove_file(
+        transcript_store
+            .transcript_path(&parent.session_id)
+            .unwrap(),
+    )
+    .unwrap();
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::Fork,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "reject missing parent history".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("required transcript archive is missing"),
+        "{error}"
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 

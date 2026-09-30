@@ -2332,6 +2332,11 @@ impl AgentTranscriptStore {
         };
         let committed = match committed {
             Ok(rows) => rows,
+            Err(error) if error.kind() == MezErrorKind::NotFound && committed_prefix_required => {
+                return Err(MezError::invalid_state(
+                    "required transcript archive is missing",
+                ));
+            }
             Err(error) if error.kind() == MezErrorKind::NotFound && !committed_prefix_required => {
                 let mut next_sequence = 1u64;
                 let mut seen = BTreeMap::new();
