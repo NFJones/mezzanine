@@ -112,6 +112,12 @@ impl RuntimeSubagentForkReadWork {
             .get(&self.parent_pane_id)
             .is_none_or(|session| {
                 session.session_id != self.parent_conversation_id
+                    || session
+                        .ephemeral_transcript_source_conversation_id
+                        .as_deref()
+                        != self
+                            .ephemeral_source
+                            .then_some(self.source_conversation_id.as_str())
                     || (if self.ephemeral_source {
                         session.ephemeral_transcript_source_entries
                     } else {

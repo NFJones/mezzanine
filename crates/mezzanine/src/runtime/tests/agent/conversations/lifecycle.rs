@@ -797,6 +797,33 @@ fn runtime_agent_loop_fork_context_honors_captured_parent_high_water_mark() {
         block.source == ContextSourceKind::TranscriptAssistant
             && block.content == "captured parent presentation"
     }));
+    let captured = service
+        .prepare_subagent_fork_read_work("agent-%1")
+        .unwrap()
+        .unwrap();
+    let session = service.agent_shell_store().get("%1").unwrap().clone();
+    if let Some(turn_id) = session.running_turn_id.as_deref() {
+        service
+            .agent_shell_store_mut()
+            .finish_turn("%1", turn_id)
+            .unwrap();
+    }
+    service
+        .agent_shell_store_mut()
+        .bind_ephemeral_conversation_with_lineage_and_transcript_source(
+            "%1",
+            session.session_id,
+            session.transcript_entries,
+            None,
+            Some("different-parent-history".to_string()),
+            session.ephemeral_transcript_source_entries,
+        )
+        .unwrap();
+    let error = captured.check_owner(&service).unwrap_err();
+    assert!(
+        error.message().contains("parent conversation changed"),
+        "{error}"
+    );
 }
 
 /// Verifies `/loop --fork` can start from a pane conversation that has no
