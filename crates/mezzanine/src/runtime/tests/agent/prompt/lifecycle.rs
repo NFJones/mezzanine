@@ -2486,9 +2486,43 @@ fn runtime_maap_spawn_accepts_prepared_fork_history() {
         unreachable!("spawn fixture must contain spawn_agent");
     };
     *session_mode = Some(SubagentSessionMode::Fork);
-    let result = service
-        .execute_spawn_action_for_turn_with_fork(&turn, &action, Some((&work, snapshot)))
-        .unwrap();
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "fork the parent".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "inherit history".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            Vec::new(),
+            None,
+        )],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    assert_eq!(
+        service
+            .execute_running_spawn_actions_for_turn_with_fork(
+                &turn,
+                &mut execution,
+                Some((&work, &Ok(snapshot))),
+            )
+            .unwrap(),
+        1
+    );
+    let result = &execution.action_results[0];
     assert!(!result.is_error);
     let structured: serde_json::Value =
         serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();

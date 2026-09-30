@@ -720,6 +720,19 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
     ) -> Result<usize> {
+        self.execute_running_spawn_actions_for_turn_with_fork(turn, execution, None)
+    }
+
+    /// Settles fork actions from a checked worker result in action order.
+    pub(crate) fn execute_running_spawn_actions_for_turn_with_fork(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &mut AgentTurnExecution,
+        prepared_fork: Option<(
+            &crate::runtime::control::RuntimeSubagentForkReadWork,
+            &Result<crate::runtime::control::RuntimeSubagentForkSnapshot>,
+        )>,
+    ) -> Result<usize> {
         if execution.terminal_state != AgentTurnState::Running {
             return Ok(0);
         }
@@ -747,9 +760,29 @@ impl RuntimeSessionService {
                     "agent: spawn agent",
                 )?;
             }
-            execution.action_results[index] = match self
-                .execute_spawn_action_for_turn(turn, &action)
-            {
+            let prepared = match (&action.payload, prepared_fork) {
+                (
+                    AgentActionPayload::SpawnAgent {
+                        session_mode: Some(mez_agent::SubagentSessionMode::Fork),
+                        ..
+                    },
+                    Some((work, snapshot)),
+                ) => Some(snapshot.as_ref().map(|snapshot| (work, snapshot.clone()))),
+                _ => None,
+            };
+            let outcome = match prepared {
+                Some(Ok(snapshot)) => {
+                    self.execute_spawn_action_for_turn_with_fork(turn, &action, Some(snapshot))
+                }
+                Some(Err(error)) => Err(SpawnActionExecutionError::before_allocation(
+                    MezError::invalid_state(format!(
+                        "fork history preparation failed: {}",
+                        error.message()
+                    )),
+                )),
+                None => self.execute_spawn_action_for_turn(turn, &action),
+            };
+            execution.action_results[index] = match outcome {
                 Ok(result) => result,
                 Err(spawn_error) => {
                     let status = if spawn_error.kind() == crate::error::MezErrorKind::Forbidden {
