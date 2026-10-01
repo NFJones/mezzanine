@@ -3795,6 +3795,11 @@ and carry unchanged bounded `mezctl/1` frames. Connection setup, stream setup,
 idle operation, final-response delivery, and endpoint teardown MUST remain
 bounded. Malformed clients, wrong ALPNs, excess streams, stalled setup, and one
 connection task failure MUST NOT stop either the Iroh listener or Unix recovery.
+Connection-local panics and unexpected task cancellation MUST release exact
+attachment and transport ownership, remain visible in payload-free failure
+accounting, and allow healthy and replacement connections to continue. Final
+draining MUST reap every task even after a failed join. This isolation MUST NOT
+suppress shared runtime actor failures or unexpected endpoint/listener loss.
 
 An authenticated Iroh endpoint ID MUST be treated only as transport and device
 evidence; it MUST NOT directly grant a Mezzanine role, session visibility, or

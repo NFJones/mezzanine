@@ -251,6 +251,9 @@ where
     let mut served = 0u64;
     let mut lifecycle = handle.lifecycle_state_watcher();
     tokio::pin!(cancellation);
+    // Iroh initialization replies carry actor-produced teardown ownership. Keep
+    // it before response I/O so aborts and unwinds cannot strand an attachment.
+    let mut _attachment_cleanup = None;
     loop {
         let state = *lifecycle.borrow();
         if should_stop(served, state) {
@@ -289,6 +292,10 @@ where
                     submit_control_connection_disconnect_event(handle, connection).await?;
                     return Err(error);
                 }
+                #[cfg(test)]
+                if frame.body.contains("\"id\":\"test-connection-panic\"") {
+                    panic!("private injected connection panic payload");
+                }
                 let input = encode_frame(&frame);
                 let dispatch = handle_control_input_with_optional_snapshots(
                     handle,
@@ -304,13 +311,17 @@ where
                     },
                     None => dispatch.await,
                 };
-                let result = match result {
+                let mut result = match result {
                     Ok(result) => result,
                     Err(error) => {
                         submit_control_connection_disconnect_event(handle, connection).await?;
                         return Err(error);
                     }
                 };
+                if let Some(cleanup) = result.connection_cleanup.take() {
+                    cleanup.own_disconnect(&mut result.connection);
+                    _attachment_cleanup = Some(cleanup);
+                }
                 let (output, next_connection, mut terminal_lifecycle_flush) = result.into_parts();
                 *connection = next_connection;
                 let write_result = match config.application_idle_timeout {
@@ -552,6 +563,18 @@ async fn handle_control_input_with_optional_snapshots(
     connection: &ControlConnectionState,
     snapshots: Option<&SnapshotRepository>,
 ) -> Result<AsyncControlInputResult> {
+    if !connection.initialized()
+        && matches!(
+            connection.authenticated_peer(),
+            Some(AuthenticatedPeer::IrohEndpoint { .. })
+        )
+    {
+        // Initialization does not perform snapshot I/O. The actor retains the
+        // exact teardown lease even if this adapter never receives its reply.
+        return handle
+            .initialize_routed_control_connection(input, max_content_length, connection.clone())
+            .await;
+    }
     match snapshots {
         Some(snapshots) => {
             handle

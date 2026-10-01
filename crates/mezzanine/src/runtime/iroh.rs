@@ -1,6 +1,7 @@
 //! Iroh endpoint construction and lifecycle for optional remote control.
 
 use base64::Engine as _;
+use futures_util::FutureExt as _;
 use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
 use iroh::endpoint::{
     BindOpts, IdleTimeout, PortmapperConfig, QuicTransportConfig, VarInt, presets,
@@ -1814,16 +1815,14 @@ async fn serve_runtime_iroh_control_listener(
                 let Some(joined) = joined else {
                     continue;
                 };
-                let _connection_result = joined.map_err(|error| {
-                    MezError::invalid_state(format!("Iroh control connection task failed: {error}"))
-                })?;
+                record_iroh_connection_join(&endpoint.diagnostics, joined, false);
             }
         }
     }
 
     if tokio::time::timeout(
         endpoint.policy.setup_timeout,
-        drain_iroh_control_tasks(&mut tasks),
+        drain_iroh_control_tasks(&mut tasks, &endpoint.diagnostics),
     )
     .await
     .is_err()
@@ -1835,13 +1834,7 @@ async fn serve_runtime_iroh_control_listener(
             .fetch_add(tasks.len() as u64, Ordering::Relaxed);
         tasks.abort_all();
         while let Some(joined) = tasks.join_next().await {
-            if let Err(error) = joined
-                && !error.is_cancelled()
-            {
-                return Err(MezError::invalid_state(format!(
-                    "Iroh control connection task failed: {error}"
-                )));
-            }
+            record_iroh_connection_join(&endpoint.diagnostics, joined, true);
         }
     }
     if endpoint_closed_unexpectedly {
@@ -1868,6 +1861,7 @@ async fn serve_runtime_iroh_control_connection(
     idle_timeout: std::time::Duration,
 ) -> Result<u64> {
     let endpoint_id = connection.remote_id().to_string();
+    let _transport_owner = IrohConnectionTransportOwner(connection.clone());
     let (send, recv) = tokio::time::timeout(setup_timeout, connection.accept_bi())
         .await
         .map_err(|_| MezError::invalid_state("Iroh control stream setup timed out"))?
@@ -1917,7 +1911,7 @@ async fn serve_runtime_iroh_control_connection(
     ));
     let periodic_sampler = sampler.clone();
     let periodic_connection = connection.clone();
-    let mut sample_task = tokio::spawn(async move {
+    let mut sample_task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -1926,7 +1920,7 @@ async fn serve_runtime_iroh_control_connection(
                 sampler.sample_current(&periodic_connection);
             }
         }
-    });
+    }));
     let sample_connection = connection.clone();
     let response_sampler = sampler.clone();
     let request_authority = authority.clone();
@@ -2006,7 +2000,19 @@ async fn serve_runtime_iroh_control_connection(
             },
             authority_cancelled,
         );
-    let (result, event_completed) = event_task.supervise(control).await;
+    // Only transport-local state is unwound. The actor owns shared runtime
+    // mutation; its failure remains a separate infrastructure result.
+    let (result, event_completed) =
+        match std::panic::AssertUnwindSafe(event_task.supervise(control))
+            .catch_unwind()
+            .await
+        {
+            Ok(result) => result,
+            Err(_) => (
+                Err(MezError::invalid_state("Iroh control connection panicked")),
+                true,
+            ),
+        };
     let disconnect_result = if event_completed {
         tokio::time::timeout(
             setup_timeout,
@@ -2540,13 +2546,50 @@ pub(crate) async fn serve_host_routed_iroh_event_stream(
     .await
 }
 
-async fn drain_iroh_control_tasks(tasks: &mut JoinSet<Result<u64>>) -> Result<()> {
-    while let Some(joined) = tasks.join_next().await {
-        let _connection_result = joined.map_err(|error| {
-            MezError::invalid_state(format!("Iroh control connection task failed: {error}"))
-        })?;
+/// Closes only the exact transport when its serving future unwinds or is aborted.
+/// Explicit graceful serving still orders FIN acknowledgement before this drop.
+struct IrohConnectionTransportOwner(iroh::endpoint::Connection);
+
+impl Drop for IrohConnectionTransportOwner {
+    fn drop(&mut self) {
+        self.0.close(VarInt::from_u32(0), b"connection owner ended");
     }
-    Ok(())
+}
+
+/// Reaps every connection task, recording local failures without early return.
+async fn drain_iroh_control_tasks(
+    tasks: &mut JoinSet<Result<u64>>,
+    diagnostics: &RuntimeIrohDiagnostics,
+) {
+    while let Some(joined) = tasks.join_next().await {
+        record_iroh_connection_join(diagnostics, joined, false);
+    }
+}
+
+/// Records unexpected connection joins without exposing arbitrary panic payloads.
+/// Ordinary worker results are already recorded by their owning serving task.
+fn record_iroh_connection_join(
+    diagnostics: &RuntimeIrohDiagnostics,
+    joined: std::result::Result<Result<u64>, tokio::task::JoinError>,
+    forced_abort: bool,
+) {
+    if let Err(error) = joined {
+        if forced_abort && error.is_cancelled() {
+            return;
+        }
+        diagnostics
+            .inner
+            .connections_failed
+            .fetch_add(1, Ordering::Relaxed);
+        eprintln!(
+            "mez: Iroh connection task {}",
+            if error.is_panic() {
+                "panicked"
+            } else {
+                "was cancelled unexpectedly"
+            }
+        );
+    }
 }
 
 /// Waits until the runtime enters a terminal lifecycle state or its state
@@ -2588,6 +2631,35 @@ fn relay_mode(policy: &RuntimeIrohRelayPolicy) -> Result<RelayMode> {
 mod tests {
     use super::*;
     use crate::runtime::{RenderInvalidationReason, RuntimeSideEffect};
+
+    /// A failed join must not short-circuit draining siblings. Unexpected
+    /// cancellation counts as failure; intentional shutdown aborts do not.
+    #[tokio::test]
+    async fn iroh_connection_drain_contains_panic_and_cancellation() {
+        let diagnostics = RuntimeIrohDiagnostics::default();
+        let mut tasks = JoinSet::new();
+        tasks.spawn(async { panic!("private injected join payload") });
+        let cancelled = tasks.spawn(std::future::pending::<Result<u64>>());
+        cancelled.abort();
+        let completed = Arc::new(AtomicBool::new(false));
+        let sibling = completed.clone();
+        tasks.spawn(async move {
+            tokio::task::yield_now().await;
+            sibling.store(true, Ordering::Release);
+            Ok(1)
+        });
+        drain_iroh_control_tasks(&mut tasks, &diagnostics).await;
+        assert!(tasks.is_empty());
+        assert!(completed.load(Ordering::Acquire));
+        assert_eq!(diagnostics.snapshot().connections_failed, 2);
+
+        tasks.spawn(std::future::pending::<Result<u64>>());
+        tasks.abort_all();
+        while let Some(joined) = tasks.join_next().await {
+            record_iroh_connection_join(&diagnostics, joined, true);
+        }
+        assert_eq!(diagnostics.snapshot().connections_failed, 2);
+    }
 
     /// Render delivery counts each encoded fragment but reports success only
     /// after flushing; phase-specific write and flush failures remain visible.
@@ -4791,7 +4863,7 @@ mod tests {
     /// or deauthorize the other stream.
     #[tokio::test(flavor = "current_thread")]
     async fn same_iroh_endpoint_keeps_independent_primary_event_streams() {
-        independent_primary_event_stream_case(false).await;
+        independent_primary_event_stream_case(0).await;
     }
 
     /// Resetting only one event stream while its control remains live must end
@@ -4799,12 +4871,20 @@ mod tests {
     /// leave shared session ownership with the healthy primary.
     #[tokio::test(flavor = "current_thread")]
     async fn iroh_event_stream_reset_ends_only_its_live_control_attachment() {
-        independent_primary_event_stream_case(true).await;
+        independent_primary_event_stream_case(1).await;
+    }
+
+    /// A controlled panic in one initialized connection must not stop the
+    /// listener or its sibling primary. This is fault injection, not a claim
+    /// that arbitrary remote input can cause a production panic.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_connection_panic_preserves_sibling_attachment_and_listener() {
+        independent_primary_event_stream_case(2).await;
     }
 
     /// Exercises ordinary disconnect and required-event failure using the same
     /// two-primary transport fixture and exact client-isolation assertions.
-    async fn independent_primary_event_stream_case(reset_events: bool) {
+    async fn independent_primary_event_stream_case(fault: u8) {
         use secrecy::ExposeSecret;
 
         use crate::control::encode_control_body;
@@ -4821,6 +4901,11 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
 
         let mut service = RuntimeServiceFixture::new().build();
+        service
+            .start_initial_pane_process(Some("cat >/dev/null"))
+            .unwrap();
+        let pane_id = service.active_pane_id().unwrap().to_string();
+        let pane_pid = service.primary_pid_for_live_pane_process(&pane_id).unwrap();
         service.set_config_root(root.clone());
         let session_id = service.session().id.to_string();
         let (server_secret, server_endpoint_id) = {
@@ -4883,7 +4968,7 @@ mod tests {
             )
             .await
             .unwrap();
-            assert_eq!(served, 2);
+            assert_eq!(served, if fault == 2 { 3 } else { 2 });
             server_endpoint.close().await;
         };
         let clients = async {
@@ -4935,7 +5020,7 @@ mod tests {
             assert_eq!(first_preface, MEZZANINE_IROH_EVENT_STREAM_PREFACE);
 
             let second_connection = client_endpoint
-                .connect(server_addr, MEZZANINE_IROH_ALPN)
+                .connect(server_addr.clone(), MEZZANINE_IROH_ALPN)
                 .await
                 .unwrap();
             let (mut second_send, mut second_recv) = second_connection.open_bi().await.unwrap();
@@ -4978,8 +5063,15 @@ mod tests {
             second_events.read_exact(&mut second_preface).await.unwrap();
             assert_eq!(second_preface, MEZZANINE_IROH_EVENT_STREAM_PREFACE);
 
-            if reset_events {
-                first_events.stop(VarInt::from_u32(1)).unwrap();
+            if fault != 0 {
+                if fault == 1 {
+                    first_events.stop(VarInt::from_u32(1)).unwrap();
+                } else {
+                    first_send.write_all(&encode_control_body(
+                        r#"{"jsonrpc":"2.0","id":"test-connection-panic","method":"session/get","params":{}}"#,
+                    )).await.unwrap();
+                    first_send.flush().await.unwrap();
+                }
                 let rename = r#"{"jsonrpc":"2.0","id":"trigger","method":"pane/rename","params":{"name":"event reset trigger","idempotency_key":"event-reset-trigger"}}"#;
                 second_send
                     .write_all(&encode_control_body(rename))
@@ -5029,6 +5121,28 @@ mod tests {
             .await
             .unwrap();
             assert!(detached_event.contains(&first_client_id));
+
+            if fault == 2 {
+                assert!(
+                    mez_mux::process::current_working_directory_for_pid(pane_pid).is_some(),
+                    "the original pane process must survive connection panic"
+                );
+                let replacement = client_endpoint
+                    .connect(server_addr.clone(), MEZZANINE_IROH_ALPN)
+                    .await
+                    .unwrap();
+                let (mut send, mut recv) = replacement.open_bi().await.unwrap();
+                send.write_all(&encode_control_body(&second_initialize))
+                    .await
+                    .unwrap();
+                send.flush().await.unwrap();
+                let response = read_test_control_body(&mut recv).await;
+                let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+                let replacement_id = response["result"]["client"]["id"].as_str().unwrap();
+                assert_ne!(replacement_id, first_client_id);
+                assert_ne!(replacement_id, second_client_id);
+                replacement.close(VarInt::from_u32(0), b"replacement complete");
+            }
 
             let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"two-client-kill"}}"#;
             second_send
