@@ -583,8 +583,14 @@ async fn async_actor_expires_zen_focus_label_without_terminal_activity() {
         .unwrap();
     let mut service =
         crate::test_support::runtime::RuntimeServiceFixture::new().build_with_session(session);
+    service
+        .execute_terminal_command(
+            &primary,
+            "set-option terminal.zen_focus_label_duration_ms 60000",
+        )
+        .unwrap();
+    service.drain_deferred_effects_transition();
     service.set_terminal_zen_mode_for_tests(true);
-    let now_ms = crate::runtime::current_unix_millis();
     service
         .execute_terminal_command(&primary, "new-window second")
         .unwrap();
@@ -610,7 +616,7 @@ async fn async_actor_expires_zen_focus_label_without_terminal_activity() {
             .acknowledge_zen_focus_label_presentations(
                 primary.clone(),
                 snapshot.presentation_ids,
-                now_ms,
+                crate::runtime::current_unix_millis(),
             )
             .await
             .unwrap();
