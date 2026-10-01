@@ -281,6 +281,18 @@ fn runtime_terminal_view_reports_latest_event_cutoff() {
 #[test]
 fn runtime_terminal_view_conditional_response_keeps_exact_base() {
     let mut service = test_runtime_service();
+    // Exact-base reuse requires identical rendered content, including chrome.
+    // Clock and uptime fields legitimately invalidate identities at rollover.
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "static-conditional-view".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\ntemplate = \"#{window.list}\"\nright_status = \"static\"\n[frames.pane]\ntemplate = \"#{pane.title}\"\nright_status = \"static\"\n".to_string(),
+        }])
+        .unwrap();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
