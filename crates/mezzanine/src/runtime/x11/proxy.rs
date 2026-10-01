@@ -1067,11 +1067,21 @@ fn bind_display_listener() -> Result<TcpListener> {
 
 /// Binds the first available display in one caller-bounded inclusive range.
 fn bind_display_listener_in_range(displays: std::ops::RangeInclusive<u16>) -> Result<TcpListener> {
+    bind_display_listener_with(displays, TcpListener::bind)
+}
+
+/// Tries bounded display candidates through one socket-binding operation.
+/// The injected operation permits deterministic collision coverage; production
+/// still uses the OS bind result as its sole admission authority.
+fn bind_display_listener_with(
+    displays: std::ops::RangeInclusive<u16>,
+    mut bind: impl FnMut(SocketAddrV4) -> std::io::Result<TcpListener>,
+) -> Result<TcpListener> {
     for display in displays {
         let port = X11_TCP_BASE_PORT
             .checked_add(display)
             .ok_or_else(|| MezError::invalid_state("X11 proxy display port overflowed"))?;
-        match TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)) {
+        match bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)) {
             Ok(listener) => return Ok(listener),
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
             Err(error) => {
@@ -1204,10 +1214,20 @@ mod tests {
         let occupied = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).unwrap();
         let occupied_port = occupied.local_addr().unwrap().port();
         let occupied_display = occupied_port.checked_sub(X11_TCP_BASE_PORT).unwrap();
-        let next_display = occupied_display.checked_add(1).unwrap();
-
-        let allocated = bind_display_listener_in_range(occupied_display..=next_display).unwrap();
-        assert_eq!(listener_display_number(&allocated).unwrap(), next_display);
+        let reserved = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut reserved = Some(reserved);
+        let mut attempts = Vec::new();
+        let allocated = bind_display_listener_with(10..=11, |address| {
+            attempts.push(address.port());
+            if address.port() == X11_TCP_BASE_PORT + 10 {
+                Err(std::io::Error::from(std::io::ErrorKind::AddrInUse))
+            } else {
+                Ok(reserved.take().unwrap())
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts, [X11_TCP_BASE_PORT + 10, X11_TCP_BASE_PORT + 11]);
+        assert!(reserved.is_none());
         drop(allocated);
 
         let error = bind_display_listener_in_range(occupied_display..=occupied_display)
