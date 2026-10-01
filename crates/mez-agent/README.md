@@ -56,6 +56,14 @@ ready-to-run product agent.
 | Coordination and routing | `scheduler`, `routing`, `auto_sizing`, `messaging`, `subagent` |
 | Integration records and policy | `instructions`, `mcp`, `memory`, `issues`, `permissions` |
 
+The `messaging::service` facade keeps one authoritative `MessageService` state.
+Its identity/discovery, snapshot codec/validation, subscription, indexed receive,
+fanout, and retention components share that state and the same recipient and
+audience predicates. Splitting these components does not create independent
+queues or grant authority from persisted message text. Product messaging tests
+are grouped separately by receive commit, turn lifecycle, presentation, action
+dispatch, discovery/approval, and snapshot recovery invariants.
+
 ## Integration and safety boundaries
 
 The crate depends on [`mez-core`](../mez-core/README.md), not on the terminal,
