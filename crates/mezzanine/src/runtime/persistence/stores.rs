@@ -69,6 +69,21 @@ impl RuntimePersistenceComponent {
         self.token_usage_store.as_ref()
     }
 
+    /// Returns the accounting observation/query instant, using wall time in production.
+    pub(crate) fn token_usage_time(&self) -> u64 {
+        #[cfg(test)]
+        if let Some(now) = self.token_usage_time_for_tests {
+            return now;
+        }
+        crate::runtime::current_unix_seconds()
+    }
+
+    /// Pins accounting time for one runtime fixture without global clock mutation.
+    #[cfg(test)]
+    pub(crate) fn set_token_usage_time_for_tests(&mut self, now: u64) {
+        self.token_usage_time_for_tests = Some(now);
+    }
+
     /// Clones the attached durable token-accounting store handle.
     pub(crate) fn cloned_token_usage_store(&self) -> Option<TokenUsageStore> {
         self.token_usage_store.clone()

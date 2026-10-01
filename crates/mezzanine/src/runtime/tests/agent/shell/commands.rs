@@ -419,6 +419,10 @@ fn runtime_agent_shell_extended_status_persists_rolling_token_usage() {
     store.initialize(0).unwrap();
 
     let mut service = test_runtime_service();
+    let accounting_time = 100 * 86_400;
+    service
+        .persistence
+        .set_token_usage_time_for_tests(accounting_time);
     service.set_token_usage_store(store.clone());
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -503,6 +507,9 @@ fn runtime_agent_shell_extended_status_persists_rolling_token_usage() {
     assert!(after_reset.contains("| openai | gpt-durable | 60 | 40 | 20 | 5 | 40.00% |"));
 
     let mut restarted = test_runtime_service();
+    restarted
+        .persistence
+        .set_token_usage_time_for_tests(accounting_time);
     restarted.set_token_usage_store(store);
     let restarted_primary = restarted
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)

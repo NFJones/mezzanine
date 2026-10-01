@@ -1299,7 +1299,11 @@ impl RuntimeSessionService {
         let token_usage_key = profile
             .map(|profile| ModelTokenUsageKey::new(profile.provider.clone(), profile.model.clone()))
             .unwrap_or_else(ModelTokenUsageKey::unknown);
-        self.record_durable_token_usage(&token_usage_key, usage, current_unix_seconds());
+        self.record_durable_token_usage(
+            &token_usage_key,
+            usage,
+            self.persistence.token_usage_time(),
+        );
         self.agent
             .agent_token_usage_by_conversation
             .entry(conversation_id.clone())
@@ -1400,7 +1404,7 @@ impl RuntimeSessionService {
         if usage_by_model.is_empty() {
             return;
         }
-        let observed_at_unix_seconds = current_unix_seconds();
+        let observed_at_unix_seconds = self.persistence.token_usage_time();
         for (key, usage) in usage_by_model {
             if !usage.is_zero() {
                 self.record_durable_token_usage(key, *usage, observed_at_unix_seconds);

@@ -35,6 +35,9 @@ pub(crate) struct RuntimePersistenceComponent {
     snapshot_repository: Option<SnapshotRepository>,
     agent_transcript_store: Option<AgentTranscriptStore>,
     token_usage_store: Option<TokenUsageStore>,
+    /// Runtime-local clock override for deterministic accounting fixtures.
+    #[cfg(test)]
+    token_usage_time_for_tests: Option<u64>,
     token_usage_health_error: RefCell<Option<String>>,
     session_registry: Option<SessionRegistry>,
     audit_log: Option<AuditLog>,

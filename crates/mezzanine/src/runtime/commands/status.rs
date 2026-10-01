@@ -601,7 +601,7 @@ impl RuntimeSessionService {
         let Some(store) = self.persistence.token_usage_store() else {
             return;
         };
-        let now = current_unix_seconds();
+        let now = self.persistence.token_usage_time();
         let oldest_observed_at = match store.oldest_observed_at(now) {
             Ok(oldest_observed_at) => oldest_observed_at,
             Err(_) => {
