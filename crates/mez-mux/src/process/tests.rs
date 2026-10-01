@@ -701,6 +701,34 @@ fn pane_process_manager_terminates_tracked_pane() {
     assert!(manager.is_empty());
 }
 
+/// Escalation must terminate the owned root even if cached PTY group metadata
+/// points to another test-owned process. A short-lived root bounds the red
+/// regression without leaving a hung or orphaned process behind.
+#[test]
+fn pane_termination_kills_owned_root_when_cached_group_differs() {
+    let mut root = spawn_pane_process(
+        &test_shell(),
+        Some("sleep 2"),
+        &test_environment(),
+        Size::new(80, 24).unwrap(),
+    )
+    .unwrap();
+    let mut other = spawn_pane_process(
+        &test_shell(),
+        Some("sleep 2"),
+        &test_environment(),
+        Size::new(80, 24).unwrap(),
+    )
+    .unwrap();
+    root.process_group_leader = Some(other.primary_pid as i32);
+    let result = root.terminate(Duration::from_millis(10));
+    other.terminate(Duration::from_millis(10)).unwrap();
+    assert!(
+        !result.unwrap().success(),
+        "the owned root exited naturally instead of being terminated"
+    );
+}
+
 /// Verifies pane process manager retains ownership when termination fails.
 ///
 /// Teardown may fail while signaling or waiting on the pane process. The

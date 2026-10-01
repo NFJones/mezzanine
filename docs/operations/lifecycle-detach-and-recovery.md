@@ -19,6 +19,12 @@ client. For administration from another process, use `mez detach --client-id
 ID`; a bare one-shot `mez detach` cannot identify a separate attached client.
 Detaching normally leaves pane processes and agent tasks running.
 
+Explicit pane termination first requests graceful process-group shutdown and
+then escalates. Final escalation also terminates the owned primary child before
+reaping it, so cached PTY group metadata cannot leave the root alive while
+cleanup waits. Signal or reap failures retain the process handle for diagnosis
+and retry.
+
 The runtime exposes `mezctl/2` and allows up to 16 equal-authority attached
 primaries with independent navigation and transient presentation. One layout
 owner controls canonical PTY geometry; non-owner resizes affect only that

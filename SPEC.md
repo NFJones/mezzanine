@@ -678,6 +678,11 @@ When Mezzanine terminates a pane explicitly, it SHOULD first request graceful
 termination through the pane shell or foreground process group and SHOULD allow
 escalation according to a documented timeout policy.
 
+Final pane termination escalation MUST also terminate the owned primary child
+before reaping it. Cached PTY process-group metadata alone MUST NOT leave the
+root alive while teardown waits for its exit. Signal and reap failures MUST
+retain process ownership for diagnosis and retry.
+
 ### 5.3 Shared SQLite Session-State Storage
 
 Session-state stores that adopt SQLite MUST use one database per concern. A

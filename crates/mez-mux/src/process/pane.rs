@@ -766,8 +766,10 @@ impl PaneProcess {
     /// An already-exited child is polled and reaped before any signal is sent,
     /// preventing a stale PTY foreground-group identifier from targeting a
     /// reused process group. Live children receive HUP, TERM, and KILL with the
-    /// supplied grace period between stages. Signal or wait failures are
-    /// returned to the caller.
+    /// supplied grace period between stages. Final escalation also terminates
+    /// the owned root child before reaping: cached PTY group metadata may name
+    /// a different foreground job. Signal or wait failures are returned to the
+    /// caller without discarding child ownership.
     pub fn terminate(&mut self, grace: Duration) -> Result<PaneExitStatus> {
         if let Some(status) = self.poll_exit()? {
             return Ok(status);
@@ -784,6 +786,20 @@ impl PaneProcess {
         }
 
         self.send_signal_to_process_group(Signal::KILL)?;
+        // PTY group metadata can name a foreground job rather than the root.
+        // With no group, the fallback above already terminates the child.
+        // Otherwise recheck exit before using the owned root handle as well.
+        if self.process_group_leader.is_some() {
+            if let Some(status) = self.poll_exit()? {
+                return Ok(status);
+            }
+            if let Err(error) = self.child.kill() {
+                if let Some(status) = self.poll_exit()? {
+                    return Ok(status);
+                }
+                return Err(error.into());
+            }
+        }
         let status = self.child.wait()?;
         let status = PaneExitStatus::from_portable_exit_status(status);
         self.exit_status = Some(status);
