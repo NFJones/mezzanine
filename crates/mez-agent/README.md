@@ -64,6 +64,13 @@ queues or grant authority from persisted message text. Product messaging tests
 are grouped separately by receive commit, turn lifecycle, presentation, action
 dispatch, discovery/approval, and snapshot recovery invariants.
 
+The `shell::transaction` facade retains one typed marker and staged-input
+contract. Child components separate launch/artifact validation, authored-input
+policy, dialect rendering, command materialization and payload encoding, private
+receiver framing, history restoration, and persistent subshell handoff. They
+only construct source; product adapters enforce admission and own pane I/O,
+approval, confinement, process lifetime, and timeouts.
+
 ## Integration and safety boundaries
 
 The crate depends on [`mez-core`](../mez-core/README.md), not on the terminal,
