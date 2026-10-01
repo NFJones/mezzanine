@@ -1600,6 +1600,25 @@ impl RuntimeSessionService {
         Ok(settled)
     }
 
+    /// Defers only the matching Fish bootstrap while receiver cleanup still
+    /// owns foreground input. The existing transaction deadline stays active.
+    fn fish_bootstrap_end_awaits_prompt(&self, pane_id: &str, marker: &str) -> bool {
+        self.process
+            .running_shell_transactions
+            .get(marker)
+            .is_some_and(|transaction| {
+                transaction.pane_id == pane_id
+                    && transaction.kind == RunningShellTransactionKind::Bootstrap
+            })
+            && self
+                .process
+                .pane_managed_shell_handoffs
+                .get(pane_id)
+                .is_some_and(|handoff| {
+                    handoff.identity().marker == marker && handoff.child_prompt_is_pending()
+                })
+    }
+
     /// Settles foreign transaction ends recorded by the pane-output frame.
     ///
     /// The identity-probe end and the bootstrap end both resolve typed shell
@@ -1615,6 +1634,12 @@ impl RuntimeSessionService {
         let mut pending =
             std::mem::take(&mut self.process.pending_deferred_foreign_transaction_ends);
         while let Some((marker, end)) = pending.pop_first() {
+            if self.fish_bootstrap_end_awaits_prompt(&end.output_pane_id, &marker) {
+                self.process
+                    .pending_deferred_foreign_transaction_ends
+                    .insert(marker, end);
+                continue;
+            }
             match self.observe_agent_shell_transaction_end(
                 &end.output_pane_id,
                 &marker,
@@ -1626,7 +1651,9 @@ impl RuntimeSessionService {
                 Ok(observed) => settled = settled.saturating_add(observed),
                 Err(error) => {
                     pending.insert(marker, end);
-                    self.process.pending_deferred_foreign_transaction_ends = pending;
+                    self.process
+                        .pending_deferred_foreign_transaction_ends
+                        .extend(pending);
                     return Err(error);
                 }
             }
@@ -1648,6 +1675,9 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut settled = 0usize;
         for (marker, end) in pending {
+            if self.fish_bootstrap_end_awaits_prompt(&end.output_pane_id, &marker) {
+                continue;
+            }
             self.process
                 .pending_deferred_foreign_transaction_ends
                 .remove(&marker);

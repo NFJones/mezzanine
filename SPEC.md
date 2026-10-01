@@ -6215,6 +6215,13 @@ event. The runtime MUST still enforce its independent completion-certification
 deadline so a missing, discarded, or stale event cannot leave certification
 pending indefinitely.
 
+Managed Fish bootstrap ends MUST remain pending until the matching admitted
+child publishes its post-source prompt-ready event. This scheduling fence MUST
+not grant environment or foreground authority: existing process and interaction
+identity checks and completion certification remain mandatory. A missing prompt
+MUST retain the bootstrap timeout, and timeout/cancellation MUST retire its
+retained end so a late prompt cannot restore discarded certification.
+
 Certification MUST be invalidated when the agent subshell exits, the pane
 closes, its primary process changes or is replaced, a bootstrap proof fails, or
 a new shell-interaction epoch begins. Restoring the original pane shell after

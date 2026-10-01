@@ -202,6 +202,13 @@ the correlated child lifecycle. Failed, truncated, stale, mismatched, or
 incomplete bootstrap evidence remains degraded and typed agent shell commands
 are refused before input is generated.
 
+Managed Fish bootstrap completion waits for the matching post-source child
+prompt before foreground certification. The wrapper's end record can precede
+receiver cleanup jobs; their temporary process groups are not the persistent
+shell. The prompt is only a scheduling fence: existing process, interaction,
+foreground, and environment checks still decide authority. A missing prompt
+retains the bootstrap deadline and fails closed rather than waiting forever.
+
 An unmanaged nested shell that is not at an empty, interactive prompt cannot be
 probed safely from the local `ssh` or container-client process alone; Mezzanine
 will not inject input into a password prompt, full-screen program, or unknown

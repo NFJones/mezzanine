@@ -187,6 +187,14 @@ impl ManagedShellHandoff {
             && (self.shell != ManagedShellKind::Fish || self.child_prompt_ready)
     }
 
+    /// Reports the Fish receiver cleanup interval before its editable prompt.
+    /// This is a scheduling fence, never foreground or environment authority.
+    pub(super) fn child_prompt_is_pending(&self) -> bool {
+        self.shell == ManagedShellKind::Fish
+            && self.phase == ManagedShellHandoffPhase::ChildInstalled
+            && !self.child_prompt_ready
+    }
+
     /// Reports whether presentation still needs to expose the native clear repaint.
     pub(super) fn editor_clear_is_pending(&self) -> bool {
         self.phase == ManagedShellHandoffPhase::TriggerQueued

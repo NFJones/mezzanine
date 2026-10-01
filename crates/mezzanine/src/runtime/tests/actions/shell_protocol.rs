@@ -1975,6 +1975,107 @@ fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
     process.terminate(Duration::from_millis(100)).unwrap();
 }
 
+/// A Fish bootstrap end can precede receiver cleanup and its editable prompt.
+/// Certification must retain the end until the correlated prompt arrives,
+/// rather than observing a transient cleanup job as the persistent shell.
+#[test]
+fn runtime_fish_bootstrap_end_waits_for_child_prompt() {
+    for missing_prompt in [false, true] {
+        let mut service = test_runtime_service();
+        service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service.start_initial_pane_process(Some("cat")).unwrap();
+        let pane_id = "%1";
+        let marker = "fish-bootstrap-prompt-fence";
+        service.running_shell_transactions_mut_for_tests().insert(
+            marker.to_string(),
+            RunningShellTransactionRef {
+                turn_id: "bootstrap-fish-prompt-fence".to_string(),
+                kind: RunningShellTransactionKind::Bootstrap,
+                pane_id: pane_id.to_string(),
+                command: "bootstrap".to_string(),
+                started_at_unix_ms: 0,
+                timeout_ms: Some(15_000),
+                pending_input_payload: None,
+                observed_output_bytes: 0,
+                observed_output_preview: String::new(),
+                observed_output_truncated: false,
+            },
+        );
+        service.prepend_fish_shell_receiver_payloads(
+            marker,
+            mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+            mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+            mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+            mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+        );
+        service.bind_agent_subshell_bootstrap_marker(pane_id, marker);
+        assert!(service.mark_managed_shell_payload_released(pane_id, marker));
+        assert_eq!(
+            service.mark_managed_shell_child_installed(pane_id, marker),
+            Some(false)
+        );
+        service
+            .observe_agent_shell_transaction_end_deferred(
+                pane_id,
+                marker,
+                "bootstrap-fish-prompt-fence",
+                "agent-%1",
+                pane_id,
+                0,
+            )
+            .unwrap();
+        assert_eq!(
+            service.settle_deferred_foreign_transaction_ends().unwrap(),
+            0
+        );
+        assert!(service.running_shell_transaction(marker).is_some());
+        assert_eq!(
+            service
+                .settle_deferred_foreign_transaction_ends_for_pane(pane_id)
+                .unwrap(),
+            0
+        );
+        assert!(service.running_shell_transaction(marker).is_some());
+        assert_eq!(
+            service.mark_managed_fish_child_prompt_ready(pane_id, "stale-marker"),
+            None
+        );
+        assert_eq!(
+            service.settle_deferred_foreign_transaction_ends().unwrap(),
+            0
+        );
+        if missing_prompt {
+            assert_eq!(
+                service.expire_timed_out_shell_transactions(15_001).unwrap(),
+                1
+            );
+            assert!(service.running_shell_transaction(marker).is_none());
+            assert_eq!(
+                service.settle_deferred_foreign_transaction_ends().unwrap(),
+                0
+            );
+            assert_eq!(
+                service.pane_readiness_state(pane_id),
+                PaneReadinessState::Degraded
+            );
+            service.terminate_all_pane_processes().unwrap();
+            continue;
+        }
+        assert_eq!(
+            service.mark_managed_fish_child_prompt_ready(pane_id, marker),
+            Some(false)
+        );
+        assert_eq!(
+            service.settle_deferred_foreign_transaction_ends().unwrap(),
+            1
+        );
+        assert!(service.running_shell_transaction(marker).is_none());
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
 /// Verifies a failed managed Fish child-exit write keeps the handoff retryable.
 ///
 /// Exit intent must not advance the reducer to `Returning` or discard child

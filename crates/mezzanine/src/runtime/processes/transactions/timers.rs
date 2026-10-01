@@ -470,6 +470,9 @@ impl RuntimeSessionService {
             .remove(marker);
         self.process.shell_receiver_pending_ends.remove(marker);
         self.process
+            .pending_deferred_foreign_transaction_ends
+            .remove(marker);
+        self.process
             .shell_transaction_encoded_output_markers
             .remove(marker);
         self.process
