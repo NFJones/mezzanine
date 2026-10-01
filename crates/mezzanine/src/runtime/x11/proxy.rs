@@ -1661,7 +1661,9 @@ mod tests {
 
     /// Setup parsing and server-opened stream credit must consume one shared
     /// deadline, then release the route permit for a healthy follow-up socket.
-    #[tokio::test]
+    /// Establish networking before pausing time; poll the actual relay directly
+    /// so scheduler delays cannot masquerade as a restarted setup budget.
+    #[tokio::test(flavor = "current_thread")]
     async fn setup_phases_share_one_deadline_and_release_capacity() {
         const TEST_ALPN: &[u8] = b"mezzanine/x11-shared-deadline-test/1";
         let (server_endpoint, client_endpoint, server_connection, client_connection) =
@@ -1683,29 +1685,40 @@ mod tests {
             .reserve_route(owner, route_offer([0x73; 16], false))
             .unwrap();
         activate_test_route(&lease, server_connection);
-        let proxy_task = tokio::spawn(proxy.serve());
 
         let mut stalled = connect_proxy(&handle).await;
+        let (local, _) = proxy.listener.accept().await.unwrap();
+        let active = handle.active_route().unwrap();
+        let permits = active.permits.clone();
+        let permit = permits.clone().try_acquire_owned().unwrap();
         let setup = setup_packet(b'l', &[0x73; 16]);
-        let started = tokio::time::Instant::now();
         stalled.write_all(&setup[..12]).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(220)).await;
-        stalled.write_all(&setup[12..]).await.unwrap();
-        stalled.flush().await.unwrap();
-        let mut byte = [0u8; 1];
-        let read = tokio::time::timeout(Duration::from_millis(250), stalled.read(&mut byte))
-            .await
-            .expect("one shared setup deadline should close the stalled socket")
-            .unwrap();
-        assert_eq!(read, 0);
-        assert!(
-            started.elapsed() < Duration::from_millis(450),
-            "setup phases restarted the configured deadline: {:?}",
-            started.elapsed()
-        );
-        wait_for_proxy_metrics(&handle, |metrics| metrics.active_streams == 0).await;
+        tokio::time::pause();
+        {
+            let mut relay = Box::pin(relay_server_x11_socket(local, active, permit));
+            assert!(futures_util::poll!(relay.as_mut()).is_pending());
+            tokio::time::advance(Duration::from_millis(220)).await;
+            stalled.write_all(&setup[12..]).await.unwrap();
+            stalled.flush().await.unwrap();
+            // Drive socket readiness without advancing the paused clock.
+            for _ in 0..32 {
+                tokio::task::yield_now().await;
+                assert!(futures_util::poll!(relay.as_mut()).is_pending());
+            }
+            tokio::time::advance(Duration::from_millis(81)).await;
+            let failure = match futures_util::poll!(relay.as_mut()) {
+                std::task::Poll::Ready(Err(failure)) => failure,
+                _ => panic!("stream-open phase restarted the shared setup deadline"),
+            };
+            assert_eq!(failure.stage, X11StreamFailureStage::HostStreamOpen);
+            assert!(failure.error.message().contains("timed out"));
+        }
+        tokio::time::resume();
+        assert_eq!(permits.available_permits(), 1);
+        drop(stalled);
 
         client_connection.set_max_concurrent_bi_streams(VarInt::from_u32(1));
+        let proxy_task = tokio::spawn(proxy.serve());
         let mut healthy = connect_proxy(&handle).await;
         healthy
             .write_all(&setup_packet(b'B', &[0x73; 16]))
