@@ -1175,6 +1175,38 @@ impl AgentContext {
         &self.chronology
     }
 
+    /// Rebases append-only arrivals onto an unpublished compacted candidate.
+    /// The live chronology must retain the complete frozen source unchanged.
+    /// Arrivals keep their original identity, trust, retention and execution
+    /// metadata. Validation is atomic; source rewrites or invalid ownership
+    /// leave this candidate unchanged. Stable-prefix refresh is independent.
+    pub fn rebase_chronology_suffix(
+        &mut self,
+        frozen: &[ConversationEvent],
+        live: &Self,
+    ) -> AgentContextResult<usize> {
+        live.validate_durable()?;
+        if !live.chronology.starts_with(frozen) {
+            return Err(AgentContextError::new(
+                "staged compaction frozen source chronology changed",
+            ));
+        }
+        let high_water = frozen.last().map_or(0, |event| event.sequence.get());
+        if self.event_sequence_high_water_mark() > high_water {
+            return Err(AgentContextError::new(
+                "staged compaction candidate already contains unfrozen arrivals",
+            ));
+        }
+        let suffix = &live.chronology[frozen.len()..];
+        let mut candidate = self.clone();
+        candidate.chronology.extend_from_slice(suffix);
+        candidate.next_event_sequence = candidate.next_event_sequence.max(live.next_event_sequence);
+        candidate.rebuild_projections();
+        candidate.validate_durable()?;
+        *self = candidate;
+        Ok(suffix.len())
+    }
+
     /// Returns typed request metadata that is excluded from model messages.
     pub fn metadata(&self) -> &ModelContextMetadata {
         &self.metadata
@@ -3272,6 +3304,42 @@ mod tests {
         ActionContentBlock, ActionResult, ActionStatus, AgentPromptError, ProviderApiCompatibility,
         ProviderTranscriptEvent,
     };
+
+    /// Rebasing preserves occurrence identities and metadata without promoting
+    /// peer authority. A frozen-source rewrite must fail atomically.
+    #[test]
+    fn chronology_suffix_rebase_preserves_identity_and_rejects_rewrite() {
+        let mut live = AgentContext::empty();
+        live.append_user_event("user prompt", "original").unwrap();
+        let frozen = live.chronology().to_vec();
+        let mut candidate = live.clone();
+        live.append_peer_message_event("peer 1", "repeated")
+            .unwrap();
+        live.append_user_event("steering", "exact").unwrap();
+        live.append_peer_message_event("peer 2", "repeated")
+            .unwrap();
+        assert_eq!(
+            candidate.rebase_chronology_suffix(&frozen, &live).unwrap(),
+            3
+        );
+        assert_eq!(candidate.chronology(), live.chronology());
+        let committed = candidate.clone();
+        assert!(candidate.rebase_chronology_suffix(&frozen, &live).is_err());
+        assert_eq!(candidate, committed);
+
+        let mut changed = AgentContext::empty();
+        changed
+            .append_user_event("user prompt", "rewritten")
+            .unwrap();
+        let mut candidate = AgentContext::empty();
+        let before = candidate.clone();
+        assert!(
+            candidate
+                .rebase_chronology_suffix(&frozen, &changed)
+                .is_err()
+        );
+        assert_eq!(candidate, before);
+    }
 
     /// Peer mail is untrusted data from another agent, so it must not share the
     /// user-input trust domain, while user prompts and routed local messages keep

@@ -1281,25 +1281,9 @@ impl RuntimeSessionService {
                         ..
                     } => {
                         let mut rebased = staged.context.clone();
-                        for event in context
-                            .chronology()
-                            .iter()
-                            .filter(|event| event.sequence().get() > staged.source_high_water)
-                        {
-                            if event.semantic_kind() != mez_agent::ContextSemanticKind::UserEvent
-                                || event.retention() != mez_agent::ContextRetention::Exact
-                            {
-                                return Err(MezError::invalid_state(
-                                    "staged compaction cannot rebase changed non-user chronology",
-                                ));
-                            }
-                            rebased
-                                .append_user_event(
-                                    event.block().label.clone(),
-                                    event.block().content.clone(),
-                                )
-                                .map_err(|error| MezError::invalid_state(error.message()))?;
-                        }
+                        rebased
+                            .rebase_chronology_suffix(&staged.source_chronology, &context)
+                            .map_err(|error| MezError::invalid_state(error.message()))?;
                         rebased
                     }
                     _ => context,
@@ -1469,10 +1453,13 @@ impl RuntimeSessionService {
                             "pre-summary recovery did not advance to another closed segment",
                         ));
                     }
-                    let source_high_water = self
+                    let source_chronology = self
                         .agent_turn_contexts()
                         .get(&turn_id)
-                        .map_or(0, AgentContext::event_sequence_high_water_mark);
+                        .map(|context| context.chronology().to_vec())
+                        .ok_or_else(|| {
+                            MezError::invalid_state("staged compaction source disappeared")
+                        })?;
                     if let Some(projection) = projection.as_ref() {
                         task.frozen_compaction_rows = self.frozen_observed_compaction_rows(
                             &task,
@@ -1498,7 +1485,7 @@ impl RuntimeSessionService {
                                 context: compacted,
                                 projection,
                                 attempts: attempts.saturating_add(1),
-                                source_high_water,
+                                source_chronology,
                             },
                         ));
                         final_request_retry.last_input_tokens = Some(retry_estimate.input_tokens);
@@ -1686,10 +1673,13 @@ impl RuntimeSessionService {
                                     ),
                                 )
                                 .map_err(|error| MezError::invalid_state(error.message()))?;
-                            let source_high_water = self
+                            let source_chronology = self
                                 .agent_turn_contexts()
                                 .get(&turn_id)
-                                .map_or(0, AgentContext::event_sequence_high_water_mark);
+                                .map(|context| context.chronology().to_vec())
+                                .ok_or_else(|| {
+                                    MezError::invalid_state("staged compaction source disappeared")
+                                })?;
                             let mut staged_task = task.clone();
                             if let RuntimeAgentCompactionTarget::ActiveTurn { staged, .. } =
                                 &mut staged_task.target
@@ -1699,7 +1689,7 @@ impl RuntimeSessionService {
                                         context: compacted.clone(),
                                         projection: Some(projection),
                                         attempts: 0,
-                                        source_high_water,
+                                        source_chronology: source_chronology.clone(),
                                     })
                                 });
                             }
@@ -1747,7 +1737,7 @@ impl RuntimeSessionService {
                                         context: compacted.clone(),
                                         projection: Some(projection),
                                         attempts: attempts.saturating_add(1),
-                                        source_high_water,
+                                        source_chronology: source_chronology.clone(),
                                     })
                                 });
                                 final_request_retry.last_input_tokens = Some(candidate_tokens);

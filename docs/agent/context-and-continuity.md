@@ -175,6 +175,12 @@ another eligible closed range beyond an exact barrier. Earlier summaries remain
 provisional until one combined epoch fits the refreshed request. A non-reducing
 or exhausted retry fails without replacing the previous transcript projection;
 its diagnostic reports component estimates, not task content.
+Messages and steering arriving during staging remain in canonical arrival order.
+Mez verifies the frozen source is unchanged and rebases appended events with
+their original identities and metadata; peer mail remains lower-trust reference
+data, never direct-user authority. Repeated payloads from distinct messages stay
+distinct, delivery cursors are not replayed, and the final request budget includes
+these arrivals before publication. A genuine frozen-source rewrite fails closed.
 If the first segment has no summary allowance because later eligible closed
 history remains raw, planning accounts for those later segments before failing.
 Each segment is still summarized separately at its original anchor, with at most

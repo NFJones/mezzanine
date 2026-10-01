@@ -1,6 +1,8 @@
 //! Runtime tests for agent compaction behavior.
 
 use super::*;
+use crate::runtime::current_unix_seconds;
+use mez_agent::messaging::{Envelope, MessageScope};
 
 /// Verifies the runtime applies raw-retention config for compaction recovery.
 ///
@@ -1478,6 +1480,144 @@ fn runtime_observed_compaction_stages_second_range_before_publication() {
             .blocks()
             .iter()
             .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
+    );
+}
+
+/// Late peer mail must remain lower-trust, ordered, and occurrence-exact while
+/// staged summaries publish atomically. Repeated content is not deduplicated.
+#[test]
+fn runtime_staged_compaction_preserves_late_peer_occurrences() {
+    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        ContextSourceKind::TranscriptAssistant,
+        "second answer",
+        "SECOND_RANGE_SOURCE ".repeat(1_200),
+        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
+        1,
+        None,
+    )
+    .unwrap()
+    .to_transcript_content();
+    let (mut service, store, turn_id) =
+        queue_observed_input_compaction_with_second_group(Some(second));
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "17000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    complete_runtime_test_compaction(&mut service, "%1", "first summary");
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+    );
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    let recipient = AgentId::opaque("agent-%1").unwrap();
+    let mut last_sequence = 0;
+    for (index, message_type) in ["send", "task_result", "send"].into_iter().enumerate() {
+        let bridge = message_type == "task_result";
+        let envelope = Envelope {
+            protocol: "mmp/1",
+            id: format!("late-mail-{index}"),
+            message_type: message_type.to_string(),
+            time: format!("runtime:{now_ms}"),
+            sender: sender.clone(),
+            recipient: mez_agent::messaging::Recipient::Agent(recipient.clone()),
+            correlation_id: Some(turn_id.clone()),
+            ttl_ms: None,
+            content_type: if bridge {
+                "application/json"
+            } else {
+                "text/plain; charset=utf-8"
+            }
+            .to_string(),
+            payload: if bridge {
+                r#"{"task_id":"synthetic-child","success":true,"summary":"bridge result","output":"SYNTHETIC_LATE_MAIL"}"#.to_string()
+            } else {
+                "SYNTHETIC_LATE_MAIL".to_string()
+            },
+            extension_fields: if bridge {
+                crate::runtime::control::runtime_bridge_extension_fields()
+            } else {
+                Vec::new()
+            },
+        };
+        last_sequence = service
+            .control
+            .message_service_mut()
+            .accept_at_with_scope(&sender.agent_id, envelope, MessageScope::Session, now_ms)
+            .unwrap()
+            .sequence;
+        assert_eq!(
+            service
+                .deliver_pending_runtime_agent_messages(now_ms)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            service
+                .deliver_pending_runtime_agent_messages(now_ms)
+                .unwrap(),
+            0
+        );
+        if index == 0 {
+            service
+                .agent_turn_contexts_mut()
+                .get_mut(&turn_id)
+                .unwrap()
+                .append_user_event("steering", "EXACT_LATE_STEERING")
+                .unwrap();
+        }
+    }
+    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
+    let suffix = context.chronology()[context.chronology().len() - 4..].to_vec();
+    complete_runtime_test_compaction(&mut service, "%1", "second summary");
+    assert!(service.agent_provider_task_is_pending(&turn_id));
+    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
+    assert_eq!(
+        &context.chronology()[context.chronology().len() - 4..],
+        suffix.as_slice()
+    );
+    assert_eq!(
+        suffix[0].semantic_kind(),
+        mez_agent::ContextSemanticKind::ReferenceEvent
+    );
+    assert_eq!(
+        suffix[0].retention(),
+        mez_agent::ContextRetention::Summarizable
+    );
+    assert_eq!(
+        store
+            .compaction_epoch(&conversation_id)
+            .unwrap()
+            .unwrap()
+            .ranges
+            .len(),
+        2
+    );
+    assert_eq!(
+        service
+            .control
+            .message_service()
+            .subscription(&recipient)
+            .unwrap()
+            .last_sequence,
+        last_sequence
+    );
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        0
     );
 }
 

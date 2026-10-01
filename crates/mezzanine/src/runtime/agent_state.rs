@@ -695,8 +695,8 @@ pub struct RuntimeStagedCompaction {
     pub projection: Option<crate::storage::transcript::AgentCompactionEpoch>,
     /// Number of additional closed ranges attempted.
     pub attempts: u32,
-    /// Last authoritative chronology sequence captured before staging.
-    pub source_high_water: u64,
+    /// Frozen authoritative chronology for append-only arrival validation.
+    pub source_chronology: Vec<mez_agent::ConversationEvent>,
 }
 
 /// Bounded complete-request retry accounting across compactor rebuilds.

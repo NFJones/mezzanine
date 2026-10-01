@@ -7016,6 +7016,13 @@ the complete request check and publishes one atomic epoch. Each attempted
 complete candidate MUST make bounded progress; no failed candidate may publish
 an epoch or resume the provider turn. Exhaustion MUST fail visibly with
 content-free component-size estimates without dropping the original context.
+Late append-only arrivals, including peer sends and runtime task-result mail,
+MUST survive staged compaction in their original order, occurrence identity,
+source, trust, retention, and execution ownership. Rebase MUST validate that
+the frozen authoritative chronology remains unchanged; genuine source rewrites
+MUST fail closed. Accepted mail MUST NOT be relabeled as direct-user input,
+acknowledged twice, or summarized before consumption. The complete request
+budget check MUST include the retained arrivals before any epoch publishes.
 An additional eligible closed range is not required when the complete refreshed
 request already fits and satisfies the triggering request's reduction rule.
 Before requesting the first summary, a zero allowance for one segment MUST NOT
