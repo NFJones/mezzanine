@@ -1248,6 +1248,9 @@ impl Session {
     ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
         size.validate()?;
+        if self.layout_owner_client_id.as_ref() == Some(primary_client_id) {
+            self.validate_authoritative_layout_size(size)?;
+        }
         let client = self
             .clients
             .iter_mut()
@@ -1277,7 +1280,7 @@ impl Session {
         &mut self,
         size: Size,
     ) -> Result<Vec<PaneResizeEffect>> {
-        size.validate()?;
+        self.validate_authoritative_layout_size(size)?;
         if self.authoritative_size == size {
             return Ok(Vec::new());
         }
@@ -1294,6 +1297,16 @@ impl Session {
                 size: pane.size,
             })
             .collect())
+    }
+
+    /// Validates every prospective window before descriptors or layout mutate.
+    /// This is the ordinary window resize contract, not a second layout engine.
+    pub(super) fn validate_authoritative_layout_size(&self, size: Size) -> Result<()> {
+        size.validate()?;
+        for window in &self.windows {
+            window.validate_resize(size)?;
+        }
+        Ok(())
     }
 
     /// Runs the set pane live state operation for this subsystem.

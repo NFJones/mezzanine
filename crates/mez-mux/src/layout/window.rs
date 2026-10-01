@@ -503,6 +503,20 @@ impl Window {
 
     /// Resizes the owning window and reapportions pane sizes through the stored split tree.
     pub fn resize_window(&mut self, size: Size) -> Result<()> {
+        self.validate_resize(size)?;
+        self.size = size;
+        if self.layout_policy_rebalances() {
+            self.apply_layout_policy();
+        } else {
+            self.layout_root.resize_panes(&mut self.panes, size);
+            self.refresh_pane_geometries();
+        }
+        Ok(())
+    }
+
+    /// Checks prospective geometry without changing the stored tree or panes.
+    /// Session-wide transitions use this same guard before committing any window.
+    pub(crate) fn validate_resize(&self, size: Size) -> Result<()> {
         if size.columns == 0 || size.rows == 0 {
             return Err(MezError::invalid_args(
                 "window size must be positive non-zero cells",
@@ -515,13 +529,6 @@ impl Window {
                 "window size {}x{} is smaller than layout minimum {}x{}",
                 size.columns, size.rows, minimum.columns, minimum.rows
             )));
-        }
-        self.size = size;
-        if self.layout_policy_rebalances() {
-            self.apply_layout_policy();
-        } else {
-            self.layout_root.resize_panes(&mut self.panes, size);
-            self.refresh_pane_geometries();
         }
         Ok(())
     }

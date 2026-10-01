@@ -10,6 +10,144 @@ use mez_core::IdFactory;
 use mez_mux::layout::{LayoutPolicy, PaneGeometry, PaneNavigationDirection, Size, SplitDirection};
 use std::path::PathBuf;
 
+/// A later split window can reject geometry after an earlier window could
+/// accept it. Every rejected request, including an identical retry, must leave
+/// client descriptors, all window rectangles, owner, revision and events intact.
+#[test]
+fn rejected_authoritative_resize_preserves_complete_session() {
+    let mut session = test_session();
+    let primary = session
+        .attach_primary_with_terminal(
+            "owner",
+            true,
+            Some(ClientTerminalDescriptor {
+                columns: 80,
+                rows: 24,
+                term: "xterm".to_string(),
+                features: Vec::new(),
+            }),
+        )
+        .unwrap();
+    session.new_window(&primary, "split", true).unwrap();
+    session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    session
+        .split_active_pane(&primary, SplitDirection::Horizontal)
+        .unwrap();
+    let before = format!("{session:?}");
+    for _ in 0..2 {
+        assert!(
+            session
+                .resize_authoritative_terminal_transition(&primary, Size::new(2, 24).unwrap())
+                .is_err()
+        );
+        assert_eq!(format!("{session:?}"), before);
+    }
+    let effects = session
+        .resize_authoritative_terminal_transition(&primary, Size::new(100, 30).unwrap())
+        .unwrap();
+    assert_eq!(effects.len(), 4);
+    assert_eq!(session.authoritative_size, Size::new(100, 30).unwrap());
+}
+
+/// Rejected explicit ownership transfer preserves membership and geometry.
+/// Automatic election still retires the departed owner and its observers when
+/// the replacement terminal is too small, retaining canonical geometry until
+/// a valid owner resize arrives.
+#[test]
+fn rejected_membership_geometry_preserves_owner_and_clients() {
+    let mut session = test_session();
+    let owner = session.attach_primary("owner", true).unwrap();
+    session
+        .split_active_pane(&owner, SplitDirection::Vertical)
+        .unwrap();
+    let terminal = |columns| ClientTerminalDescriptor {
+        columns,
+        rows: 24,
+        term: "xterm".to_string(),
+        features: Vec::new(),
+    };
+    let second = session
+        .attach_primary_with_terminal("second", true, Some(terminal(2)))
+        .unwrap();
+    session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    let before = format!("{session:?}");
+    assert!(
+        session
+            .select_layout_owner_transition(Some(&owner), second.as_str())
+            .is_err()
+    );
+    assert_eq!(format!("{session:?}"), before);
+    let detached = session.detach_primary_transition(&owner).unwrap();
+    assert!(detached.resize_effects.is_empty());
+    assert!(!session.is_attached_primary(&owner));
+    assert_eq!(session.layout_owner_client_id(), Some(&second));
+    assert_eq!(session.authoritative_size, Size::new(80, 24).unwrap());
+    assert_eq!(detached.revoked_observer_client_ids.len(), 1);
+    assert!(
+        !session
+            .resize_authoritative_terminal_transition(&second, Size::new(90, 24).unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(session.authoritative_size, Size::new(90, 24).unwrap());
+    session.detach_primary_transition(&second).unwrap();
+    let before = format!("{session:?}");
+    assert!(
+        session
+            .attach_primary_with_terminal("tiny", true, Some(terminal(2)))
+            .is_err()
+    );
+    assert_eq!(format!("{session:?}"), before);
+    session
+        .attach_primary_with_terminal("healthy", true, Some(terminal(80)))
+        .unwrap();
+}
+
+/// Loading a valid restored split tree that cannot fit the live owner's terminal
+/// must fail without publishing replacement windows, ids, or navigation state.
+#[test]
+fn rejected_restored_layout_resize_preserves_live_session() {
+    let mut session = test_session();
+    let owner = session
+        .attach_primary_with_terminal(
+            "small",
+            true,
+            Some(ClientTerminalDescriptor {
+                columns: 2,
+                rows: 24,
+                term: "xterm".to_string(),
+                features: Vec::new(),
+            }),
+        )
+        .unwrap();
+    let mut input = single_window_restore_input();
+    let mut second = input.windows[0].panes[0].clone();
+    second.id = mez_core::PaneId::new('%', 2);
+    second.index = 1;
+    second.active = false;
+    second.size = Size::new(40, 24).unwrap();
+    input.windows[0].panes[0].size = second.size;
+    input.windows[0].panes.push(second);
+    let before = format!("{session:?}");
+    for _ in 0..2 {
+        assert!(
+            session
+                .replace_layout_from_restore_input(input.clone())
+                .is_err()
+        );
+        assert_eq!(format!("{session:?}"), before);
+    }
+    session
+        .resize_authoritative_terminal_transition(&owner, Size::new(80, 24).unwrap())
+        .unwrap();
+    session.replace_layout_from_restore_input(input).unwrap();
+    assert_eq!(session.windows()[0].panes().len(), 2);
+}
+
 /// Public-field geometry must fail before descriptor, revision, or restored-id
 /// mutation. These checks use dimensions only and never allocate a huge grid.
 #[test]

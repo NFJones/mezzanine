@@ -388,6 +388,15 @@ the layout owner's resize changes canonical geometry. A primary request always
 requires a verifiable interactive terminal; a client descriptor alone is not
 sufficient when the transport does not trust that assertion.
 
+Authoritative resizes validate every window before updating client descriptors
+or canonical geometry. Rejected requests and identical retries leave layout,
+ownership, revisions, and resize effects unchanged. Explicit ownership transfer
+and restored-layout loading use the same failure-atomic boundary. On automatic
+owner election, a replacement terminal too small for the split trees retains
+the previous canonical geometry; the departed client still detaches and the new
+owner can submit a valid resize later. Post-commit PTY I/O errors are separate
+from domain rejection and do not promise cross-process rollback.
+
 Observer initialization immediately creates an attached read-only `observer`
 bound to the current layout-owner primary. It fails with `conflict` and leaves
 no client residue when no layout owner is attached. Observers receive only

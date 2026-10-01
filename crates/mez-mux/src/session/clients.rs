@@ -71,6 +71,11 @@ impl Session {
             .as_ref()
             .map(|terminal| crate::layout::Size::new(terminal.columns, terminal.rows))
             .transpose()?;
+        if self.layout_owner_client_id.is_none()
+            && let Some(size) = terminal_size
+        {
+            self.validate_authoritative_layout_size(size)?;
+        }
         let navigation = if let Some(owner_id) = self.layout_owner_client_id.as_ref() {
             self.navigation_from_primary_source(owner_id)?
         } else {
@@ -169,6 +174,11 @@ impl Session {
             .as_ref()
             .map(|terminal| crate::layout::Size::new(terminal.columns, terminal.rows))
             .transpose()?;
+        if self.layout_owner_client_id.as_ref() != Some(&target_id)
+            && let Some(size) = target_size
+        {
+            self.validate_authoritative_layout_size(size)?;
+        }
         let selected_at = current_unix_seconds();
         self.clients[target_index].last_seen_at_unix_seconds = Some(selected_at);
         let resize_effects = if self.layout_owner_client_id.as_ref() != Some(&target_id) {
@@ -381,6 +391,31 @@ impl Session {
         let final_primary_landing = (primary_count_before == 1)
             .then(|| self.snapshot_landing_navigation(Some(primary_client_id)))
             .transpose()?;
+        let elected = if self.layout_owner_client_id.as_ref() == Some(primary_client_id) {
+            self.attached_primaries()
+                .filter(|client| client.id != *primary_client_id)
+                .min_by(|left, right| {
+                    left.attached_at_unix_seconds
+                        .cmp(&right.attached_at_unix_seconds)
+                        .then_with(|| left.id.as_str().cmp(right.id.as_str()))
+                })
+                .map(|client| {
+                    let size = client
+                        .terminal
+                        .as_ref()
+                        .map(|terminal| crate::layout::Size::new(terminal.columns, terminal.rows))
+                        .transpose()?;
+                    // Disconnect cannot retain the departed owner merely because
+                    // the elected client's local terminal cannot fit the tree.
+                    // Reject that resize and retain canonical geometry instead.
+                    let size =
+                        size.filter(|size| self.validate_authoritative_layout_size(*size).is_ok());
+                    Ok::<_, MezError>((client.id.clone(), size))
+                })
+                .transpose()?
+        } else {
+            None
+        };
         if let Some(client) = self
             .clients
             .iter_mut()
@@ -410,22 +445,9 @@ impl Session {
         }
         let primary_count_after = primary_count_before.saturating_sub(1);
         let resize_effects = if self.layout_owner_client_id.as_ref() == Some(primary_client_id) {
-            self.layout_owner_client_id = self
-                .attached_primaries()
-                .min_by(|left, right| {
-                    left.attached_at_unix_seconds
-                        .cmp(&right.attached_at_unix_seconds)
-                        .then_with(|| left.id.as_str().cmp(right.id.as_str()))
-                })
-                .map(|client| client.id.clone());
+            self.layout_owner_client_id = elected.as_ref().map(|(id, _)| id.clone());
             self.layout_revision = self.layout_revision.saturating_add(1);
-            let elected_size = self
-                .layout_owner_client_id
-                .as_ref()
-                .and_then(|owner_id| self.clients.iter().find(|client| client.id == *owner_id))
-                .and_then(|client| client.terminal.as_ref())
-                .map(|terminal| crate::layout::Size::new(terminal.columns, terminal.rows))
-                .transpose()?;
+            let elected_size = elected.and_then(|(_, size)| size);
             elected_size
                 .map(|size| self.apply_authoritative_layout_size(size))
                 .transpose()?

@@ -208,6 +208,15 @@ impl Session {
     /// Fresh live identifiers are allocated so loading a saved layout behaves
     /// like recreating its groups, windows, and panes in the current session.
     pub fn replace_layout_from_restore_input(&mut self, input: SessionRestoreInput) -> Result<()> {
+        let mut candidate = self.clone();
+        candidate.apply_layout_from_restore_input(input)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Builds and resizes restored layout on a candidate; failed owner geometry
+    /// cannot publish partial windows, fresh identities, or navigation state.
+    fn apply_layout_from_restore_input(&mut self, input: SessionRestoreInput) -> Result<()> {
         validate_restored_geometry(&input)?;
         let restored_authoritative_size = input.authoritative_size;
         let authoritative_size = self

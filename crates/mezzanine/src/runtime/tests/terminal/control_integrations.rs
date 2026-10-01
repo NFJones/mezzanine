@@ -2,6 +2,36 @@
 
 use super::*;
 
+/// A valid resource-bounded size can still fail a later window's split minimum.
+/// Repeated control rejection must not emit layout events, change screens or
+/// canonical geometry, or let the equality fast path accept a corrupt retry.
+#[test]
+fn runtime_control_rejected_layout_resize_preserves_session_and_event_cutoff() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("owner", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.session.new_window(&primary, "split", true).unwrap();
+    service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let before = format!("{:?}", service.session());
+    let cutoff = service.event_log().unwrap().latest_event_id();
+    for id in ["first", "retry"] {
+        let body = serde_json::json!({
+            "jsonrpc":"2.0", "id":id, "method":"terminal/step",
+            "params":{"client_size":{"columns":2,"rows":24},
+                "idempotency_key":id, "input_bytes":[], "render":false}
+        })
+        .to_string();
+        let response = service.dispatch_runtime_control_body(&body, &primary);
+        assert!(response.contains("invalid_params"), "{response}");
+        assert_eq!(format!("{:?}", service.session()), before);
+        assert_eq!(service.event_log().unwrap().latest_event_id(), cutoff);
+    }
+}
+
 /// Excessive control view/step geometry and direct resize must fail before
 /// changing descriptors, layout, event cutoffs, or scheduling PTY resize work.
 /// A healthy request afterward confirms the session remains usable.

@@ -395,8 +395,19 @@ resize MUST update only that client's terminal descriptor and local viewport.
 Ownership MAY transfer atomically to another attached interactive primary
 without changing either client's authority. When the owner detaches, Mezzanine
 MUST elect the oldest attached primary, breaking equal-time ties by `ClientId`,
-and apply the elected owner's latest size exactly once. With zero primaries,
+and apply the elected owner's latest size exactly once when it fits every
+window's split-tree minimum. If that size cannot fit, owner election and exact
+disconnect cleanup MUST still complete, retaining canonical geometry without
+resize effects until a valid owner resize arrives. With zero primaries,
 Mezzanine MUST retain canonical geometry and have no layout owner.
+
+Rejected authoritative resize, explicit owner transfer, initial owner attachment,
+or restored-layout resize MUST preserve client descriptors, canonical geometry,
+all windows and pane rectangles, ownership, identities, revisions, and events.
+Every prospective window MUST be validated before any geometry is committed;
+an identical rejected retry MUST not become an equality-path success. PTY resize
+effects MUST describe only committed geometry. Subsequent PTY I/O failure does
+not imply cross-process rollback of a committed domain transition.
 
 Primary lifecycle edges MUST be exact and actor ordered. `0 -> 1` enters the
 attached/running lifecycle and runs session-attach effects once. `N -> N+1`
