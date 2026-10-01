@@ -570,7 +570,8 @@ async fn async_attached_terminal_service_rate_limits_bursty_render_invalidations
 /// input or runtime event that wakes the render service. The idle resize poll
 /// should notice that size change, invalidate retained diff state, and repaint
 /// exactly once instead of waiting for user interaction.
-#[tokio::test(flavor = "current_thread")]
+/// Paused time and service completion isolate polling from scheduler latency.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_service_polls_terminal_size_while_idle() {
     let mut service = test_service();
     let primary = service
@@ -619,18 +620,14 @@ async fn async_attached_terminal_service_polls_terminal_size_while_idle() {
         write_notify.notified().await;
         assert_eq!(write_count.load(Ordering::SeqCst), 1);
 
-        let deadline = Instant::now() + Duration::from_millis(500);
-        while write_count.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        let report = tokio::time::timeout(Duration::from_secs(5), service_task)
+            .await
+            .expect("idle resize polling must complete the second service batch")
+            .unwrap()
+            .unwrap();
         assert_eq!(write_count.load(Ordering::SeqCst), 2);
         assert_eq!(invalidate_count.load(Ordering::SeqCst), 1);
 
-        let report = tokio::time::timeout(Duration::from_millis(1), service_task)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
         assert_eq!(report.terminal_resizes, 1);
         assert_eq!(report.loop_report.output_frames, 2);
         assert_eq!(
