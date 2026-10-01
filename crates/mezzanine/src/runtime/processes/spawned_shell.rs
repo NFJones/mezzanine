@@ -1819,13 +1819,15 @@ mod tests {
 
     /// Verifies timeout completion remains bounded when a detached descendant
     /// survives process-group cleanup while retaining inherited output pipes.
+    /// The wider gap between scheduling slack and descendant lifetime keeps
+    /// this integration check distinct from the deterministic open-pipe test.
     #[test]
     fn spawned_executor_timeout_does_not_wait_for_escaped_descendant_pipes() {
         let mut executor = SpawnedShellExecutor::new(test_context());
         let started = Instant::now();
         let output = executor
             .execute_shell(&request(
-                "python3 -c 'import subprocess,sys,time; subprocess.Popen([\"python3\",\"-c\",\"import time; time.sleep(2)\"], stdout=sys.stdout, stderr=sys.stderr, start_new_session=True); time.sleep(2)'",
+                "python3 -c 'import subprocess,sys,time; subprocess.Popen([\"python3\",\"-c\",\"import time; time.sleep(10)\"], stdout=sys.stdout, stderr=sys.stderr, start_new_session=True); time.sleep(10)'",
                 Some(100),
             ))
             .unwrap();
@@ -1833,10 +1835,36 @@ mod tests {
         assert!(output.timed_out);
         assert_eq!(output.exit_code, None);
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(5),
             "timeout waited for escaped descendant: {:?}",
             started.elapsed()
         );
+    }
+
+    /// Cancellation must finish while an inherited writer remains open.
+    /// Waiting for reader completion before dropping the writer proves that
+    /// shutdown does not depend on EOF, independently of process startup time.
+    #[test]
+    fn spawned_output_reader_cancellation_does_not_require_eof() {
+        let (reader, writer) = status_pipe().unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let reader = spawn_output_reader(
+            SpawnedChildPipe::Stdout,
+            std::fs::File::from(reader),
+            4096,
+            done_tx,
+            None,
+        );
+        cancel_pending_reader(&reader);
+        let completion = done_rx.recv_timeout(Duration::from_secs(5));
+        // Always release the writer before a failing assertion so a defective
+        // blocking reader can unwind rather than leaking an open test pipe.
+        drop(writer);
+        assert!(
+            completion.is_ok(),
+            "reader cancellation waited for pipe EOF"
+        );
+        assert!(join_output_reader(reader).unwrap().bytes.is_empty());
     }
 
     /// Verifies the interruption handle kills a running child and reports
