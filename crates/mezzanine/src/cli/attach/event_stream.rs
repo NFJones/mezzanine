@@ -1,4 +1,8 @@
 //! Attached terminal polling and auxiliary runtime event-stream handling.
+//!
+//! The connection-local receiver owns ordered decoding and bounded latest-render
+//! delivery. Stream EOF and consumer loss settle that owner; clipboard expiration
+//! merely retires partial transfer state and never impersonates transport EOF.
 
 use super::{
     ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH, ATTACH_EVENT_STREAM_READ_BUFFER_BYTES,
@@ -679,7 +683,12 @@ async fn receive_iroh_runtime_events(
         }
         Ok(stream)
     };
-    let mut stream = match tokio::time::timeout(setup_timeout, setup).await {
+    let setup_result = tokio::select! {
+        biased;
+        _ = sender.closed() => return Ok(()),
+        result = tokio::time::timeout(setup_timeout, setup) => result,
+    };
+    let mut stream = match setup_result {
         Ok(result) => result?,
         Err(_) => {
             connection.close(
@@ -714,10 +723,10 @@ async fn receive_iroh_runtime_events(
                     .and_then(IrohClipboardAssembler::expiration_deadline)
                 {
                     tokio::select! {
-                        read = stream.read(&mut buffer) => read.map_err(|_| {
+                        read = tokio::io::AsyncReadExt::read(&mut stream, &mut buffer) => Some(read.map_err(|_| {
                             MezError::invalid_state("Iroh event stream read failed")
-                        })?,
-                        _ = connection.closed() => None,
+                        })?),
+                        _ = connection.closed() => Some(0),
                         _ = tokio::time::sleep_until(deadline) => {
                             if let Some(assembler) = clipboard_assembler.as_mut() {
                                 assembler.discard_expired();
@@ -727,10 +736,10 @@ async fn receive_iroh_runtime_events(
                     }
                 } else {
                     tokio::select! {
-                        read = stream.read(&mut buffer) => read.map_err(|_| {
+                        read = tokio::io::AsyncReadExt::read(&mut stream, &mut buffer) => Some(read.map_err(|_| {
                             MezError::invalid_state("Iroh event stream read failed")
-                        })?,
-                        _ = connection.closed() => None,
+                        })?),
+                        _ = connection.closed() => Some(0),
                     }
                 };
                 Ok::<Option<usize>, MezError>(read)
@@ -751,10 +760,16 @@ async fn receive_iroh_runtime_events(
                     read = &mut read => read?,
                 }
             } else {
-                read.await?
+                tokio::select! {
+                    read = &mut read => read?,
+                    _ = sender.closed() => return Ok(()),
+                }
             }
         };
         let Some(read) = read else {
+            // Only clipboard-expiry housekeeping is nonterminal. Explicit
+            // AsyncRead maps orderly QUIC FIN to zero bytes, unlike the
+            // inherent RecvStream API whose None means finished.
             continue;
         };
         if read == 0 {
@@ -1854,6 +1869,351 @@ mod iroh_setup_tests {
 
         client_connection.close(VarInt::from_u32(0), b"test complete");
         task.await.unwrap();
+        client.close().await;
+        server.close().await;
+    }
+
+    /// Orderly event FIN must disconnect and settle while control stays live.
+    /// An isolated two-worker runtime with bounded shutdown prevents the old
+    /// non-yielding EOF loop from hanging the test process after a failed check.
+    #[test]
+    fn iroh_event_fin_disconnects_without_control_connection_close() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(async {
+            let (server, client, server_connection, client_connection) =
+                connected_iroh_event_pair().await;
+            let (mut receiver, task) = spawn_iroh_runtime_event_receiver(
+                client_connection.clone(),
+                IrohCompressionPolicy::new(
+                    RuntimeIrohCompressionCodec::None, 1, 3,
+                    ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+                ).unwrap(),
+                std::time::Duration::from_secs(5), 1, false, None, None,
+            );
+            let mut stream = server_connection.open_uni().await.unwrap();
+            stream.write_all(crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE).await.unwrap();
+            stream.write_all(&crate::control::encode_control_body(
+                r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
+            )).await.unwrap();
+            stream.flush().await.unwrap();
+            let result = async {
+                let first = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+                    .await.map_err(|_| "initial event timed out")?
+                    .ok_or("initial event missing")?.map_err(|_| "initial event failed")?;
+                assert_eq!(first.action, AttachRenderAction::View);
+                stream.finish().unwrap();
+                let last = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+                    .await.map_err(|_| "orderly FIN did not disconnect")?
+                    .ok_or("disconnect missing")?.map_err(|_| "clean FIN reported error")?;
+                assert_eq!(last.action, AttachRenderAction::Disconnect);
+                tokio::time::timeout(std::time::Duration::from_secs(5), task)
+                    .await.map_err(|_| "receiver task did not settle")?.unwrap();
+                assert!(receiver.recv().await.is_none(), "one terminal notification only");
+                assert!(client_connection.close_reason().is_none());
+                Ok::<(), &str>(())
+            }.await;
+            client_connection.close(VarInt::from_u32(0), b"test complete");
+            server_connection.close(VarInt::from_u32(0), b"test complete");
+            drop((client, server));
+            result
+        });
+        runtime.shutdown_timeout(std::time::Duration::from_millis(100));
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    /// All negotiated versions and codecs must deliver one disconnect on clean
+    /// FIN without requiring whole-connection loss. Empty streams and truncated
+    /// frames/fragments exercise terminal completeness checks, not idle timers.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_event_fin_checks_negotiated_frames_and_transfer_completeness() {
+        for version in 1..=5 {
+            for codec in [
+                RuntimeIrohCompressionCodec::None,
+                RuntimeIrohCompressionCodec::Zstd,
+                RuntimeIrohCompressionCodec::Lz4,
+                RuntimeIrohCompressionCodec::ZstdStream,
+                RuntimeIrohCompressionCodec::Lz4Stream,
+            ] {
+                iroh_fin_case(version, codec, "complete").await;
+            }
+        }
+        for case in ["empty", "header", "body", "fragment"] {
+            iroh_fin_case(4, RuntimeIrohCompressionCodec::None, case).await;
+        }
+        for codec in [
+            RuntimeIrohCompressionCodec::Zstd,
+            RuntimeIrohCompressionCodec::Lz4Stream,
+        ] {
+            iroh_fin_case(5, codec, "body").await;
+        }
+    }
+
+    /// Sends one bounded transfer and asserts its terminal receiver and task
+    /// outcomes while the independently owned control connection remains live.
+    async fn iroh_fin_case(version: u32, codec: RuntimeIrohCompressionCodec, case: &str) {
+        let (server, client, server_connection, client_connection) =
+            connected_iroh_event_pair().await;
+        let compression =
+            IrohCompressionPolicy::new(codec, 1, 3, ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024)
+                .unwrap();
+        let (mut receiver, task) = spawn_iroh_runtime_event_receiver(
+            client_connection.clone(),
+            compression,
+            std::time::Duration::from_secs(5),
+            version,
+            true,
+            None,
+            None,
+        );
+        let mut stream = server_connection.open_uni().await.unwrap();
+        let preface = match version {
+            5 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V5_PREFACE,
+            4 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V4_PREFACE,
+            3 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE,
+            2 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE,
+            _ => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE,
+        };
+        stream.write_all(preface).await.unwrap();
+        let body = if case == "fragment" {
+            r#"{"jsonrpc":"2.0","method":"render/chunk","params":{"revision":1,"index":0,"chunks":2,"total_bytes":4,"data_base64":"e30="}}"#
+        } else {
+            r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#
+        };
+        let frame = crate::control::encode_control_body(body);
+        let encoded = if compression.is_streaming() {
+            crate::runtime::IrohStreamEncoder::new(compression)
+                .unwrap()
+                .encode_frame(&frame, crate::runtime::IrohFrameCompressionMode::Eligible)
+                .unwrap()
+                .as_bytes()
+                .to_vec()
+        } else {
+            compression
+                .encode_frame(&frame, crate::runtime::IrohFrameCompressionMode::Eligible)
+                .unwrap()
+                .as_bytes()
+                .to_vec()
+        };
+        let bytes = match case {
+            "empty" => &encoded[..0],
+            "header" => &encoded[..8],
+            "body" => &encoded[..encoded.len() - 1],
+            _ => encoded.as_slice(),
+        };
+        stream.write_all(bytes).await.unwrap();
+        stream.finish().unwrap();
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let message = receiver.recv().await.expect("terminal message missing");
+                match message {
+                    Ok(wakeup) if wakeup.action != AttachRenderAction::Disconnect => {
+                        assert_eq!(case, "complete");
+                    }
+                    terminal => break terminal,
+                }
+            }
+        })
+        .await
+        .expect("FIN must settle promptly");
+        if matches!(case, "complete" | "empty") {
+            assert_eq!(terminal.unwrap().action, AttachRenderAction::Disconnect);
+        } else {
+            let error = terminal.unwrap_err();
+            assert!(
+                error.message().contains(if case == "fragment" {
+                    "fragment"
+                } else {
+                    "incomplete frame"
+                }),
+                "{error}"
+            );
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            receiver.recv().await.is_none(),
+            "duplicate terminal message"
+        );
+        assert!(client_connection.close_reason().is_none());
+        client_connection.close(VarInt::from_u32(0), b"test complete");
+        server_connection.close(VarInt::from_u32(0), b"test complete");
+        client.close().await;
+        server.close().await;
+    }
+
+    /// Losing the presentation consumer before stream arrival or during a
+    /// partial preface must cancel setup promptly without closing live control.
+    /// A long product timeout distinguishes cancellation from timeout cleanup.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_event_consumer_drop_cancels_incomplete_setup() {
+        for partial_preface in [false, true] {
+            let (server, client, server_connection, client_connection) =
+                connected_iroh_event_pair().await;
+            let compression = IrohCompressionPolicy::new(
+                RuntimeIrohCompressionCodec::None,
+                1,
+                3,
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+            )
+            .unwrap();
+            let (receiver, mut task) = spawn_iroh_runtime_event_receiver(
+                client_connection.clone(),
+                compression,
+                std::time::Duration::from_secs(60),
+                1,
+                false,
+                None,
+                None,
+            );
+            let mut stream = if partial_preface {
+                let mut stream = server_connection.open_uni().await.unwrap();
+                stream
+                    .write_all(&crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE[..3])
+                    .await
+                    .unwrap();
+                stream.flush().await.unwrap();
+                Some(stream)
+            } else {
+                None
+            };
+            drop(receiver);
+            let settled = tokio::time::timeout(std::time::Duration::from_secs(5), &mut task).await;
+            if settled.is_err() {
+                task.abort();
+                let _ = task.await;
+            }
+            assert!(
+                client_connection.close_reason().is_none(),
+                "consumer loss must not close control"
+            );
+            assert!(
+                settled.is_ok(),
+                "setup did not observe consumer drop: partial={partial_preface}"
+            );
+            if let Some(stream) = stream.as_mut() {
+                let _ = stream.finish();
+            }
+            client_connection.close(VarInt::from_u32(0), b"test complete");
+            server_connection.close(VarInt::from_u32(0), b"test complete");
+            client.close().await;
+            server.close().await;
+        }
+    }
+
+    /// Clipboard expiry must not disconnect a live stream, and orderly FIN must
+    /// remain terminal when the presentation channel is full. Consumer loss must
+    /// also settle an idle receiver without waiting for another peer byte.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_event_receiver_expiry_backpressure_and_consumer_drop_settle() {
+        let (server, client, server_connection, client_connection) =
+            connected_iroh_event_pair().await;
+        let compression = IrohCompressionPolicy::new(
+            RuntimeIrohCompressionCodec::None,
+            1,
+            3,
+            ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+        )
+        .unwrap();
+        let (clipboard_sender, _clipboard_receiver) = tokio::sync::watch::channel(None);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let connection = client_connection.clone();
+        let task = tokio::spawn(async move {
+            receive_iroh_runtime_events(
+                connection,
+                compression,
+                std::time::Duration::from_secs(5),
+                2,
+                false,
+                None,
+                Some(&clipboard_sender),
+                &sender,
+            )
+            .await
+        });
+        let mut stream = server_connection.open_uni().await.unwrap();
+        stream
+            .write_all(crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE)
+            .await
+            .unwrap();
+        let event = crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
+        );
+        stream.write_all(&crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","method":"client/clipboard.begin","params":{"sequence":1,"total_bytes":7,"chunks":1}}"#,
+        )).await.unwrap();
+        stream.write_all(&event).await.unwrap();
+        stream.flush().await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .action,
+            AttachRenderAction::View
+        );
+        // Exercise the real expiry select without paused-time QUIC interference.
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        assert!(!task.is_finished(), "clipboard expiry is not EOF");
+        assert!(receiver.try_recv().is_err());
+        stream.write_all(&event).await.unwrap();
+        stream.flush().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while receiver.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        stream.write_all(&event).await.unwrap();
+        stream.finish().unwrap();
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let action = receiver.recv().await.unwrap().unwrap().action;
+                if action == AttachRenderAction::Disconnect {
+                    break action;
+                }
+                assert_eq!(action, AttachRenderAction::View);
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(terminal, AttachRenderAction::Disconnect);
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(receiver.recv().await.is_none());
+
+        let (receiver, task) = spawn_iroh_runtime_event_receiver(
+            client_connection.clone(),
+            compression,
+            std::time::Duration::from_secs(5),
+            1,
+            false,
+            None,
+            None,
+        );
+        let mut stream = server_connection.open_uni().await.unwrap();
+        stream
+            .write_all(crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE)
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        drop(receiver);
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        client_connection.close(VarInt::from_u32(0), b"test complete");
+        server_connection.close(VarInt::from_u32(0), b"test complete");
         client.close().await;
         server.close().await;
     }

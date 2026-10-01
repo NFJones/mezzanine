@@ -4050,7 +4050,12 @@ Event framing, parsing, batches, queues, writes, waits, and teardown MUST be
 bounded. A slow receiver MUST backpressure or terminate only its own stream and
 MUST NOT block the runtime actor or another connection. Control completion,
 revocation, detach, reset, endpoint shutdown, and connection loss MUST close the
-event task idempotently. The client MUST reject missing, malformed, oversized,
+event task idempotently. Orderly event-stream FIN MUST terminate the client
+receiver even while control remains live: clean EOF produces one disconnect,
+while an incomplete frame or render-fragment transfer produces a terminal error.
+Clipboard-transfer expiry is housekeeping, not EOF; dropping the presentation
+consumer MUST release the receiver without awaiting further peer traffic.
+The client MUST reject missing, malformed, oversized,
 duplicate, unknown-version, or non-event server streams and MUST refetch the
 current rendered view after any event gap. Iroh attach clients MUST coalesce
 already-ready redraw wakeups before fetching a view and MUST honor the rendered
