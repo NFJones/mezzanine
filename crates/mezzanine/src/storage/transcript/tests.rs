@@ -5480,6 +5480,33 @@ fn transcript_store_catalog_mutation_waits_for_advisory_writer_lock() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies ordinary mutations retain their production lock budget in tests.
+/// A brief writer exceeding the former 100 ms fixture override must release
+/// normally before the durable append proceeds, without bypassing exclusion.
+#[test]
+fn transcript_store_catalog_mutation_uses_standard_lock_budget() {
+    let root = temp_root("catalog-standard-lock-budget");
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+    let writer = spawn_catalog_lock_holder(
+        &root.join(".catalog-migration.lock"),
+        false,
+        std::time::Duration::from_millis(250),
+    );
+    let result = store.append(&entry("standard-lock-budget", 1, TranscriptRole::User));
+    wait_for_catalog_lock_holder(writer);
+    result.expect(
+        "ordinary mutations must retain the production lock wait, not a 100ms fixture budget",
+    );
+    assert!(
+        store
+            .catalog_saved_session("standard-lock-budget")
+            .unwrap()
+            .is_some()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies ordinary catalog mutations exclude another process holding shared
 /// advisory ownership, rather than treating the lock as reader-compatible.
 #[test]

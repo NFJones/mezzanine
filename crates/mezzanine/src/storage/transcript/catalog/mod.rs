@@ -43,11 +43,7 @@ const CATALOG_REBUILD_FILE_NAME: &str = ".catalog.sqlite3.rebuild";
 /// Retained previous database from the most recent explicit rebuild.
 const CATALOG_BACKUP_FILE_NAME: &str = ".catalog.sqlite3.backup";
 /// Maximum time an operator or startup waits for catalog migration ownership.
-#[cfg(not(test))]
 const CATALOG_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
-/// Short bounded lock wait used by deterministic contention regressions.
-#[cfg(test)]
-const CATALOG_LOCK_TIMEOUT: Duration = Duration::from_millis(100);
 /// Maximum wait for one interactive catalog read (picker pages, prefix
 /// completion).
 ///
