@@ -1697,6 +1697,97 @@ mod tests {
         )
     }
 
+    /// Oversized unterminated headers fail before raw forwarding for plaintext
+    /// and both stateful initialization paths. Plaintext also rejects after a
+    /// complete initialization frame; a fresh stream on the same connection
+    /// remains usable, proving rejection is connection-local pump failure.
+    #[tokio::test(flavor = "current_thread")]
+    async fn inbound_bridge_bounds_headers_before_forwarding_and_preserves_stream_reuse() {
+        for (codec, initialized) in [
+            (RuntimeIrohCompressionCodec::None, false),
+            (RuntimeIrohCompressionCodec::None, true),
+            (RuntimeIrohCompressionCodec::Lz4Stream, false),
+            (RuntimeIrohCompressionCodec::ZstdStream, false),
+        ] {
+            let (
+                server,
+                client,
+                server_connection,
+                client_connection,
+                _server_send,
+                server_recv,
+                mut client_send,
+                _client_recv,
+            ) = test_iroh_stream_pair().await;
+            let (raw_writer, mut raw_reader) = tokio::io::duplex(16384);
+            let inbound = tokio::spawn(pump_iroh_frames_to_raw(
+                server_recv,
+                raw_writer,
+                policy(codec, 1),
+                IrohCompressionMetrics::new(codec),
+                16384,
+            ));
+            if initialized {
+                let frame = crate::control::encode_control_body(r#"{"initialized":true}"#);
+                client_send.write_all(&frame).await.unwrap();
+                client_send.flush().await.unwrap();
+                let mut forwarded = vec![0; frame.len()];
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    raw_reader.read_exact(&mut forwarded),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(forwarded, frame);
+            }
+            // Modest bounded fixture: no unbounded allocation/OOM experiment.
+            client_send.write_all(&[b'x'; 8192]).await.unwrap();
+            client_send.flush().await.unwrap();
+            let error = tokio::time::timeout(std::time::Duration::from_secs(5), inbound)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert!(error.to_string().contains("header"), "{codec:?}: {error}");
+            let mut byte = [0; 1];
+            assert_eq!(raw_reader.read(&mut byte).await.unwrap(), 0);
+
+            // Reuse transport admission with a healthy independent stream.
+            let (mut healthy_send, _healthy_recv) = client_connection.open_bi().await.unwrap();
+            let frame = crate::control::encode_control_body(r#"{"healthy":true}"#);
+            healthy_send.write_all(&frame).await.unwrap();
+            healthy_send.finish().unwrap();
+            let (_send, recv) = server_connection.accept_bi().await.unwrap();
+            let (writer, mut reader) = tokio::io::duplex(4096);
+            let healthy = tokio::spawn(pump_iroh_frames_to_raw(
+                recv,
+                writer,
+                policy(RuntimeIrohCompressionCodec::None, 1),
+                IrohCompressionMetrics::new(RuntimeIrohCompressionCodec::None),
+                4096,
+            ));
+            let mut forwarded = Vec::new();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                reader.read_to_end(&mut forwarded),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(5), healthy)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(forwarded, frame);
+            server_connection.close(0u32.into(), b"test complete");
+            client_connection.close(0u32.into(), b"test complete");
+            server.close().await;
+            client.close().await;
+        }
+    }
+
     /// Verifies a version 3 bridge leaves both initialization frames raw and
     /// switches both directions to fresh stateful contexts only afterward.
     ///

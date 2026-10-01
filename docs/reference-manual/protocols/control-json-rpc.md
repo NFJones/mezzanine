@@ -271,7 +271,11 @@ Content-Type: application/vnd.mezzanine.control+json; version=1\r\n
 ```
 
 Unknown headers are ignored. Missing, invalid, negative, or oversized lengths
-are rejected. The body is a JSON-RPC 2.0 request, response, or notification:
+are rejected. Headers have a separate 8192-byte maximum including the final
+`\r\n\r\n`. Unterminated or over-budget headers fail before Iroh bridge raw
+forwarding, also during stateful compression initialization. Bodies and later
+buffered frames do not count toward this header budget.
+The body is a JSON-RPC 2.0 request, response, or notification:
 
 - Requests contain `jsonrpc: "2.0"`, a non-null string or integer `id`, a
   `method`, and optional object `params`.

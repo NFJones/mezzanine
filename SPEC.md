@@ -9734,6 +9734,11 @@ Content-Type: application/vnd.mezzanine.mmp+json; version=1\r\n
 Receivers MUST reject frames with missing, invalid, negative, or oversized
 `Content-Length` values.
 
+The physical header block, including its terminating `\r\n\r\n`, MUST NOT
+exceed 8192 bytes. Receivers MUST reject a header once no terminator can fit
+within that budget, independently of the body limit, without scanning body or
+subsequent-frame bytes as header data.
+
 Receivers MUST ignore unknown headers.
 
 ### 12.4 Envelope
@@ -10070,6 +10075,12 @@ Content-Type: application/vnd.mezzanine.control+json; version=1\r\n
 reject frames with missing, invalid, negative, or oversized `Content-Length`
 values. Receivers MUST ignore unknown headers unless a header is explicitly
 documented as mandatory.
+
+The physical header block, including its terminating `\r\n\r\n`, MUST NOT
+exceed 8192 bytes. This independent budget MUST apply before Iroh bridge raw
+forwarding, including plaintext setup and stateful compression initialization.
+An unterminated header MUST fail once no terminator can fit within the budget;
+body bytes and subsequent buffered frames MUST NOT count toward that header.
 
 The JSON body MUST use JSON-RPC 2.0 request, response, and notification
 objects. Requests MUST include `"jsonrpc": "2.0"`, a non-null string or

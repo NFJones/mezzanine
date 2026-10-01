@@ -27,6 +27,9 @@ Content-Type: application/vnd.mezzanine.mmp+json; version=1\r\n
 
 `Content-Length` is the JSON body's octet length. Receivers reject missing,
 invalid, negative, or oversized values and ignore unknown headers.
+The physical header has a separate 8192-byte maximum including its final
+`\r\n\r\n`; unterminated headers fail when a terminator can no longer fit.
+Body bytes and subsequent buffered frames are not part of this header budget.
 
 ## Envelope and identity
 

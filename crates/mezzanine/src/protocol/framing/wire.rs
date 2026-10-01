@@ -10,6 +10,10 @@ use crate::error::{MezError, Result};
 
 use super::types::ProtocolFrame;
 
+/// Maximum physical header bytes, including the four-byte CRLF terminator.
+/// Body budgets are independent and cannot authorize larger header scans.
+pub(crate) const MAX_PROTOCOL_HEADER_BYTES: usize = 8192;
+
 /// Encodes a protocol frame with content-length and content-type headers.
 pub fn encode_frame(frame: &ProtocolFrame) -> Vec<u8> {
     let body = frame.body.as_bytes();
@@ -29,7 +33,7 @@ pub fn encode_frame(frame: &ProtocolFrame) -> Vec<u8> {
 /// headers are malformed, the body is incomplete, UTF-8 decoding fails, or the
 /// declared content length exceeds the supplied limit.
 pub fn decode_frame(input: &[u8], max_content_length: usize) -> Result<(ProtocolFrame, usize)> {
-    let header_end = find_header_end(input)
+    let header_end = find_header_end(input)?
         .ok_or_else(|| MezError::invalid_args("protocol frame is missing header terminator"))?;
     let header = str::from_utf8(&input[..header_end])
         .map_err(|_| MezError::invalid_args("protocol frame headers must be UTF-8"))?;
@@ -83,13 +87,20 @@ pub fn decode_frame(input: &[u8], max_content_length: usize) -> Result<(Protocol
     Ok((ProtocolFrame { content_type, body }, body_end))
 }
 
-/// Runs the find header end operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn find_header_end(input: &[u8]) -> Option<usize> {
-    input.windows(4).position(|window| window == b"\r\n\r\n")
+/// Finds a complete header within the independent physical header budget.
+/// Returns pending only while a terminator can still fit; rejects over-budget
+/// headers without scanning bodies or subsequent buffered frames.
+pub(super) fn find_header_end(input: &[u8]) -> Result<Option<usize>> {
+    let bounded = &input[..input.len().min(MAX_PROTOCOL_HEADER_BYTES)];
+    if let Some(end) = bounded.windows(4).position(|window| window == b"\r\n\r\n") {
+        return Ok(Some(end));
+    }
+    if input.len() >= MAX_PROTOCOL_HEADER_BYTES {
+        return Err(MezError::invalid_args(
+            "protocol frame header exceeds 8192-byte limit",
+        ));
+    }
+    Ok(None)
 }
 
 /// Runs the frame content length from header operation for this subsystem.

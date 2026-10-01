@@ -1,7 +1,8 @@
 //! Tokio codec implementation for protocol frames.
 //!
 //! The codec performs incremental decoding without consuming partial input and
-//! enforces configured maximum body length before waiting for oversized bodies.
+//! enforces independent finite header and configured body limits before waiting
+//! for oversized peer input. Each header scan examines at most 8 KiB.
 
 use tokio_util::bytes::{BufMut, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
@@ -32,7 +33,7 @@ impl Decoder for ProtocolFrameCodec {
         &mut self,
         src: &mut BytesMut,
     ) -> std::result::Result<Option<Self::Item>, Self::Error> {
-        let Some(header_end) = find_header_end(src) else {
+        let Some(header_end) = find_header_end(src)? else {
             return Ok(None);
         };
         let content_length = frame_content_length_from_header(&src[..header_end])?;

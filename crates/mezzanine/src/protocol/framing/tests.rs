@@ -61,6 +61,18 @@ fn rejects_oversized_body() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
 }
 
+/// Unterminated headers must fail within a finite header budget independently
+/// of the body limit, before an Iroh bridge can retain arbitrary peer bytes.
+#[test]
+fn codec_rejects_unterminated_header_over_budget() {
+    let mut codec = ProtocolFrameCodec::new(1024 * 1024).unwrap();
+    let mut input = BytesMut::from(vec![b'x'; 8193].as_slice());
+    let error = codec.decode(&mut input).unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(error.to_string().contains("header"));
+    assert_eq!(input.len(), 8193, "rejection must not consume peer input");
+}
+
 /// Verifies that streaming decode leaves partial input untouched and consumes a
 /// complete frame only after the remaining bytes arrive.
 #[test]
@@ -77,6 +89,82 @@ fn codec_decodes_split_frames_without_consuming_partial_input() {
     input.extend_from_slice(&encoded[split_at..]);
     assert_eq!(codec.decode(&mut input).unwrap(), Some(frame));
     assert!(input.is_empty());
+}
+
+/// Exact-budget headers remain valid across split terminators, but a terminator
+/// beyond the budget fails even when the configured body budget is much larger.
+/// Large bodies and later buffered frames must not count toward the first header.
+#[test]
+fn header_budget_preserves_boundaries_fragmentation_and_frame_independence() {
+    let limit = super::wire::MAX_PROTOCOL_HEADER_BYTES;
+    for header_bytes in [limit - 1, limit, limit + 1] {
+        let prefix = "Content-Length: 9000\r\nX-Padding: ";
+        let header = format!(
+            "{prefix}{}\r\n\r\n",
+            "x".repeat(header_bytes - prefix.len() - 4)
+        );
+        assert_eq!(header.len(), header_bytes);
+        let body = "b".repeat(9000);
+        let first = format!("{header}{body}");
+        let next = encode_frame(&ProtocolFrame::new("application/json", "{}"));
+        let mut complete = first.as_bytes().to_vec();
+        complete.extend_from_slice(&next);
+        let mut codec = ProtocolFrameCodec::new(16384).unwrap();
+        let mut input = BytesMut::from(complete.as_slice());
+        if header_bytes > limit {
+            assert!(
+                codec
+                    .decode(&mut input)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("header")
+            );
+            assert!(
+                decode_frame(&complete, 16384)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("header")
+            );
+            continue;
+        }
+        let (decoded, consumed) = decode_frame(&complete, 16384).unwrap();
+        assert_eq!(consumed, first.len());
+        assert_eq!(codec.decode(&mut input).unwrap(), Some(decoded));
+        assert_eq!(
+            codec.decode(&mut input).unwrap(),
+            Some(ProtocolFrame::new("application/json", "{}"))
+        );
+        assert!(input.is_empty());
+        for split in [
+            header.len() - 3,
+            header.len() - 2,
+            header.len() - 1,
+            header.len(),
+            first.len() - 1,
+        ] {
+            let mut codec = ProtocolFrameCodec::new(16384).unwrap();
+            let mut partial = BytesMut::from(&first.as_bytes()[..split]);
+            assert_eq!(codec.decode(&mut partial).unwrap(), None);
+            assert_eq!(partial.len(), split);
+            partial.extend_from_slice(&first.as_bytes()[split..]);
+            assert_eq!(codec.decode(&mut partial).unwrap().unwrap().body, body);
+            assert!(partial.is_empty());
+        }
+    }
+    let mut codec = ProtocolFrameCodec::new(16384).unwrap();
+    let mut pending = BytesMut::new();
+    for _ in 0..31 {
+        pending.extend_from_slice(&[b'x'; 256]);
+        assert_eq!(codec.decode(&mut pending).unwrap(), None);
+    }
+    pending.extend_from_slice(&[b'x'; 256]);
+    assert!(
+        codec
+            .decode(&mut pending)
+            .unwrap_err()
+            .to_string()
+            .contains("header")
+    );
 }
 
 /// Verifies streaming decode rejects duplicate content-length headers.
