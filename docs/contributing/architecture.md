@@ -58,6 +58,13 @@ There is one context store and one checked candidate-before-commit boundary.
 Behavior-grouped tests preserve event identity, causal ownership, trust, and
 byte-exact projection contracts. Transcript filesystem I/O remains product-owned.
 
+Runtime process orchestration remains under `runtime/processes/mod.rs`, with
+focused children for adapter ownership, typed input delivery, terminal settings,
+conversation-bound screens, transaction retirement, termination, and lifecycle
+event payloads. All operate on the existing `RuntimeSessionService` state;
+process generations, shell interaction epochs, and exact input leases remain
+explicit handoffs rather than independently mutable policy stores.
+
 Agent terminal presentation application lives under
 `runtime/render/presentation/buffer_apply/`. Its components distinguish cumulative
 provider source, immutable worker projection, freshness acceptance, validated
