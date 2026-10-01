@@ -649,7 +649,8 @@ async fn authenticated_control_loop_times_out_silent_remote_peer() {
 
 /// Fragmented input remains valid when the complete frame arrives within one
 /// idle interval; partial bytes do not get mistaken for a terminal timeout.
-#[tokio::test(flavor = "current_thread")]
+/// Paused time preserves the intended interval despite test-thread contention.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn authenticated_control_loop_accepts_fragmented_frame_within_idle_deadline() {
     use crate::control::{AuthenticatedPeer, decode_control_frame, encode_control_body};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -696,7 +697,8 @@ async fn authenticated_control_loop_accepts_fragmented_frame_within_idle_deadlin
 
 /// Each fully flushed request/response cycle resets the idle interval, so
 /// healthy periodic traffic can outlive one absolute timeout duration.
-#[tokio::test(flavor = "current_thread")]
+/// Paused time isolates deadline resetting from host scheduler latency.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn authenticated_control_loop_resets_idle_deadline_after_active_traffic() {
     use crate::control::{AuthenticatedPeer, decode_control_frame, encode_control_body};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
