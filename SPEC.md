@@ -4080,6 +4080,13 @@ duplicate, unknown-version, or non-event server streams and MUST refetch the
 current rendered view after any event gap. Iroh attach clients MUST coalesce
 already-ready redraw wakeups before fetching a view and MUST honor the rendered
 view's animation refresh interval without waiting for another runtime event.
+Iroh attachment view and presentation-acknowledgement RPCs MUST bound the complete
+request write, flush, and response wait by the effective request timeout. The
+budget MUST NOT restart between those phases. A timeout MUST fail visibly and
+require teardown and explicit reattach, without replaying the ambiguous request
+or reporting a presentation receipt as successful. Empty receipt sets require
+no acknowledgement RPC. This requirement does not introduce a new request-timeout
+policy for Unix primary attachment, which has no supplied RPC deadline.
 Terminal input MUST NOT be replayed
 after an ambiguous write, response, timeout, reset, or connection failure. The
 client MUST report that the input outcome is unknown, close boundedly, and

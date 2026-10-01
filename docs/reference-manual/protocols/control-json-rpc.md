@@ -258,6 +258,12 @@ operation. Orderly event-stream FIN ends the receiver even while control stays
 live. Clean EOF yields one disconnect; incomplete frames or render-fragment
 transfers yield a terminal error. Clipboard-transfer expiry is nonterminal
 housekeeping, and dropping the presentation consumer releases the receiver.
+Iroh view and presentation-acknowledgement RPCs use the effective request timeout
+for the entire write, flush, and response wait, not one budget per phase. A
+timeout leaves the outcome unknown and ends attachment through existing
+terminal and transport cleanup; it does not replay the request or confirm a
+receipt. An empty presentation-ID set sends no acknowledgement RPC. Unix primary
+attachment retains its existing policy without a supplied RPC deadline.
 Unix and legacy Iroh v1 and v2 event streams carry authorized
 `event/*` notifications that wake the client to request a fresh rendered view.
 The bound Unix stream can also carry a non-durable owner-scoped

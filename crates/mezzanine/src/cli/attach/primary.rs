@@ -558,21 +558,14 @@ where
             if !immediate_render && !ordinary_rate.ready() {
                 continue;
             }
-            let frame = tokio::time::timeout(
+            let frame = super::requests::request_conditional_view_async(
+                stream,
+                client_size,
+                iteration,
+                cached_frame.as_ref(),
                 request_timeout,
-                super::requests::request_conditional_view_async(
-                    stream,
-                    client_size,
-                    iteration,
-                    cached_frame.as_ref(),
-                ),
             )
-            .await
-            .map_err(|_| {
-                MezError::invalid_state(
-                    "Iroh terminal view acknowledgement timed out; reattach required",
-                )
-            })??
+            .await?
             .ok_or_else(|| {
                 MezError::invalid_state(
                     "Iroh attach disconnected while reading a terminal view; reattach required",
@@ -636,6 +629,7 @@ where
                     &primary_client_id,
                     &frame.presentation_ids,
                     iteration,
+                    request_timeout,
                 )
                 .await?
             {
@@ -793,16 +787,9 @@ where
             let frame = match inline_frame {
                 Some(frame) => frame,
                 None => {
-                    let result = tokio::time::timeout(
-                        request_timeout,
-                        super::requests::request_conditional_view_async(
-                            stream, client_size, iteration, cached_frame.as_ref(),
-                        ),
-                    )
-                    .await
-                    .map_err(|_| MezError::invalid_state(
-                        "Iroh terminal view acknowledgement timed out; reattach required",
-                    ))??
+                    let result = super::requests::request_conditional_view_async(
+                        stream, client_size, iteration, cached_frame.as_ref(), request_timeout,
+                    ).await?
                     .ok_or_else(|| MezError::invalid_state(
                         "Iroh attach disconnected while reading a terminal view; reattach required",
                     ))?;
@@ -867,6 +854,7 @@ where
                     &primary_client_id,
                     &frame.presentation_ids,
                     iteration,
+                    request_timeout,
                 )
                 .await?
             {
@@ -901,6 +889,93 @@ where
 )]
 mod pushed_snapshot_tests {
     use super::*;
+
+    /// A live local Iroh peer may acknowledge a view but withhold its committed
+    /// presentation receipt. The primary must return a timeout, send one receipt
+    /// only, and leave terminal/transport cleanup available to its owning caller.
+    #[tokio::test(flavor = "current_thread")]
+    async fn primary_local_iroh_stalled_receipt_ends_attachment_without_replay() {
+        let (
+            server_endpoint,
+            client_endpoint,
+            server_connection,
+            client_connection,
+            mut server_bridge,
+            mut client_bridge,
+        ) = local_iroh_control_bridges().await;
+        let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+        terminal.push_pending_input_read();
+        let (done, finished) = tokio::sync::oneshot::channel();
+        let peer = async {
+            let request =
+                read_async_control_response_frames(server_bridge.stream_mut(), 1024 * 1024, 1)
+                    .await
+                    .unwrap();
+            let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+            let request: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(request["method"], "terminal/view");
+            let response = serde_json::json!({"jsonrpc":"2.0", "id":request["id"],
+                "result":{"view":{"lines":["committed"],"line_style_spans":[[]],
+                    "cursor":{"row":0,"column":0,"visible":false},"output_modes":{}},
+                    "presentation_ids":[7]}});
+            tokio::io::AsyncWriteExt::write_all(
+                server_bridge.stream_mut(),
+                &super::super::encode_control_body(&response.to_string()),
+            )
+            .await
+            .unwrap();
+            let request =
+                read_async_control_response_frames(server_bridge.stream_mut(), 1024 * 1024, 1)
+                    .await
+                    .unwrap();
+            let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+            assert!(body.contains("terminal/presentation/acknowledge"));
+            finished.await.unwrap();
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    read_async_control_response_frames(server_bridge.stream_mut(), 1024 * 1024, 1)
+                )
+                .await
+                .is_err(),
+                "receipt timeout must not replay or start another RPC"
+            );
+        };
+        let attached = async {
+            let error = run_iroh_attached_primary_client_loop_async_with_events(
+                client_bridge.stream_mut(),
+                &mut terminal,
+                Some(&client_connection),
+                ClientId::opaque("c1".to_string()).unwrap(),
+                Size::new(80, 24).unwrap(),
+                std::time::Duration::from_secs(1),
+                None,
+                false,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error
+                    .message()
+                    .contains("presentation acknowledgement timed out"),
+                "{error}"
+            );
+            assert_eq!(terminal.written_frames.len(), 1);
+            done.send(()).unwrap();
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(attached, peer);
+        })
+        .await
+        .expect("stalled receipt must end attachment");
+        terminal.restore_presentation().await.unwrap();
+        assert_eq!(terminal.presentation_restores, 1);
+        drop((client_bridge, server_bridge));
+        client_connection.close(iroh::endpoint::VarInt::from_u32(0), b"test complete");
+        server_connection.close(iroh::endpoint::VarInt::from_u32(0), b"test complete");
+        client_endpoint.close().await;
+        server_endpoint.close().await;
+    }
 
     /// Verifies legacy Iroh primary event wakeups coalesce behind the advertised
     /// cadence and request one current view after the initial immediate frame.

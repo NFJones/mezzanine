@@ -185,41 +185,46 @@ where
     I: AsyncAttachedTerminalIo,
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let frame =
-        match request_conditional_view_async(stream, client_size, iteration, baseline.as_ref())
-            .await?
-        {
-            Some(super::AttachConditionalView::Modified(frame)) => *frame,
-            Some(super::AttachConditionalView::NotModified {
-                render_rate_limit_fps,
-                event_cutoff,
-            }) => {
-                if let Some(frame) = baseline.as_mut() {
-                    frame.event_cutoff = event_cutoff.or(frame.event_cutoff);
-                    let outcome =
-                        render_attach_client_frame_async(terminal_io, frame, cursor_blink_epoch)
-                            .await?;
-                    if !outcome.connected {
-                        return Ok(outcome);
-                    }
+    let frame = match request_conditional_view_async(
+        stream,
+        client_size,
+        iteration,
+        baseline.as_ref(),
+        None,
+    )
+    .await?
+    {
+        Some(super::AttachConditionalView::Modified(frame)) => *frame,
+        Some(super::AttachConditionalView::NotModified {
+            render_rate_limit_fps,
+            event_cutoff,
+        }) => {
+            if let Some(frame) = baseline.as_mut() {
+                frame.event_cutoff = event_cutoff.or(frame.event_cutoff);
+                let outcome =
+                    render_attach_client_frame_async(terminal_io, frame, cursor_blink_epoch)
+                        .await?;
+                if !outcome.connected {
+                    return Ok(outcome);
                 }
-                return Ok(PrimaryViewRenderOutcome {
-                    connected: true,
-                    animation_refresh_interval_ms: baseline
+            }
+            return Ok(PrimaryViewRenderOutcome {
+                connected: true,
+                animation_refresh_interval_ms: baseline
+                    .as_ref()
+                    .map_or(0, |frame| frame.modes.animation_refresh_interval_ms),
+                render_rate_limit_fps: render_rate_limit_fps.or_else(|| {
+                    baseline
                         .as_ref()
-                        .map_or(0, |frame| frame.modes.animation_refresh_interval_ms),
-                    render_rate_limit_fps: render_rate_limit_fps.or_else(|| {
-                        baseline
-                            .as_ref()
-                            .and_then(|frame| frame.render_rate_limit_fps)
-                    }),
-                });
-            }
-            Some(super::AttachConditionalView::Missing) | None => {
-                *baseline = None;
-                return Ok(PrimaryViewRenderOutcome::disconnected());
-            }
-        };
+                        .and_then(|frame| frame.render_rate_limit_fps)
+                }),
+            });
+        }
+        Some(super::AttachConditionalView::Missing) | None => {
+            *baseline = None;
+            return Ok(PrimaryViewRenderOutcome::disconnected());
+        }
+    };
     let outcome = render_attach_client_frame_async(terminal_io, &frame, cursor_blink_epoch).await?;
     if outcome.connected
         && !frame.presentation_ids.is_empty()
@@ -228,6 +233,7 @@ where
             client_id,
             &frame.presentation_ids,
             iteration,
+            None,
         )
         .await?
     {
@@ -245,6 +251,7 @@ pub(super) async fn acknowledge_committed_focus_labels_async<S>(
     client_id: &ClientId,
     presentation_ids: &[u64],
     iteration: u64,
+    request_timeout: impl Into<Option<std::time::Duration>>,
 ) -> Result<bool>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -254,11 +261,13 @@ where
     }
     let request =
         terminal_presentation_acknowledgement_request(iteration, client_id, presentation_ids);
-    if !write_async_control_body_or_disconnected(stream, &request).await? {
-        return Ok(false);
-    }
-    let Some(response) =
-        read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await?
+    let Some(response) = bounded_attachment_exchange(
+        stream,
+        &request,
+        request_timeout,
+        "presentation acknowledgement",
+    )
+    .await?
     else {
         return Ok(false);
     };
@@ -276,6 +285,7 @@ pub(super) async fn request_conditional_view_async<S>(
     client_size: Size,
     iteration: u64,
     baseline: Option<&super::AttachClientFrame>,
+    request_timeout: impl Into<Option<std::time::Duration>>,
 ) -> Result<Option<super::AttachConditionalView>>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -285,11 +295,8 @@ where
         client_size,
         baseline.and_then(|frame| frame.view_identity.as_deref()),
     );
-    if !write_async_control_body_or_disconnected(stream, &request).await? {
-        return Ok(None);
-    }
     let Some(response) =
-        read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await?
+        bounded_attachment_exchange(stream, &request, request_timeout, "terminal view").await?
     else {
         return Ok(None);
     };
@@ -298,6 +305,38 @@ where
         return Ok(None);
     }
     super::responses::conditional_view_response(body.as_str(), baseline).map(Some)
+}
+
+/// Bounds one ordered attachment RPC's write, flush, and response wait together.
+/// Timeout leaves delivery ambiguous: callers must tear down, never resend the
+/// request or read another response from this stream. Diagnostics omit payloads.
+async fn bounded_attachment_exchange<S>(
+    stream: &mut S,
+    request: &str,
+    request_timeout: impl Into<Option<std::time::Duration>>,
+    operation: &str,
+) -> Result<Option<Vec<u8>>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let exchange = async {
+        if !write_async_control_body_or_disconnected(stream, request).await? {
+            return Ok(None);
+        }
+        read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await
+    };
+    let Some(request_timeout) = request_timeout.into() else {
+        // Unix primary attachment has no supplied RPC deadline. Preserve that
+        // existing policy rather than inventing one in its rendering adapter.
+        return exchange.await;
+    };
+    tokio::time::timeout(request_timeout, exchange)
+        .await
+        .map_err(|_| {
+            MezError::invalid_state(format!(
+                "attachment {operation} timed out; outcome unknown, reattach required"
+            ))
+        })?
 }
 
 /// Notifies the runtime that the attached primary terminal size changed.
@@ -607,6 +646,138 @@ pub(super) fn control_socket_cursor_blink_elapsed(
 mod conditional_view_tests {
     use super::*;
 
+    /// A blocked write and a later blocked response consume one shared budget,
+    /// not a new timeout per phase. Receipt-free frames produce no RPC, and
+    /// timeout never writes the original request again.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn attachment_exchange_deadline_bounds_write_and_read_without_replay() {
+        let timeout = std::time::Duration::from_millis(100);
+        let id = ClientId::opaque("c1".to_string()).unwrap();
+        for receipt in [false, true] {
+            for drain_write in [false, true] {
+                let (mut client, mut server) = tokio::io::duplex(1);
+                let (done, finished) = tokio::sync::oneshot::channel();
+                let peer = async {
+                    if drain_write {
+                        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                        let request =
+                            read_async_control_response_frames(&mut server, 1024 * 1024, 1)
+                                .await
+                                .unwrap();
+                        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+                        assert!(body.contains(if receipt {
+                            "terminal/presentation/acknowledge"
+                        } else {
+                            "terminal/view"
+                        }));
+                    }
+                    let _ = finished.await;
+                    let mut remaining = [0; 4096];
+                    let extra = tokio::time::timeout(
+                        std::time::Duration::from_millis(1),
+                        server.read(&mut remaining),
+                    )
+                    .await;
+                    if drain_write {
+                        assert!(extra.is_err(), "timed-out RPC must not replay");
+                    }
+                };
+                let rpc = async {
+                    let started = tokio::time::Instant::now();
+                    let error = if receipt {
+                        acknowledge_committed_focus_labels_async(&mut client, &id, &[7], 0, timeout)
+                            .await
+                            .unwrap_err()
+                    } else {
+                        request_conditional_view_async(
+                            &mut client,
+                            Size::new(80, 24).unwrap(),
+                            0,
+                            None,
+                            timeout,
+                        )
+                        .await
+                        .err()
+                        .expect("stalled view must time out")
+                    };
+                    assert!(error.message().contains("timed out"));
+                    assert!(error.message().contains("outcome unknown"));
+                    assert_eq!(
+                        started.elapsed(),
+                        timeout,
+                        "phase budgets must not multiply"
+                    );
+                    let _ = done.send(());
+                };
+                tokio::join!(rpc, peer);
+            }
+        }
+        let (mut client, mut server) = tokio::io::duplex(1);
+        assert!(
+            acknowledge_committed_focus_labels_async(
+                &mut client,
+                &id,
+                &[],
+                0,
+                std::time::Duration::ZERO
+            )
+            .await
+            .unwrap()
+        );
+        assert!(
+            tokio::time::timeout(timeout, server.read(&mut [0; 1]))
+                .await
+                .is_err()
+        );
+    }
+
+    /// Flush is part of the complete RPC deadline, even if all request bytes
+    /// have been accepted by an adapter. No response read or success may follow
+    /// an uncommitted flush. This seam avoids wall-clock transport races.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn attachment_exchange_deadline_bounds_flush() {
+        struct BlockedFlush;
+        impl tokio::io::AsyncRead for BlockedFlush {
+            fn poll_read(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                _: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                panic!("response read must not precede successful flush");
+            }
+        }
+        impl tokio::io::AsyncWrite for BlockedFlush {
+            fn poll_write(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                bytes: &[u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                std::task::Poll::Ready(Ok(bytes.len()))
+            }
+            fn poll_flush(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Pending
+            }
+            fn poll_shutdown(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
+        let error = bounded_attachment_exchange(
+            &mut BlockedFlush,
+            "{}",
+            std::time::Duration::from_millis(100),
+            "terminal view",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.message().contains("terminal view timed out"));
+    }
+
     /// A committed view identity is sent on the next request, whose short
     /// unchanged response retains the base and advances its event cutoff.
     #[tokio::test]
@@ -643,18 +814,30 @@ mod conditional_view_tests {
         };
         let client_task = async {
             let size = Size::new(80, 24).unwrap();
-            let mut baseline = match request_conditional_view_async(&mut client, size, 0, None)
-                .await
-                .unwrap()
-                .unwrap()
+            let mut baseline = match request_conditional_view_async(
+                &mut client,
+                size,
+                0,
+                None,
+                std::time::Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
+            .unwrap()
             {
                 super::super::AttachConditionalView::Modified(frame) => frame,
                 _ => panic!("initial view must be complete"),
             };
-            let reply = request_conditional_view_async(&mut client, size, 1, Some(&baseline))
-                .await
-                .unwrap()
-                .unwrap();
+            let reply = request_conditional_view_async(
+                &mut client,
+                size,
+                1,
+                Some(&baseline),
+                std::time::Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
+            .unwrap();
             match reply {
                 super::super::AttachConditionalView::NotModified { event_cutoff, .. } => {
                     baseline.event_cutoff = event_cutoff;

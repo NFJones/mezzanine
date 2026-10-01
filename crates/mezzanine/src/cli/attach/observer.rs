@@ -350,9 +350,14 @@ where
         if input.bytes.is_empty() && !immediate_render && !ordinary_rate.ready() {
             continue;
         }
-        let Some(result) =
-            request_conditional_view_async(stream, client_size, iteration, cached_frame.as_ref())
-                .await?
+        let Some(result) = request_conditional_view_async(
+            stream,
+            client_size,
+            iteration,
+            cached_frame.as_ref(),
+            request_timeout,
+        )
+        .await?
         else {
             break Ok(());
         };
@@ -420,6 +425,7 @@ where
                 })?,
                 &frame.presentation_ids,
                 iteration,
+                request_timeout,
             )
             .await?
         {
@@ -439,6 +445,80 @@ where
 #[cfg(test)]
 mod pushed_snapshot_tests {
     use super::*;
+
+    /// A peer can keep control live while withholding a view or receipt reply.
+    /// The supplied RPC timeout must end either wait; an outer fixture deadline
+    /// only bounds the broken baseline and is not the product timeout policy.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn observer_stalled_view_and_receipt_use_request_deadline() {
+        for receipt in [false, true] {
+            let (mut client, mut server) = tokio::io::duplex(16384);
+            let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+            terminal.push_pending_input_read();
+            let (done, finished) = tokio::sync::oneshot::channel();
+            let peer = async {
+                let request = super::super::requests::read_async_control_response_frames(
+                    &mut server,
+                    1024 * 1024,
+                    1,
+                )
+                .await
+                .unwrap();
+                let (body, _) = super::super::decode_control_frame(&request, 1024 * 1024).unwrap();
+                assert!(body.contains("terminal/view"));
+                if receipt {
+                    let reply = r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["committed"],"line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{}},"presentation_ids":[7]}}"#;
+                    tokio::io::AsyncWriteExt::write_all(
+                        &mut server,
+                        &super::super::encode_control_body(reply),
+                    )
+                    .await
+                    .unwrap();
+                    let request = super::super::requests::read_async_control_response_frames(
+                        &mut server,
+                        1024 * 1024,
+                        1,
+                    )
+                    .await
+                    .unwrap();
+                    let (body, _) =
+                        super::super::decode_control_frame(&request, 1024 * 1024).unwrap();
+                    assert!(body.contains("terminal/presentation/acknowledge"));
+                }
+                let _ = finished.await; // Keep the transport live, without a reply.
+            };
+            let attached = async {
+                let outcome = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    run_attached_observer_client_loop_async(
+                        &mut client,
+                        &mut terminal,
+                        None,
+                        Some(ClientId::opaque("c2".to_string()).unwrap()),
+                        Size::new(80, 24).unwrap(),
+                        std::time::Duration::from_millis(100),
+                        None,
+                        None,
+                        false,
+                    ),
+                )
+                .await;
+                let _ = done.send(());
+                assert!(
+                    outcome.is_ok(),
+                    "RPC bypassed request deadline: receipt={receipt}"
+                );
+                assert!(
+                    outcome
+                        .unwrap()
+                        .unwrap_err()
+                        .message()
+                        .contains("timed out")
+                );
+            };
+            tokio::join!(attached, peer);
+        }
+    }
 
     /// Verifies a legacy observer's separate event wakeups produce one trailing
     /// exact-client view fetch at the server-advertised cadence.
