@@ -1122,8 +1122,21 @@ async fn serve_routed_initialize_inner(
         }
     });
     let (event_stop_tx, event_stop_rx) = tokio::sync::watch::channel(false);
-    let mut event_task = connection_state.take_event_stream_start().map(
+    let event_task = connection_state.take_event_stream_start().map(
         |(client_id, version, client_clipboard_write, push_render)| {
+            #[cfg(test)]
+            if let Some(fault) = request_id
+                .as_str()
+                .filter(|id| id.starts_with("test-event-task-"))
+            {
+                let panic = fault.ends_with("panic");
+                return tokio::spawn(async move {
+                    if panic {
+                        panic!("private injected event panic payload");
+                    }
+                    Err(MezError::invalid_args("Iroh render transfer exceeds limit"))
+                });
+            }
             tokio::spawn(serve_host_routed_iroh_event_stream(
                 (*connection).clone(),
                 binding.runtime.actor().clone(),
@@ -1138,6 +1151,7 @@ async fn serve_routed_initialize_inner(
             ))
         },
     );
+    let mut event_task = crate::runtime::IrohEventTask::new(event_task);
     let control_config =
         AsyncRuntimeControlConnectionConfig::new(HOST_CONTROL_MAX_CONTENT_LENGTH, 0)?;
     let authority_principal = principal.clone();
@@ -1178,7 +1192,7 @@ async fn serve_routed_initialize_inner(
             }
         }
     };
-    let control_result =
+    let control =
         serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation(
             bridge.stream_mut(),
             peer,
@@ -1203,21 +1217,16 @@ async fn serve_routed_initialize_inner(
             },
             |_| Ok(()),
             authority_cancelled,
-        )
-        .await;
+        );
+    let (control_result, _) = event_task.supervise(control).await;
     let x11_route_result = connection_state.deactivate_x11_route();
     sample_task.abort();
     let _ = (&mut sample_task).await;
     let _ = event_stop_tx.send(true);
-    if let Some(mut task) = event_task.take()
-        && tokio::time::timeout(policy.setup_timeout, &mut task)
-            .await
-            .is_err()
-    {
-        task.abort();
-        let _ = task.await;
-    }
-    control_result?;
+    let event_result = event_task
+        .settle_until(tokio::time::Instant::now() + policy.setup_timeout)
+        .await;
+    crate::runtime::merge_iroh_event_result(control_result, event_result)?;
     x11_route_result?;
     Ok(())
 }
@@ -2503,6 +2512,19 @@ mod tests {
                 RemoteSessionLeaseState::Active
             );
 
+            for fault in ["error", "panic"] {
+                fail_test_routed_event_task(&client, &server_addr, &credential, &session_id, fault)
+                    .await;
+                assert_eq!(
+                    runtime.actor().lifecycle_state().await.unwrap(),
+                    RuntimeLifecycleState::Detached
+                );
+                assert_eq!(
+                    router.get_lease(&lease_id).unwrap().state,
+                    RemoteSessionLeaseState::Active
+                );
+            }
+
             let replay = exchange_test_routed_initialize(
                 &client,
                 &server_addr,
@@ -2852,18 +2874,18 @@ mod tests {
         };
 
         let (served, ()) = tokio::join!(server, client_work);
-        assert_eq!(served.unwrap(), 16);
+        assert_eq!(served.unwrap(), 18);
         let snapshot = diagnostics.snapshot();
         assert!(!snapshot.listener_active);
         assert_eq!(snapshot.active_connections, 0);
-        assert_eq!(snapshot.connections_accepted, 16);
-        assert_eq!(snapshot.setup_successes, 16);
+        assert_eq!(snapshot.connections_accepted, 18);
+        assert_eq!(snapshot.setup_successes, 18);
         assert_eq!(snapshot.connections_rejected, snapshot.setup_failures);
         assert_eq!(
             snapshot
                 .connections_completed
                 .saturating_add(snapshot.connections_failed),
-            16
+            18
         );
         router
             .shutdown_all(true, std::time::Duration::from_secs(2))
@@ -3049,6 +3071,48 @@ mod tests {
                 .await
                 .unwrap();
         serde_json::from_str(&response).unwrap()
+    }
+
+    /// Keeps the request direction live after initialization while a negotiated
+    /// event worker fails or panics. Required-event loss must close control
+    /// without client FIN and without deleting the committed routed session.
+    async fn fail_test_routed_event_task(
+        client: &iroh::Endpoint,
+        server_addr: &iroh::EndpointAddr,
+        credential: &str,
+        session_id: &str,
+        fault: &str,
+    ) {
+        let connection = client
+            .connect(server_addr.clone(), crate::runtime::MEZZANINE_IROH_ALPN)
+            .await
+            .unwrap();
+        let (mut send, mut recv) = connection.open_bi().await.unwrap();
+        let request = json!({"jsonrpc":"2.0", "id":format!("test-event-task-{fault}"),
+        "method":"control/initialize", "params":{
+            "client_name":"event-fault", "requested_version":3, "requested_role":"primary",
+            "detach_primary_on_disconnect":true, "event_stream_version":1,
+            "session_intent":"attach", "session_target":{"session_id":session_id},
+            "client":{"name":"event-fault", "interactive":true,
+                "terminal":{"columns":80,"rows":24,"term":"xterm"}},
+            "authentication":{"mechanism":"extension:iroh_device","token":credential}
+        }})
+        .to_string();
+        send.write_all(&encode_control_body(&request))
+            .await
+            .unwrap();
+        send.flush().await.unwrap();
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(10), recv.read_to_end(4096))
+                .await
+                .expect("event failure must end live control")
+                .unwrap();
+        let (body, consumed) = decode_control_frame(&response, 4096).unwrap();
+        assert_eq!(consumed, response.len());
+        assert!(body.contains("granted_role"), "{body}");
+        tokio::time::timeout(std::time::Duration::from_secs(10), connection.closed())
+            .await
+            .unwrap();
     }
 
     /// Sends valid routed initialization into the request-local broken-bridge

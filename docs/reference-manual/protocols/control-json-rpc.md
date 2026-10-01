@@ -258,6 +258,11 @@ operation. Orderly event-stream FIN ends the receiver even while control stays
 live. Clean EOF yields one disconnect; incomplete frames or render-fragment
 transfers yield a terminal error. Clipboard-transfer expiry is nonterminal
 housekeeping, and dropping the presentation consumer releases the receiver.
+Both per-session and host-routed servers supervise the event worker alongside
+live control. Required event-stream loss ends only that attachment with exact
+disconnect/X11 cleanup. Worker errors, peer stop, panic classification (without
+panic payloads), and teardown deadlines remain visible; sibling connections and
+the shared session stay live. Failed writes do not advance render bases or receipts.
 Iroh view and presentation-acknowledgement RPCs use the effective request timeout
 for the entire write, flush, and response wait, not one budget per phase. A
 timeout leaves the outcome unknown and ends attachment through existing

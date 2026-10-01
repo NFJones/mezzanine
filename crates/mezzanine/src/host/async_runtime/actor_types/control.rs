@@ -4,10 +4,9 @@
 use super::UnixStream;
 use super::{
     AsRawFd, AsyncControlInputResult, AsyncRuntimeControlConnectionConfig,
-    AsyncRuntimeSessionHandle, AsyncWriteExt, AuthenticatedPeer, ClientEvent,
-    ControlConnectionState, Framed, JoinSet, MezError, ProtocolFrameCodec, Result, RuntimeEvent,
-    RuntimeEventBatch, RuntimeLifecycleState, SnapshotRepository, StreamExt, UnixListener,
-    authenticated_unix_peer_uid, encode_frame,
+    AsyncRuntimeSessionHandle, AsyncWriteExt, AuthenticatedPeer, ControlConnectionState, Framed,
+    JoinSet, MezError, ProtocolFrameCodec, Result, RuntimeLifecycleState, SnapshotRepository,
+    StreamExt, UnixListener, authenticated_unix_peer_uid, encode_frame,
 };
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -379,21 +378,17 @@ fn control_application_idle_error(operation: &str) -> MezError {
 /// runtime event that clears stale attached-primary session state. Request-local
 /// control clients do not opt into this behavior because their EOF is just the
 /// end of one RPC exchange.
-async fn submit_control_connection_disconnect_event(
+pub(crate) async fn submit_control_connection_disconnect_event(
     handle: &AsyncRuntimeSessionHandle,
     connection: &mut ControlConnectionState,
 ) -> Result<()> {
-    connection.deactivate_x11_route()?;
-    let Some(client_id) = connection.take_disconnect_client_id() else {
-        return Ok(());
-    };
-    let mut batch = RuntimeEventBatch::new();
-    batch.push(RuntimeEvent::Client(ClientEvent::Disconnected {
-        client_id,
-        reason: "control socket EOF".to_string(),
-    }));
-    handle.submit_runtime_events(batch).await?;
-    Ok(())
+    if let Some(cleanup) = handle.take_connection_cleanup_lease(connection) {
+        cleanup
+            .close(TERMINAL_CONTROL_CONNECTION_DRAIN_TIMEOUT)
+            .await
+    } else {
+        connection.deactivate_x11_route().map(|_| ())
+    }
 }
 
 /// Runs the serve async runtime control listener operation for this subsystem.

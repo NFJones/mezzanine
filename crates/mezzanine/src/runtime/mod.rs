@@ -308,6 +308,9 @@ mod iroh;
 /// Owns bounded application-layer compression for versioned Iroh frames.
 #[path = "iroh/compression.rs"]
 mod iroh_compression;
+/// Owns connection-local event worker supervision and bounded task settlement.
+#[path = "iroh/event_task.rs"]
+mod iroh_event_task;
 /// Exposes the json module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -618,6 +621,7 @@ pub(crate) use iroh_compression::{
     IrohCompressionBridge, IrohCompressionMetrics, IrohCompressionPolicy, IrohFrameCompressionMode,
     IrohStreamDecoder, IrohStreamEncoder,
 };
+pub(crate) use iroh_event_task::{IrohEventTask, merge_event_result as merge_iroh_event_result};
 pub(crate) use json::current_unix_millis;
 use json::{
     RuntimeSubagentModelProfiles, agent_shell_visibility_json_name, agent_state_control_method,

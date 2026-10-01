@@ -161,6 +161,7 @@ pub use crate::runtime::{
 };
 #[cfg(test)]
 pub use actor_types::serve_authenticated_async_runtime_control_connection_loop_with_snapshots;
+pub(crate) use actor_types::submit_control_connection_disconnect_event;
 #[cfg(test)]
 pub use actor_types::{
     AsyncAttachedTerminalStepRequest, plan_and_apply_async_attached_terminal_client_step,

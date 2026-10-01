@@ -537,6 +537,20 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Transfers exact disconnect ownership to a cancellation-safe cleanup lease.
+    /// No await separates consuming the connection flag from retaining its owner.
+    pub(crate) fn take_connection_cleanup_lease(
+        &self,
+        connection: &mut ControlConnectionState,
+    ) -> Option<crate::host::async_runtime::ControlConnectionCleanupLease> {
+        let retained = connection.clone();
+        connection.take_disconnect_client_id()?;
+        Some(crate::host::async_runtime::ControlConnectionCleanupLease {
+            cleanup_tx: self.client_clipboard_route_cleanup_tx.clone(),
+            connection: Some(Box::new(retained)),
+        })
+    }
+
     /// Initializes a routed connection with actor-produced cancellation ownership.
     /// A lost reply drops the retained lease and schedules exact attachment cleanup.
     pub(crate) async fn initialize_routed_control_connection(

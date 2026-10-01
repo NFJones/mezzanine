@@ -4073,6 +4073,12 @@ revocation, detach, reset, endpoint shutdown, and connection loss MUST close the
 event task idempotently. Orderly event-stream FIN MUST terminate the client
 receiver even while control remains live: clean EOF produces one disconnect,
 while an incomplete frame or render-fragment transfer produces a terminal error.
+Per-session and host-routed connection owners MUST supervise event-task
+completion while control remains active. Loss of a negotiated required event
+stream MUST end only its attachment through exact-client disconnect and X11
+cleanup, never shared-session shutdown. Worker errors and task panics MUST remain
+observable during live serving and bounded teardown; panic payloads MUST NOT
+enter diagnostics. Failed event writes MUST NOT advance render bases or receipts.
 Clipboard-transfer expiry is housekeeping, not EOF; dropping the presentation
 consumer MUST release the receiver without awaiting further peer traffic.
 The client MUST reject missing, malformed, oversized,

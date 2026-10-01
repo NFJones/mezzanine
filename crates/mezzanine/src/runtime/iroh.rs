@@ -1891,7 +1891,7 @@ async fn serve_runtime_iroh_control_connection(
     let event_connection = connection.clone();
     let event_handle = handle.clone();
     let event_compression_metrics = compression_metrics.clone();
-    let mut event_task = tokio::spawn(async move {
+    let event_task = tokio::spawn(async move {
         let Ok((client_id, version, client_clipboard_write, push_render)) = event_start_rx.await
         else {
             return Ok(0);
@@ -1911,6 +1911,7 @@ async fn serve_runtime_iroh_control_connection(
         )
         .await
     });
+    let mut event_task = super::IrohEventTask::new(Some(event_task));
     let sampler = Arc::new(Mutex::new(
         connection_guard.sampler(compression_metrics.clone()),
     ));
@@ -1962,7 +1963,7 @@ async fn serve_runtime_iroh_control_connection(
             }
         }
     };
-    let result =
+    let control =
         serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation(
             bridge.stream_mut(),
             AuthenticatedPeer::iroh_endpoint(endpoint_id),
@@ -2004,8 +2005,22 @@ async fn serve_runtime_iroh_control_connection(
                 Ok(())
             },
             authority_cancelled,
+        );
+    let (result, event_completed) = event_task.supervise(control).await;
+    let disconnect_result = if event_completed {
+        tokio::time::timeout(
+            setup_timeout,
+            crate::host::async_runtime::submit_control_connection_disconnect_event(
+                handle,
+                &mut connection_state,
+            ),
         )
-        .await;
+        .await
+        .map_err(|_| MezError::invalid_state("Iroh event failure disconnect timed out"))
+        .and_then(|result| result)
+    } else {
+        Ok(())
+    };
     let x11_route_result = connection_state.deactivate_x11_route();
     sample_task.abort();
     let _ = (&mut sample_task).await;
@@ -2025,15 +2040,10 @@ async fn serve_runtime_iroh_control_connection(
             b"control failed"
         },
     );
-    if tokio::time::timeout_at(shutdown_deadline, &mut event_task)
-        .await
-        .is_err()
-    {
-        event_task.abort();
-        let _ = event_task.await;
-    }
+    let event_result = event_task.settle_until(shutdown_deadline).await;
     let bridge_result = bridge.settle_until(shutdown_deadline).await;
-    let served = result?;
+    let served = super::iroh_event_task::merge_event_result(result, event_result)?;
+    disconnect_result?;
     x11_route_result?;
     bridge_finish_result?;
     bridge_outbound_result?;
@@ -2477,6 +2487,16 @@ async fn serve_registered_runtime_iroh_event_stream(
                 if changed.is_err() || *stop.borrow() {
                     break;
                 }
+            }
+            stopped = send.stopped() => {
+                if *stop.borrow() || connection.close_reason().is_some() {
+                    break;
+                }
+                return Err(MezError::invalid_state(match stopped {
+                    Ok(Some(_)) => "Iroh event stream was stopped by the peer",
+                    Ok(None) => "Iroh event stream ended unexpectedly",
+                    Err(_) => "Iroh event stream stop observation failed",
+                }));
             }
             _ = connection.closed() => break,
         }
@@ -4771,6 +4791,20 @@ mod tests {
     /// or deauthorize the other stream.
     #[tokio::test(flavor = "current_thread")]
     async fn same_iroh_endpoint_keeps_independent_primary_event_streams() {
+        independent_primary_event_stream_case(false).await;
+    }
+
+    /// Resetting only one event stream while its control remains live must end
+    /// that exact attachment, preserve sibling control/event progress, and
+    /// leave shared session ownership with the healthy primary.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_event_stream_reset_ends_only_its_live_control_attachment() {
+        independent_primary_event_stream_case(true).await;
+    }
+
+    /// Exercises ordinary disconnect and required-event failure using the same
+    /// two-primary transport fixture and exact client-isolation assertions.
+    async fn independent_primary_event_stream_case(reset_events: bool) {
         use secrecy::ExposeSecret;
 
         use crate::control::encode_control_body;
@@ -4944,12 +4978,46 @@ mod tests {
             second_events.read_exact(&mut second_preface).await.unwrap();
             assert_eq!(second_preface, MEZZANINE_IROH_EVENT_STREAM_PREFACE);
 
-            first_send.finish().unwrap();
-            first_connection.close(VarInt::from_u32(0), b"first client complete");
+            if reset_events {
+                first_events.stop(VarInt::from_u32(1)).unwrap();
+                let rename = r#"{"jsonrpc":"2.0","id":"trigger","method":"pane/rename","params":{"name":"event reset trigger","idempotency_key":"event-reset-trigger"}}"#;
+                second_send
+                    .write_all(&encode_control_body(rename))
+                    .await
+                    .unwrap();
+                second_send.flush().await.unwrap();
+                let response = read_test_control_body(&mut second_recv).await;
+                assert!(!response.contains("\"error\""), "{response}");
+                // Drain final control FIN so orderly shutdown can acknowledge
+                // it without closing the still-live request direction ourselves.
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    let mut bytes = [0u8; 4096];
+                    loop {
+                        match tokio::io::AsyncReadExt::read(&mut first_recv, &mut bytes).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                    }
+                    first_connection.closed().await;
+                })
+                .await
+                .expect("event failure must terminate its live control attachment");
+            } else {
+                first_send.finish().unwrap();
+                first_connection.close(VarInt::from_u32(0), b"first client complete");
+            }
 
+            let mut second_events = tokio_util::codec::FramedRead::new(
+                second_events,
+                crate::protocol::framing::ProtocolFrameCodec::new(1024 * 1024).unwrap(),
+            );
             let detached_event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 loop {
-                    let body = read_test_control_body(&mut second_events).await;
+                    let body = futures_util::StreamExt::next(&mut second_events)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .body;
                     let frame: serde_json::Value = serde_json::from_str(&body).unwrap();
                     if frame["params"]["event_type"] == "client_detached"
                         && body.contains(&first_client_id)

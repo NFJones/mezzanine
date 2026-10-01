@@ -17,6 +17,84 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, Semaphore, oneshot};
 
+/// Saturated actor ingress must not lose a disconnect when event completion
+/// cancels control already awaiting cleanup, or an outer timeout cancels it.
+/// Retirement is exact-client and duplicate teardown leaves a sibling intact.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+async fn event_completion_during_saturated_disconnect_retains_exact_cleanup() {
+    for event_completion in [false, true] {
+        let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+        let owner = service
+            .attach_primary(
+                "departing",
+                true,
+                mez_mux::layout::Size::new(80, 24).unwrap(),
+                120,
+            )
+            .unwrap();
+        let sibling = service
+            .attach_primary(
+                "sibling",
+                true,
+                mez_mux::layout::Size::new(80, 24).unwrap(),
+                120,
+            )
+            .unwrap();
+        let (handle, mut actor) = super::AsyncRuntimeSessionActor::new(
+            service,
+            super::AsyncRuntimeActorConfig::default(),
+        )
+        .unwrap();
+        let capacity = handle.sender.normal_admission.available_permits();
+        let pressure = handle
+            .sender
+            .normal_admission
+            .clone()
+            .acquire_many_owned(capacity as u32)
+            .await
+            .unwrap();
+        let mut connection = crate::control::ControlConnectionState::new(true, true);
+        connection.rebind_caller_client(owner.clone());
+        connection.own_rebound_client_disconnect_for_test();
+        let mut cleanup = Box::pin(
+            crate::host::async_runtime::submit_control_connection_disconnect_event(
+                &handle,
+                &mut connection,
+            ),
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), &mut cleanup)
+                .await
+                .is_err()
+        );
+        if event_completion {
+            let task = tokio::spawn(async { Err(crate::MezError::invalid_state("event failed")) });
+            let mut events = crate::runtime::IrohEventTask::new(Some(task));
+            let (result, completed) = events.supervise(async { cleanup.await.map(|_| 0) }).await;
+            assert!(completed);
+            assert!(result.is_err());
+        } else {
+            drop(cleanup);
+        }
+        assert!(connection.take_disconnect_client_id().is_none());
+        drop(pressure);
+        let cleanup = actor
+            .client_clipboard_route_cleanup_rx
+            .try_recv()
+            .expect("cancelled disconnect must remain actor-owned");
+        actor.apply_transport_cancellation_cleanup(cleanup).await;
+        assert!(!actor.service.session().is_attached_primary(&owner));
+        assert!(actor.service.session().is_attached_primary(&sibling));
+        crate::host::async_runtime::submit_control_connection_disconnect_event(
+            &handle,
+            &mut connection,
+        )
+        .await
+        .unwrap();
+        assert!(actor.client_clipboard_route_cleanup_rx.try_recv().is_err());
+    }
+}
+
 /// A cancelled initialization response must retain exact attachment teardown
 /// after the actor has applied the request. Cleanup is queued synchronously by
 /// the discarded response lease, and never detaches an unrelated client.
