@@ -3418,6 +3418,15 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
     );
     service.inject_agent_owned_pane_daemon_environment_for_tests(daemon);
 
+    let root = temp_root("agent-owned-pane-exec-environment");
+    let report = root.join("environment");
+    let pending_report = root.join("environment.pending");
+    let command = format!(
+        "env > {}; mv {} {}; exec cat\n",
+        mez_agent::shell_quote(&pending_report.to_string_lossy()),
+        mez_agent::shell_quote(&pending_report.to_string_lossy()),
+        mez_agent::shell_quote(&report.to_string_lossy()),
+    );
     let window_id = service.session().active_window().unwrap().id.clone();
     let agent_started = service
         .split_pane_in_window_with_process(
@@ -3431,10 +3440,32 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
             },
         )
         .unwrap();
-    let agent_process = service
+    let mut agent_process = service
         .take_running_pane_process_for_adapter(&agent_started.pane_id)
         .unwrap();
-    let agent_environment = pane_root_exec_environment(&agent_process);
+    agent_process.write_input(command.as_bytes()).unwrap();
+    // The child publishes only after exec and atomically renames the report.
+    // Do not retry until forbidden values disappear: the first complete report
+    // is authoritative even if it exposes a real launch-boundary failure.
+    let mut reported = None;
+    for _ in 0..200 {
+        if let Ok(bytes) = fs::read(&report) {
+            reported = Some(bytes);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let reported = reported.expect("agent-owned child must publish its environment after exec");
+    let agent_environment = reported
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| {
+            let separator = line.iter().position(|byte| *byte == b'=')?;
+            Some(mez_mux::process::RawEnvironmentEntry {
+                key: line[..separator].to_vec(),
+                value: line[separator + 1..].to_vec(),
+            })
+        })
+        .collect::<Vec<_>>();
 
     assert!(
         !environment_forwards_key(&agent_environment, b"MEZ_AGENT_OWNED_DAEMON_SENTINEL"),
@@ -3452,6 +3483,7 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
 
     drop(user_process);
     drop(agent_process);
+    let _ = fs::remove_dir_all(root);
 }
 
 /// Reads one pane root process's exec-time environment for pane-creation tests.
