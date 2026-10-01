@@ -65,6 +65,13 @@ event payloads. All operate on the existing `RuntimeSessionService` state;
 process generations, shell interaction epochs, and exact input leases remain
 explicit handoffs rather than independently mutable policy stores.
 
+Iroh transport composition lives under `runtime/iroh/mod.rs`. Focused children
+own render fragmentation and flush accounting, connection-local control serving,
+task settlement, and privacy-safe diagnostic projections. The listener retains
+the endpoint and diagnostic registry; successful delivery remains the boundary
+for committing render bases and presentation receipts. Transport authorization
+and exact-client cleanup stay above the agent-independent presentation crates.
+
 Agent terminal presentation application lives under
 `runtime/render/presentation/buffer_apply/`. Its components distinguish cumulative
 provider source, immutable worker projection, freshness acceptance, validated

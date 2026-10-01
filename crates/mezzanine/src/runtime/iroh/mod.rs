@@ -1,4 +1,9 @@
-//! Iroh endpoint construction and lifecycle for optional remote control.
+//! Iroh endpoint construction and transport composition for remote control.
+//!
+//! The listener owns endpoint policy and the diagnostics registry. Focused
+//! children separate render delivery, control connection lifetime, settlement,
+//! and privacy-safe projections without changing exact-client authority or the
+//! successful-flush boundary for render bases and presentation receipts.
 
 use base64::Engine as _;
 use futures_util::FutureExt as _;
@@ -28,6 +33,24 @@ use crate::security::remote::{RemotePrincipal, RemoteTrustStore};
 use crate::storage::snapshot::SnapshotRepository;
 use mez_core::ids::ClientId;
 use tokio::io::AsyncWriteExt;
+
+mod control_connection;
+mod diagnostics;
+mod quality;
+use control_connection::serve_runtime_iroh_control_connection;
+pub(crate) use diagnostics::RuntimeIrohDiagnosticsSnapshot;
+mod render_delivery;
+mod settlement;
+pub(crate) use quality::{
+    RuntimeIrohConnectionQualitySnapshot, classify_runtime_iroh_connection_quality,
+};
+#[cfg(test)]
+use render_delivery::encode_iroh_render_delivery_frames;
+use render_delivery::{IrohRenderDeliveryPhase, write_iroh_render_delivery};
+use settlement::{
+    IrohConnectionTransportOwner, drain_iroh_control_tasks, record_iroh_connection_join,
+    terminal_daemon_state, wait_for_terminal_iroh_lifecycle,
+};
 
 use super::config::{
     RuntimeIrohAddressLookupPolicy, RuntimeIrohCompressionCodec, RuntimeIrohRelayPolicy,
@@ -151,133 +174,6 @@ fn iroh_render_rate_limit_interval(rate_limit_fps: u64) -> Option<Duration> {
     Some(Duration::from_millis(
         1_000u64.saturating_add(rate_limit_fps.saturating_sub(1)) / rate_limit_fps,
     ))
-}
-
-/// Splits an oversized framed v3 render update into bounded v4 envelopes.
-///
-/// The fragments preserve the original control frame verbatim. The receiver
-/// validates the complete reconstructed frame through the existing atomic v3
-/// snapshot or delta parser before publishing any presentation work.
-fn encode_iroh_render_delivery_frames(
-    frame: Vec<u8>,
-    revision: u64,
-    version: u32,
-) -> Result<Vec<Vec<u8>>> {
-    if version < 4 || frame.len() <= IROH_RENDER_FRAGMENT_BYTES {
-        return Ok(vec![frame]);
-    }
-    if frame.len() > IROH_RENDER_FRAGMENT_MAX_TOTAL_BYTES {
-        return Err(MezError::invalid_state(
-            "Iroh rendered view exceeds the bounded v4 fragment transfer limit",
-        ));
-    }
-    let total_bytes = frame.len();
-    let chunks = frame.chunks(IROH_RENDER_FRAGMENT_BYTES).collect::<Vec<_>>();
-    let chunk_count = chunks.len();
-    debug_assert!(chunk_count <= IROH_RENDER_FRAGMENT_MAX_CHUNKS);
-    Ok(chunks
-        .into_iter()
-        .enumerate()
-        .map(|(index, chunk)| {
-            encode_control_body(
-                &serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "render/chunk",
-                    "params": {
-                        "revision": revision,
-                        "index": index,
-                        "chunks": chunk_count,
-                        "total_bytes": total_bytes,
-                        "data_base64": base64::engine::general_purpose::STANDARD.encode(chunk),
-                    }
-                })
-                .to_string(),
-            )
-        })
-        .collect())
-}
-
-/// Error context differs for the first snapshot and subsequent updates.
-#[derive(Clone, Copy)]
-enum IrohRenderDeliveryPhase {
-    InitialSnapshot,
-    Update,
-}
-
-impl IrohRenderDeliveryPhase {
-    fn write_timeout(self) -> &'static str {
-        match self {
-            Self::InitialSnapshot => "Iroh render snapshot write timed out",
-            Self::Update => "Iroh render update write timed out",
-        }
-    }
-
-    fn write_failed(self) -> &'static str {
-        match self {
-            Self::InitialSnapshot => "Iroh render snapshot write failed",
-            Self::Update => "Iroh render update write failed",
-        }
-    }
-
-    fn flush_timeout(self) -> &'static str {
-        match self {
-            Self::InitialSnapshot => "Iroh render snapshot flush timed out",
-            Self::Update => "Iroh render update flush timed out",
-        }
-    }
-
-    fn flush_failed(self) -> &'static str {
-        match self {
-            Self::InitialSnapshot => "Iroh render snapshot flush failed",
-            Self::Update => "Iroh render update flush failed",
-        }
-    }
-}
-
-/// Counts frames only after encoding them; a successful return means all
-/// fragments were written and the complete stream flush succeeded. The caller
-/// alone commits its retained base and presentation receipts after this result.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "stream, render identity, codec state, accounting, timeout, and error phase are independent delivery inputs"
-)]
-async fn write_iroh_render_delivery<W: tokio::io::AsyncWrite + Unpin>(
-    send: &mut W,
-    frame: Vec<u8>,
-    revision: u64,
-    version: u32,
-    compression: IrohCompressionPolicy,
-    stream_encoder: &mut Option<IrohStreamEncoder>,
-    compression_metrics: &IrohCompressionMetrics,
-    idle_timeout: Duration,
-    phase: IrohRenderDeliveryPhase,
-) -> Result<(usize, usize, Duration)> {
-    let frames = encode_iroh_render_delivery_frames(frame, revision, version)?;
-    let started = Instant::now();
-    let mut wire_bytes = 0usize;
-    let mut decoded_bytes = 0usize;
-    for frame in frames {
-        let frame = match stream_encoder.as_mut() {
-            Some(encoder) => encoder.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?,
-            None => compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?,
-        };
-        wire_bytes = wire_bytes.saturating_add(frame.as_bytes().len());
-        decoded_bytes = decoded_bytes.saturating_add(frame.decoded_bytes());
-        compression_metrics.record_frame(
-            frame.as_bytes().len(),
-            frame.decoded_bytes(),
-            frame.compressed(),
-        );
-        tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
-            .await
-            .map_err(|_| MezError::invalid_state(phase.write_timeout()))?
-            .map_err(|_| MezError::invalid_state(phase.write_failed()))?;
-    }
-    tokio::time::timeout(idle_timeout, send.flush())
-        .await
-        .map_err(|_| MezError::invalid_state(phase.flush_timeout()))?
-        .map_err(|_| MezError::invalid_state(phase.flush_failed()))?;
-    Ok((wire_bytes, decoded_bytes, started.elapsed()))
 }
 
 /// Bounded render triggers collected after the previous v3 update completes.
@@ -772,127 +668,6 @@ struct RuntimeIrohDiagnosticsInner {
     connection_quality: Mutex<BTreeMap<String, RuntimeIrohConnectionQualitySnapshot>>,
 }
 
-/// Privacy-safe selected-path measurements for one initialized Iroh client.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RuntimeIrohConnectionQualitySnapshot {
-    pub(crate) connected_millis: u64,
-    pub(crate) sampled_at: Instant,
-    pub(crate) rtt_micros: u64,
-    pub(crate) average_rtt_micros: u64,
-    pub(crate) jitter_micros: u64,
-    pub(crate) tx_bytes: u64,
-    pub(crate) rx_bytes: u64,
-    pub(crate) tx_bytes_per_second: u64,
-    pub(crate) rx_bytes_per_second: u64,
-    pub(crate) lost_packets: u64,
-    pub(crate) congestion_events: u64,
-    pub(crate) cwnd_bytes: u64,
-    pub(crate) mtu: u16,
-    pub(crate) compression_codec: RuntimeIrohCompressionCodec,
-    pub(crate) compression_wire_bytes: u64,
-    pub(crate) compression_decoded_bytes: u64,
-    pub(crate) compression_compressed_frames: u64,
-    pub(crate) compression_identity_frames: u64,
-    pub(crate) render_triggers_coalesced: u64,
-    pub(crate) render_updates_suppressed: u64,
-    pub(crate) render_snapshot_fallbacks: u64,
-    pub(crate) render_ready_depth_max: u64,
-    pub(crate) render_write_wait_micros: u64,
-    pub(crate) render_write_wait_max_micros: u64,
-    pub(crate) render_snapshot_frames: u64,
-    pub(crate) render_delta_frames: u64,
-    pub(crate) render_changed_rows: u64,
-    pub(crate) render_selected_wire_bytes: u64,
-    pub(crate) render_selected_decoded_bytes: u64,
-    pub(crate) render_snapshot_candidate_bytes: u64,
-    path: u8,
-}
-
-impl RuntimeIrohConnectionQualitySnapshot {
-    /// Returns the selected path class without exposing an address or relay URL.
-    pub(crate) const fn path_name(self) -> &'static str {
-        match self.path {
-            1 => "direct",
-            2 => "relay",
-            3 => "custom",
-            _ => "unknown",
-        }
-    }
-
-    /// Returns the elapsed time since the transport sample was collected.
-    pub(crate) fn sample_age(self) -> std::time::Duration {
-        self.sampled_at.elapsed()
-    }
-
-    /// Builds a deterministic snapshot for focused command-rendering tests.
-    #[cfg(test)]
-    pub(crate) fn test_fixture(path: &str) -> Self {
-        Self {
-            connected_millis: 12_000,
-            sampled_at: Instant::now(),
-            rtt_micros: 42_000,
-            average_rtt_micros: 45_000,
-            jitter_micros: 6_000,
-            tx_bytes: 524_288,
-            rx_bytes: 8_388_608,
-            tx_bytes_per_second: 1_126,
-            rx_bytes_per_second: 3_277,
-            lost_packets: 0,
-            congestion_events: 0,
-            cwnd_bytes: 65_536,
-            mtu: 1_200,
-            compression_codec: RuntimeIrohCompressionCodec::Zstd,
-            compression_wire_bytes: 512,
-            compression_decoded_bytes: 1_024,
-            compression_compressed_frames: 2,
-            compression_identity_frames: 1,
-            render_triggers_coalesced: 4,
-            render_updates_suppressed: 1,
-            render_snapshot_fallbacks: 1,
-            render_ready_depth_max: 5,
-            render_write_wait_micros: 250,
-            render_write_wait_max_micros: 250,
-            render_snapshot_frames: 1,
-            render_delta_frames: 1,
-            render_changed_rows: 25,
-            render_selected_wire_bytes: 176,
-            render_selected_decoded_bytes: 608,
-            render_snapshot_candidate_bytes: 1_024,
-            path: match path {
-                "direct" => 1,
-                "relay" => 2,
-                "custom" => 3,
-                _ => 0,
-            },
-        }
-    }
-}
-
-/// Classifies one privacy-safe Iroh transport sample for diagnostics and UI.
-pub(crate) fn classify_runtime_iroh_connection_quality(
-    rtt_micros: u64,
-    jitter_micros: u64,
-    lost_packets: u64,
-    congestion_events: u64,
-    sample_age: std::time::Duration,
-) -> crate::host::terminal::TerminalIrohStatusQuality {
-    use crate::host::terminal::TerminalIrohStatusQuality;
-
-    if sample_age > std::time::Duration::from_secs(5) {
-        TerminalIrohStatusQuality::Unknown
-    } else if rtt_micros >= 500_000 || lost_packets >= 4 || congestion_events >= 4 {
-        TerminalIrohStatusQuality::Poor
-    } else if rtt_micros >= 200_000
-        || jitter_micros >= 75_000
-        || lost_packets > 0
-        || congestion_events > 0
-    {
-        TerminalIrohStatusQuality::Degraded
-    } else {
-        TerminalIrohStatusQuality::Good
-    }
-}
-
 #[derive(Debug, Clone)]
 struct RuntimeIrohPathSample {
     sampled_at: Instant,
@@ -916,70 +691,7 @@ struct RuntimeIrohPathSample {
     render_snapshot_candidate_bytes: u64,
 }
 
-/// Copyable status projection that contains no endpoint or peer identifiers.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct RuntimeIrohDiagnosticsSnapshot {
-    pub(crate) listener_active: bool,
-    pub(crate) active_connections: usize,
-    pub(crate) connections_accepted: u64,
-    pub(crate) connections_rejected: u64,
-    pub(crate) setup_successes: u64,
-    pub(crate) setup_failures: u64,
-    pub(crate) setup_latency_total_millis: u64,
-    pub(crate) setup_latency_max_millis: u64,
-    pub(crate) connections_completed: u64,
-    pub(crate) connections_failed: u64,
-    pub(crate) direct_connections: u64,
-    pub(crate) relay_connections: u64,
-    pub(crate) custom_connections: u64,
-    pub(crate) unknown_connections: u64,
-    pub(crate) shutdown_aborts: u64,
-    last_path: u8,
-}
-
-impl RuntimeIrohDiagnosticsSnapshot {
-    pub(crate) fn average_setup_latency_millis(self) -> u64 {
-        let attempts = self.setup_successes.saturating_add(self.setup_failures);
-        self.setup_latency_total_millis
-            .checked_div(attempts)
-            .unwrap_or(0)
-    }
-
-    pub(crate) const fn last_path_name(self) -> &'static str {
-        match self.last_path {
-            1 => "direct",
-            2 => "relay",
-            3 => "custom",
-            _ => "unknown",
-        }
-    }
-}
-
 impl RuntimeIrohDiagnostics {
-    pub(crate) fn snapshot(&self) -> RuntimeIrohDiagnosticsSnapshot {
-        RuntimeIrohDiagnosticsSnapshot {
-            listener_active: self.inner.listener_active.load(Ordering::Relaxed),
-            active_connections: self.inner.active_connections.load(Ordering::Relaxed),
-            connections_accepted: self.inner.connections_accepted.load(Ordering::Relaxed),
-            connections_rejected: self.inner.connections_rejected.load(Ordering::Relaxed),
-            setup_successes: self.inner.setup_successes.load(Ordering::Relaxed),
-            setup_failures: self.inner.setup_failures.load(Ordering::Relaxed),
-            setup_latency_total_millis: self
-                .inner
-                .setup_latency_total_millis
-                .load(Ordering::Relaxed),
-            setup_latency_max_millis: self.inner.setup_latency_max_millis.load(Ordering::Relaxed),
-            connections_completed: self.inner.connections_completed.load(Ordering::Relaxed),
-            connections_failed: self.inner.connections_failed.load(Ordering::Relaxed),
-            direct_connections: self.inner.direct_connections.load(Ordering::Relaxed),
-            relay_connections: self.inner.relay_connections.load(Ordering::Relaxed),
-            custom_connections: self.inner.custom_connections.load(Ordering::Relaxed),
-            unknown_connections: self.inner.unknown_connections.load(Ordering::Relaxed),
-            shutdown_aborts: self.inner.shutdown_aborts.load(Ordering::Relaxed),
-            last_path: self.inner.last_path.load(Ordering::Relaxed),
-        }
-    }
-
     pub(crate) fn listener_started(&self) {
         self.inner.listener_active.store(true, Ordering::Relaxed);
     }
@@ -1847,218 +1559,6 @@ async fn serve_runtime_iroh_control_listener(
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "connection ownership, diagnostics, runtime state, framing, snapshots, compression, and timeouts are independent adapter inputs"
-)]
-async fn serve_runtime_iroh_control_connection(
-    connection: iroh::endpoint::Connection,
-    connection_guard: RuntimeIrohConnectionGuard,
-    handle: &AsyncRuntimeSessionHandle,
-    control_config: AsyncRuntimeControlConnectionConfig,
-    snapshots: Option<&SnapshotRepository>,
-    authority: Option<RuntimeIrohAuthority>,
-    compression: IrohCompressionPolicy,
-    setup_timeout: std::time::Duration,
-    idle_timeout: std::time::Duration,
-) -> Result<u64> {
-    let endpoint_id = connection.remote_id().to_string();
-    let _transport_owner = IrohConnectionTransportOwner(connection.clone());
-    let (send, recv) = tokio::time::timeout(setup_timeout, connection.accept_bi())
-        .await
-        .map_err(|_| MezError::invalid_state("Iroh control stream setup timed out"))?
-        .map_err(|error| {
-            MezError::invalid_state(format!("failed to accept Iroh control stream: {error}"))
-        })?;
-    let compression_metrics = IrohCompressionMetrics::new(compression.codec());
-    let mut bridge = IrohCompressionBridge::spawn_with_metrics(
-        recv,
-        send,
-        compression,
-        compression_metrics.clone(),
-        control_config.max_content_length,
-    )?;
-    let mut connection_state = ControlConnectionState::new(false, false);
-    connection_state.bind_x11_connection_id(format!("iroh-{}", connection.stable_id()))?;
-    let (event_start_tx, event_start_rx) =
-        tokio::sync::oneshot::channel::<(ClientId, u32, bool, bool)>();
-    let mut event_start_tx = Some(event_start_tx);
-    let (event_stop_tx, event_stop_rx) = tokio::sync::watch::channel(false);
-    let event_connection = connection.clone();
-    let event_handle = handle.clone();
-    let event_compression_metrics = compression_metrics.clone();
-    let event_task = tokio::spawn(async move {
-        let Ok((client_id, version, client_clipboard_write, push_render)) = event_start_rx.await
-        else {
-            return Ok(0);
-        };
-        serve_runtime_iroh_event_stream(
-            event_connection,
-            event_handle,
-            client_id,
-            version,
-            client_clipboard_write,
-            push_render,
-            compression,
-            event_compression_metrics,
-            setup_timeout,
-            idle_timeout,
-            event_stop_rx,
-        )
-        .await
-    });
-    let mut event_task = super::IrohEventTask::new(Some(event_task));
-    let sampler = Arc::new(Mutex::new(
-        connection_guard.sampler(compression_metrics.clone()),
-    ));
-    let periodic_sampler = sampler.clone();
-    let periodic_connection = connection.clone();
-    let mut sample_task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            if let Ok(mut sampler) = periodic_sampler.lock() {
-                sampler.sample_current(&periodic_connection);
-            }
-        }
-    }));
-    let sample_connection = connection.clone();
-    let response_sampler = sampler.clone();
-    let request_authority = authority.clone();
-    let cancellation_authority = authority;
-    let (principal_tx, mut principal_rx) =
-        tokio::sync::watch::channel::<Option<RemotePrincipal>>(None);
-    let authority_cancelled = async move {
-        let Some(authority) = cancellation_authority else {
-            std::future::pending::<()>().await;
-            return;
-        };
-        let mut trust_changes = authority.trust.authority_changes();
-        loop {
-            let principal = principal_rx.borrow().clone();
-            if principal.as_ref().is_some_and(|principal| {
-                authority
-                    .trust
-                    .validate_bound_principal(&authority.server_endpoint_id, principal)
-                    .is_err()
-            }) {
-                return;
-            }
-            tokio::select! {
-                changed = trust_changes.changed() => {
-                    if changed.is_err() {
-                        return;
-                    }
-                }
-                changed = principal_rx.changed() => {
-                    if changed.is_err() {
-                        return;
-                    }
-                }
-            }
-        }
-    };
-    let control =
-        serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation(
-            bridge.stream_mut(),
-            AuthenticatedPeer::iroh_endpoint(endpoint_id),
-            handle,
-            &mut connection_state,
-            control_config,
-            snapshots,
-            |_, state| terminal_daemon_state(state),
-            move |connection_state| {
-                let Some(authority) = request_authority.as_ref() else {
-                    return Ok(());
-                };
-                let Some(principal) = connection_state.remote_principal() else {
-                    return Ok(());
-                };
-                authority
-                    .trust
-                    .validate_bound_principal(&authority.server_endpoint_id, principal)
-            },
-            move |connection_state| {
-                principal_tx.send_replace(connection_state.remote_principal().cloned());
-                if let Some(client_id) = connection_state.caller_client_id()
-                    && let Ok(mut sampler) = response_sampler.lock()
-                {
-                    sampler.sample(&sample_connection, client_id);
-                }
-                if let Some(start) = connection_state.take_event_stream_start()
-                    && let Some(sender) = event_start_tx.take()
-                {
-                    let _ = sender.send(start);
-                }
-                if let Some(route) = connection_state.take_x11_route_start() {
-                    route.activate(
-                        sample_connection.clone(),
-                        compression,
-                        compression_metrics.clone(),
-                    )?;
-                }
-                Ok(())
-            },
-            authority_cancelled,
-        );
-    // Only transport-local state is unwound. The actor owns shared runtime
-    // mutation; its failure remains a separate infrastructure result.
-    let (result, event_completed) =
-        match std::panic::AssertUnwindSafe(event_task.supervise(control))
-            .catch_unwind()
-            .await
-        {
-            Ok(result) => result,
-            Err(_) => (
-                Err(MezError::invalid_state("Iroh control connection panicked")),
-                true,
-            ),
-        };
-    let disconnect_result = if event_completed {
-        tokio::time::timeout(
-            setup_timeout,
-            crate::host::async_runtime::submit_control_connection_disconnect_event(
-                handle,
-                &mut connection_state,
-            ),
-        )
-        .await
-        .map_err(|_| MezError::invalid_state("Iroh event failure disconnect timed out"))
-        .and_then(|result| result)
-    } else {
-        Ok(())
-    };
-    let x11_route_result = connection_state.deactivate_x11_route();
-    sample_task.abort();
-    let _ = (&mut sample_task).await;
-    let _ = event_stop_tx.send(true);
-    let shutdown_deadline = tokio::time::Instant::now() + setup_timeout;
-    let bridge_finish_result = bridge.finish_outbound_until(shutdown_deadline).await;
-    // Closing the connection while the outbound FIN is still unacknowledged
-    // discards that FIN, leaving a peer that drains the framed response stream
-    // to observe a connection error where the stream ends. Order the close
-    // after the peer's acknowledgement, bounded by the same shutdown deadline.
-    let bridge_outbound_result = bridge.settle_outbound_until(shutdown_deadline).await;
-    connection.close(
-        VarInt::from_u32(u32::from(result.is_err())),
-        if result.is_ok() {
-            b"control complete"
-        } else {
-            b"control failed"
-        },
-    );
-    let event_result = event_task.settle_until(shutdown_deadline).await;
-    let bridge_result = bridge.settle_until(shutdown_deadline).await;
-    let served = super::iroh_event_task::merge_event_result(result, event_result)?;
-    disconnect_result?;
-    x11_route_result?;
-    bridge_finish_result?;
-    bridge_outbound_result?;
-    bridge_result?;
-    Ok(served)
-}
-
-#[allow(
-    clippy::too_many_arguments,
     reason = "connection ownership, client routing, framing, lifecycle, and bounded setup and idle behavior are independent event adapter inputs"
 )]
 async fn serve_runtime_iroh_event_stream(
@@ -2546,73 +2046,6 @@ pub(crate) async fn serve_host_routed_iroh_event_stream(
     .await
 }
 
-/// Closes only the exact transport when its serving future unwinds or is aborted.
-/// Explicit graceful serving still orders FIN acknowledgement before this drop.
-struct IrohConnectionTransportOwner(iroh::endpoint::Connection);
-
-impl Drop for IrohConnectionTransportOwner {
-    fn drop(&mut self) {
-        self.0.close(VarInt::from_u32(0), b"connection owner ended");
-    }
-}
-
-/// Reaps every connection task, recording local failures without early return.
-async fn drain_iroh_control_tasks(
-    tasks: &mut JoinSet<Result<u64>>,
-    diagnostics: &RuntimeIrohDiagnostics,
-) {
-    while let Some(joined) = tasks.join_next().await {
-        record_iroh_connection_join(diagnostics, joined, false);
-    }
-}
-
-/// Records unexpected connection joins without exposing arbitrary panic payloads.
-/// Ordinary worker results are already recorded by their owning serving task.
-fn record_iroh_connection_join(
-    diagnostics: &RuntimeIrohDiagnostics,
-    joined: std::result::Result<Result<u64>, tokio::task::JoinError>,
-    forced_abort: bool,
-) {
-    if let Err(error) = joined {
-        if forced_abort && error.is_cancelled() {
-            return;
-        }
-        diagnostics
-            .inner
-            .connections_failed
-            .fetch_add(1, Ordering::Relaxed);
-        eprintln!(
-            "mez: Iroh connection task {}",
-            if error.is_panic() {
-                "panicked"
-            } else {
-                "was cancelled unexpectedly"
-            }
-        );
-    }
-}
-
-/// Waits until the runtime enters a terminal lifecycle state or its state
-/// publisher disappears, allowing peer-controlled setup to cancel promptly.
-async fn wait_for_terminal_iroh_lifecycle(
-    lifecycle: &mut tokio::sync::watch::Receiver<super::RuntimeLifecycleState>,
-) {
-    loop {
-        if terminal_daemon_state(*lifecycle.borrow()) || lifecycle.changed().await.is_err() {
-            return;
-        }
-    }
-}
-
-fn terminal_daemon_state(state: super::RuntimeLifecycleState) -> bool {
-    matches!(
-        state,
-        super::RuntimeLifecycleState::Stopping
-            | super::RuntimeLifecycleState::Killed
-            | super::RuntimeLifecycleState::Failed
-    )
-}
-
 fn relay_mode(policy: &RuntimeIrohRelayPolicy) -> Result<RelayMode> {
     match policy {
         RuntimeIrohRelayPolicy::Disabled => Ok(RelayMode::Disabled),
@@ -2632,165 +2065,177 @@ mod tests {
     use super::*;
     use crate::runtime::{RenderInvalidationReason, RuntimeSideEffect};
 
-    /// A failed join must not short-circuit draining siblings. Unexpected
-    /// cancellation counts as failure; intentional shutdown aborts do not.
-    #[tokio::test]
-    async fn iroh_connection_drain_contains_panic_and_cancellation() {
-        let diagnostics = RuntimeIrohDiagnostics::default();
-        let mut tasks = JoinSet::new();
-        tasks.spawn(async { panic!("private injected join payload") });
-        let cancelled = tasks.spawn(std::future::pending::<Result<u64>>());
-        cancelled.abort();
-        let completed = Arc::new(AtomicBool::new(false));
-        let sibling = completed.clone();
-        tasks.spawn(async move {
-            tokio::task::yield_now().await;
-            sibling.store(true, Ordering::Release);
-            Ok(1)
-        });
-        drain_iroh_control_tasks(&mut tasks, &diagnostics).await;
-        assert!(tasks.is_empty());
-        assert!(completed.load(Ordering::Acquire));
-        assert_eq!(diagnostics.snapshot().connections_failed, 2);
+    mod settlement {
+        use super::*;
 
-        tasks.spawn(std::future::pending::<Result<u64>>());
-        tasks.abort_all();
-        while let Some(joined) = tasks.join_next().await {
-            record_iroh_connection_join(&diagnostics, joined, true);
+        /// A failed join must not short-circuit draining siblings. Unexpected
+        /// cancellation counts as failure; intentional shutdown aborts do not.
+        #[tokio::test]
+        async fn iroh_connection_drain_contains_panic_and_cancellation() {
+            let diagnostics = RuntimeIrohDiagnostics::default();
+            let mut tasks = JoinSet::new();
+            tasks.spawn(async { panic!("private injected join payload") });
+            let cancelled = tasks.spawn(std::future::pending::<Result<u64>>());
+            cancelled.abort();
+            let completed = Arc::new(AtomicBool::new(false));
+            let sibling = completed.clone();
+            tasks.spawn(async move {
+                tokio::task::yield_now().await;
+                sibling.store(true, Ordering::Release);
+                Ok(1)
+            });
+            drain_iroh_control_tasks(&mut tasks, &diagnostics).await;
+            assert!(tasks.is_empty());
+            assert!(completed.load(Ordering::Acquire));
+            assert_eq!(diagnostics.snapshot().connections_failed, 2);
+
+            tasks.spawn(std::future::pending::<Result<u64>>());
+            tasks.abort_all();
+            while let Some(joined) = tasks.join_next().await {
+                record_iroh_connection_join(&diagnostics, joined, true);
+            }
+            assert_eq!(diagnostics.snapshot().connections_failed, 2);
         }
-        assert_eq!(diagnostics.snapshot().connections_failed, 2);
     }
 
-    /// Render delivery counts each encoded fragment but reports success only
-    /// after flushing; phase-specific write and flush failures remain visible.
-    #[tokio::test]
-    async fn iroh_render_delivery_flushes_before_reporting_success() {
-        use std::pin::Pin;
-        use std::task::{Context, Poll};
+    mod render_delivery {
+        use super::*;
 
-        struct TestSink {
-            bytes: Vec<u8>,
-            fail_write: bool,
-            fail_after_bytes: Option<usize>,
-            fail_flush: bool,
-            flushes: usize,
-        }
-        impl tokio::io::AsyncWrite for TestSink {
-            fn poll_write(
-                mut self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-                bytes: &[u8],
-            ) -> Poll<std::io::Result<usize>> {
-                if self.fail_write
-                    || self
-                        .fail_after_bytes
-                        .is_some_and(|limit| self.bytes.len() >= limit)
-                {
-                    return Poll::Ready(Err(std::io::Error::other("write rejected")));
+        /// Render delivery counts each encoded fragment but reports success only
+        /// after flushing; phase-specific write and flush failures remain visible.
+        #[tokio::test]
+        async fn iroh_render_delivery_flushes_before_reporting_success() {
+            use std::pin::Pin;
+            use std::task::{Context, Poll};
+
+            struct TestSink {
+                bytes: Vec<u8>,
+                fail_write: bool,
+                fail_after_bytes: Option<usize>,
+                fail_flush: bool,
+                flushes: usize,
+            }
+            impl tokio::io::AsyncWrite for TestSink {
+                fn poll_write(
+                    mut self: Pin<&mut Self>,
+                    _: &mut Context<'_>,
+                    bytes: &[u8],
+                ) -> Poll<std::io::Result<usize>> {
+                    if self.fail_write
+                        || self
+                            .fail_after_bytes
+                            .is_some_and(|limit| self.bytes.len() >= limit)
+                    {
+                        return Poll::Ready(Err(std::io::Error::other("write rejected")));
+                    }
+                    self.bytes.extend_from_slice(bytes);
+                    Poll::Ready(Ok(bytes.len()))
                 }
-                self.bytes.extend_from_slice(bytes);
-                Poll::Ready(Ok(bytes.len()))
-            }
-            fn poll_flush(
-                mut self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                self.flushes += 1;
-                Poll::Ready(if self.fail_flush {
-                    Err(std::io::Error::other("flush rejected"))
-                } else {
-                    Ok(())
-                })
-            }
-            fn poll_shutdown(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-        }
-        let policy =
-            IrohCompressionPolicy::new(RuntimeIrohCompressionCodec::None, 1, 3, 8 * 1024 * 1024)
-                .unwrap();
-        for phase in [
-            IrohRenderDeliveryPhase::InitialSnapshot,
-            IrohRenderDeliveryPhase::Update,
-        ] {
-            for (fail_write, fail_flush) in [(false, false), (true, false), (false, true)] {
-                let mut sink = TestSink {
-                    bytes: Vec::new(),
-                    fail_write,
-                    fail_after_bytes: None,
-                    fail_flush,
-                    flushes: 0,
-                };
-                let metrics = IrohCompressionMetrics::new(policy.codec());
-                let frame = b"bounded render".to_vec();
-                let result = write_iroh_render_delivery(
-                    &mut sink,
-                    frame.clone(),
-                    1,
-                    4,
-                    policy,
-                    &mut None,
-                    &metrics,
-                    Duration::from_secs(1),
-                    phase,
-                )
-                .await;
-                assert_eq!(metrics.snapshot().identity_frames, 1);
-                if fail_write {
-                    assert!(result.unwrap_err().message().contains(phase.write_failed()));
-                    assert!(sink.bytes.is_empty());
-                    assert_eq!(sink.flushes, 0);
-                } else if fail_flush {
-                    assert!(result.unwrap_err().message().contains(phase.flush_failed()));
-                    assert_eq!(sink.bytes, frame);
-                    assert_eq!(sink.flushes, 1);
-                } else {
-                    let (wire, decoded, _) = result.unwrap();
-                    assert_eq!((wire, decoded), (frame.len(), frame.len()));
-                    assert_eq!(sink.bytes, frame);
-                    assert_eq!(sink.flushes, 1);
+                fn poll_flush(
+                    mut self: Pin<&mut Self>,
+                    _: &mut Context<'_>,
+                ) -> Poll<std::io::Result<()>> {
+                    self.flushes += 1;
+                    Poll::Ready(if self.fail_flush {
+                        Err(std::io::Error::other("flush rejected"))
+                    } else {
+                        Ok(())
+                    })
                 }
-                assert_eq!(
-                    metrics.snapshot().render_snapshot_frames
-                        + metrics.snapshot().render_delta_frames,
-                    0
-                );
+                fn poll_shutdown(
+                    self: Pin<&mut Self>,
+                    _: &mut Context<'_>,
+                ) -> Poll<std::io::Result<()>> {
+                    Poll::Ready(Ok(()))
+                }
             }
+            let policy = IrohCompressionPolicy::new(
+                RuntimeIrohCompressionCodec::None,
+                1,
+                3,
+                8 * 1024 * 1024,
+            )
+            .unwrap();
+            for phase in [
+                IrohRenderDeliveryPhase::InitialSnapshot,
+                IrohRenderDeliveryPhase::Update,
+            ] {
+                for (fail_write, fail_flush) in [(false, false), (true, false), (false, true)] {
+                    let mut sink = TestSink {
+                        bytes: Vec::new(),
+                        fail_write,
+                        fail_after_bytes: None,
+                        fail_flush,
+                        flushes: 0,
+                    };
+                    let metrics = IrohCompressionMetrics::new(policy.codec());
+                    let frame = b"bounded render".to_vec();
+                    let result = write_iroh_render_delivery(
+                        &mut sink,
+                        frame.clone(),
+                        1,
+                        4,
+                        policy,
+                        &mut None,
+                        &metrics,
+                        Duration::from_secs(1),
+                        phase,
+                    )
+                    .await;
+                    assert_eq!(metrics.snapshot().identity_frames, 1);
+                    if fail_write {
+                        assert!(result.unwrap_err().message().contains(phase.write_failed()));
+                        assert!(sink.bytes.is_empty());
+                        assert_eq!(sink.flushes, 0);
+                    } else if fail_flush {
+                        assert!(result.unwrap_err().message().contains(phase.flush_failed()));
+                        assert_eq!(sink.bytes, frame);
+                        assert_eq!(sink.flushes, 1);
+                    } else {
+                        let (wire, decoded, _) = result.unwrap();
+                        assert_eq!((wire, decoded), (frame.len(), frame.len()));
+                        assert_eq!(sink.bytes, frame);
+                        assert_eq!(sink.flushes, 1);
+                    }
+                    assert_eq!(
+                        metrics.snapshot().render_snapshot_frames
+                            + metrics.snapshot().render_delta_frames,
+                        0
+                    );
+                }
+            }
+            let frame = vec![b'x'; IROH_RENDER_FRAGMENT_BYTES + 1];
+            let fragments = encode_iroh_render_delivery_frames(frame.clone(), 2, 4).unwrap();
+            let mut sink = TestSink {
+                bytes: Vec::new(),
+                fail_write: false,
+                fail_after_bytes: Some(fragments[0].len()),
+                fail_flush: false,
+                flushes: 0,
+            };
+            let metrics = IrohCompressionMetrics::new(policy.codec());
+            let error = write_iroh_render_delivery(
+                &mut sink,
+                frame,
+                2,
+                4,
+                policy,
+                &mut None,
+                &metrics,
+                Duration::from_secs(1),
+                IrohRenderDeliveryPhase::Update,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.message(), "Iroh render update write failed");
+            assert_eq!(sink.bytes, fragments[0]);
+            assert_eq!(sink.flushes, 0);
+            assert_eq!(metrics.snapshot().identity_frames, 2);
+            assert_eq!(
+                metrics.snapshot().render_snapshot_frames + metrics.snapshot().render_delta_frames,
+                0
+            );
         }
-        let frame = vec![b'x'; IROH_RENDER_FRAGMENT_BYTES + 1];
-        let fragments = encode_iroh_render_delivery_frames(frame.clone(), 2, 4).unwrap();
-        let mut sink = TestSink {
-            bytes: Vec::new(),
-            fail_write: false,
-            fail_after_bytes: Some(fragments[0].len()),
-            fail_flush: false,
-            flushes: 0,
-        };
-        let metrics = IrohCompressionMetrics::new(policy.codec());
-        let error = write_iroh_render_delivery(
-            &mut sink,
-            frame,
-            2,
-            4,
-            policy,
-            &mut None,
-            &metrics,
-            Duration::from_secs(1),
-            IrohRenderDeliveryPhase::Update,
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(error.message(), "Iroh render update write failed");
-        assert_eq!(sink.bytes, fragments[0]);
-        assert_eq!(sink.flushes, 0);
-        assert_eq!(metrics.snapshot().identity_frames, 2);
-        assert_eq!(
-            metrics.snapshot().render_snapshot_frames + metrics.snapshot().render_delta_frames,
-            0
-        );
     }
 
     // Endpoint construction starts background networking tasks; permit CI
@@ -3646,67 +3091,71 @@ mod tests {
         assert!(chunk.contains(r#""data_base64":"""#), "{chunk}");
     }
 
-    /// Verifies the shared Iroh quality classifier preserves every threshold
-    /// and treats stale samples as unknown before considering measurements.
-    #[test]
-    fn iroh_connection_quality_classifier_covers_thresholds_and_staleness() {
-        use crate::host::terminal::TerminalIrohStatusQuality;
+    mod diagnostics {
+        use super::*;
 
-        let classify = |rtt, jitter, loss, congestion, age_seconds| {
-            classify_runtime_iroh_connection_quality(
-                rtt,
-                jitter,
-                loss,
-                congestion,
-                std::time::Duration::from_secs(age_seconds),
-            )
-        };
-        assert_eq!(
-            classify(42_000, 6_000, 0, 0, 0),
-            TerminalIrohStatusQuality::Good
-        );
-        assert_eq!(
-            classify(200_000, 0, 0, 0, 0),
-            TerminalIrohStatusQuality::Degraded
-        );
-        assert_eq!(
-            classify(0, 75_000, 0, 0, 0),
-            TerminalIrohStatusQuality::Degraded
-        );
-        assert_eq!(classify(0, 0, 1, 0, 0), TerminalIrohStatusQuality::Degraded);
-        assert_eq!(
-            classify(500_000, 0, 0, 0, 0),
-            TerminalIrohStatusQuality::Poor
-        );
-        assert_eq!(classify(0, 0, 4, 0, 0), TerminalIrohStatusQuality::Poor);
-        assert_eq!(
-            classify(900_000, 0, 9, 9, 6),
-            TerminalIrohStatusQuality::Unknown
-        );
-    }
+        /// Verifies the shared Iroh quality classifier preserves every threshold
+        /// and treats stale samples as unknown before considering measurements.
+        #[test]
+        fn iroh_connection_quality_classifier_covers_thresholds_and_staleness() {
+            use crate::host::terminal::TerminalIrohStatusQuality;
 
-    /// Verifies a client remains associated with its Iroh connection while
-    /// path discovery is incomplete, allowing the periodic sampler to publish
-    /// the first selected-path sample later.
-    #[test]
-    fn iroh_path_sampler_associates_client_before_path_selection() {
-        let diagnostics = RuntimeIrohDiagnostics::default();
-        let client_id = ClientId::opaque("remote-primary").unwrap();
-        let guard = RuntimeIrohConnectionGuard {
-            diagnostics,
-            connected_at: Instant::now(),
-            client_id: Arc::new(Mutex::new(None)),
-        };
-        let mut sampler = guard.sampler(IrohCompressionMetrics::new(
-            RuntimeIrohCompressionCodec::Zstd,
-        ));
+            let classify = |rtt, jitter, loss, congestion, age_seconds| {
+                classify_runtime_iroh_connection_quality(
+                    rtt,
+                    jitter,
+                    loss,
+                    congestion,
+                    std::time::Duration::from_secs(age_seconds),
+                )
+            };
+            assert_eq!(
+                classify(42_000, 6_000, 0, 0, 0),
+                TerminalIrohStatusQuality::Good
+            );
+            assert_eq!(
+                classify(200_000, 0, 0, 0, 0),
+                TerminalIrohStatusQuality::Degraded
+            );
+            assert_eq!(
+                classify(0, 75_000, 0, 0, 0),
+                TerminalIrohStatusQuality::Degraded
+            );
+            assert_eq!(classify(0, 0, 1, 0, 0), TerminalIrohStatusQuality::Degraded);
+            assert_eq!(
+                classify(500_000, 0, 0, 0, 0),
+                TerminalIrohStatusQuality::Poor
+            );
+            assert_eq!(classify(0, 0, 4, 0, 0), TerminalIrohStatusQuality::Poor);
+            assert_eq!(
+                classify(900_000, 0, 9, 9, 6),
+                TerminalIrohStatusQuality::Unknown
+            );
+        }
 
-        sampler.associate_client(client_id.as_str());
+        /// Verifies a client remains associated with its Iroh connection while
+        /// path discovery is incomplete, allowing the periodic sampler to publish
+        /// the first selected-path sample later.
+        #[test]
+        fn iroh_path_sampler_associates_client_before_path_selection() {
+            let diagnostics = RuntimeIrohDiagnostics::default();
+            let client_id = ClientId::opaque("remote-primary").unwrap();
+            let guard = RuntimeIrohConnectionGuard {
+                diagnostics,
+                connected_at: Instant::now(),
+                client_id: Arc::new(Mutex::new(None)),
+            };
+            let mut sampler = guard.sampler(IrohCompressionMetrics::new(
+                RuntimeIrohCompressionCodec::Zstd,
+            ));
 
-        assert_eq!(
-            sampler.client_id.lock().unwrap().as_deref(),
-            Some(client_id.as_str())
-        );
+            sampler.associate_client(client_id.as_str());
+
+            assert_eq!(
+                sampler.client_id.lock().unwrap().as_deref(),
+                Some(client_id.as_str())
+            );
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
