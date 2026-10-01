@@ -728,3 +728,18 @@ fn sqlite_family(path: &Path) -> [PathBuf; 3] {
         PathBuf::from(format!("{}-shm", path.display())),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Interactive admission must retain a finite budget below the ordinary
+    /// startup/mutation wait, independently of test-thread scheduling delays.
+    #[test]
+    fn interactive_catalog_lock_budget_remains_short() {
+        let interactive = std::hint::black_box(CATALOG_INTERACTIVE_LOCK_TIMEOUT);
+        assert!(!interactive.is_zero());
+        assert!(interactive <= Duration::from_millis(250));
+        assert!(interactive < CATALOG_LOCK_TIMEOUT);
+    }
+}
