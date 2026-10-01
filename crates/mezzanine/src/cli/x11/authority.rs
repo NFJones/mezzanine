@@ -523,19 +523,23 @@ mod tests {
     }
 
     /// Nonzero xauth exit must remain a distinct bounded setup rejection.
+    /// Use an existing interpreter so this status-only test does not race
+    /// publication of a newly written executable during parallel process work.
     #[tokio::test]
     async fn rejects_nonzero_xauth_exit() {
         let root = test_root("nonzero");
         fs::create_dir_all(&root).unwrap();
         let authority = root.join("authority");
         write_private_file(&authority, &[]).unwrap();
-        let script = root.join("fake-xauth");
-        fs::write(&script, "#!/bin/sh\nexit 7\n").unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
 
-        let error = run_xauth(script.as_os_str(), &authority, &[], Duration::from_secs(1))
-            .await
-            .unwrap_err();
+        let error = run_xauth(
+            OsStr::new("/bin/sh"),
+            &authority,
+            &[OsString::from("-c"), OsString::from("exit 7")],
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
 
         assert!(error.message().contains("rejected"), "{error:?}");
         let _ = fs::remove_dir_all(root);
