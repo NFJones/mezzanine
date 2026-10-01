@@ -47,8 +47,11 @@ each connection to one concurrent bidirectional control stream. Primaries
 attempt event-stream versions `3 → 2 → 1`; observers attempt `3 → 1`.
 Downgrade occurs only for the structured unsupported-event-version result or
 the exact legacy equivalent, never for authentication, authorization,
-malformed initialization, transport, or post-initialization failures. After
-the initialize response is flushed, the server may open one unidirectional
+malformed initialization, transport, or post-initialization failures.
+Plaintext event frames distinguish incomplete input from permanent framing
+errors: malformed complete frames terminate reception immediately, without
+waiting for EOF or idle timeout or skipping bytes to reach a later event.
+After the initialize response is flushed, the server may open one unidirectional
 stream with preface `mezzanine/events/1\n`, `mezzanine/events/2\n`, or
 `mezzanine/events/3\n`, matching the negotiated version. Version 3 is the
 boundary for pushed rendered-state updates. A primary or observer v3 stream

@@ -831,13 +831,21 @@ fn drain_negotiated_iroh_event_frames(
     let mut wakeup = IrohAttachRenderWakeup::new(AttachRenderAction::None, None);
     loop {
         let (decoded, consumed) = if compression.codec() == RuntimeIrohCompressionCodec::None {
-            let Ok((body, consumed)) =
-                decode_control_frame(pending, ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH)
+            let Some((frame, consumed)) = crate::protocol::framing::decode_frame_incremental(
+                pending,
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH,
+            )
+            .map_err(|_| MezError::invalid_args("invalid plaintext Iroh event frame"))?
             else {
                 return Ok(wakeup);
             };
+            if frame.content_type != crate::control::CONTROL_CONTENT_TYPE {
+                return Err(MezError::invalid_args(
+                    "unexpected plaintext Iroh event content type",
+                ));
+            }
             wakeup = wakeup.combine(apply_negotiated_iroh_attach_frame(
-                body.as_str(),
+                frame.body.as_str(),
                 clipboard_assembler.as_deref_mut(),
                 clipboard_sender,
                 allow_pushed_render,
@@ -2040,6 +2048,56 @@ mod iroh_setup_tests {
             receiver.recv().await.is_none(),
             "duplicate terminal message"
         );
+        assert!(client_connection.close_reason().is_none());
+        client_connection.close(VarInt::from_u32(0), b"test complete");
+        server_connection.close(VarInt::from_u32(0), b"test complete");
+        client.close().await;
+        server.close().await;
+    }
+
+    /// Invalid complete plaintext must settle the receiver before its long idle
+    /// timeout while the stream and control connection remain open.
+    #[tokio::test(flavor = "current_thread")]
+    async fn plaintext_iroh_event_receiver_rejects_without_eof() {
+        let (server, client, server_connection, client_connection) =
+            connected_iroh_event_pair().await;
+        let compression = IrohCompressionPolicy::new(
+            RuntimeIrohCompressionCodec::None,
+            1,
+            3,
+            ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+        )
+        .unwrap();
+        let (mut receiver, task) = spawn_iroh_runtime_event_receiver(
+            client_connection.clone(),
+            compression,
+            std::time::Duration::from_secs(60),
+            1,
+            false,
+            None,
+            None,
+        );
+        let mut stream = server_connection.open_uni().await.unwrap();
+        stream
+            .write_all(crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE)
+            .await
+            .unwrap();
+        stream
+            .write_all(b"Content-Length: nope\r\n\r\n")
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        let error = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(error.message().contains("plaintext Iroh event frame"));
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(receiver.recv().await.is_none());
         assert!(client_connection.close_reason().is_none());
         client_connection.close(VarInt::from_u32(0), b"test complete");
         server_connection.close(VarInt::from_u32(0), b"test complete");
@@ -3270,6 +3328,102 @@ mod iroh_tests {
             .action,
             AttachRenderAction::InvalidateAndView
         );
+    }
+
+    /// Complete malformed plaintext frames must fail immediately, even before
+    /// a valid event, without mutating the retained render base.
+    #[test]
+    fn plaintext_iroh_event_frames_reject_malformed_prefix() {
+        let valid = encode_control_body(
+            r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
+        );
+        let compression = IrohCompressionPolicy::new(
+            RuntimeIrohCompressionCodec::None,
+            1,
+            3,
+            ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+        )
+        .unwrap();
+        for malformed in [
+            b"invalid header\r\n\r\n".as_slice(),
+            b"Content-Length: nope\r\n\r\n",
+            b"Content-Length: 1\r\nContent-Length: 1\r\n\r\nx",
+            b"Content-Length: 1\r\nContent-Type: wrong/type\r\n\r\nx",
+            b"Content-Length: 1\r\n\r\n\xff",
+        ] {
+            for following in [false, true] {
+                let mut pending = malformed.to_vec();
+                if following {
+                    pending.extend_from_slice(&valid);
+                }
+                let mut state = IrohRetainedRenderState::default();
+                assert!(
+                    drain_negotiated_iroh_event_frames(
+                        &mut pending,
+                        compression,
+                        None,
+                        None,
+                        None,
+                        false,
+                        &mut state,
+                    )
+                    .is_err()
+                );
+                assert_eq!(state.revision, 0);
+            }
+        }
+    }
+
+    /// Every plaintext byte boundary remains legitimately incomplete; completing
+    /// the input decodes both events without losing or repeating buffered bytes.
+    #[test]
+    fn plaintext_iroh_event_frames_decode_all_fragment_boundaries() {
+        let frame = encode_control_body(
+            r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
+        );
+        let compression = IrohCompressionPolicy::new(
+            RuntimeIrohCompressionCodec::None,
+            1,
+            3,
+            ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+        )
+        .unwrap();
+        for split in 0..frame.len() {
+            let mut pending = frame[..split].to_vec();
+            let mut state = IrohRetainedRenderState::default();
+            assert_eq!(
+                drain_negotiated_iroh_event_frames(
+                    &mut pending,
+                    compression,
+                    None,
+                    None,
+                    None,
+                    false,
+                    &mut state,
+                )
+                .unwrap()
+                .action,
+                AttachRenderAction::None
+            );
+            assert_eq!(pending, frame[..split]);
+            pending.extend_from_slice(&frame[split..]);
+            pending.extend_from_slice(&frame);
+            assert_eq!(
+                drain_negotiated_iroh_event_frames(
+                    &mut pending,
+                    compression,
+                    None,
+                    None,
+                    None,
+                    false,
+                    &mut state,
+                )
+                .unwrap()
+                .action,
+                AttachRenderAction::View
+            );
+            assert!(pending.is_empty());
+        }
     }
 
     /// Verifies negotiated Zstandard and LZ4 event envelopes decode to the

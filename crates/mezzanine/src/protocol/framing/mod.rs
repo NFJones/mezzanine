@@ -28,6 +28,7 @@ mod wire;
 
 pub use render::render_frame_template;
 pub use types::{FrameContext, FrameOverflow, ProtocolFrame, ProtocolFrameCodec};
+pub(crate) use wire::decode_frame_incremental;
 pub use wire::{decode_frame, encode_frame};
 
 /// Exposes the tests module boundary.

@@ -87,6 +87,30 @@ pub fn decode_frame(input: &[u8], max_content_length: usize) -> Result<(Protocol
     Ok((ProtocolFrame { content_type, body }, body_end))
 }
 
+/// Decodes available input without treating permanent framing errors as pending.
+/// Partial headers and bodies return `None`; complete malformed frames fail.
+pub(crate) fn decode_frame_incremental(
+    input: &[u8],
+    max_content_length: usize,
+) -> Result<Option<(ProtocolFrame, usize)>> {
+    let Some(header_end) = find_header_end(input)? else {
+        return Ok(None);
+    };
+    let content_length = frame_content_length_from_header(&input[..header_end])?;
+    if content_length > max_content_length {
+        return Err(MezError::invalid_args(
+            "Content-Length exceeds configured limit",
+        ));
+    }
+    let body_end = (header_end + 4)
+        .checked_add(content_length)
+        .ok_or_else(|| MezError::invalid_args("Content-Length overflow"))?;
+    if input.len() < body_end {
+        return Ok(None);
+    }
+    decode_frame(input, max_content_length).map(Some)
+}
+
 /// Finds a complete header within the independent physical header budget.
 /// Returns pending only while a terminator can still fit; rejects over-budget
 /// headers without scanning bodies or subsequent buffered frames.

@@ -10,7 +10,7 @@ use tokio_util::codec::{Decoder, Encoder};
 use crate::error::MezError;
 
 use super::types::{ProtocolFrame, ProtocolFrameCodec};
-use super::wire::{decode_frame, encode_frame, find_header_end, frame_content_length_from_header};
+use super::wire::{decode_frame_incremental, encode_frame};
 
 impl Decoder for ProtocolFrameCodec {
     /// Defines the Item type used by this subsystem.
@@ -33,29 +33,11 @@ impl Decoder for ProtocolFrameCodec {
         &mut self,
         src: &mut BytesMut,
     ) -> std::result::Result<Option<Self::Item>, Self::Error> {
-        let Some(header_end) = find_header_end(src)? else {
+        let Some((frame, consumed)) = decode_frame_incremental(src, self.max_content_length)?
+        else {
             return Ok(None);
         };
-        let content_length = frame_content_length_from_header(&src[..header_end])?;
-        if content_length > self.max_content_length {
-            return Err(MezError::invalid_args(
-                "Content-Length exceeds configured limit",
-            ));
-        }
-        let body_start = header_end + 4;
-        let body_end = body_start
-            .checked_add(content_length)
-            .ok_or_else(|| MezError::invalid_args("Content-Length overflow"))?;
-        if src.len() < body_end {
-            return Ok(None);
-        }
-        let frame_bytes = src.split_to(body_end);
-        let (frame, consumed) = decode_frame(&frame_bytes, self.max_content_length)?;
-        if consumed != body_end {
-            return Err(MezError::invalid_state(
-                "protocol frame codec consumed an unexpected frame length",
-            ));
-        }
+        let _ = src.split_to(consumed);
         Ok(Some(frame))
     }
 }

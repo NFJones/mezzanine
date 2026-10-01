@@ -4078,6 +4078,9 @@ revocation, detach, reset, endpoint shutdown, and connection loss MUST close the
 event task idempotently. Orderly event-stream FIN MUST terminate the client
 receiver even while control remains live: clean EOF produces one disconnect,
 while an incomplete frame or render-fragment transfer produces a terminal error.
+Plaintext event decoding MUST distinguish partial input from permanent framing
+failure. A malformed complete frame MUST fail immediately without waiting for
+EOF or idle timeout, skipping invalid bytes, or applying a partial render base.
 Per-session and host-routed connection owners MUST supervise event-task
 completion while control remains active. Loss of a negotiated required event
 stream MUST end only its attachment through exact-client disconnect and X11
