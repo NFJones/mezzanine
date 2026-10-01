@@ -50,6 +50,14 @@ concrete transports, process execution, and terminal-facing product adapters
 in the product crate. This boundary keeps provider-independent logic testable
 without product-only dependencies.
 
+Agent context contracts are exported through `mez-agent/src/context/mod.rs`.
+Its canonical owner retains private typed stable slots and chronological events;
+focused children implement append/rebase, range compaction, legacy history
+policy, validation, provider-message storage, request projection, and errors.
+There is one context store and one checked candidate-before-commit boundary.
+Behavior-grouped tests preserve event identity, causal ownership, trust, and
+byte-exact projection contracts. Transcript filesystem I/O remains product-owned.
+
 Agent terminal presentation application lives under
 `runtime/render/presentation/buffer_apply/`. Its components distinguish cumulative
 provider source, immutable worker projection, freshness acceptance, validated
