@@ -349,6 +349,11 @@ processes, and MUST NOT automatically reconstruct a remote session. Local
 hosted-assignment recovery remains separate and MUST NOT be represented as
 remote lease recovery.
 
+Hosted-local restart reconciliation MUST retain nondecreasing assignment
+update timestamps even when the wall clock moves backward. Boot and assignment
+generations MUST still advance, and checkpoint-based recovery eligibility MUST
+remain unchanged; timestamp retention does not preserve prior live authority.
+
 Remote creation MUST require a client-generated idempotency key scoped to the
 authenticated host principal and normalized creation request. A replay of the
 same key and request MUST return the original lease/session result. Reusing the

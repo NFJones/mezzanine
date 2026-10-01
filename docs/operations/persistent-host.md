@@ -171,6 +171,10 @@ option, and garbage collection previews by default. See the [CLI
 reference](../reference-manual/cli.md#persistent-host-command-contract) for the
 complete lease command contract.
 
+Hosted-local restart reconciliation preserves the stored update timestamp when
+the wall clock moves backward, while advancing boot and assignment generations.
+Valid checkpoints remain eligible for recovery; old runtime authority does not.
+
 ## Add remote access deliberately
 
 Local use does not require Iroh. Enable and validate host-scoped Iroh policy

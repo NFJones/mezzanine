@@ -62,6 +62,55 @@ fn assignment_restart_fences_live_state_and_retains_checkpoint() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Restart must advance authority generations even after clock rollback,
+/// without regressing persisted timestamps or losing recovery checkpoints.
+#[test]
+fn assignment_restart_preserves_timestamp_after_clock_rollback() {
+    let root = test_root("restart-clock-rollback");
+    let repository = LocalSessionAssignmentRepository::new(root.clone());
+    let pending = repository
+        .reserve_pending(LocalAssignmentReservationRequest {
+            session_id: "$rollback".to_string(),
+            name: "rollback".to_string(),
+            default_for_host: true,
+            now_unix_seconds: 100,
+        })
+        .unwrap();
+    let active = repository
+        .activate(
+            &pending.session_id,
+            pending.boot_generation,
+            pending.assignment_generation,
+            110,
+        )
+        .unwrap();
+    let checkpointed = repository
+        .update_checkpoint(
+            &active.session_id,
+            active.boot_generation,
+            active.assignment_generation,
+            LocalAssignmentCheckpoint {
+                snapshot_id: "rollback-checkpoint".to_string(),
+                snapshot_version: 1,
+                session_id: active.session_id.clone(),
+                recorded_at_unix_seconds: 120,
+            },
+            120,
+        )
+        .unwrap();
+    assert_eq!(repository.advance_boot_generation(90).unwrap(), 1);
+    let restored = repository.get(&active.session_id).unwrap().unwrap();
+    assert_eq!(restored.updated_at_unix_seconds, 120);
+    assert_eq!(restored.state, LocalSessionAssignmentState::Recoverable);
+    assert_eq!(restored.checkpoint, checkpointed.checkpoint);
+    assert_eq!(restored.boot_generation, 1);
+    assert_eq!(
+        restored.assignment_generation,
+        checkpointed.assignment_generation + 1
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Reservation and activation are one logical write, so an assignment written
 /// under one injected instant records that instant for its creation and update
 /// fields, while an older callback instant is still rejected.

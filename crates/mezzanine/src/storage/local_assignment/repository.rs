@@ -241,6 +241,9 @@ impl LocalSessionAssignmentRepository {
         )
     }
 
+    /// Fences prior runtime authority and derives restart state atomically.
+    /// A backward wall-clock sample cannot regress persisted update timestamps
+    /// or discard otherwise valid recovery checkpoints.
     pub(crate) fn advance_boot_generation(&self, now_unix_seconds: u64) -> Result<u64> {
         self.mutate_database(|database| {
             database.boot_generation = database.boot_generation.saturating_add(1);
@@ -268,7 +271,8 @@ impl LocalSessionAssignmentRepository {
                     }
                     _ => {}
                 }
-                assignment.updated_at_unix_seconds = now_unix_seconds;
+                assignment.updated_at_unix_seconds =
+                    now_unix_seconds.max(assignment.updated_at_unix_seconds);
                 assignment.boot_generation = database.boot_generation;
                 assignment.assignment_generation =
                     assignment.assignment_generation.saturating_add(1);
