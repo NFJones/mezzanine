@@ -2266,7 +2266,42 @@ mod tests {
         )
         .await;
         assert_eq!(preview["result"]["applied"], false);
-        assert_eq!(preview["result"]["lease_ids"].as_array().unwrap().len(), 1);
+        let rpc_candidates = preview["result"]["lease_ids"].as_array().unwrap();
+        assert!(
+            rpc_candidates
+                .iter()
+                .all(|id| id == &json!(created.lease.lease_id))
+        );
+        // A zero-age RPC cutoff samples the wall clock, which can precede a
+        // persisted terminal timestamp after clock adjustment. Exercise exact
+        // eligibility with the record's own instant rather than assuming that
+        // a later wall-clock sample is monotonic.
+        let terminal = host.router.get_lease(&created.lease.lease_id).unwrap();
+        assert_eq!(
+            terminal.state,
+            crate::storage::lease::RemoteSessionLeaseState::Revoked
+        );
+        let cutoff = terminal.terminal_at_unix_seconds.unwrap();
+        let deterministic_preview = host
+            .router
+            .garbage_collect_leases(
+                crate::storage::lease::LeaseGarbageCollectionPolicy {
+                    released_before_unix_seconds: cutoff,
+                    revoked_before_unix_seconds: cutoff,
+                    failed_before_unix_seconds: cutoff,
+                },
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            deterministic_preview.preview.lease_ids,
+            vec![created.lease.lease_id.clone()]
+        );
+        assert_eq!(
+            host.router.get_lease(&created.lease.lease_id).unwrap(),
+            terminal
+        );
 
         host.router
             .shutdown_all(true, Duration::from_secs(2))
