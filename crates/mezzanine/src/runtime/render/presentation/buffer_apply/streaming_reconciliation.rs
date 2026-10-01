@@ -6,6 +6,30 @@
 
 use super::*;
 
+/// Reports whether any provisional field lacks its source-closure receipt.
+/// This classifies rejection diagnostics only, never authorizes publication.
+pub(super) fn streaming_source_is_incomplete(
+    presentation: &RuntimeStreamingSayPresentation,
+) -> bool {
+    presentation
+        .rationale
+        .as_ref()
+        .is_some_and(|source| !source.complete)
+        || presentation.actions.values().any(|source| !source.complete)
+        || presentation
+            .outbound_messages
+            .values()
+            .any(|source| !source.complete)
+        || presentation
+            .shell_commands
+            .values()
+            .any(|source| !source.complete)
+        || presentation
+            .shell_summaries
+            .values()
+            .any(|source| !source.complete)
+}
+
 /// Checks complete provisional fields against their exact validated ordinals.
 /// Receipt alone does not authorize promotion; source, media type and action
 /// payload must all agree with the accepted batch.
@@ -107,6 +131,36 @@ pub(super) fn streaming_sources_match_batch(
 }
 
 impl RuntimeSessionService {
+    /// Reconciles live source and reports whether the installed screen survived.
+    pub(crate) fn reconcile_agent_streaming_say_completion_with_render_intent(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        execution: &mez_agent::AgentTurnExecution,
+    ) -> Result<crate::runtime::render::RuntimeStreamingSayCompletionReconciliation> {
+        self.reconcile_captured_streaming_presentation(pane_id, turn_id, execution)
+    }
+
+    /// Captures one provisional response for exact-source settlement on the actor.
+    ///
+    /// Removing ownership happens before reconciliation, as in the original
+    /// settlement path. No worker or competing presentation store can publish it.
+    pub(super) fn reconcile_captured_streaming_presentation(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        execution: &mez_agent::AgentTurnExecution,
+    ) -> Result<crate::runtime::render::RuntimeStreamingSayCompletionReconciliation> {
+        let Some(presentation) = self
+            .presentation
+            .agent_streaming_say_presentations
+            .remove(pane_id)
+        else {
+            return Ok(Default::default());
+        };
+        self.settle_captured_streaming_presentation(pane_id, turn_id, execution, presentation)
+    }
+
     /// Reconciles live source with one validated provider execution.
     ///
     /// Every streamed action must be complete and exactly match its validated

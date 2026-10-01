@@ -50,6 +50,15 @@ concrete transports, process execution, and terminal-facing product adapters
 in the product crate. This boundary keeps provider-independent logic testable
 without product-only dependencies.
 
+Agent terminal presentation application lives under
+`runtime/render/presentation/buffer_apply/`. Its components distinguish cumulative
+provider source, immutable worker projection, freshness acceptance, validated
+settlement, message acceptance, durable replay/resize, and shell-preview layers.
+They all operate on the runtime service's existing conversation screen and
+presentation state, not independently mutable stores. Captured response identity,
+source revision, geometry, policy, and installed-screen lineage remain explicit
+handoffs; a provisional display row is not evidence of action execution.
+
 ## Ownership and tests
 
 Follow the closest owner rather than forwarding contracts through

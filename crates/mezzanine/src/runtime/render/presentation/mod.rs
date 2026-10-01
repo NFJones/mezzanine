@@ -1,10 +1,11 @@
 //! Agent transcript and action-result presentation helpers.
 //!
-//! This module owns pure formatting for model-authored pane transcript content,
-//! command previews, markdown rendering, diff previews, and bounded action
-//! result display. Keeping these helpers outside the runtime service facade
-//! makes visible output behavior easier to test without mixing it with pane
-//! state transitions.
+//! Formatting children own command, Markdown, diff, and bounded result display.
+//! `buffer_apply` composes those renderers with actor-owned conversation screens:
+//! source ingestion, worker projection, exact-lineage acceptance, durable replay,
+//! resize, and shell-preview settlement have distinct ownership components.
+//! The runtime service remains the sole mutable presentation authority; pure
+//! rendering never grants a provisional action execution or persistence authority.
 
 use super::super::{RenderedClientView, ShellClassification, runtime_mezzanine_error_code};
 use mez_mux::render::overlay_text_cells;

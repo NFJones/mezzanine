@@ -7,6 +7,228 @@
 use super::*;
 
 impl RuntimeSessionService {
+    /// Replays persisted presentation entries into the pane terminal buffer.
+    pub(crate) fn replay_agent_presentation_entries_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        entries: &[AgentPresentationEntry],
+    ) -> Result<bool> {
+        if entries.is_empty() {
+            return Ok(false);
+        }
+        self.validate_agent_presentation_replay_target(pane_id, entries)?;
+        self.presentation
+            .agent_presentation_replay_panes
+            .insert(pane_id.to_string());
+        let result = (|| -> Result<bool> {
+            let mut sorted_entries = entries.iter().collect::<Vec<_>>();
+            sorted_entries.sort_by_key(|entry| entry.sequence);
+            for entry in sorted_entries {
+                if let (Some(source_text), Some(source_content_type)) = (
+                    entry.source_text.as_deref(),
+                    entry.source_content_type.as_deref(),
+                ) {
+                    if source_content_type == AGENT_PRESENTATION_USER_PROMPT_CONTENT_TYPE {
+                        self.append_agent_user_prompt_to_terminal_buffer(pane_id, source_text)?;
+                        continue;
+                    }
+                    if source_content_type == AGENT_PRESENTATION_PARENT_PROMPT_CONTENT_TYPE {
+                        self.append_agent_parent_prompt_to_terminal_buffer(pane_id, source_text)?;
+                        continue;
+                    }
+                    if source_content_type == AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE {
+                        // A record that does not decode is dropped rather than
+                        // rendered as assistant text: this content type is only
+                        // ever written by the peer echo writer, so a malformed
+                        // or oversized source is corrupt log state, not model
+                        // output, and printing its raw bytes would invent a
+                        // transcript line that never existed.
+                        if let Some(encoded) = decoded_peer_message_presentation_source(source_text)
+                        {
+                            // Replayed peer sources use the same renderer as live
+                            // presentation: normal mode admits only exact canonical
+                            // plaintext, verbose mode renders every bounded raw
+                            // payload, and a pre-persistence suppression leaves no
+                            // presentation record for replay to resurrect.
+                            if encoded.direction == "sent" {
+                                let source = RuntimeStreamingMessageSource {
+                                    recipient: encoded.peer.clone(),
+                                    recipient_label: encoded.peer.clone(),
+                                    direct_parent: encoded.direct_parent,
+                                    content_type: encoded
+                                        .content_type
+                                        .as_deref()
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    text: encoded.payload.clone(),
+                                    complete: true,
+                                };
+                                self.append_accepted_outbound_message_presentation(
+                                    pane_id,
+                                    encoded.action_identity.as_deref().unwrap_or_default(),
+                                    &source,
+                                )?;
+                            } else {
+                                self.append_agent_peer_message_to_terminal_buffer(
+                                    pane_id,
+                                    &PeerMessagePresentation {
+                                        receive_identity: encoded.receive_identity.as_deref(),
+                                        peer_label: encoded.peer.as_str(),
+                                        content_type: encoded.content_type.as_deref(),
+                                        payload: encoded.payload.as_str(),
+                                        direct_parent: encoded.direct_parent,
+                                        presentation_eligible: encoded
+                                            .presentation_eligible
+                                            .unwrap_or(false),
+                                    },
+                                )?;
+                            }
+                        }
+                        continue;
+                    }
+                    if source_content_type == AGENT_PRESENTATION_THINKING_CONTENT_TYPE {
+                        self.append_agent_thinking_text_to_terminal_buffer(pane_id, source_text)?;
+                        continue;
+                    }
+                    if source_content_type == AGENT_PRESENTATION_MACRO_LIFECYCLE_CONTENT_TYPE
+                        && let Some((macro_name, step_index, total_steps, status, is_error)) =
+                            macro_lifecycle_presentation_source(source_text)
+                    {
+                        if is_error {
+                            self.append_agent_macro_error_to_terminal_buffer(
+                                pane_id,
+                                &macro_name,
+                                step_index.unwrap_or_default(),
+                                total_steps,
+                                &status,
+                            )?;
+                        } else {
+                            self.append_agent_macro_status_to_terminal_buffer(
+                                pane_id,
+                                &macro_name,
+                                step_index,
+                                total_steps,
+                                &status,
+                            )?;
+                        }
+                        continue;
+                    }
+                    if source_content_type == AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE {
+                        self.append_agent_command_preview_to_terminal_buffer(pane_id, source_text)?;
+                        continue;
+                    }
+                    if source_content_type
+                        == AGENT_PRESENTATION_TRUNCATED_COMMAND_PREVIEW_CONTENT_TYPE
+                    {
+                        self.append_agent_command_preview_source_to_terminal_buffer(
+                            pane_id,
+                            source_text,
+                            true,
+                        )?;
+                        continue;
+                    }
+                    if source_content_type == AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE {
+                        let rendered_line = agent_action_execution_rendered_line(
+                            source_text,
+                            &self.presentation.settings.ui_theme,
+                        );
+                        self.append_agent_terminal_log_rendered_lines_to_buffer(
+                            pane_id,
+                            AgentTerminalPresentationStyle::Status,
+                            &[rendered_line],
+                            Some((source_text, source_content_type)),
+                        )?;
+                        continue;
+                    }
+                    if source_content_type == AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE
+                        && let Some(styled_lines) =
+                            styled_agent_presentation_source_lines(source_text)
+                        && !styled_lines.is_empty()
+                    {
+                        self.append_agent_terminal_styled_lines_to_buffer(pane_id, &styled_lines)?;
+                        continue;
+                    }
+                    self.append_agent_assistant_content_to_terminal_buffer(
+                        pane_id,
+                        source_text,
+                        source_content_type,
+                    )?;
+                    continue;
+                }
+                if let Some(ansi_text) = entry.ansi_text.as_deref() {
+                    self.ensure_current_agent_presentation_screen(pane_id)?;
+                    self.retire_agent_streaming_say_before_pane_write(pane_id)?;
+                    let (conversation_id, mut screen, preview_presentation) =
+                        self.agent_shell_preview_write_base(pane_id)?;
+                    Self::feed_agent_terminal_screen(
+                        &mut screen,
+                        ansi_text.as_bytes(),
+                        "replaying persisted agent presentation",
+                    )?;
+                    if !entry.copy_lines.is_empty() {
+                        screen
+                            .set_recent_normal_copy_texts(&entry.copy_lines, AGENT_COPY_SKIP_LINE);
+                    }
+                    self.install_agent_shell_preview_write(
+                        pane_id,
+                        &conversation_id,
+                        screen,
+                        preview_presentation,
+                    )?;
+                    continue;
+                }
+                let styled_lines = entry
+                    .display_lines
+                    .iter()
+                    .enumerate()
+                    .map(|(index, line)| {
+                        let style = entry
+                            .style_names
+                            .get(index)
+                            .and_then(|name| {
+                                AgentTerminalPresentationStyle::from_persistence_name(name)
+                            })
+                            .unwrap_or(AgentTerminalPresentationStyle::Status);
+                        (style, line.clone())
+                    })
+                    .collect::<Vec<_>>();
+                self.append_agent_terminal_styled_lines_to_buffer(pane_id, &styled_lines)?;
+                if !entry.copy_lines.is_empty()
+                    && let Some(screen) = self.agent_pane_screen_mut(pane_id)
+                {
+                    screen.set_recent_normal_copy_texts(&entry.copy_lines, AGENT_COPY_SKIP_LINE);
+                }
+            }
+            let state = self
+                .presentation
+                .agent_prompt_inputs
+                .entry(pane_id.to_string())
+                .or_insert_with(|| default_runtime_agent_prompt_input().into());
+            state.display_lines.clear();
+            Ok(true)
+        })();
+        self.presentation
+            .agent_presentation_replay_panes
+            .remove(pane_id);
+        result
+    }
+
+    /// Replays synthesized transcript fallback lines without persisting them as new presentation.
+    pub(crate) fn replay_agent_transcript_fallback_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        display_lines: Vec<String>,
+    ) -> Result<()> {
+        self.presentation
+            .agent_presentation_replay_panes
+            .insert(pane_id.to_string());
+        let result = self.set_agent_prompt_display_lines(pane_id, display_lines);
+        self.presentation
+            .agent_presentation_replay_panes
+            .remove(pane_id);
+        result
+    }
+
     /// Rebuilds a resized agent pane from complete durable presentation source.
     ///
     /// The rebuild is intentionally limited to histories that contain semantic
