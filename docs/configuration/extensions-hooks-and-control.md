@@ -35,6 +35,12 @@ an operation that has not completed; after the triggering event has completed,
 the same failure is reported as a warning. Inspect hook failures with
 `show-messages` and audit records rather than assuming an event completed.
 
+Synchronous program-hook output capture is cancellation-aware: a timed-out hook
+does not wait for pipe EOF from escaped descendants. After normal child exit,
+both output readers share a bounded drain grace period. If that drain cannot
+complete, the captured prefix is marked truncated. This does not claim that
+process-group termination can kill a descendant that deliberately escaped it.
+
 Use `extensions` only for implementation-specific extension data. Unknown
 top-level keys are rejected rather than silently interpreted as configuration.
 

@@ -4,8 +4,10 @@
 //! and conversion of runner output into uniform hook execution results.
 
 use std::io::{Read, Write};
+use std::os::fd::AsFd;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinSet;
@@ -117,18 +119,21 @@ pub fn execute_program_hook(plan: &HookExecutionPlan) -> Result<HookExecutionRes
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let stdout_reader = std::thread::spawn(move || read_child_pipe(stdout));
-    let stderr_reader = std::thread::spawn(move || read_child_pipe(stderr));
+    let mut stdout_reader = ProgramHookPipeReader::spawn(stdout);
+    let mut stderr_reader = ProgramHookPipeReader::spawn(stderr);
     let status = wait_for_child_with_timeout(&mut child, Duration::from_millis(plan.timeout_ms))?;
     if status.is_none() {
         process_group.terminate();
         let _ = child.kill();
         let _ = child.wait();
+        stdout_reader.cancel();
+        stderr_reader.cancel();
     } else {
         process_group.disarm();
     }
-    let stdout = join_child_pipe_reader(stdout_reader)?;
-    let stderr = join_child_pipe_reader(stderr_reader)?;
+    let drain_deadline = Instant::now() + Duration::from_millis(100);
+    let stdout = stdout_reader.settle_until(drain_deadline)?;
+    let stderr = stderr_reader.settle_until(drain_deadline)?;
     let Some(status) = status else {
         return Ok(HookExecutionResult {
             hook_id: plan.hook_id.clone(),
@@ -530,20 +535,90 @@ pub fn execute_focused_shell_hook(
     })
 }
 
-/// Runs the read child pipe operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn read_child_pipe<T: Read>(pipe: Option<T>) -> Result<BoundedHookOutput> {
+/// Owns one synchronous output reader and cancels it if execution unwinds.
+/// Normal completion drains within a shared grace period; cancellation never
+/// depends on pipe EOF from an escaped descendant.
+struct ProgramHookPipeReader {
+    cancel: Option<mpsc::Sender<()>>,
+    done: mpsc::Receiver<()>,
+    handle: Option<std::thread::JoinHandle<Result<BoundedHookOutput>>>,
+}
+
+impl ProgramHookPipeReader {
+    /// Starts a nonblocking, bounded-retention reader for an owned child pipe.
+    fn spawn<T: Read + AsFd + Send + 'static>(pipe: Option<T>) -> Self {
+        let (cancel, cancellation) = mpsc::channel();
+        let (done_tx, done) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let result = read_child_pipe(pipe, cancellation);
+            let _ = done_tx.send(());
+            result
+        });
+        Self {
+            cancel: Some(cancel),
+            done,
+            handle: Some(handle),
+        }
+    }
+
+    /// Requests reader shutdown while retaining any already captured prefix.
+    fn cancel(&mut self) {
+        self.cancel.take();
+    }
+
+    /// Drains until the shared deadline, then cancels and joins the owned reader.
+    fn settle_until(&mut self, deadline: Instant) -> Result<BoundedHookOutput> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if self.done.recv_timeout(remaining).is_err() {
+            self.cancel();
+        }
+        let handle = self
+            .handle
+            .take()
+            .ok_or_else(|| MezError::invalid_state("hook pipe reader was already settled"))?;
+        join_child_pipe_reader(handle)
+    }
+}
+
+impl Drop for ProgramHookPipeReader {
+    fn drop(&mut self) {
+        self.cancel();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Drains bounded retained output while permitting cancellation without EOF.
+/// An incomplete capture is explicitly marked truncated, never complete output.
+fn read_child_pipe<T: Read + AsFd>(
+    pipe: Option<T>,
+    cancellation: mpsc::Receiver<()>,
+) -> Result<BoundedHookOutput> {
     let Some(mut pipe) = pipe else {
         return Ok(BoundedHookOutput::default());
     };
+    let flags = rustix::fs::fcntl_getfl(pipe.as_fd()).map_err(std::io::Error::from)?;
+    rustix::fs::fcntl_setfl(pipe.as_fd(), flags | rustix::fs::OFlags::NONBLOCK)
+        .map_err(std::io::Error::from)?;
     let mut retained = Vec::new();
     let mut observed_bytes = 0usize;
     let mut buffer = [0_u8; 8192];
     loop {
-        let read = pipe.read(&mut buffer)?;
+        if !matches!(cancellation.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+            let mut output = bounded_hook_output(retained, observed_bytes)?;
+            output.truncated = true;
+            return Ok(output);
+        }
+        let read = match pipe.read(&mut buffer) {
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                let _ = cancellation.recv_timeout(Duration::from_millis(10));
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         if read == 0 {
             break;
         }

@@ -594,6 +594,52 @@ fn program_hook_execution_enforces_timeout() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Escaped descendants retaining output pipes must not extend hook timeout
+/// completion. The descendant publishes natural completion after two seconds,
+/// so the assertion distinguishes reader cancellation from waiting for EOF.
+#[cfg(unix)]
+#[test]
+fn program_hook_timeout_does_not_wait_for_escaped_pipe_writer() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-hook-escaped-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let finished = root.join("finished");
+    let hook = HookDefinition {
+        id: "escaped-writer".to_string(),
+        event: HookEvent::SessionDetach,
+        invocation: HookInvocation::Program {
+            command: "python3".to_string(),
+            args: vec!["-c".to_string(),
+                "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time,pathlib,sys; time.sleep(2); pathlib.Path(sys.argv[1]).touch()',sys.argv[1]],start_new_session=True); time.sleep(2)".to_string(),
+                finished.display().to_string()],
+        },
+        enabled: true,
+        required: false,
+        agent_hook: false,
+        matcher_groups: Vec::new(),
+        timeout_ms: Some(200),
+        on_failure: None,
+    };
+    let result = execute_program_hook(&plan_hook(&hook).unwrap().unwrap()).unwrap();
+    let waited_for_writer = finished.exists();
+    // Let the short-lived escaped fixture finish before removing its directory.
+    // Cleanup is outside the hook result and cannot hide EOF-dependent return.
+    let cleanup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !finished.exists() && std::time::Instant::now() < cleanup_deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = fs::remove_dir_all(root);
+    assert_eq!(result.status, HookExecutionStatus::TimedOut);
+    assert!(result.stdout_truncated || result.stderr_truncated);
+    assert!(
+        !waited_for_writer,
+        "timeout completion waited for escaped writer EOF"
+    );
+}
+
 /// Verifies focused shell hook blocks on shell availability.
 ///
 /// This regression scenario documents the behavior being protected so a

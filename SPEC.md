@@ -12597,6 +12597,12 @@ MUST retain typed continuation ownership until its worker result either denies
 or resumes the guarded shell phase; stale results after turn settlement MUST
 NOT resume an action.
 
+Synchronous program-hook output readers MUST support cancellation independently
+of pipe EOF. Timeout MUST retire reader ownership after terminating and reaping
+the direct child, even if escaped descendants retain inherited writers. Normal
+child completion MAY allow one shared bounded output-drain grace period;
+cancelled incomplete captures MUST be marked truncated rather than complete.
+
 Shell hooks MUST be visible in the focused pane when they run and MUST use the
 same command boundary and permission model as agent shell commands.
 When shell hooks receive event data through an environment variable, the
