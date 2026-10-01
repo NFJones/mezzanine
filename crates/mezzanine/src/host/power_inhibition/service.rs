@@ -342,6 +342,7 @@ mod tests {
         calls: Mutex<Vec<String>>,
         block_acquire: AtomicBool,
         block_successful_system_acquire: AtomicBool,
+        block_successful_release: AtomicBool,
         entered_acquire: AtomicBool,
         system_acquire_failures: AtomicUsize,
         display_acquire_failures: AtomicUsize,
@@ -383,6 +384,14 @@ mod tests {
                 if FakeState::fail_next(&self.state.release_failures) {
                     return Err("release unavailable".to_string());
                 }
+                let guard = self.state.gate_lock.lock().unwrap();
+                let _guard = self
+                    .state
+                    .gate
+                    .wait_while(guard, |_| {
+                        self.state.block_successful_release.load(Ordering::Acquire)
+                    })
+                    .unwrap();
                 self.released = true;
             }
             Ok(())
@@ -723,14 +732,12 @@ mod tests {
         wait_until(|| handle.snapshot().confirmed_generation == 1);
         state.release_failures.store(1, Ordering::Release);
 
+        state
+            .block_successful_release
+            .store(true, Ordering::Release);
         assert_eq!(handle.publish(PowerInhibitionMode::Disabled), 2);
         wait_until(|| {
-            state
-                .calls()
-                .iter()
-                .filter(|call| *call == "release:System")
-                .count()
-                == 1
+            handle.snapshot().last_error == Some(PowerInhibitionErrorClass::SystemRelease)
         });
         let failed = handle.snapshot();
         assert_eq!(failed.desired_generation, 2);
@@ -742,6 +749,13 @@ mod tests {
             Some(PowerInhibitionErrorClass::SystemRelease)
         );
 
+        {
+            let _guard = state.gate_lock.lock().unwrap();
+            state
+                .block_successful_release
+                .store(false, Ordering::Release);
+            state.gate.notify_all();
+        }
         wait_until(|| handle.snapshot().confirmed_generation == 2);
         assert_eq!(
             state.calls(),
