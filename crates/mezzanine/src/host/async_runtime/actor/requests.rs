@@ -158,6 +158,52 @@ impl AsyncRuntimeSessionActor {
         self.client_clipboard_routes.remove(&client_id).is_some()
     }
 
+    /// Settles cancellation ownership on the serialized actor, using ordinary
+    /// exact-client event reduction. Cleanup errors remain visible without
+    /// leaking client identifiers, transport payloads, or arbitrary diagnostics.
+    pub(super) async fn apply_transport_cancellation_cleanup(
+        &mut self,
+        cleanup: super::ClientClipboardRouteCleanup,
+    ) {
+        match cleanup {
+            super::ClientClipboardRouteCleanup::Clipboard {
+                client_id,
+                generation,
+            } => {
+                self.cleanup_client_clipboard_route(client_id, generation);
+            }
+            super::ClientClipboardRouteCleanup::Connection {
+                mut connection,
+                route_result,
+                reply,
+            } => {
+                let previous_lifecycle_state = self.service.lifecycle_state();
+                let route_result = route_result.and(connection.deactivate_x11_route().map(|_| ()));
+                let result = if let Some(client_id) = connection.take_disconnect_client_id() {
+                    let mut batch = super::RuntimeEventBatch::new();
+                    batch.push(super::RuntimeEvent::Client(
+                        super::ClientEvent::Disconnected {
+                            client_id,
+                            reason: "routed control connection ended".to_string(),
+                        },
+                    ));
+                    let result = self.apply_runtime_event_batch(batch).await.map(|_| ());
+                    self.notify_event_delivery();
+                    result.and(route_result)
+                } else {
+                    route_result
+                };
+                if result.is_err() {
+                    eprintln!("mez: routed attachment cleanup failed");
+                }
+                self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                if let Some(reply) = reply {
+                    let _ = reply.send(result);
+                }
+            }
+        }
+    }
+
     /// Captures the exact client view identity used to fence worker rendering.
     pub(super) fn client_render_token(
         &mut self,
@@ -742,36 +788,43 @@ impl AsyncRuntimeSessionActor {
                 input,
                 max_content_length,
                 mut connection,
+                retain_connection_cleanup,
                 reply,
             } => {
                 self.record_terminal_control_request_metrics(&input, max_content_length);
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let previous_id = self.side_effect_routes.next_transcript_claim_id();
-                let mut result = self
-                    .service
-                    .handle_control_input_for_connection_transition(
+                let transition_result =
+                    self.service.handle_control_input_for_connection_transition(
                         &input,
                         max_content_length,
                         &mut connection,
+                    );
+                let connection_cleanup = retain_connection_cleanup.then(|| {
+                    Box::new(
+                        crate::host::async_runtime::config::ControlConnectionCleanupLease {
+                            cleanup_tx: self.client_clipboard_route_cleanup_tx.clone(),
+                            connection: Some(Box::new(connection.clone())),
+                        },
                     )
-                    .and_then(|(output, consumed, transition)| {
-                        self.queue_deferred_pane_io_side_effects_from_service()?;
-                        self.queue_runtime_side_effects(transition.side_effects)?;
-                        self.queue_pending_provider_dispatch_side_effects()?;
-                        self.queue_pending_deferred_agent_command_side_effects()?;
-                        self.queue_shell_lifecycle_timer_side_effects()?;
-                        if let Some(client_id) = connection.caller_client_id().cloned() {
-                            self.ensure_client_render_timers_or_defer_to_pending_render(
-                                &client_id,
-                            )?;
-                        }
-                        Ok(AsyncControlInputResult {
-                            output,
-                            consumed,
-                            connection,
-                            terminal_lifecycle_flush: None,
-                        })
-                    });
+                });
+                let mut result = transition_result.and_then(|(output, consumed, transition)| {
+                    self.queue_deferred_pane_io_side_effects_from_service()?;
+                    self.queue_runtime_side_effects(transition.side_effects)?;
+                    self.queue_pending_provider_dispatch_side_effects()?;
+                    self.queue_pending_deferred_agent_command_side_effects()?;
+                    self.queue_shell_lifecycle_timer_side_effects()?;
+                    if let Some(client_id) = connection.caller_client_id().cloned() {
+                        self.ensure_client_render_timers_or_defer_to_pending_render(&client_id)?;
+                    }
+                    Ok(AsyncControlInputResult {
+                        output,
+                        consumed,
+                        connection,
+                        connection_cleanup,
+                        terminal_lifecycle_flush: None,
+                    })
+                });
                 let terminal_lifecycle_deferred = self
                     .defer_terminal_lifecycle_until_response_flush(
                         previous_lifecycle_state,
@@ -781,10 +834,10 @@ impl AsyncRuntimeSessionActor {
                 if let Some(TranscriptReceiptReply::Control(reply, result)) = self
                     .start_transcript_receipt_admission(
                         previous_id,
-                        TranscriptReceiptReply::Control(reply, result),
+                        TranscriptReceiptReply::Control(reply, Box::new(result)),
                     )
                 {
-                    let _ = reply.send(result);
+                    let _ = reply.send(*result);
                 }
                 if should_notify {
                     self.notify_event_delivery();
@@ -847,6 +900,7 @@ impl AsyncRuntimeSessionActor {
                                     output: output_prefix,
                                     consumed: consumed_prefix,
                                     connection,
+                                    connection_cleanup: None,
                                     terminal_lifecycle_flush: None,
                                 }));
                                 self.notify_event_delivery();
@@ -908,10 +962,10 @@ impl AsyncRuntimeSessionActor {
                         if let Some(TranscriptReceiptReply::Control(reply, result)) = self
                             .start_transcript_receipt_admission(
                                 previous_id,
-                                TranscriptReceiptReply::Control(reply, Err(error)),
+                                TranscriptReceiptReply::Control(reply, Box::new(Err(error))),
                             )
                         {
-                            let _ = reply.send(result);
+                            let _ = reply.send(*result);
                         }
                     }
                     Ok(consumed) if remaining_input.is_empty() => {
@@ -919,6 +973,7 @@ impl AsyncRuntimeSessionActor {
                             output: output_prefix,
                             consumed: consumed_prefix.saturating_add(consumed),
                             connection,
+                            connection_cleanup: None,
                             terminal_lifecycle_flush: None,
                         });
                         terminal_lifecycle_deferred = self
@@ -929,10 +984,10 @@ impl AsyncRuntimeSessionActor {
                         if let Some(TranscriptReceiptReply::Control(reply, result)) = self
                             .start_transcript_receipt_admission(
                                 previous_id,
-                                TranscriptReceiptReply::Control(reply, result),
+                                TranscriptReceiptReply::Control(reply, Box::new(result)),
                             )
                         {
-                            let _ = reply.send(result);
+                            let _ = reply.send(*result);
                         }
                         self.notify_event_delivery();
                     }
@@ -992,16 +1047,17 @@ impl AsyncRuntimeSessionActor {
                     if let Some(TranscriptReceiptReply::Control(reply, result)) = self
                         .start_transcript_receipt_admission(
                             previous_id,
-                            TranscriptReceiptReply::Control(reply, Err(error)),
+                            TranscriptReceiptReply::Control(reply, Box::new(Err(error))),
                         )
                     {
-                        let _ = reply.send(result);
+                        let _ = reply.send(*result);
                     }
                 } else if remaining_input.is_empty() {
                     let mut result = Ok(AsyncControlInputResult {
                         output: output_prefix,
                         consumed: consumed_prefix,
                         connection,
+                        connection_cleanup: None,
                         terminal_lifecycle_flush: None,
                     });
                     terminal_lifecycle_deferred = self
@@ -1012,10 +1068,10 @@ impl AsyncRuntimeSessionActor {
                     if let Some(TranscriptReceiptReply::Control(reply, result)) = self
                         .start_transcript_receipt_admission(
                             previous_id,
-                            TranscriptReceiptReply::Control(reply, result),
+                            TranscriptReceiptReply::Control(reply, Box::new(result)),
                         )
                     {
-                        let _ = reply.send(result);
+                        let _ = reply.send(*result);
                     }
                     self.notify_event_delivery();
                 } else {
@@ -2124,7 +2180,7 @@ impl AsyncRuntimeSessionActor {
                     TranscriptReceiptReply::Control(sender, result) => {
                         let _ = sender.send(match failure {
                             Some(error) if result.is_ok() => Err(error),
-                            _ => result,
+                            _ => *result,
                         });
                     }
                     TranscriptReceiptReply::Command(sender, result) => {

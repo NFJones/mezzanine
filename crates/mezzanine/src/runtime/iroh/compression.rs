@@ -790,6 +790,17 @@ impl IrohCompressionBridge {
         }
     }
 
+    /// Drops the pump-owned raw peer before a response write in handoff tests.
+    /// This creates a real broken-pipe boundary rather than assuming QUIC close
+    /// immediately defeats the duplex bridge's buffered write.
+    #[cfg(test)]
+    pub(crate) async fn fail_raw_peer_for_test(&mut self) {
+        self.task.abort();
+        while !self.task.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    }
+
     /// Stops the local stream and waits boundedly for the bridge task.
     pub(crate) async fn shutdown(mut self, timeout: std::time::Duration) -> Result<()> {
         let deadline = tokio::time::Instant::now() + timeout;

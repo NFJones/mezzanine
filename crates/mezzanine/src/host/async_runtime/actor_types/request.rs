@@ -33,7 +33,7 @@ pub(in crate::host::async_runtime) enum TranscriptReceiptReply {
     /// A control response whose applied transcript rows must be recoverable.
     Control(
         oneshot::Sender<Result<AsyncControlInputResult>>,
-        Result<AsyncControlInputResult>,
+        Box<Result<AsyncControlInputResult>>,
     ),
     /// A terminal or agent-shell command response.
     Command(oneshot::Sender<Result<String>>, Result<String>),
@@ -391,6 +391,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     HandleControlInput {
+        /// Retains attachment cleanup across routed initialization handoff.
+        retain_connection_cleanup: bool,
         /// Stores the input value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module

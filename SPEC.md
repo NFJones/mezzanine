@@ -4077,8 +4077,17 @@ require an explicit reattach without reconnecting or retrying buffered input.
 Abrupt EOF, reset, decode, dispatch, write, and flush failures MUST consume a
 connection-owned primary disconnect at most once. A connection MAY own that
 disconnect only when its initialization created the primary; reusing an
-existing same-named primary MUST NOT transfer disconnect ownership. One-shot
-administrative clients that create a primary MUST request this cleanup so EOF
+existing same-named primary MUST NOT transfer disconnect ownership.
+
+Routed actor initialization MUST establish cancellation-safe exact-client
+cleanup before returning its response. Response delivery, X11 activation,
+diagnostic registration, and control-loop handoff failures MUST retain that
+owner. Cleanup MUST invalidate the exact X11 route before waiting for actor
+acknowledgement; failure or timeout MUST NOT be reported as successful detach.
+Committed session creation and its idempotency outcome MUST survive ambiguous
+response loss independently of the connection's attachment teardown.
+
+One-shot administrative clients that create a primary MUST request this cleanup so EOF
 releases request-local ownership before a differently named remote primary
 redeems an invitation. Graceful completion MUST finish the response stream and
 wait boundedly for peer acknowledgement before closing the QUIC connection.

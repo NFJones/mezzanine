@@ -3,6 +3,135 @@
 use super::super::*;
 use crate::host::async_runtime::serve_authenticated_async_runtime_control_connection_loop_with_snapshots;
 
+/// Routed initialization must retain exact teardown across an actual failed
+/// response write, dropped handoff futures, and explicit close. Same-named
+/// replacement attachments stay live; opt-out attachments remain unowned.
+#[tokio::test(flavor = "current_thread")]
+async fn routed_initialization_cleanup_survives_write_failure_and_cancellation() {
+    use crate::control::encode_control_body;
+    use tokio::io::AsyncWriteExt;
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let actor_task = tokio::spawn(actor.run());
+    let initialize = |role: &str, detach: bool| {
+        encode_control_body(
+            &serde_json::json!({
+                "jsonrpc":"2.0", "id":"init", "method":"control/initialize",
+                "params":{"client_name":"same-name", "requested_version":2,
+                    "requested_role":role,"detach_primary_on_disconnect":detach,
+                    "client":{"name":"same-name","interactive":true,
+                        "terminal":{"columns":80,"rows":24,"term":"xterm"}},
+                    "authentication":{"mechanism":"peer_credentials"}}
+            })
+            .to_string(),
+        )
+    };
+    let mut failed = handle
+        .initialize_routed_control_connection(
+            initialize("primary", true),
+            4096,
+            ControlConnectionState::new(true, true),
+        )
+        .await
+        .unwrap();
+    let failed_id = failed.connection.caller_client_id().unwrap().clone();
+    let replacement = handle
+        .handle_control_input_for_connection(
+            initialize("primary", false),
+            4096,
+            ControlConnectionState::new(true, true),
+        )
+        .await
+        .unwrap();
+    let replacement_id = replacement.connection.caller_client_id().unwrap().clone();
+    assert_ne!(failed_id, replacement_id);
+    let (mut writer, reader) = tokio::io::duplex(64);
+    drop(reader);
+    assert!(
+        writer.write_all(&failed.output).await.is_err(),
+        "inject real response write failure"
+    );
+    failed
+        .connection_cleanup
+        .take()
+        .unwrap()
+        .close(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let mut cancelled = handle
+        .initialize_routed_control_connection(
+            initialize("primary", true),
+            4096,
+            ControlConnectionState::new(true, true),
+        )
+        .await
+        .unwrap();
+    let cancelled_id = cancelled.connection.caller_client_id().unwrap().clone();
+    let lease = cancelled.connection_cleanup.take().unwrap();
+    lease.own_disconnect(&mut cancelled.connection);
+    assert!(cancelled.connection.take_disconnect_client_id().is_none());
+    let (entered, reached) = tokio::sync::oneshot::channel();
+    let handoff = tokio::spawn(async move {
+        let _retained_owner = lease;
+        entered.send(()).unwrap();
+        std::future::pending::<()>().await;
+    });
+    reached.await.unwrap();
+    handoff.abort();
+    assert!(handoff.await.unwrap_err().is_cancelled());
+
+    let mut unowned = handle
+        .initialize_routed_control_connection(
+            initialize("primary", false),
+            4096,
+            ControlConnectionState::new(true, true),
+        )
+        .await
+        .unwrap();
+    let unowned_id = unowned.connection.caller_client_id().unwrap().clone();
+    unowned
+        .connection_cleanup
+        .take()
+        .unwrap()
+        .close(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let observer = handle
+        .initialize_routed_control_connection(
+            initialize("observer", true),
+            4096,
+            ControlConnectionState::new(true, true),
+        )
+        .await
+        .unwrap();
+    let observer_id = observer.connection.caller_client_id().unwrap().clone();
+    drop(observer); // A lost reply or dropped response must retain teardown too.
+
+    // Cleanup has a fairness allowance of four requests, independent of mailbox
+    // pressure. Barriers allow its queued Drop events to settle before shutdown.
+    for _ in 0..8 {
+        handle.lifecycle_state().await.unwrap();
+    }
+    handle.shutdown().await.unwrap();
+    let exit = actor_task.await.unwrap();
+    assert!(!exit.service.session().is_attached_primary(&failed_id));
+    assert!(!exit.service.session().is_attached_primary(&cancelled_id));
+    assert!(exit.service.session().is_attached_primary(&replacement_id));
+    assert!(exit.service.session().is_attached_primary(&unowned_id));
+    assert!(
+        !exit
+            .service
+            .session()
+            .clients()
+            .iter()
+            .any(|client| client.id == observer_id
+                && client.state == mez_mux::session::ClientState::Attached)
+    );
+}
+
 /// Verifies async control connection authorizes and round trips control frame.
 ///
 /// This regression scenario documents the behavior being protected so a

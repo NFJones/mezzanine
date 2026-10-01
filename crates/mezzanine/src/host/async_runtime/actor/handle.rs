@@ -528,6 +528,25 @@ impl AsyncRuntimeSessionHandle {
         connection: ControlConnectionState,
     ) -> Result<AsyncControlInputResult> {
         self.request(|reply| AsyncRuntimeRequest::HandleControlInput {
+            retain_connection_cleanup: false,
+            input,
+            max_content_length,
+            connection,
+            reply,
+        })
+        .await?
+    }
+
+    /// Initializes a routed connection with actor-produced cancellation ownership.
+    /// A lost reply drops the retained lease and schedules exact attachment cleanup.
+    pub(crate) async fn initialize_routed_control_connection(
+        &self,
+        input: Vec<u8>,
+        max_content_length: usize,
+        connection: ControlConnectionState,
+    ) -> Result<AsyncControlInputResult> {
+        self.request(|reply| AsyncRuntimeRequest::HandleControlInput {
+            retain_connection_cleanup: true,
             input,
             max_content_length,
             connection,
@@ -1557,13 +1576,12 @@ impl ClientClipboardRouteLease {
 impl Drop for ClientClipboardRouteLease {
     fn drop(&mut self) {
         if self.armed {
-            let _ =
-                self.handle
-                    .client_clipboard_route_cleanup_tx
-                    .send(ClientClipboardRouteCleanup {
-                        client_id: self.client_id.clone(),
-                        generation: self.generation,
-                    });
+            let _ = self.handle.client_clipboard_route_cleanup_tx.send(
+                ClientClipboardRouteCleanup::Clipboard {
+                    client_id: self.client_id.clone(),
+                    generation: self.generation,
+                },
+            );
         }
     }
 }

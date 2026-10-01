@@ -788,6 +788,7 @@ async fn serve_routed_initialize(
 ) -> Result<()> {
     let response_id = request_id(&request_body);
     let mut initialization_sent = false;
+    let mut attachment_cleanup = None;
     let result = serve_routed_initialize_inner(
         request_body,
         trust,
@@ -802,8 +803,15 @@ async fn serve_routed_initialize(
         connection_guard,
         policy,
         &mut initialization_sent,
+        &mut attachment_cleanup,
     )
     .await;
+    // The outer owner survives all early errors; dropping this future transfers
+    // teardown to the actor without spawning an untracked asynchronous task.
+    let attachment_cleanup_result = match attachment_cleanup.take() {
+        Some(cleanup) => cleanup.close(policy.setup_timeout).await,
+        None => Ok(()),
+    };
     let error_write_result: Result<()> = if let Err(error) = result.as_ref()
         && !initialization_sent
     {
@@ -834,7 +842,16 @@ async fn serve_routed_initialize(
         b"routed control complete",
     )
     .await;
+    if attachment_cleanup_result.is_err()
+        && let Err(error) = result.as_ref()
+    {
+        return Err(MezError::new(
+            error.kind(),
+            format!("{error}; routed attachment cleanup also failed"),
+        ));
+    }
     result?;
+    attachment_cleanup_result?;
     error_write_result?;
     bridge_result
 }
@@ -857,6 +874,7 @@ async fn serve_routed_initialize_inner(
     connection_guard: crate::runtime::RuntimeIrohConnectionGuard,
     policy: &RuntimeIrohTransportPolicy,
     initialization_sent: &mut bool,
+    attachment_cleanup: &mut Option<Box<crate::host::async_runtime::ControlConnectionCleanupLease>>,
 ) -> Result<()> {
     let request: Value = serde_json::from_str(&request_body).map_err(|error| {
         MezError::invalid_args(format!("invalid host initialize JSON: {error}"))
@@ -996,15 +1014,16 @@ async fn serve_routed_initialize_inner(
     connection_state.bind_authenticated_peer(peer.clone())?;
     connection_state.bind_remote_principal(principal.clone())?;
     connection_state.bind_x11_connection_id(format!("iroh-{}", connection.stable_id()))?;
-    let initialized = binding
+    let mut initialized = binding
         .runtime
         .actor()
-        .handle_control_input_for_connection(
+        .initialize_routed_control_connection(
             encode_control_body(&actor_request.to_string()),
             HOST_CONTROL_MAX_CONTENT_LENGTH,
             connection_state,
         )
         .await?;
+    *attachment_cleanup = initialized.connection_cleanup.take();
     let (actor_body, consumed) =
         decode_control_frame(&initialized.output, HOST_CONTROL_MAX_CONTENT_LENGTH)?;
     if consumed != initialized.output.len() {
@@ -1045,6 +1064,12 @@ async fn serve_routed_initialize_inner(
             server.insert("protocol_versions".to_string(), json!([3]));
         }
     }
+    // The request-local seam closes the actual raw bridge peer after attachment
+    // and provisioning commit; production has no client-controlled failpoint.
+    #[cfg(test)]
+    if request_id.as_str() == Some("test-fail-routed-response") {
+        bridge.fail_raw_peer_for_test().await;
+    }
     tokio::time::timeout(
         policy.idle_timeout,
         bridge
@@ -1062,6 +1087,10 @@ async fn serve_routed_initialize_inner(
     }
 
     let mut connection_state = initialized.connection;
+    let connection_cleanup = attachment_cleanup.as_ref().ok_or_else(|| {
+        MezError::invalid_state("routed initialization omitted attachment cleanup ownership")
+    })?;
+    connection_cleanup.own_disconnect(&mut connection_state);
     if let Some(route) = connection_state.take_x11_route_start() {
         route.activate(connection.clone(), compression, compression_metrics.clone())?;
     }
@@ -2413,6 +2442,27 @@ mod tests {
                 .unwrap()
                 .to_string();
 
+            // Lose the first response after actor attachment and provisioning
+            // commit. Retry must reuse the retained session without a stale
+            // attached primary or a second creation.
+            fail_test_routed_initialize_write(
+                &client,
+                &server_addr,
+                &credential,
+                "create",
+                Some("create-one"),
+                None,
+                Some("owned"),
+            )
+            .await;
+            let snapshots = router.snapshots().await.unwrap();
+            assert_eq!(snapshots.len(), 1);
+            let runtime = router.runtime_for_tests(&snapshots[0].session_id).unwrap();
+            assert_eq!(
+                runtime.actor().lifecycle_state().await.unwrap(),
+                RuntimeLifecycleState::Detached
+            );
+
             let created = exchange_test_routed_initialize(
                 &client,
                 &server_addr,
@@ -2433,6 +2483,25 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .to_string();
+
+            fail_test_routed_initialize_write(
+                &client,
+                &server_addr,
+                &credential,
+                "attach",
+                None,
+                Some(json!({"session_id": session_id})),
+                None,
+            )
+            .await;
+            assert_eq!(
+                runtime.actor().lifecycle_state().await.unwrap(),
+                RuntimeLifecycleState::Detached
+            );
+            assert_eq!(
+                router.get_lease(&lease_id).unwrap().state,
+                RemoteSessionLeaseState::Active
+            );
 
             let replay = exchange_test_routed_initialize(
                 &client,
@@ -2783,18 +2852,18 @@ mod tests {
         };
 
         let (served, ()) = tokio::join!(server, client_work);
-        assert_eq!(served.unwrap(), 14);
+        assert_eq!(served.unwrap(), 16);
         let snapshot = diagnostics.snapshot();
         assert!(!snapshot.listener_active);
         assert_eq!(snapshot.active_connections, 0);
-        assert_eq!(snapshot.connections_accepted, 14);
-        assert_eq!(snapshot.setup_successes, 14);
+        assert_eq!(snapshot.connections_accepted, 16);
+        assert_eq!(snapshot.setup_successes, 16);
         assert_eq!(snapshot.connections_rejected, snapshot.setup_failures);
         assert_eq!(
             snapshot
                 .connections_completed
                 .saturating_add(snapshot.connections_failed),
-            14
+            16
         );
         router
             .shutdown_all(true, std::time::Duration::from_secs(2))
@@ -2980,6 +3049,57 @@ mod tests {
                 .await
                 .unwrap();
         serde_json::from_str(&response).unwrap()
+    }
+
+    /// Sends valid routed initialization into the request-local broken-bridge
+    /// seam. Connection termination proves the wrapper passed its acknowledged
+    /// attachment cleanup boundary before the caller inspects actor state.
+    async fn fail_test_routed_initialize_write(
+        client: &iroh::Endpoint,
+        server_addr: &iroh::EndpointAddr,
+        credential: &str,
+        intent: &str,
+        key: Option<&str>,
+        target: Option<Value>,
+        name: Option<&str>,
+    ) {
+        let connection = client
+            .connect(server_addr.clone(), crate::runtime::MEZZANINE_IROH_ALPN)
+            .await
+            .unwrap();
+        let (mut send, mut recv) = connection.open_bi().await.unwrap();
+        let mut params = json!({
+            "client_name":"test-client", "requested_version":3, "requested_role":"primary",
+            "detach_primary_on_disconnect":true, "session_intent":intent,
+            "client":{"name":"test-client","interactive":true,
+                "terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},
+            "authentication":{"mechanism":"extension:iroh_device","token":credential}
+        });
+        if let Some(key) = key {
+            params["idempotency_key"] = json!(key);
+        }
+        if let Some(target) = target {
+            params["session_target"] = target;
+        }
+        if let Some(name) = name {
+            params["client"]["metadata"] = json!({"session_name":name});
+        }
+        let body = json!({"jsonrpc":"2.0", "id":"test-fail-routed-response",
+            "method":"control/initialize", "params":params})
+        .to_string();
+        send.write_all(&encode_control_body(&body)).await.unwrap();
+        send.finish().unwrap();
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(10), recv.read_to_end(4096))
+                .await
+                .unwrap();
+        assert!(
+            response.is_err() || response.unwrap().is_empty(),
+            "failed bridge cannot deliver success"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(10), connection.closed())
+            .await
+            .unwrap();
     }
 
     async fn exchange_test_initialize_params(

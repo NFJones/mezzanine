@@ -17,6 +17,42 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, Semaphore, oneshot};
 
+/// A cancelled initialization response must retain exact attachment teardown
+/// after the actor has applied the request. Cleanup is queued synchronously by
+/// the discarded response lease, and never detaches an unrelated client.
+#[tokio::test(flavor = "current_thread")]
+async fn routed_initialization_lost_actor_reply_retains_cleanup() {
+    let service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let (_handle, mut actor) =
+        super::AsyncRuntimeSessionActor::new(service, super::AsyncRuntimeActorConfig::default())
+            .unwrap();
+    let (reply, response) = oneshot::channel();
+    drop(response);
+    actor.handle_request(AsyncRuntimeRequest::HandleControlInput {
+        input: crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"lost-reply","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"lost-reply","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        ),
+        max_content_length: 4096,
+        connection: crate::control::ControlConnectionState::new(true, true),
+        retain_connection_cleanup: true,
+        reply,
+    }).await;
+    let client_id = actor
+        .service
+        .session()
+        .clients()
+        .iter()
+        .find(|client| client.name == "lost-reply")
+        .unwrap()
+        .id
+        .clone();
+    assert!(actor.service.session().is_attached_primary(&client_id));
+    let cleanup = actor.client_clipboard_route_cleanup_rx.try_recv().unwrap();
+    actor.apply_transport_cancellation_cleanup(cleanup).await;
+    assert!(!actor.service.session().is_attached_primary(&client_id));
+    assert!(actor.client_clipboard_route_cleanup_rx.try_recv().is_err());
+}
+
 /// Verifies that the provider worker watchdog cannot fire before the
 /// provider transport timeout. The watchdog cleans up abandoned async
 /// claims, so it must leave enough time for a legitimate long-running

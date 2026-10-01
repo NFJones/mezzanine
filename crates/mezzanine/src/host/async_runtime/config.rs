@@ -20,12 +20,78 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 // Async runtime, daemon, connection, and client configuration.
 
-/// Generation-fenced clipboard-route cleanup emitted synchronously when an
-/// event-stream owner is dropped or aborted.
+/// Actor-owned cancellation cleanup emitted synchronously by transport leases.
 #[derive(Debug)]
-pub(super) struct ClientClipboardRouteCleanup {
-    pub(super) client_id: ClientId,
-    pub(super) generation: u64,
+pub(super) enum ClientClipboardRouteCleanup {
+    /// Generation-fenced clipboard route retirement.
+    Clipboard {
+        client_id: ClientId,
+        generation: u64,
+    },
+    /// Exact attachment and X11 teardown, optionally acknowledged to its owner.
+    Connection {
+        connection: Box<ControlConnectionState>,
+        route_result: Result<()>,
+        reply: Option<tokio::sync::oneshot::Sender<Result<()>>>,
+    },
+}
+
+/// Sole disconnect owner spanning routed initialization and control serving.
+/// Drop transfers teardown synchronously to the actor cancellation queue.
+#[derive(Debug)]
+pub(crate) struct ControlConnectionCleanupLease {
+    pub(super) cleanup_tx: mpsc::UnboundedSender<ClientClipboardRouteCleanup>,
+    pub(super) connection: Option<Box<ControlConnectionState>>,
+}
+
+impl ControlConnectionCleanupLease {
+    /// Transfers sole disconnect ownership away from the control-loop copy.
+    /// X11 leases remain shared exact-route handles and deactivation is idempotent.
+    pub(crate) fn own_disconnect(&self, connection: &mut ControlConnectionState) {
+        let _ = connection.take_disconnect_client_id();
+    }
+
+    /// Sends teardown before awaiting bounded acknowledgement, so cancellation
+    /// cannot lose the cleanup event. Errors never authorize replay or reattach.
+    pub(crate) async fn close(mut self, timeout: Duration) -> Result<()> {
+        let Some(mut connection) = self.connection.take() else {
+            return Ok(());
+        };
+        let route_result = connection.deactivate_x11_route().map(|_| ());
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.cleanup_tx
+            .send(ClientClipboardRouteCleanup::Connection {
+                connection,
+                route_result,
+                reply: Some(reply),
+            })
+            .map_err(|_| MezError::invalid_state("attachment cleanup actor is unavailable"))?;
+        tokio::time::timeout(timeout, response)
+            .await
+            .map_err(|_| MezError::invalid_state("attachment cleanup acknowledgement timed out"))?
+            .map_err(|_| {
+                MezError::invalid_state("attachment cleanup acknowledgement was dropped")
+            })?
+    }
+}
+
+impl Drop for ControlConnectionCleanupLease {
+    fn drop(&mut self) {
+        if let Some(mut connection) = self.connection.take() {
+            let route_result = connection.deactivate_x11_route().map(|_| ());
+            if self
+                .cleanup_tx
+                .send(ClientClipboardRouteCleanup::Connection {
+                    connection,
+                    route_result,
+                    reply: None,
+                })
+                .is_err()
+            {
+                eprintln!("mez: attachment cleanup actor is unavailable");
+            }
+        }
+    }
 }
 
 /// Exact clipboard-route ownership for one live Iroh event stream.
@@ -783,6 +849,9 @@ pub struct AsyncRuntimeSessionActor {
     /// Cancellation-safe route cleanup sent synchronously by event-task Drop.
     pub(super) client_clipboard_route_cleanup_rx:
         mpsc::UnboundedReceiver<ClientClipboardRouteCleanup>,
+    /// Producer retained for actor-created attachment handoff leases.
+    pub(super) client_clipboard_route_cleanup_tx:
+        mpsc::UnboundedSender<ClientClipboardRouteCleanup>,
     /// Stores the message delivery notify value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -1000,6 +1069,8 @@ pub struct AsyncControlInputResult {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub connection: ControlConnectionState,
+    /// Exact attachment cleanup retained only for routed initialization handoff.
+    pub(crate) connection_cleanup: Option<Box<ControlConnectionCleanupLease>>,
     /// Terminal lifecycle publication deferred until this response flushes.
     pub(super) terminal_lifecycle_flush: Option<AsyncTerminalLifecycleFlushGuard>,
 }
@@ -1535,6 +1606,31 @@ mod tests {
     use super::*;
     use crate::host::async_runtime::AsyncRuntimeRequest;
     use crate::runtime::{PaneEvent, PaneProcessEvent, RuntimeEvent, RuntimeEventBatch};
+
+    /// Cleanup submission and acknowledgement failures must stay visible. A
+    /// timeout does not retract an already queued exact-owner cleanup event,
+    /// while an unavailable actor is never reported as successful detachment.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn connection_cleanup_reports_unavailable_actor_and_acknowledgement_timeout() {
+        let (cleanup_tx, mut cleanup_rx) = mpsc::unbounded_channel();
+        let lease = ControlConnectionCleanupLease {
+            cleanup_tx: cleanup_tx.clone(),
+            connection: Some(Box::new(ControlConnectionState::new(true, true))),
+        };
+        let error = lease.close(Duration::from_secs(1)).await.unwrap_err();
+        assert!(error.message().contains("acknowledgement timed out"));
+        assert!(matches!(
+            cleanup_rx.try_recv().unwrap(),
+            ClientClipboardRouteCleanup::Connection { .. }
+        ));
+        drop(cleanup_rx);
+        let lease = ControlConnectionCleanupLease {
+            cleanup_tx,
+            connection: Some(Box::new(ControlConnectionState::new(true, true))),
+        };
+        let error = lease.close(Duration::from_secs(1)).await.unwrap_err();
+        assert!(error.message().contains("actor is unavailable"));
+    }
 
     fn pane_output_request(
         instance: PaneProcessInstance,

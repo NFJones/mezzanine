@@ -276,7 +276,7 @@ impl AsyncRuntimeSessionActor {
         );
         let handle = AsyncRuntimeSessionHandle {
             sender: sender.clone(),
-            client_clipboard_route_cleanup_tx,
+            client_clipboard_route_cleanup_tx: client_clipboard_route_cleanup_tx.clone(),
             message_delivery_notify: message_delivery_notify.clone(),
             event_delivery_notify: event_delivery_notify.clone(),
             event_delivery_revision_rx,
@@ -312,6 +312,7 @@ impl AsyncRuntimeSessionActor {
             next_client_clipboard_route_generation: 0,
             client_clipboard_sequences: Default::default(),
             client_clipboard_route_cleanup_rx,
+            client_clipboard_route_cleanup_tx,
             side_effect_delivery_notify,
             side_effect_delivery_tx,
             pane_process_side_effect_delivery_txs,
@@ -468,7 +469,7 @@ impl AsyncRuntimeSessionActor {
                 && self.queued_request_count() > 0
                 && let Ok(cleanup) = self.client_clipboard_route_cleanup_rx.try_recv()
             {
-                self.cleanup_client_clipboard_route(cleanup.client_id, cleanup.generation);
+                self.apply_transport_cancellation_cleanup(cleanup).await;
                 self.request_scheduler.requests_since_clipboard_cleanup = 0;
                 continue;
             }
@@ -479,7 +480,7 @@ impl AsyncRuntimeSessionActor {
                     biased;
                     () = self.request_ingress_notify.notified() => continue,
                     Some(cleanup) = self.client_clipboard_route_cleanup_rx.recv() => {
-                        self.cleanup_client_clipboard_route(cleanup.client_id, cleanup.generation);
+                        self.apply_transport_cancellation_cleanup(cleanup).await;
                         self.request_scheduler.requests_since_clipboard_cleanup = 0;
                         // A cleanup is cancellation bookkeeping rather than an actor request.
                         // Re-enter the loop so ingress is checked before another cleanup.

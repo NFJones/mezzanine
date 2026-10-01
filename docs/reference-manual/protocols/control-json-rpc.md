@@ -243,6 +243,14 @@ interactive primary does not transfer its ownership to the one-shot request.
 Neither side silently replays an application request after an ambiguous
 failure.
 
+Routed initialization retains exact attachment cleanup from actor response
+creation through response delivery and control-loop handoff. Early errors or
+cancelled futures transfer teardown to the actor's cancellation queue, not an
+untracked background task. The exact X11 route is invalidated before bounded
+cleanup acknowledgement. A failed acknowledgement does not prove detachment.
+Committed session creation remains idempotently reusable after response loss;
+attachment cleanup does not delete that session or replay input.
+
 Interactive Iroh attach retains that initialized stream instead of opening a
 stream per request. The client serializes each resize, `terminal/step`, and
 `terminal/view` operation behind exactly one response before sending the next
