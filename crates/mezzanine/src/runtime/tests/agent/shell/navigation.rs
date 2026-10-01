@@ -974,7 +974,8 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
         Session::new_default(
             ResolvedShell::new(shell_path.clone(), ShellSource::ShellEnv),
             Size::new(80, 24).unwrap(),
-        ),
+        )
+        .unwrap(),
         PathBuf::from("/tmp/mez-1000/default.sock"),
         100,
         10,
@@ -1092,7 +1093,8 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
         Session::new_default(
             ResolvedShell::new(shell_path, ShellSource::ShellEnv),
             Size::new(80, 24).unwrap(),
-        ),
+        )
+        .unwrap(),
         root.join("control.sock"),
         100,
         10,

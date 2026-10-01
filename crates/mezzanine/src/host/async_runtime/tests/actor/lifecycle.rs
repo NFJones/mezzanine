@@ -2122,7 +2122,7 @@ fn restored_pane_prompt_actor_fixture() -> (RuntimeSessionService, ClientId, Str
         PathBuf::from("/bin/sh"),
         crate::host::shell::ShellSource::ShellEnv,
     );
-    let original = Session::new_default(shell.clone(), Size::new(80, 24).unwrap());
+    let original = Session::new_default(shell.clone(), Size::new(80, 24).unwrap()).unwrap();
     let payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
     let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
     let restored = Session::from_restore_input(shell, restore_input).unwrap();

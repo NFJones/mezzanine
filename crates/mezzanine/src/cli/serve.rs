@@ -90,7 +90,7 @@ pub(super) async fn run_new<W: Write>(
         Size::new(80, 24)?
     };
     let launch_directory = std::env::current_dir()?;
-    let mut session = Session::new_default(shell, size);
+    let mut session = Session::new_default(shell, size)?;
     apply_requested_session_name(&mut session, session_name.as_deref())?;
     if interactive && !dry_run {
         let new_socket_selection = socket_selection_for_new_session(socket_selection)?;
@@ -752,7 +752,7 @@ pub(super) async fn run_serve<W: Write>(
         None
     };
     let (columns, rows) = terminal_size_from_fd_or_environment(terminal_size_fd);
-    let mut session = Session::new_default(shell, Size::new(columns, rows)?);
+    let mut session = Session::new_default(shell, Size::new(columns, rows)?)?;
     apply_requested_session_name(&mut session, session_name.as_deref())?;
     assign_unique_live_session_id(&mut session)?;
     let socket_path = selected_socket_path(socket_selection).clone();

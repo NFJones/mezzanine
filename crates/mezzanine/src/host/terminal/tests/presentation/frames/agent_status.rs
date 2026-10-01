@@ -26,7 +26,7 @@ fn rendered_column_is_bold(spans: &[TerminalStyleSpan], column: usize) -> bool {
 #[test]
 fn render_default_pane_frame_right_aligns_agent_status_in_agent_mode() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(56, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(56, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let inputs = vec![PaneRenderInput {
         pane_id: pane_id.clone(),
@@ -71,7 +71,7 @@ fn render_default_pane_frame_right_aligns_agent_status_in_agent_mode() {
 #[test]
 fn render_default_pane_frame_keeps_right_border_for_overlong_agent_status() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(36, 6).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(36, 6).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Horizontal)
         .unwrap();
@@ -127,7 +127,7 @@ fn render_default_pane_frame_keeps_right_border_for_overlong_agent_status() {
 #[test]
 fn render_default_pane_frame_right_aligns_context_usage_before_agent_status() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(64, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(64, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let inputs = vec![PaneRenderInput {
         pane_id: pane_id.clone(),
@@ -179,7 +179,7 @@ fn render_default_pane_frame_right_aligns_context_usage_before_agent_status() {
 #[test]
 fn render_default_pane_frame_right_aligns_agent_status_without_pwd() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(72, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(72, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let inputs = vec![PaneRenderInput {
         pane_id: pane_id.clone(),
@@ -223,7 +223,7 @@ fn render_default_pane_frame_right_aligns_agent_status_without_pwd() {
 #[test]
 fn render_default_pane_frame_agent_status_uses_separate_themed_pills_without_name() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(84, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(84, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut frame_context = TerminalFrameContext::default();
     frame_context.panes.insert(
@@ -333,7 +333,7 @@ fn render_active_agent_status_gradient_uses_theme_relative_harmony() {
             builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
         let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
         let mut ids = IdFactory::default();
-        let window = Window::new(&mut ids, 0, "main", Size::new(62, 3).unwrap());
+        let window = Window::new(&mut ids, 0, "main", Size::new(62, 3).unwrap()).unwrap();
         let pane_id = window.panes()[0].id.to_string();
         let mut frame_context = TerminalFrameContext::default();
         frame_context.panes.insert(
@@ -407,7 +407,7 @@ fn render_active_agent_status_gradient_uses_theme_relative_harmony() {
 #[test]
 fn render_reduced_motion_agent_status_uses_static_running_style() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(62, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(62, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut frame_context = TerminalFrameContext {
         reduced_motion: true,
@@ -469,7 +469,7 @@ fn render_reduced_motion_agent_status_uses_static_running_style() {
 fn render_merged_agent_status_pills_do_not_inherit_active_divider_bold() {
     for reduced_motion in [true, false] {
         let mut ids = IdFactory::default();
-        let mut window = Window::new(&mut ids, 0, "main", Size::new(64, 9).unwrap());
+        let mut window = Window::new(&mut ids, 0, "main", Size::new(64, 9).unwrap()).unwrap();
         window
             .split_active(&mut ids, SplitDirection::Horizontal)
             .unwrap();
@@ -541,7 +541,7 @@ fn render_merged_agent_status_pills_do_not_inherit_active_divider_bold() {
 #[test]
 fn render_default_pane_frame_agent_status_waiting_uses_running_scan() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(56, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(56, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut frame_context = TerminalFrameContext::default();
     frame_context.panes.insert(
@@ -604,7 +604,7 @@ fn render_default_pane_frame_agent_status_waiting_uses_running_scan() {
 #[test]
 fn render_default_pane_frame_agent_status_routing_uses_running_scan() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(56, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(56, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut frame_context = TerminalFrameContext::default();
     frame_context.panes.insert(
@@ -669,7 +669,7 @@ fn render_default_pane_frame_agent_status_routing_uses_running_scan() {
 #[test]
 fn render_default_pane_frame_agent_status_stopped_is_muted() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(48, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(48, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut frame_context = TerminalFrameContext::default();
     frame_context.panes.insert(
@@ -726,7 +726,7 @@ fn render_default_pane_frame_agent_status_stopped_is_muted() {
 #[test]
 fn render_default_pane_frame_scroll_position_replaces_agent_info() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(32, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(32, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let inputs = vec![PaneRenderInput {
         pane_id: pane_id.clone(),
@@ -769,7 +769,7 @@ fn render_default_pane_frame_scroll_position_replaces_agent_info() {
 #[test]
 fn render_default_pane_frame_scroll_position_has_background_without_box_drawing_fill() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(32, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(32, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut frame_context = TerminalFrameContext::default();
     frame_context.panes.insert(
@@ -813,7 +813,7 @@ fn render_default_pane_frame_scroll_position_has_background_without_box_drawing_
 #[test]
 fn render_agent_planning_pill_has_fixed_label_and_state_colors() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(48, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(48, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
 
     let render = |value: Option<&str>| {

@@ -198,7 +198,8 @@ async fn snapshot_repository_async_persists_lists_and_deletes_snapshots() {
     let session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let frame_state = SnapshotFrameState::default();
 
     let state = repo
@@ -530,7 +531,8 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/usr/bin/zsh"), ShellSource::ShellEnv),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
     session
         .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
@@ -776,7 +778,8 @@ fn snapshot_v5_selects_manual_and_automatic_landing_sources() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let owner = session.attach_primary("owner", true).unwrap();
     let owner_window = session.new_window(&owner, "owner", true).unwrap();
     let second = session.attach_primary("second", true).unwrap();
@@ -813,7 +816,8 @@ fn snapshot_v4_normalizes_legacy_focus_into_landing_navigation() {
     let session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let payload = SessionSnapshotPayload::from_session(&session);
     repo.write_payload("legacy", &payload).unwrap();
     let path = root.join("legacy.payload");
@@ -860,7 +864,8 @@ fn session_snapshot_payload_preserves_terminal_and_transcript_refs() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
     let pane_id = session
         .active_window()
@@ -1001,7 +1006,8 @@ fn snapshot_repository_restores_session_shape_from_payload() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
     session
         .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
@@ -1044,7 +1050,8 @@ fn snapshot_restore_preserves_ambiguous_layout_ancestry() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
     session
         .split_active_pane_select(&primary, SplitDirection::Horizontal, true)
@@ -1137,7 +1144,8 @@ fn snapshot_payload_rejects_invalid_window_layout_policy() {
     let session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     payload.windows[0].layout_policy = "stacked".to_string();
 
@@ -1155,7 +1163,8 @@ fn snapshot_payload_rejects_invalid_pane_process_state() {
     let session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     payload.windows[0].panes[0].process_state = "unknown".to_string();
 
@@ -1172,7 +1181,8 @@ fn snapshot_payload_rejects_invalid_pane_readiness_state() {
     let session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     payload.windows[0].panes[0].readiness_state = "full-screen".to_string();
 
@@ -1187,7 +1197,8 @@ fn snapshot_v5_rejects_cross_parent_landing_navigation() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
     let first_window = session.active_window().unwrap().id.clone();
     let second_window = session.new_window(&primary, "second", true).unwrap();
@@ -1249,7 +1260,8 @@ fn snapshot_v2_through_v5_keep_peer_presentation_outbox_empty() {
     let session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let payload = SessionSnapshotPayload::from_session(&session);
     repo.write_payload("legacy", &payload).unwrap();
     let path = root.join("legacy.payload");
@@ -1295,7 +1307,8 @@ fn snapshot_v6_rejects_duplicate_empty_peer_presentation_outbox_records() {
     let session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     repo.write_payload("duplicate", &SessionSnapshotPayload::from_session(&session))
         .unwrap();
     let path = root.join("duplicate.payload");
@@ -1316,7 +1329,8 @@ fn snapshot_v6_peer_presentation_outbox_enforces_boundary_without_loss() {
     let session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     let mut messages = MessageService::default();
     let recipient = messages
@@ -1405,7 +1419,8 @@ fn snapshot_v6_peer_presentation_payload_round_trips_utf8_at_byte_bound() {
     let session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     let mut messages = MessageService::default();
     let recipient = messages
@@ -1466,7 +1481,8 @@ fn snapshot_v6_peer_presentation_rejects_missing_cursor_or_owner() {
     let session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     payload.unsettled_peer_presentations = vec![SnapshotUnsettledPeerPresentation {
         identity: "peer-message recipient=agent-%1 sequence=1 id=malformed".to_string(),
@@ -1528,7 +1544,8 @@ fn snapshot_v6_peer_presentation_rejects_invalid_recipient_pane_ownership() {
     let session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     let mut messages = MessageService::default();
     let recipient = messages
@@ -1595,7 +1612,8 @@ fn snapshot_payload_rejects_invalid_shell_metadata() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     session.attach_primary("primary", true).unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     payload.shell.path.clear();
@@ -1622,7 +1640,8 @@ fn snapshot_payload_rejects_invalid_agent_session_metadata() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     session.attach_primary("primary", true).unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     payload.agent_sessions.push(SnapshotAgentSession {
@@ -1651,7 +1670,8 @@ fn snapshot_payload_rejects_invalid_visible_style_spans() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     session.attach_primary("primary", true).unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     let pane = &mut payload.windows[0].panes[0];
@@ -1698,7 +1718,8 @@ fn snapshot_payload_rejects_invalid_terminal_saved_state() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     session.attach_primary("primary", true).unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     let pane = &mut payload.windows[0].panes[0];
@@ -1751,7 +1772,8 @@ fn snapshot_payload_rejects_invalid_pane_geometry() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     session.attach_primary("primary", true).unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     payload.windows[0].panes[0].geometry = Some(SnapshotPaneGeometry {
@@ -1779,7 +1801,8 @@ fn snapshot_payload_rejects_invalid_pane_geometry() {
     let mut split_session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let primary = split_session.attach_primary("primary", true).unwrap();
     split_session
         .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
@@ -1818,7 +1841,8 @@ fn snapshot_payload_rejects_invalid_approval_metadata() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     session.attach_primary("primary", true).unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     payload.approval_grants.push(SnapshotApprovalGrantMetadata {
@@ -1916,7 +1940,8 @@ fn snapshot_payload_rejects_invalid_frame_state() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     session.attach_primary("primary", true).unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     payload.frame_state.window.position = "middle".to_string();

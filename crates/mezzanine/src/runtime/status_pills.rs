@@ -1971,6 +1971,7 @@ mod tests {
             SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
             Size::new(80, 24).unwrap(),
         )
+        .unwrap()
     }
 
     /// Verifies provider presentation preserves each primary's exact pane

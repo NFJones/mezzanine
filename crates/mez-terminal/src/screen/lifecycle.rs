@@ -227,6 +227,7 @@ impl TerminalScreen {
         history_limit: usize,
         history_rotate_lines: usize,
     ) -> std::result::Result<Self, TerminalScreenConfigError> {
+        size.validate()?;
         Ok(Self {
             size,
             cells: blank_cells(size),
@@ -433,14 +434,13 @@ impl TerminalScreen {
         outcome
     }
 
-    /// Runs the resize operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn resize(&mut self, size: Size) {
+    /// Resizes a terminal surface after validating its allocation budget.
+    /// Invalid public-field geometry returns an error without changing content,
+    /// cursor, revision, or ownership. Valid geometry preserves reflow policy.
+    pub fn resize(&mut self, size: Size) -> std::result::Result<(), TerminalScreenConfigError> {
+        size.validate()?;
         if self.size == size {
-            return;
+            return Ok(());
         }
         self.mark_render_changed();
         self.reset_normal_viewport_origin();
@@ -452,22 +452,23 @@ impl TerminalScreen {
 
         if self.alternate.active() {
             self.resize_alternate_screen(size);
-            return;
+            return Ok(());
         }
 
         if self.normal_viewport_detached_from_history {
             self.resize_detached_normal_screen(size);
-            return;
+            return Ok(());
         }
         if self.normal_screen_viewport_is_cleared() {
             self.resize_cleared_normal_screen(size);
-            return;
+            return Ok(());
         }
         if self.size.columns == size.columns {
             self.resize_normal_screen_rows_only(size);
-            return;
+            return Ok(());
         }
         self.resize_normal_screen_reflowing(size);
+        Ok(())
     }
 
     /// Rebuilds visible cell footprints after the terminal width policy changes.

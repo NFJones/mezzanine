@@ -106,7 +106,8 @@ fn runtime_agent_resize_projection_rejects_every_stale_owner_generation() {
     geometry_service
         .agent_pane_screen_mut("%1")
         .unwrap()
-        .resize(Size::new(18, 12).unwrap());
+        .resize(Size::new(18, 12).unwrap())
+        .unwrap();
     assert!(
         !geometry_service
             .apply_agent_presentation_resize_result(geometry_result)

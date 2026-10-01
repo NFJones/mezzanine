@@ -50,6 +50,7 @@ pub fn new_window_pane_size(window_size: Size, spec: PaneSizeSpec) -> Result<Siz
 
 /// Validates the hard minimum dimensions shared by pane resize operations.
 pub fn validate_pane_size(size: Size) -> Result<()> {
+    size.validate()?;
     if size.columns < MIN_PANE_COLUMNS || size.rows < MIN_PANE_ROWS {
         Err(MezError::invalid_args(
             "pane size is below the minimum pane dimensions",

@@ -99,7 +99,7 @@ impl Session {
         self.require_primary(primary_client_id)?;
         self.activate_client_navigation(primary_client_id)?;
         let index = self.windows.len();
-        let mut window = Window::new(&mut self.ids, index, name, self.authoritative_size);
+        let mut window = Window::new(&mut self.ids, index, name, self.authoritative_size)?;
         window.created_at_unix_seconds = Some(current_unix_seconds());
         let id = window.id.clone();
         self.windows.push(window);
@@ -167,7 +167,7 @@ impl Session {
             .position(|group| &group.id == group_id)
             .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "window group not found"))?;
         let index = self.windows.len();
-        let mut window = Window::new(&mut self.ids, index, name, self.authoritative_size);
+        let mut window = Window::new(&mut self.ids, index, name, self.authoritative_size)?;
         window.created_at_unix_seconds = Some(current_unix_seconds());
         let id = window.id.clone();
         self.windows.push(window);
@@ -208,7 +208,7 @@ impl Session {
                 name.clone()
             },
             self.authoritative_size,
-        );
+        )?;
         let now = current_unix_seconds();
         window.created_at_unix_seconds = Some(now);
         let window_id = window.id.clone();
@@ -1247,6 +1247,7 @@ impl Session {
         size: Size,
     ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
+        size.validate()?;
         let client = self
             .clients
             .iter_mut()
@@ -1276,6 +1277,7 @@ impl Session {
         &mut self,
         size: Size,
     ) -> Result<Vec<PaneResizeEffect>> {
+        size.validate()?;
         if self.authoritative_size == size {
             return Ok(Vec::new());
         }
@@ -1498,8 +1500,12 @@ impl Session {
         select_new_window: bool,
     ) -> Result<BreakPaneTransition> {
         self.require_primary(primary_client_id)?;
+        self.authoritative_size.validate()?;
         self.activate_client_navigation(primary_client_id)?;
         let (source_window_index, source_pane_index) = self.pane_location(target)?;
+        self.windows[source_window_index].panes()[source_pane_index]
+            .size
+            .validate()?;
         let source_window_id = self.windows[source_window_index].id.clone();
         let source_group_index = self.group_index_containing_window_id(&source_window_id);
         let source_group_window_position = source_group_index.and_then(|group_index| {
@@ -1524,7 +1530,7 @@ impl Session {
             window_name,
             self.authoritative_size,
             pane,
-        );
+        )?;
         window.created_at_unix_seconds = Some(current_unix_seconds());
         let window_id = window.id.clone();
         self.windows.push(window);

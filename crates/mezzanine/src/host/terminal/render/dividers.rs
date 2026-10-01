@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn styled_pane_dividers_highlight_active_pane_border() {
         let mut ids = IdFactory::default();
-        let mut window = Window::new(&mut ids, 0, "main", Size::new(8, 4).unwrap());
+        let mut window = Window::new(&mut ids, 0, "main", Size::new(8, 4).unwrap()).unwrap();
         window
             .split_active(&mut ids, SplitDirection::Vertical)
             .unwrap();
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn merged_pane_frame_boundaries_use_focus_stable_rendition() {
         let mut ids = IdFactory::default();
-        let mut window = Window::new(&mut ids, 0, "main", Size::new(28, 6).unwrap());
+        let mut window = Window::new(&mut ids, 0, "main", Size::new(28, 6).unwrap()).unwrap();
         window
             .split_active(&mut ids, SplitDirection::Vertical)
             .unwrap();
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn styled_pane_dividers_use_dedicated_divider_palette_for_neutral_cells() {
         let mut ids = IdFactory::default();
-        let mut window = Window::new(&mut ids, 0, "main", Size::new(28, 6).unwrap());
+        let mut window = Window::new(&mut ids, 0, "main", Size::new(28, 6).unwrap()).unwrap();
         window
             .split_active(&mut ids, SplitDirection::Vertical)
             .unwrap();

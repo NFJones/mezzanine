@@ -445,6 +445,15 @@ documented terminal-safe rendering or provide local scrolling within the
 presented view. If a read-only observer's terminal is larger than the source
 view, unused space MUST NOT change the controlled pane layout.
 
+Terminal geometry MUST contain positive axes of at most 4096 cells each and
+at most 262144 visible cells per surface. These independent resource budgets
+MUST be checked before terminal grid construction, resize allocation, client
+descriptor or canonical layout mutation, and restored-layout reconstruction.
+Excessive geometry MUST fail with a typed validation error rather than being
+silently clamped; rejected screen resizes MUST preserve the previous screen.
+The limits bound per-surface cell/style grids and axis metadata, not a global
+session memory quota or a guarantee that permitted allocations cannot fail.
+
 If the final primary detaches, the most recent canonical dimensions MUST remain
 authoritative until a new primary attaches. Read-only observers MUST NOT change
 pane pseudoterminal dimensions while no primary is attached.

@@ -21,7 +21,7 @@ use unicode_width::UnicodeWidthStr;
 #[test]
 fn render_window_frame_uses_named_template_fields() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 7, "main\u{1b}[31m", Size::new(18, 3).unwrap());
+    let mut window = Window::new(&mut ids, 7, "main\u{1b}[31m", Size::new(18, 3).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -57,7 +57,7 @@ fn render_window_frame_uses_named_template_fields() {
 #[test]
 fn render_window_and_pane_title_fields_use_projected_titles() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(24, 2).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(24, 2).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let inputs = vec![PaneRenderInput {
         pane_id: pane_id.clone(),
@@ -104,7 +104,7 @@ fn render_window_and_pane_title_fields_use_projected_titles() {
 #[test]
 fn render_default_window_frame_uses_window_pillbox_context() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 1, "work", Size::new(40, 3).unwrap());
+    let window = Window::new(&mut ids, 1, "work", Size::new(40, 3).unwrap()).unwrap();
     let inputs = vec![PaneRenderInput {
         pane_id: window.panes()[0].id.to_string(),
         lines: vec!["body".to_string()],
@@ -180,7 +180,7 @@ fn render_default_window_frame_uses_window_pillbox_context() {
 #[test]
 fn render_window_completion_attention_respects_flashing_preference() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "work", Size::new(40, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "work", Size::new(40, 3).unwrap()).unwrap();
     let render_phase = |animation_tick_ms, reduced_motion, completion_attention_static| {
         let config = TerminalClientLoopConfig {
             frame_context: TerminalFrameContext {
@@ -245,7 +245,7 @@ fn render_window_completion_attention_respects_flashing_preference() {
 #[test]
 fn render_window_approval_attention_uses_distinct_semantic_color() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "work", Size::new(40, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "work", Size::new(40, 3).unwrap()).unwrap();
     let config = TerminalClientLoopConfig {
         frame_context: TerminalFrameContext {
             animation_tick_ms: 0,
@@ -303,7 +303,8 @@ fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
         0,
         "abcdefghijklmnopqrstuvwxZ",
         Size::new(80, 3).unwrap(),
-    );
+    )
+    .unwrap();
     let horizontal_split_action = WindowFrameAction::terminal_button("-", "split-window -h");
     let new_window_action = WindowFrameAction::terminal_button("□", "new-window");
     let frame_context = TerminalFrameContext {
@@ -386,7 +387,7 @@ fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
 #[test]
 fn render_window_status_uses_right_aligned_themed_segments() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 1, "work", Size::new(96, 3).unwrap());
+    let window = Window::new(&mut ids, 1, "work", Size::new(96, 3).unwrap()).unwrap();
     let frame_context = TerminalFrameContext {
         windows: vec![TerminalWindowFrameContext {
             id: "@2".to_string(),
@@ -468,7 +469,7 @@ fn render_window_status_uses_right_aligned_themed_segments() {
 #[test]
 fn render_window_status_uses_cached_command_status_pills() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 1, "work", Size::new(50, 3).unwrap());
+    let window = Window::new(&mut ids, 1, "work", Size::new(50, 3).unwrap()).unwrap();
     let frame_context = TerminalFrameContext {
         windows: vec![TerminalWindowFrameContext {
             id: "@2".to_string(),
@@ -521,7 +522,7 @@ fn render_window_status_uses_cached_command_status_pills() {
 #[test]
 fn render_window_status_pills_apply_palette_overrides_in_both_style_paths() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 1, "work", Size::new(80, 3).unwrap());
+    let window = Window::new(&mut ids, 1, "work", Size::new(80, 3).unwrap()).unwrap();
     let foreground = TerminalColor::Rgb(0x12, 0x34, 0x56);
     let background = TerminalColor::Rgb(0x65, 0x43, 0x21);
 
@@ -620,7 +621,7 @@ fn render_window_status_pills_apply_palette_overrides_in_both_style_paths() {
 #[test]
 fn render_window_frame_fits_single_row_window() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(12, 1).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(12, 1).unwrap()).unwrap();
     let inputs = vec![PaneRenderInput {
         pane_id: window.panes()[0].id.to_string(),
         lines: vec!["body".to_string()],
@@ -649,7 +650,7 @@ fn render_window_frame_fits_single_row_window() {
 #[test]
 fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "work", Size::new(40, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "work", Size::new(40, 3).unwrap()).unwrap();
     let render = |template: &str| {
         let config = TerminalClientLoopConfig {
             frame_context: TerminalFrameContext {

@@ -108,7 +108,8 @@ fn snapshot_resume_restores_local_session_shape() {
     let mut session = Session::new_default(
         resolve_shell(Some(OsString::from("/bin/sh"))).unwrap(),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
     session
         .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
@@ -156,7 +157,8 @@ fn snapshot_resume_can_restart_restored_panes_with_explicit_command() {
     let mut session = Session::new_default(
         resolve_shell(Some(OsString::from("/bin/sh"))).unwrap(),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
     session
         .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
@@ -207,7 +209,8 @@ fn snapshot_resume_can_serve_restored_session_over_control_socket() {
     let session = Session::new_default(
         resolve_shell(Some(OsString::from("/bin/sh"))).unwrap(),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let pane_id = session.windows()[0].panes()[0].id.to_string();
     repository
         .create_from_session_with_captures(
@@ -328,7 +331,8 @@ fn snapshot_resume_latest_selects_newest_matching_snapshot() {
     let mut session = Session::new_default(
         resolve_shell(Some(OsString::from("/bin/sh"))).unwrap(),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     repository
         .create_from_session("snap-a", Some("old".to_string()), &session)
         .unwrap();

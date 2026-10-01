@@ -15,17 +15,16 @@ use super::types::{
 };
 
 impl Session {
-    /// Runs the new default operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn new_default(shell: impl Into<SessionShell>, size: Size) -> Self {
+    /// Creates a default session with resource-bounded terminal geometry.
+    /// Rejects invalid public-field dimensions before allocating identities or
+    /// constructing canonical windows; shell resolution remains product-owned.
+    pub fn new_default(shell: impl Into<SessionShell>, size: Size) -> Result<Self> {
+        size.validate()?;
         let shell = shell.into();
         let mut ids = IdFactory::default();
         let id = ids.session();
         let now = current_unix_seconds();
-        let mut window = Window::new(&mut ids, 0, "0", size);
+        let mut window = Window::new(&mut ids, 0, "0", size)?;
         window.created_at_unix_seconds = Some(now);
         let group = WindowGroup::new(ids.window_group(), 0, "0", window.id.clone(), Some(now));
         let landing_navigation = LandingNavigationState {
@@ -34,7 +33,7 @@ impl Session {
             active_pane_id: Some(window.active_pane().id.clone()),
         };
 
-        Self {
+        Ok(Self {
             ids,
             id,
             name: "default".to_string(),
@@ -60,7 +59,7 @@ impl Session {
             layout_owner_client_id: None,
             layout_revision: 0,
             next_event_id: 1,
-        }
+        })
     }
 
     /// Runs the windows operation for this subsystem.

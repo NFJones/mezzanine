@@ -193,7 +193,8 @@ fn connection_initialize_rejects_unsupported_protocol_version() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let input = encode_control_body(
@@ -228,7 +229,8 @@ fn connection_initialize_validates_session_target_against_live_session() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let missing_target = encode_control_body(
@@ -279,7 +281,8 @@ fn connection_initialize_binds_primary_caller_for_followup_requests() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let mut input = encode_control_body(
@@ -425,7 +428,8 @@ fn primary_disconnect_client_is_taken_once() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let input = encode_control_body(
@@ -453,7 +457,8 @@ fn same_named_primary_initialization_creates_independent_owned_client() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let existing_primary = session.attach_primary("primary", true).unwrap();
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
@@ -489,7 +494,8 @@ fn iroh_primary_with_same_display_name_gets_independent_client() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let existing_primary = session.attach_primary("remote-cli", true).unwrap();
     let mut connection = ControlConnectionState::new(false, false);
     connection
@@ -542,7 +548,8 @@ fn authenticated_iroh_primary_negotiates_event_stream_version_two() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut connection = ControlConnectionState::new(false, false);
     connection
         .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint("endpoint-v2"))
@@ -589,7 +596,8 @@ fn authenticated_iroh_primary_negotiates_event_stream_version_three() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut connection = ControlConnectionState::new(false, false);
     connection
         .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint("endpoint-v3-primary"))
@@ -726,7 +734,8 @@ fn unsupported_event_stream_version_is_structured() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut connection = ControlConnectionState::new(false, false);
     connection
         .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint("endpoint-future"))
@@ -771,7 +780,8 @@ fn unix_primary_cannot_negotiate_event_stream_version_two() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut connection = ControlConnectionState::new(true, true);
     connection
         .bind_authenticated_peer(AuthenticatedPeer::unix_user(1000))
@@ -817,7 +827,8 @@ fn x11_initialize_offer_is_strict_and_iroh_primary_only() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let mut connection = ControlConnectionState::new(true, true);
     connection
         .bind_authenticated_peer(AuthenticatedPeer::unix_user(1000))

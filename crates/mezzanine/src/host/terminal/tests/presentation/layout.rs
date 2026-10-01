@@ -20,7 +20,7 @@ use unicode_width::UnicodeWidthStr;
 
 pub(super) fn window_from_test_geometries(size: Size, geometries: Vec<PaneGeometry>) -> Window {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", size);
+    let mut window = Window::new(&mut ids, 0, "main", size).unwrap();
     while window.panes().len() < geometries.len() {
         window
             .split_active(&mut ids, SplitDirection::Vertical)
@@ -53,7 +53,7 @@ fn blank_inputs_for_window(window: &Window) -> Vec<PaneRenderInput> {
 #[test]
 fn client_loop_draws_window_from_live_pane_screens() {
     let mut ids = mez_core::ids::IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(20, 4).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(20, 4).unwrap()).unwrap();
     window
         .split_active(&mut ids, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
@@ -84,7 +84,7 @@ fn client_loop_draws_window_from_live_pane_screens() {
 #[test]
 fn client_view_preserves_terminal_style_spans() {
     let mut ids = mez_core::ids::IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap()).unwrap();
     let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
     screen.feed(b"\x1b[1;38;5;120mAB\x1b[0mC");
     let mut screens = BTreeMap::new();
@@ -135,7 +135,7 @@ fn client_view_preserves_terminal_style_spans() {
 #[test]
 fn client_view_keeps_full_word_style_span_through_final_character() {
     let mut ids = mez_core::ids::IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap()).unwrap();
     let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
     screen.feed(b"\x1b[34mblue\x1b[0m");
     let mut screens = BTreeMap::new();
@@ -176,7 +176,7 @@ fn client_view_keeps_full_word_style_span_through_final_character() {
 #[test]
 fn client_view_offsets_style_spans_across_side_by_side_panes() {
     let mut ids = mez_core::ids::IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap()).unwrap();
     window
         .split_active(&mut ids, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
@@ -239,7 +239,7 @@ fn client_view_offsets_style_spans_across_side_by_side_panes() {
 #[test]
 fn client_view_uses_role_appropriate_dimensions() {
     let mut ids = mez_core::ids::IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(20, 4).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(20, 4).unwrap()).unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
     screen.feed(b"live\nviewport");
     let mut screens = BTreeMap::new();
@@ -329,7 +329,7 @@ fn observer_client_presentation_uses_local_viewport_offset() {
 #[test]
 fn default_client_loop_config_renders_window_and_pane_state_rows() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(24, 4).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(24, 4).unwrap()).unwrap();
     let view = render_attached_client_view(
         ClientViewRole::Primary,
         &window,
@@ -373,7 +373,7 @@ fn default_client_loop_config_renders_window_and_pane_state_rows() {
 #[test]
 fn attached_client_view_hides_cursor_when_pane_screen_hides_cursor() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(24, 4).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(24, 4).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut screen = TerminalScreen::new(Size::new(24, 2).unwrap(), 10).unwrap();
     screen.feed(b"\x1b[?1049h\x1b[?25lhtop");
@@ -399,7 +399,7 @@ fn attached_client_view_hides_cursor_when_pane_screen_hides_cursor() {
 #[test]
 fn attached_client_view_places_bottom_split_cursor_below_merged_divider_title() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(24, 5).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(24, 5).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Horizontal)
         .unwrap();
@@ -432,7 +432,7 @@ fn attached_client_view_places_bottom_split_cursor_below_merged_divider_title() 
 #[test]
 fn attached_client_view_clamps_cursor_before_right_divider() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -473,7 +473,7 @@ fn attached_client_view_clamps_cursor_before_right_divider() {
 #[test]
 fn render_window_composes_vertical_split_side_by_side() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -497,7 +497,7 @@ fn render_window_composes_vertical_split_side_by_side() {
 #[test]
 fn render_window_indexes_reordered_and_missing_pane_inputs() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -524,7 +524,7 @@ fn render_window_indexes_reordered_and_missing_pane_inputs() {
 #[test]
 fn render_window_rejects_duplicate_pane_inputs() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let inputs = vec![
         PaneRenderInput {
@@ -550,7 +550,7 @@ fn render_window_rejects_duplicate_pane_inputs() {
 #[test]
 fn render_window_keeps_divider_fixed_after_wide_glyph() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -586,7 +586,7 @@ fn render_window_keeps_divider_fixed_after_wide_glyph() {
 #[test]
 fn render_window_clips_wide_glyph_that_overlaps_divider() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -622,7 +622,7 @@ fn render_window_clips_wide_glyph_that_overlaps_divider() {
 #[test]
 fn render_window_keeps_divider_fixed_after_warning_sign_grapheme() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -657,7 +657,7 @@ fn render_window_keeps_divider_fixed_after_warning_sign_grapheme() {
 #[test]
 fn render_window_clips_warning_sign_grapheme_that_overlaps_divider() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -691,7 +691,7 @@ fn render_window_clips_warning_sign_grapheme_that_overlaps_divider() {
 #[test]
 fn render_window_composes_horizontal_split_stacked() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(12, 4).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(12, 4).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Horizontal)
         .unwrap();
@@ -727,7 +727,7 @@ fn render_window_composes_horizontal_split_stacked() {
 #[test]
 fn render_window_reserves_horizontal_divider_above_next_pane_header() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(12, 6).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(12, 6).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Horizontal)
         .unwrap();
@@ -772,7 +772,7 @@ fn render_window_reserves_horizontal_divider_above_next_pane_header() {
 #[test]
 fn render_window_composes_irregular_layout_from_stored_geometry() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 4).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 4).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -819,7 +819,7 @@ fn render_window_composes_irregular_layout_from_stored_geometry() {
 #[test]
 fn render_window_connects_overlapped_mixed_split_divider_junction() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 4).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 4).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -1025,7 +1025,7 @@ fn render_window_connects_all_mixed_split_junction_shapes() {
 #[test]
 fn render_context_usage_uses_distinct_pill_background() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(64, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(64, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut frame_context = TerminalFrameContext::default();
     frame_context.panes.insert(
@@ -1082,7 +1082,7 @@ fn render_context_usage_uses_distinct_pill_background() {
 #[test]
 fn render_attached_view_uses_conditional_window_group_bar() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "shell", Size::new(40, 4).unwrap());
+    let window = Window::new(&mut ids, 0, "shell", Size::new(40, 4).unwrap()).unwrap();
     let single_group_config = TerminalClientLoopConfig {
         frame_context: TerminalFrameContext {
             groups: vec![TerminalWindowGroupFrameContext {
@@ -1164,7 +1164,7 @@ fn render_attached_view_uses_conditional_window_group_bar() {
 #[test]
 fn render_pane_pwd_fields_compact_deep_paths_to_three_segments() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 1, "work", Size::new(120, 3).unwrap());
+    let window = Window::new(&mut ids, 1, "work", Size::new(120, 3).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let frame_context = TerminalFrameContext {
         windows: vec![TerminalWindowFrameContext {
@@ -1220,7 +1220,7 @@ fn render_pane_pwd_fields_compact_deep_paths_to_three_segments() {
 #[test]
 fn render_output_reflects_wrapped_text_erasure() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap()).unwrap();
     let mut screen = TerminalScreen::new(Size::new(10, 1).unwrap(), 10).unwrap();
     screen.feed(b"hello");
     let mut screens = BTreeMap::new();
@@ -1265,7 +1265,7 @@ fn render_output_reflects_wrapped_text_erasure() {
 #[test]
 fn render_output_reflects_wrapped_csi_erasure() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(5, 3).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(5, 3).unwrap()).unwrap();
     let mut screen = TerminalScreen::new(Size::new(5, 3).unwrap(), 10).unwrap();
     screen.feed(b"abcde");
     screen.feed(b"f");

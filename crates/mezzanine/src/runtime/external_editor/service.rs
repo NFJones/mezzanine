@@ -350,7 +350,7 @@ impl RuntimeSessionService {
             );
         }
         if let Some(screen) = self.external_editor.screen_mut(pane_id) {
-            screen.resize(size);
+            screen.resize(size)?;
         }
         Ok(())
     }
@@ -404,7 +404,7 @@ impl RuntimeSessionService {
             }
             PaneProcessEvent::Pane(crate::runtime::PaneEvent::Resized { size, .. }) => {
                 if let Some(screen) = self.external_editor.screen_mut(&pane_id) {
-                    screen.resize(size);
+                    screen.resize(size)?;
                 }
                 Ok(RuntimeTransition::default())
             }

@@ -4790,6 +4790,7 @@ impl RuntimeSessionService {
         size: Size,
     ) -> Result<bool> {
         self.require_live()?;
+        size.validate()?;
         let pane_id = pane_id.into();
         let Some(descriptor) = self.find_pane_descriptor(&pane_id) else {
             return Ok(false);
@@ -4805,7 +4806,7 @@ impl RuntimeSessionService {
             .process_pane_screens
             .get_mut(descriptor.pane_id.as_str())
         {
-            screen.resize(size);
+            screen.resize(size)?;
         }
         let agent_session_id = self
             .agent_shell_store()
@@ -4821,7 +4822,7 @@ impl RuntimeSessionService {
                 .as_deref()
                 .and_then(|session_id| self.agent_pane_screen_lineage(&pane_id, session_id));
             if let Some(screen) = self.agent_pane_screen_mut(&pane_id) {
-                screen.resize(size);
+                screen.resize(size)?;
             }
             let resized_lineage = agent_session_id
                 .as_deref()
@@ -4835,7 +4836,7 @@ impl RuntimeSessionService {
                         previous_lineage,
                         resized_lineage,
                         size,
-                    );
+                    )?;
             }
         }
         if let Some(screen) = self
@@ -4843,7 +4844,7 @@ impl RuntimeSessionService {
             .pane_transaction_osc_screens
             .get_mut(descriptor.pane_id.as_str())
         {
-            screen.resize(size);
+            screen.resize(size)?;
         }
         let primary_pid = self
             .process

@@ -341,7 +341,8 @@ mod tests {
         let mut session = Session::new_default(
             SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
             Size::new(80, 24).unwrap(),
-        );
+        )
+        .unwrap();
         let primary = session.attach_primary("primary", true).unwrap();
         (session, primary)
     }
@@ -409,7 +410,8 @@ mod tests {
         let session = Session::new_default(
             SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
             Size::new(80, 24).unwrap(),
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             list_clients(&session),

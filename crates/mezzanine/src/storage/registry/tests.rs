@@ -448,7 +448,7 @@ fn rejects_relative_socket_paths() {
 #[test]
 fn builds_record_from_session_state() {
     let shell = ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh);
-    let mut session = Session::new_default(shell, Size::new(80, 24).unwrap());
+    let mut session = Session::new_default(shell, Size::new(80, 24).unwrap()).unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
     session.detach_primary(&primary).unwrap();
 

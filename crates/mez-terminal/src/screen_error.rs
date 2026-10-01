@@ -30,6 +30,15 @@ impl From<HistoryConfigError> for TerminalScreenConfigError {
     }
 }
 
+impl From<crate::TerminalSizeError> for TerminalScreenConfigError {
+    /// Retains the shared geometry safety diagnostic at screen allocation edges.
+    fn from(error: crate::TerminalSizeError) -> Self {
+        Self {
+            message: error.message(),
+        }
+    }
+}
+
 impl fmt::Display for TerminalScreenConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.message)

@@ -827,7 +827,8 @@ mod policy_mode_tests {
             0,
             "work",
             mez_mux::layout::Size::new(20, 3).expect("valid test size"),
-        );
+        )
+        .unwrap();
         window
             .split_active(&mut ids, mez_mux::layout::SplitDirection::Vertical)
             .expect("test window should split");

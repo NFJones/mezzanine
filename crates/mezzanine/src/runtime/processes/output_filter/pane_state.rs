@@ -148,7 +148,7 @@ impl RuntimeSessionService {
                 self.process.settings.terminal_history_limit,
                 self.process.settings.terminal_history_rotate_lines,
             )?);
-        process_screen.resize(process_presentation_size);
+        process_screen.resize(process_presentation_size)?;
         let mut synchronized_output = mez_terminal::SynchronizedOutputFeedOutcome::default();
         if let Some(offset) = restored_prompt_offset {
             synchronized_output
@@ -1318,7 +1318,7 @@ impl RuntimeSessionService {
         }
         let screen =
             if let Some(screen) = self.process.pane_transaction_osc_screens.get_mut(pane_id) {
-                screen.resize(size);
+                screen.resize(size)?;
                 screen
             } else {
                 self.process.pane_transaction_osc_screens.insert(

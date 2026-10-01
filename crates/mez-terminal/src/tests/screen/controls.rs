@@ -237,9 +237,9 @@ fn terminal_screen_row_only_expand_after_shell_clear_keeps_stationary_viewport()
         .map(str::to_string)
         .collect::<Vec<_>>();
     screen.feed(b"\x1b[H\x1b[2J$ ");
-    screen.resize(Size::new(12, 2).unwrap());
+    screen.resize(Size::new(12, 2).unwrap()).unwrap();
     assert_eq!(screen.visible_lines(), vec!["$", ""]);
-    screen.resize(Size::new(12, 5).unwrap());
+    screen.resize(Size::new(12, 5).unwrap()).unwrap();
     assert_eq!(screen.visible_lines(), vec!["$", "", "", "", ""]);
     assert_eq!(screen.cursor_state().row, 0);
     assert_eq!(screen.cursor_state().column, 2);

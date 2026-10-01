@@ -25,12 +25,29 @@ type FreshSnapshotLayout = (
     LandingNavigationState,
 );
 
+/// Rejects resource-excessive restored geometry before allocating live ids or
+/// rebuilding layout. Public size fields cannot bypass the terminal budget.
+fn validate_restored_geometry(input: &SessionRestoreInput) -> Result<()> {
+    input.authoritative_size.validate()?;
+    for window in &input.windows {
+        window.size.validate()?;
+        for pane in &window.panes {
+            pane.size.validate()?;
+            if let Some(geometry) = pane.geometry {
+                crate::layout::Size::new(geometry.columns, geometry.rows)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Session {
     /// Rebuilds a session from dependency-neutral data decoded by a product adapter.
     pub fn from_restore_input(
         shell: impl Into<SessionShell>,
         input: SessionRestoreInput,
     ) -> Result<Self> {
+        validate_restored_geometry(&input)?;
         let shell = shell.into();
         let restored_at = current_unix_seconds();
         let landing_navigation = input.landing_navigation.clone();
@@ -191,6 +208,7 @@ impl Session {
     /// Fresh live identifiers are allocated so loading a saved layout behaves
     /// like recreating its groups, windows, and panes in the current session.
     pub fn replace_layout_from_restore_input(&mut self, input: SessionRestoreInput) -> Result<()> {
+        validate_restored_geometry(&input)?;
         let restored_authoritative_size = input.authoritative_size;
         let authoritative_size = self
             .layout_owner_client_id

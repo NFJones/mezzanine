@@ -9,7 +9,7 @@ pub(super) fn test_service() -> RuntimeSessionService {
         crate::host::shell::ShellSource::ShellEnv,
     );
     let size = Size::new(80, 24).unwrap();
-    let session = Session::new_default(shell, size);
+    let session = Session::new_default(shell, size).unwrap();
     legacy_test_service(
         RuntimeSessionService::new(
             session,
@@ -27,7 +27,7 @@ pub(super) fn test_service_with_observer() -> (RuntimeSessionService, ClientId) 
         crate::host::shell::ShellSource::ShellEnv,
     );
     let size = Size::new(80, 24).unwrap();
-    let mut session = Session::new_default(shell, size);
+    let mut session = Session::new_default(shell, size).unwrap();
     session.attach_primary("primary", true).unwrap();
     let observer = session
         .attach_observer_with_terminal("observer", None, 1)
@@ -45,7 +45,7 @@ pub(super) fn test_service_with_observer() -> (RuntimeSessionService, ClientId) 
 pub(super) fn test_service_with_shell(shell_path: &str) -> RuntimeSessionService {
     let shell = resolve_shell(Some(OsString::from(shell_path))).unwrap();
     let size = Size::new(80, 24).unwrap();
-    let session = Session::new_default(shell, size);
+    let session = Session::new_default(shell, size).unwrap();
     legacy_test_service(
         RuntimeSessionService::new(
             session,
@@ -108,7 +108,7 @@ pub(super) fn test_service_with_event_log() -> RuntimeSessionService {
         crate::host::shell::ShellSource::ShellEnv,
     );
     let size = Size::new(80, 24).unwrap();
-    let session = Session::new_default(shell, size);
+    let session = Session::new_default(shell, size).unwrap();
     RuntimeSessionService::with_event_log(
         session,
         PathBuf::from("/tmp/mez-async-runtime-test.sock"),

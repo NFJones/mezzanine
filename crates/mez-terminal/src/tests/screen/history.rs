@@ -266,8 +266,8 @@ fn terminal_screen_snapshot_alignment_rejects_unrelated_coordinates() {
     assert_eq!(unrelated, before);
 
     let mut resized = presented.clone();
-    resized.resize(Size::new(20, 4).unwrap());
-    resized.resize(size);
+    resized.resize(Size::new(20, 4).unwrap()).unwrap();
+    resized.resize(size).unwrap();
     let before = resized.clone();
     resized.preserve_normal_viewport_origin(&presented);
     assert_eq!(resized, before);
@@ -588,7 +588,7 @@ fn terminal_screen_resize_preserves_blank_viewport_after_clear_visible_into_hist
     screen.feed(b"one\r\ntwo\r\nthree");
     screen.clear_visible_into_history();
 
-    screen.resize(Size::new(5, 3).unwrap());
+    screen.resize(Size::new(5, 3).unwrap()).unwrap();
     assert_eq!(screen.visible_lines(), vec!["", "", ""]);
     assert_eq!(screen.cursor_state().row, 0);
     assert_eq!(screen.cursor_state().column, 0);
@@ -597,7 +597,7 @@ fn terminal_screen_resize_preserves_blank_viewport_after_clear_visible_into_hist
         vec!["one", "two", "three"]
     );
 
-    screen.resize(Size::new(5, 4).unwrap());
+    screen.resize(Size::new(5, 4).unwrap()).unwrap();
     assert_eq!(screen.visible_lines(), vec!["", "", "", ""]);
     assert_eq!(screen.cursor_state().row, 0);
     assert_eq!(screen.cursor_state().column, 0);
@@ -629,7 +629,7 @@ fn terminal_screen_resize_after_shell_clear_does_not_pull_history_tail_into_view
     screen.feed(b"\x1b[H\x1b[2J$ ");
     assert_eq!(screen.visible_lines(), vec!["$", "", "", ""]);
 
-    screen.resize(Size::new(8, 4).unwrap());
+    screen.resize(Size::new(8, 4).unwrap()).unwrap();
     assert_eq!(screen.visible_lines(), vec!["$", "", "", ""]);
     assert_eq!(screen.cursor_state().row, 0);
     assert_eq!(screen.cursor_state().column, 2);
@@ -655,14 +655,14 @@ fn terminal_screen_row_only_resize_preserves_history_and_visible_rows() {
     let mut screen = TerminalScreen::new(Size::new(5, 3).unwrap(), 10).unwrap();
     screen.feed(b"11111\r\n22222\r\n33333\r\n44444");
 
-    screen.resize(Size::new(5, 2).unwrap());
+    screen.resize(Size::new(5, 2).unwrap()).unwrap();
     assert_eq!(
         screen.history().lines().collect::<Vec<_>>(),
         vec!["11111", "22222"]
     );
     assert_eq!(screen.visible_lines(), vec!["33333", "44444"]);
 
-    screen.resize(Size::new(5, 4).unwrap());
+    screen.resize(Size::new(5, 4).unwrap()).unwrap();
     assert_eq!(
         screen.history().lines().collect::<Vec<_>>(),
         vec!["11111", "22222"]
@@ -696,7 +696,7 @@ fn terminal_screen_resize_shrink_preserves_dropped_row_copy_text_in_history() {
         "",
     );
 
-    screen.resize(Size::new(10, 3).unwrap());
+    screen.resize(Size::new(10, 3).unwrap()).unwrap();
 
     // Dropped rows 0 and 1 must land in history, preserving copy-text when present.
     let history_styled: Vec<_> = screen.history().styled_lines().collect();

@@ -1259,7 +1259,8 @@ mod tests {
         let mut session = Session::new_default(
             SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
             Size::new(80, 24).unwrap(),
-        );
+        )
+        .unwrap();
         let primary = session.attach_primary("primary", true).unwrap();
         let first_pane_id = session.windows()[0].panes()[0].id.clone();
         session
@@ -1295,7 +1296,8 @@ mod tests {
         let mut session = Session::new_default(
             SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
             Size::new(80, 24).unwrap(),
-        );
+        )
+        .unwrap();
         let primary = session.attach_primary("primary", true).unwrap();
         session
             .split_active_pane(&primary, SplitDirection::Vertical)
@@ -1333,7 +1335,8 @@ mod tests {
         let mut session = Session::new_default(
             SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
             Size::new(80, 24).unwrap(),
-        );
+        )
+        .unwrap();
         let primary = session.attach_primary("primary", true).unwrap();
         session
             .split_active_pane(&primary, SplitDirection::Vertical)
@@ -1388,7 +1391,8 @@ mod tests {
         let session = Session::new_default(
             SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
             Size::new(1, 1).unwrap(),
-        );
+        )
+        .unwrap();
         let plan = plan_window_presentation(
             session.active_window().unwrap(),
             WindowPresentationOptions {

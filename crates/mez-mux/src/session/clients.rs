@@ -246,6 +246,7 @@ impl Session {
         client_id: &ClientId,
         size: crate::layout::Size,
     ) -> Result<()> {
+        size.validate()?;
         let client = self
             .clients
             .iter_mut()
@@ -577,6 +578,7 @@ fn validate_client_terminal_descriptor(terminal: &ClientTerminalDescriptor) -> R
             "client terminal descriptor dimensions must be non-zero",
         ));
     }
+    crate::layout::Size::new(terminal.columns, terminal.rows)?;
     if terminal.term.trim().is_empty() {
         return Err(MezError::invalid_args(
             "client terminal descriptor requires term",

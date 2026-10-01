@@ -1025,7 +1025,8 @@ mod tests {
             let mut original = Session::new_default(
                 ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
                 Size::new(80, 24).unwrap(),
-            );
+            )
+            .unwrap();
             let primary = original.attach_primary("primary", true).unwrap();
             original
                 .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
@@ -1401,7 +1402,8 @@ mod tests {
         let mut session = Session::new_default(
             ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
             Size::new(80, 24).unwrap(),
-        );
+        )
+        .unwrap();
         session.id = SessionId::new('$', id);
         session.name = name.to_string();
         SessionFactoryRequest {

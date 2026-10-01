@@ -1662,7 +1662,7 @@ impl HostSessionRouter {
             .strip_prefix('$')
             .and_then(|value| value.parse::<u64>().ok())
             .ok_or_else(|| MezError::invalid_state("routed session id is invalid"))?;
-        let mut session = Session::new_default(self.config.shell.clone(), size);
+        let mut session = Session::new_default(self.config.shell.clone(), size)?;
         session.id = SessionId::new('$', numeric_id);
         if let Some(name) = name {
             session.name = name;
@@ -1691,7 +1691,7 @@ impl HostSessionRouter {
             .strip_prefix('$')
             .and_then(|value| value.parse::<u64>().ok())
             .ok_or_else(|| MezError::invalid_state("routed session id is invalid"))?;
-        let mut session = Session::new_default(context.shell, context.size);
+        let mut session = Session::new_default(context.shell, context.size)?;
         session.id = SessionId::new('$', numeric_id);
         if let Some(name) = name {
             session.name = name;
@@ -2353,7 +2353,8 @@ mod tests {
         let config = test_config(&root);
         let session_id = "$991817";
         let snapshot_id = "legacy-remote-snapshot";
-        let mut session = Session::new_default(config.shell.clone(), Size::new(80, 24).unwrap());
+        let mut session =
+            Session::new_default(config.shell.clone(), Size::new(80, 24).unwrap()).unwrap();
         session.id = SessionId::parse('$', session_id.to_string()).unwrap();
         SnapshotRepository::new(config.config_root.join("layouts"))
             .create_from_session(snapshot_id, None, &session)

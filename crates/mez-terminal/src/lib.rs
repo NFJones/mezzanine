@@ -28,7 +28,9 @@ pub mod width;
 
 pub use mouse::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers, parse_sgr_mouse};
 
-pub use geometry::{TerminalSize, TerminalSizeError};
+pub use geometry::{
+    MAX_TERMINAL_AXIS_CELLS, MAX_TERMINAL_SURFACE_CELLS, TerminalSize, TerminalSizeError,
+};
 
 pub use protocol::{
     MANAGED_SHELL_PROTOCOL_VERSION, MAX_OSC_STRING_BYTES, ManagedShellAdapter,

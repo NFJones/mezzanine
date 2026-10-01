@@ -12,12 +12,15 @@ use super::{
 };
 
 impl Window {
-    /// Runs the new operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn new(ids: &mut IdFactory, index: usize, name: impl Into<String>, size: Size) -> Self {
+    /// Creates one window after validating resource-bounded geometry.
+    /// Invalid public-field dimensions return an error before consuming ids.
+    pub fn new(
+        ids: &mut IdFactory,
+        index: usize,
+        name: impl Into<String>,
+        size: Size,
+    ) -> Result<Self> {
+        size.validate()?;
         let pane = Pane {
             id: ids.pane(),
             index: 0,
@@ -29,7 +32,7 @@ impl Window {
         };
         let name = name.into();
 
-        Self {
+        Ok(Self {
             id: ids.window(),
             index,
             name_source: window_name_source_for_created_window(index, &name),
@@ -50,7 +53,7 @@ impl Window {
                 columns: size.columns,
                 rows: size.rows,
             }],
-        }
+        })
     }
 
     /// Runs the panes operation for this subsystem.
@@ -505,6 +508,7 @@ impl Window {
                 "window size must be positive non-zero cells",
             ));
         }
+        size.validate()?;
         let minimum = self.layout_root.minimum_size();
         if size.columns < minimum.columns || size.rows < minimum.rows {
             return Err(MezError::invalid_args(format!(
@@ -656,24 +660,23 @@ impl Window {
         Ok(&self.panes[inserted_index])
     }
 
-    /// Runs the from existing pane operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Creates a window from a pane after validating both geometry inputs.
+    /// Invalid dimensions return an error before consuming a window identity.
     pub fn from_existing_pane(
         ids: &mut IdFactory,
         index: usize,
         name: impl Into<String>,
         size: Size,
         mut pane: Pane,
-    ) -> Self {
+    ) -> Result<Self> {
+        size.validate()?;
+        pane.size.validate()?;
         pane.index = 0;
         pane.size = size;
         pane.active = true;
 
         let name = name.into();
-        Self {
+        Ok(Self {
             id: ids.window(),
             index,
             name_source: window_name_source_for_created_window(index, &name),
@@ -694,7 +697,7 @@ impl Window {
                 columns: size.columns,
                 rows: size.rows,
             }],
-        }
+        })
     }
 
     /// Runs the from restored parts operation for this subsystem.
@@ -765,6 +768,15 @@ impl Window {
         mut panes: Vec<Pane>,
         layout: RestoredWindowLayout,
     ) -> Result<Self> {
+        size.validate()?;
+        for pane in &panes {
+            pane.size.validate()?;
+        }
+        if let Some(geometries) = &layout.pane_geometries {
+            for geometry in geometries {
+                Size::new(geometry.columns, geometry.rows)?;
+            }
+        }
         if panes.is_empty() {
             return Err(MezError::invalid_args(
                 "restored window must contain at least one pane",

@@ -496,7 +496,9 @@ impl TerminalScreen {
         self.scroll_region = state.scroll_region;
 
         if self.size != target_size {
-            self.resize(target_size);
+            // Both sizes are internal, previously validated screen dimensions.
+            // The fallible public resize still defends its allocation boundary.
+            let _ = self.resize(target_size);
             return;
         }
 

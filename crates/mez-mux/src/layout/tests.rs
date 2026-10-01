@@ -6,6 +6,59 @@ use super::{
     new_window_pane_size, range_overlap_u16,
 };
 
+/// Direct constructors reject invalid public-field geometry before consuming
+/// identities. Restored window APIs enforce the same budget with and without
+/// rectangle metadata, independently of the session restore adapter.
+#[test]
+fn window_constructors_reject_excessive_geometry_before_identity_allocation() {
+    let mut ids = IdFactory::default();
+    let valid = Size::new(80, 24).unwrap();
+    let window = Window::new(&mut ids, 0, "valid", valid).unwrap();
+    let pane = window.active_pane().clone();
+    let invalid = Size {
+        columns: 1024,
+        rows: 257,
+    };
+    let before = format!("{ids:?}");
+    assert!(Window::new(&mut ids, 1, "invalid", invalid).is_err());
+    assert_eq!(format!("{ids:?}"), before);
+    assert!(Window::from_existing_pane(&mut ids, 1, "invalid", invalid, pane.clone()).is_err());
+    assert_eq!(format!("{ids:?}"), before);
+    let mut invalid_pane = pane.clone();
+    invalid_pane.size = invalid;
+    assert!(
+        Window::from_existing_pane(&mut ids, 1, "invalid", valid, invalid_pane.clone()).is_err()
+    );
+    assert_eq!(format!("{ids:?}"), before);
+    for rectangles in [false, true] {
+        let geometries = rectangles.then(|| {
+            vec![PaneGeometry {
+                index: 0,
+                column: 0,
+                row: 0,
+                columns: invalid.columns,
+                rows: invalid.rows,
+            }]
+        });
+        assert!(
+            Window::from_restored_parts_with_geometries(
+                window.id.clone(),
+                0,
+                "invalid",
+                invalid,
+                vec![invalid_pane.clone()],
+                geometries,
+                LayoutPolicy::Tiled,
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        Window::from_restored_parts(window.id.clone(), 0, "invalid", valid, vec![invalid_pane])
+            .is_err()
+    );
+}
+
 /// Verifies new-window pane sizing resolves absolute, percentage, and
 /// directional requests before the product creates a process-backed window.
 ///
@@ -112,7 +165,7 @@ fn range_overlap_u16_uses_half_open_ranges() {
 fn first_pane_occupies_window_size() {
     let mut ids = IdFactory::default();
     let size = Size::new(120, 40).unwrap();
-    let window = Window::new(&mut ids, 0, "main", size);
+    let window = Window::new(&mut ids, 0, "main", size).unwrap();
 
     assert_eq!(window.panes().len(), 1);
     assert_eq!(window.active_pane().size, size);
@@ -128,7 +181,7 @@ fn first_pane_occupies_window_size() {
 fn even_layout_rebalances_after_pane_count_changes() {
     let mut ids = IdFactory::default();
     let size = Size::new(100, 20).unwrap();
-    let mut window = Window::new(&mut ids, 0, "main", size);
+    let mut window = Window::new(&mut ids, 0, "main", size).unwrap();
     window.set_layout_policy(LayoutPolicy::EvenVertical);
 
     window
@@ -175,7 +228,7 @@ fn even_layout_rebalances_after_pane_count_changes() {
 #[test]
 fn even_grid_layout_rebalances_panes_across_rows_and_columns() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(80, 24).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(80, 24).unwrap()).unwrap();
     for _ in 0..3 {
         window
             .split_active_select(&mut ids, SplitDirection::Vertical, true)
@@ -239,7 +292,7 @@ fn even_grid_layout_rebalances_panes_across_rows_and_columns() {
 #[test]
 fn vertical_split_halves_columns() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(121, 40).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(121, 40).unwrap()).unwrap();
 
     window
         .split_active(&mut ids, SplitDirection::Vertical)
@@ -258,7 +311,7 @@ fn vertical_split_halves_columns() {
 #[test]
 fn horizontal_split_halves_rows() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 41).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 41).unwrap()).unwrap();
 
     window
         .split_active(&mut ids, SplitDirection::Horizontal)
@@ -276,7 +329,7 @@ fn horizontal_split_halves_rows() {
 #[test]
 fn split_with_size_spec_rebalances_sibling_without_overlap() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(80, 24).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(80, 24).unwrap()).unwrap();
 
     window
         .split_active_with_size_spec(
@@ -319,7 +372,7 @@ fn split_with_size_spec_rebalances_sibling_without_overlap() {
 #[test]
 fn split_with_size_spec_rejects_cross_axis_conflict_without_mutation() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(80, 24).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(80, 24).unwrap()).unwrap();
 
     let error = window
         .split_active_with_size_spec(
@@ -354,7 +407,7 @@ fn split_with_size_spec_rejects_cross_axis_conflict_without_mutation() {
 #[test]
 fn select_pane_accepts_id_or_index() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 40).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 40).unwrap()).unwrap();
     let pane_id = window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap()
@@ -376,7 +429,7 @@ fn select_pane_accepts_id_or_index() {
 #[test]
 fn killing_pane_removes_it_and_keeps_one_active() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 40).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 40).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -393,7 +446,7 @@ fn killing_pane_removes_it_and_keeps_one_active() {
 #[test]
 fn killing_active_pane_uses_local_mru_focus_history() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 40).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 40).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -419,7 +472,7 @@ fn killing_active_pane_uses_local_mru_focus_history() {
 #[test]
 fn killing_inactive_pane_preserves_active_pane_focus() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 40).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 40).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -436,7 +489,7 @@ fn killing_inactive_pane_preserves_active_pane_focus() {
 #[test]
 fn killing_active_pane_uses_bounded_local_focus_history() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(60_000, 40).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(4096, 40).unwrap()).unwrap();
     let oldest = window.active_pane().id.clone();
     for _ in 0..11 {
         window
@@ -454,7 +507,7 @@ fn killing_active_pane_uses_bounded_local_focus_history() {
 #[test]
 fn killing_nested_pane_reflows_remaining_tree_without_gap() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(90, 30).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(90, 30).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -496,7 +549,7 @@ fn killing_nested_pane_reflows_remaining_tree_without_gap() {
 #[test]
 fn killing_middle_stacked_pane_preserves_manual_cross_axis_resize() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 30).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 30).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -578,7 +631,7 @@ fn killing_middle_stacked_pane_preserves_manual_cross_axis_resize() {
 #[test]
 fn swapping_panes_exchanges_identity_without_changing_slots() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(121, 40).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(121, 40).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -603,7 +656,7 @@ fn swapping_panes_exchanges_identity_without_changing_slots() {
 #[test]
 fn moved_pane_can_be_inserted_after_existing_pane() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(80, 24).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(80, 24).unwrap()).unwrap();
     let moved_id = window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap()
@@ -671,7 +724,7 @@ fn restored_window_keeps_saved_identity_and_active_pane() {
 #[test]
 fn pane_navigation_zoom_rotation_and_layout_cycle_are_deterministic() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(90, 30).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(90, 30).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -729,7 +782,7 @@ fn pane_navigation_zoom_rotation_and_layout_cycle_are_deterministic() {
 #[test]
 fn pane_navigation_uses_stored_geometry_with_backtracking_and_wrapping() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(90, 30).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(90, 30).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -778,7 +831,7 @@ fn pane_navigation_uses_stored_geometry_with_backtracking_and_wrapping() {
 #[test]
 fn pane_navigation_full_height_pane_does_not_vertically_wrap_to_side_stack() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(90, 30).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(90, 30).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -811,7 +864,7 @@ fn pane_navigation_full_height_pane_does_not_vertically_wrap_to_side_stack() {
 #[test]
 fn pane_navigation_after_wrap_can_move_back_to_internal_panes() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(90, 30).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(90, 30).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -847,7 +900,7 @@ fn pane_navigation_after_wrap_can_move_back_to_internal_panes() {
 #[test]
 fn pane_geometry_is_stored_after_split_and_snapshot_restore() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(121, 40).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(121, 40).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();

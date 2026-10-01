@@ -523,6 +523,7 @@ pub(super) fn terminal_descriptor_from_json(body: &str) -> Result<TerminalDescri
             "terminal descriptor dimensions must be non-zero",
         ));
     }
+    mez_terminal::TerminalSize::new(columns, rows)?;
     Ok(TerminalDescriptor {
         columns,
         rows,

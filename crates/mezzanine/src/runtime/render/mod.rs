@@ -2248,12 +2248,13 @@ impl RuntimePresentationComponent {
         previous_lineage: u64,
         resized_lineage: u64,
         size: Size,
-    ) {
+    ) -> Result<()> {
+        size.validate()?;
         if let Some(preview) = self.agent_shell_output_previews.get_mut(pane_id)
             && preview.installed_lineage == previous_lineage
         {
             let mut baseline = preview.baseline_screen.as_ref().clone();
-            baseline.resize(size);
+            baseline.resize(size)?;
             preview.baseline_screen = std::sync::Arc::new(baseline);
             preview.installed_lineage = resized_lineage;
         }
@@ -2261,7 +2262,7 @@ impl RuntimePresentationComponent {
             && progress.installed_lineage == previous_lineage
         {
             let mut baseline = progress.baseline_screen.as_ref().clone();
-            baseline.resize(size);
+            baseline.resize(size)?;
             progress.baseline_screen = std::sync::Arc::new(baseline);
             progress.installed_lineage = resized_lineage;
             progress.projected_context.size = size;
@@ -2270,9 +2271,9 @@ impl RuntimePresentationComponent {
             && streaming.installed_lineage == previous_lineage
         {
             let mut baseline = streaming.baseline_screen.as_ref().clone();
-            baseline.resize(size);
+            baseline.resize(size)?;
             let mut provider = streaming.provider_screen.as_ref().clone();
-            provider.resize(size);
+            provider.resize(size)?;
             streaming.baseline_screen = std::sync::Arc::new(baseline);
             streaming.provider_screen = std::sync::Arc::new(provider);
             streaming.installed_lineage = resized_lineage;
@@ -2282,6 +2283,7 @@ impl RuntimePresentationComponent {
             streaming.projected_rationale = None;
             streaming.projected_lineage = None;
         }
+        Ok(())
     }
 
     /// Coalesces source-backed agent presentation replay to one final pane size.

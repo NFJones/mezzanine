@@ -10,6 +10,55 @@ use mez_core::IdFactory;
 use mez_mux::layout::{LayoutPolicy, PaneGeometry, PaneNavigationDirection, Size, SplitDirection};
 use std::path::PathBuf;
 
+/// Public-field geometry must fail before descriptor, revision, or restored-id
+/// mutation. These checks use dimensions only and never allocate a huge grid.
+#[test]
+fn session_rejects_excessive_geometry_before_mutation_and_restore() {
+    let mut session = test_session();
+    assert!(
+        Session::new_default(
+            session.shell.clone(),
+            Size {
+                columns: 1024,
+                rows: 257
+            }
+        )
+        .is_err()
+    );
+    let primary = session.attach_primary("primary", true).unwrap();
+    let before = format!("{session:?}");
+    let size = Size {
+        columns: 1024,
+        rows: 257,
+    };
+    assert!(
+        session
+            .resize_authoritative_terminal_transition(&primary, size)
+            .is_err()
+    );
+    assert_eq!(format!("{session:?}"), before);
+    for surface in 0..4 {
+        let mut input = single_window_restore_input();
+        match surface {
+            0 => input.authoritative_size = size,
+            1 => input.windows[0].size = size,
+            2 => input.windows[0].panes[0].size = size,
+            _ => {
+                input.windows[0].panes[0].geometry = Some(PaneGeometry {
+                    index: 0,
+                    column: 0,
+                    row: 0,
+                    columns: size.columns,
+                    rows: size.rows,
+                })
+            }
+        }
+        assert!(Session::from_restore_input(session.shell.clone(), input.clone()).is_err());
+        assert!(session.replace_layout_from_restore_input(input).is_err());
+        assert_eq!(format!("{session:?}"), before);
+    }
+}
+
 /// Runs the test session operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -20,6 +69,7 @@ fn test_session() -> Session {
         SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
         Size::new(80, 24).unwrap(),
     )
+    .unwrap()
 }
 
 /// Builds one valid dependency-neutral layout for restore lifecycle tests.

@@ -290,6 +290,12 @@ The body is a JSON-RPC 2.0 request, response, or notification:
 Unless an outer transport has already authenticated and negotiated a version,
 the first request is `control/initialize`.
 
+Terminal descriptors and `client_size` geometry require positive axes no larger
+than 4096 cells each and a product no larger than 262144 visible cells. Excessive
+sizes are rejected before attachment, layout mutation, PTY resize scheduling, or
+screen allocation. The same safety budget applies to local/direct screen APIs
+and restored geometry; dimensions are not silently clamped.
+
 ```json
 {"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"example-ui","client_version":"1.0.0","requested_version":2,"requested_role":"primary","client":{"name":"example-ui","requested_role":"primary","interactive":true,"terminal":{"columns":120,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}
 ```

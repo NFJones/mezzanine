@@ -36,6 +36,7 @@ impl SessionFixture {
             ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
             self.size,
         )
+        .unwrap()
     }
 
     /// Builds the session and attaches a primary client.

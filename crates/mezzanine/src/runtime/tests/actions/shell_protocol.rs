@@ -1405,7 +1405,8 @@ fn runtime_bash_dirty_prompt_survives_agent_subshell_admission() {
         Session::new_default(
             ResolvedShell::new(bash_path, ShellSource::ShellEnv),
             Size::new(80, 24).unwrap(),
-        ),
+        )
+        .unwrap(),
         root.join("default.sock"),
         100,
         10,
@@ -1512,7 +1513,8 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
         Session::new_default(
             ResolvedShell::new(fish_path, ShellSource::ShellEnv),
             Size::new(80, 24).unwrap(),
-        ),
+        )
+        .unwrap(),
         root.join("default.sock"),
         100,
         10,
@@ -1737,7 +1739,8 @@ fn runtime_fish_dirty_prompt_exit_before_receiver_installation_discards_draft() 
         Session::new_default(
             ResolvedShell::new(fish_path, ShellSource::ShellEnv),
             Size::new(80, 24).unwrap(),
-        ),
+        )
+        .unwrap(),
         root.join("default.sock"),
         100,
         10,
@@ -2270,7 +2273,8 @@ fn runtime_posix_dirty_prompt_is_interrupted_before_agent_admission() {
         Session::new_default(
             ResolvedShell::new(shell_path, ShellSource::FallbackBinSh),
             Size::new(80, 24).unwrap(),
-        ),
+        )
+        .unwrap(),
         root.join("default.sock"),
         100,
         10,
@@ -2388,7 +2392,8 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
         Session::new_default(
             ResolvedShell::new(bash_path, ShellSource::ShellEnv),
             Size::new(80, 24).unwrap(),
-        ),
+        )
+        .unwrap(),
         root.join("default.sock"),
         100,
         10,
@@ -2505,7 +2510,8 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
         Session::new_default(
             ResolvedShell::new(bash_path, ShellSource::ShellEnv),
             Size::new(80, 24).unwrap(),
-        ),
+        )
+        .unwrap(),
         root.join("default.sock"),
         100,
         10,

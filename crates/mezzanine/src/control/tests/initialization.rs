@@ -2,6 +2,29 @@
 
 use super::*;
 
+/// Excessive primary and observer descriptors must fail at initialization
+/// before attaching a client or changing canonical session geometry.
+#[test]
+fn control_initialize_rejects_excessive_terminal_geometry() {
+    let (mut session, primary) = test_session();
+    let before = format!("{session:?}");
+    for role in ["primary", "observer"] {
+        for (columns, rows) in [(4097, 1), (1024, 257), (65535, 65535)] {
+            let body = serde_json::json!({
+                "jsonrpc":"2.0", "id":1, "method":"control/initialize",
+                "params": { "client_name":"oversized", "requested_version":2,
+                    "requested_role":role, "client": {"name":"oversized", "interactive":true,
+                        "terminal":{"columns":columns,"rows":rows,"term":"xterm"}},
+                    "authentication":{"mechanism":"peer_credentials"}}
+            })
+            .to_string();
+            let response = dispatch_control_request(&body, &mut session, &primary);
+            assert!(response.contains("invalid_params"), "{response}");
+            assert_eq!(format!("{session:?}"), before);
+        }
+    }
+}
+
 /// Verifies dispatches control initialize method.
 ///
 /// This regression scenario documents the behavior being protected so a

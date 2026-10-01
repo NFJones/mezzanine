@@ -259,8 +259,8 @@ fn live_daemon_session_ids_are_unique_for_registry_listing() {
     let registry = SessionRegistry::new(directory.path.clone(), env.runtime.uid);
     crate::runtime::ensure_private_socket_directory(&directory.path, env.runtime.uid).unwrap();
     let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
-    let mut first = Session::new_default(shell.clone(), Size::new(80, 24).unwrap());
-    let mut second = Session::new_default(shell, Size::new(80, 24).unwrap());
+    let mut first = Session::new_default(shell.clone(), Size::new(80, 24).unwrap()).unwrap();
+    let mut second = Session::new_default(shell, Size::new(80, 24).unwrap()).unwrap();
     assign_unique_live_session_id(&mut first).unwrap();
     assign_unique_live_session_id(&mut second).unwrap();
     assert_ne!(first.id, second.id);

@@ -5,6 +5,40 @@ use crate::{
     terminal_text_width,
 };
 
+/// Public size fields cannot bypass allocation guards. Rejected construction
+/// allocates no grid, and rejected resize preserves the complete prior screen,
+/// including alternate ownership, cursor, history, and render revision.
+#[test]
+fn terminal_screen_rejects_excessive_geometry_without_mutation() {
+    for alternate in [false, true] {
+        let mut screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 120).unwrap();
+        screen.feed(b"retained content");
+        if alternate {
+            screen.feed(b"\x1b[?1049halternate content");
+        }
+        let before = screen.clone();
+        for size in [
+            Size {
+                columns: 4097,
+                rows: 1,
+            },
+            Size {
+                columns: 1024,
+                rows: 257,
+            },
+            Size {
+                columns: u16::MAX,
+                rows: u16::MAX,
+            },
+        ] {
+            assert!(TerminalScreen::new(size, 120).is_err());
+            assert!(screen.resize(size).is_err());
+            assert_eq!(screen, before);
+        }
+        screen.resize(Size::new(81, 24).unwrap()).unwrap();
+    }
+}
+
 /// Verifies alternate-screen row-only resize preserves the visible application
 /// tail without recording alternate content in normal-screen history.
 #[test]
@@ -12,7 +46,7 @@ fn terminal_screen_alternate_resize_preserves_pre_resize_content() {
     let mut screen = TerminalScreen::new(Size::new(6, 4).unwrap(), 10).unwrap();
 
     screen.feed(b"\x1b[?1049hrow0\r\nrow1\r\nrow2\r\nrow3");
-    screen.resize(Size::new(6, 2).unwrap());
+    screen.resize(Size::new(6, 2).unwrap()).unwrap();
 
     assert!(screen.alternate_screen_active());
     assert_eq!(screen.size(), Size::new(6, 2).unwrap());
@@ -29,7 +63,7 @@ fn terminal_screen_alternate_resize_reflows_wrapped_and_wide_content() {
     let mut screen = TerminalScreen::new(Size::new(8, 3).unwrap(), 10).unwrap();
 
     screen.feed("\x1b[?1049habcdef界".as_bytes());
-    screen.resize(Size::new(4, 3).unwrap());
+    screen.resize(Size::new(4, 3).unwrap()).unwrap();
 
     assert!(screen.alternate_screen_active());
     assert_eq!(screen.visible_lines(), vec!["abcd", "ef界", ""]);
@@ -37,7 +71,7 @@ fn terminal_screen_alternate_resize_reflows_wrapped_and_wide_content() {
     assert_eq!(screen.cursor_state().column, 3);
     assert!(screen.history().is_empty());
 
-    screen.resize(Size::new(8, 3).unwrap());
+    screen.resize(Size::new(8, 3).unwrap()).unwrap();
 
     assert_eq!(screen.visible_lines(), vec!["abcdef界", "", ""]);
     assert_eq!(screen.cursor_state().row, 0);
@@ -52,7 +86,7 @@ fn terminal_screen_row_only_resize_preserves_delayed_wrap() {
     let mut screen = TerminalScreen::new(Size::new(4, 2).unwrap(), 10).unwrap();
     screen.feed(b"abcd");
 
-    screen.resize(Size::new(4, 3).unwrap());
+    screen.resize(Size::new(4, 3).unwrap()).unwrap();
     screen.feed(b"e");
 
     assert_eq!(screen.visible_lines(), vec!["abcd", "e", ""]);
@@ -67,7 +101,7 @@ fn terminal_screen_width_growth_recomputes_delayed_wrap() {
     let mut screen = TerminalScreen::new(Size::new(4, 2).unwrap(), 10).unwrap();
     screen.feed(b"abcd");
 
-    screen.resize(Size::new(6, 2).unwrap());
+    screen.resize(Size::new(6, 2).unwrap()).unwrap();
     screen.feed(b"e");
 
     assert_eq!(screen.visible_lines(), vec!["abcde", ""]);
@@ -82,7 +116,7 @@ fn terminal_screen_width_shrink_recomputes_delayed_wrap() {
     let mut screen = TerminalScreen::new(Size::new(8, 3).unwrap(), 10).unwrap();
     screen.feed(b"abcdefgh");
 
-    screen.resize(Size::new(4, 3).unwrap());
+    screen.resize(Size::new(4, 3).unwrap()).unwrap();
     screen.feed(b"i");
 
     assert_eq!(screen.visible_lines(), vec!["abcd", "efgh", "i"]);
@@ -101,7 +135,7 @@ fn terminal_screen_resize_resets_scroll_region_before_line_feed() {
     let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
     screen.feed(b"\x1b[2;5r\x1b[5;1H");
 
-    screen.resize(Size::new(8, 3).unwrap());
+    screen.resize(Size::new(8, 3).unwrap()).unwrap();
     screen.feed(b"\nX");
 
     assert_eq!(screen.visible_lines(), vec!["", "", "X"]);
@@ -120,7 +154,7 @@ fn terminal_screen_resize_resets_origin_region_before_index() {
     let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
     screen.feed(b"\x1b[?6h\x1b[2;5r\x1b[4;1H");
 
-    screen.resize(Size::new(8, 3).unwrap());
+    screen.resize(Size::new(8, 3).unwrap()).unwrap();
     screen.feed(b"\x1bDX");
 
     assert_eq!(screen.visible_lines(), vec!["", "", "X"]);
@@ -136,7 +170,7 @@ fn terminal_screen_resize_shrink_preserves_bottom_when_content_overflows() {
     let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
     screen.feed(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");
 
-    screen.resize(Size::new(8, 3).unwrap());
+    screen.resize(Size::new(8, 3).unwrap()).unwrap();
 
     assert_eq!(screen.visible_lines(), vec!["three", "four", "five"]);
     assert_eq!(screen.cursor_state().row, 2);
@@ -150,7 +184,7 @@ fn terminal_screen_resize_shrink_keeps_top_when_content_fits() {
     let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
     screen.feed(b"one\r\ntwo");
 
-    screen.resize(Size::new(8, 3).unwrap());
+    screen.resize(Size::new(8, 3).unwrap()).unwrap();
 
     assert_eq!(screen.visible_lines(), vec!["one", "two", ""]);
 }
@@ -166,10 +200,10 @@ fn terminal_screen_resize_reflows_and_restores_soft_wrapped_content() {
 
     assert_eq!(screen.visible_lines(), vec!["abcdefghij", "klmn", ""]);
 
-    screen.resize(Size::new(5, 3).unwrap());
+    screen.resize(Size::new(5, 3).unwrap()).unwrap();
     assert_eq!(screen.visible_lines(), vec!["abcde", "fghij", "klmn"]);
 
-    screen.resize(Size::new(10, 3).unwrap());
+    screen.resize(Size::new(10, 3).unwrap()).unwrap();
     assert_eq!(screen.visible_lines(), vec!["abcdefghij", "klmn", ""]);
 }
 
@@ -183,12 +217,12 @@ fn terminal_screen_resize_reflows_content_with_active_scroll_region() {
     let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
     screen.feed(b"\x1b[1;3rabcdefghijklmn");
 
-    screen.resize(Size::new(5, 3).unwrap());
+    screen.resize(Size::new(5, 3).unwrap()).unwrap();
     assert_eq!(screen.visible_lines(), vec!["abcde", "fghij", "klmn"]);
     assert_eq!(screen.cursor_state().row, 2);
     assert_eq!(screen.cursor_state().column, 4);
 
-    screen.resize(Size::new(10, 3).unwrap());
+    screen.resize(Size::new(10, 3).unwrap()).unwrap();
     assert_eq!(screen.visible_lines(), vec!["abcdefghij", "klmn", ""]);
     assert_eq!(screen.cursor_state().row, 1);
     assert_eq!(screen.cursor_state().column, 4);
@@ -209,7 +243,7 @@ fn terminal_screen_resize_preserves_soft_wrap_boundary_spaces() {
         let mut screen = TerminalScreen::new(Size::new(columns, 3).unwrap(), 10).unwrap();
         screen.feed(input);
 
-        screen.resize(Size::new(12, 3).unwrap());
+        screen.resize(Size::new(12, 3).unwrap()).unwrap();
 
         assert_eq!(screen.visible_lines(), vec![expected, "", ""]);
         assert_eq!(screen.cursor_state().row, 0);
@@ -227,12 +261,12 @@ fn terminal_screen_resize_preserves_soft_wrap_boundary_spaces() {
 fn terminal_screen_resize_preserves_space_styles_and_hard_line_boundaries() {
     let mut styled = TerminalScreen::new(Size::new(5, 3).unwrap(), 10).unwrap();
     styled.feed(b"abc\x1b[48;5;42m  \x1b[0mX");
-    styled.resize(Size::new(10, 3).unwrap());
+    styled.resize(Size::new(10, 3).unwrap()).unwrap();
     assert_eq!(styled.visible_lines(), vec!["abc  X", "", ""]);
 
     let mut hard_break = TerminalScreen::new(Size::new(5, 3).unwrap(), 10).unwrap();
     hard_break.feed(b"abc  \r\nX");
-    hard_break.resize(Size::new(10, 3).unwrap());
+    hard_break.resize(Size::new(10, 3).unwrap()).unwrap();
     assert_eq!(hard_break.visible_lines(), vec!["abc", "X", ""]);
 }
 
@@ -247,12 +281,12 @@ fn terminal_screen_resize_preserves_overwide_graphemes() {
         let mut screen = TerminalScreen::new(Size::new(2, 2).unwrap(), 10).unwrap();
         screen.feed(grapheme.as_bytes());
 
-        screen.resize(Size::new(1, 2).unwrap());
+        screen.resize(Size::new(1, 2).unwrap()).unwrap();
         assert_eq!(screen.visible_lines(), vec![grapheme, ""], "{grapheme}");
         assert_eq!(screen.cursor_state().row, 0, "{grapheme}");
         assert_eq!(screen.cursor_state().column, 0, "{grapheme}");
 
-        screen.resize(Size::new(2, 2).unwrap());
+        screen.resize(Size::new(2, 2).unwrap()).unwrap();
         assert_eq!(screen.visible_lines(), vec![grapheme, ""], "{grapheme}");
         assert_eq!(screen.cursor_state().row, 0, "{grapheme}");
         assert_eq!(screen.cursor_state().column, 0, "{grapheme}");
@@ -269,8 +303,8 @@ fn terminal_screen_resize_restores_overwide_grapheme_footprint() {
     let mut screen = TerminalScreen::new(Size::new(2, 2).unwrap(), 10).unwrap();
     screen.feed("界".as_bytes());
 
-    screen.resize(Size::new(1, 2).unwrap());
-    screen.resize(Size::new(2, 2).unwrap());
+    screen.resize(Size::new(1, 2).unwrap()).unwrap();
+    screen.resize(Size::new(2, 2).unwrap()).unwrap();
     screen.feed(b"\x1b[1;2HX");
 
     assert_eq!(screen.visible_lines(), vec![" X", ""]);
@@ -318,11 +352,11 @@ fn terminal_screen_reflows_agent_transcript_rows_with_gutter() {
     screen.set_wrap_continuation_prefix("▐ ");
     screen.feed("\x1b[31m▐ mez> \x1b[0mabcdefghi".as_bytes());
 
-    screen.resize(Size::new(16, 5).unwrap());
+    screen.resize(Size::new(16, 5).unwrap()).unwrap();
     assert_eq!(screen.visible_lines()[0], "▐ mez> abcdefghi");
     assert_eq!(screen.visible_lines()[1], "");
 
-    screen.resize(Size::new(10, 5).unwrap());
+    screen.resize(Size::new(10, 5).unwrap()).unwrap();
     assert_eq!(screen.visible_lines()[0], "▐ mez> abc");
     assert_eq!(screen.visible_lines()[1], "▐ defghi");
 }
@@ -348,7 +382,7 @@ fn terminal_screen_row_only_resize_keeps_stationary_view_when_tail_fits() {
             TerminalStyledLine::plain("live2"),
         ],
     );
-    screen.resize(Size::new(5, 3).unwrap());
+    screen.resize(Size::new(5, 3).unwrap()).unwrap();
     assert_eq!(screen.visible_lines(), vec!["live1", "live2", ""]);
     assert_eq!(screen.cursor_state().row, 0);
     assert_eq!(screen.cursor_state().column, 0);
@@ -376,7 +410,7 @@ fn terminal_screen_width_resize_reflows_only_live_viewport() {
         .take(8)
         .map(str::to_string)
         .collect::<Vec<_>>();
-    screen.resize(Size::new(10, 4).unwrap());
+    screen.resize(Size::new(10, 4).unwrap()).unwrap();
     assert_eq!(screen.history().len(), before_history_len);
     assert_eq!(
         screen
@@ -406,7 +440,7 @@ fn terminal_screen_resize_counts_agent_gutters_when_restoring_cursor() {
     screen.set_wrap_continuation_prefix("▐ ");
     screen.feed("\x1b[31m▐ mez> \x1b[0mabcdefghijklmnopqrst\r\nnext".as_bytes());
 
-    screen.resize(Size::new(10, 6).unwrap());
+    screen.resize(Size::new(10, 6).unwrap()).unwrap();
 
     assert_eq!(screen.visible_lines()[4], "next");
     assert_eq!(screen.cursor_state().row, 4);

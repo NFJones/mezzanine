@@ -115,7 +115,7 @@ fn terminal_screen_keeps_resized_geometry_after_alternate_screen_exit() {
 
     screen.feed(b"keep");
     screen.feed(b"\x1b[?1049hsecret");
-    screen.resize(Size::new(12, 3).unwrap());
+    screen.resize(Size::new(12, 3).unwrap()).unwrap();
 
     screen.feed(b"\x1b[?1049l!");
 
@@ -138,7 +138,7 @@ fn terminal_screen_preserves_prompt_tail_after_alternate_screen_resize_shrink() 
 
     screen.feed(b"top\r\nmiddle\r\nprompt");
     screen.feed(b"\x1b[?1049hfullscreen");
-    screen.resize(Size::new(10, 2).unwrap());
+    screen.resize(Size::new(10, 2).unwrap()).unwrap();
 
     screen.feed(b"\x1b[?1049l!");
 

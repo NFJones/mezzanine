@@ -959,7 +959,7 @@ fn attached_terminal_client_step_reports_hangups_and_errors_without_output() {
 #[test]
 fn client_loop_draws_zoomed_pane_across_window_body() {
     let mut ids = mez_core::ids::IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(20, 4).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(20, 4).unwrap()).unwrap();
     window
         .split_active(&mut ids, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();

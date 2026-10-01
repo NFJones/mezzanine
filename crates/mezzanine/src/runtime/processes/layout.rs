@@ -783,7 +783,7 @@ impl RuntimeSessionService {
                 .process_pane_screens
                 .get_mut(descriptor.pane_id.as_str())
             {
-                screen.resize(process_presentation_size);
+                screen.resize(process_presentation_size)?;
             }
             let agent_screen_size = self.agent_pane_screen(pane_id).map(|screen| screen.size());
             let agent_screen_width_changed =
@@ -810,7 +810,7 @@ impl RuntimeSessionService {
                     .as_deref()
                     .and_then(|session_id| self.agent_pane_screen_lineage(pane_id, session_id));
                 if let Some(screen) = self.agent_pane_screen_mut(pane_id) {
-                    screen.resize(process_size);
+                    screen.resize(process_size)?;
                 }
                 let resized_lineage = agent_session_id
                     .as_deref()
@@ -824,7 +824,7 @@ impl RuntimeSessionService {
                             previous_lineage,
                             resized_lineage,
                             process_size,
-                        );
+                        )?;
                 }
             }
             if let Some(screen) = self
@@ -832,7 +832,7 @@ impl RuntimeSessionService {
                 .pane_transaction_osc_screens
                 .get_mut(descriptor.pane_id.as_str())
             {
-                screen.resize(process_size);
+                screen.resize(process_size)?;
             }
             let update = PaneResizeUpdate {
                 session_id: self.session.id.to_string(),

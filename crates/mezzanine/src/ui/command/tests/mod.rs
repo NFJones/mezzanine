@@ -29,7 +29,8 @@ fn test_session() -> (Session, ClientId) {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
-    );
+    )
+    .unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
     (session, primary)
 }

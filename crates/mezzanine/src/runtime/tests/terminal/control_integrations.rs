@@ -2,6 +2,48 @@
 
 use super::*;
 
+/// Excessive control view/step geometry and direct resize must fail before
+/// changing descriptors, layout, event cutoffs, or scheduling PTY resize work.
+/// A healthy request afterward confirms the session remains usable.
+#[test]
+fn runtime_control_rejects_excessive_geometry_without_mutation() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let before = format!("{:?}", service.session());
+    let cutoff = service.event_log().unwrap().latest_event_id();
+    for method in ["terminal/step", "terminal/view"] {
+        let request = serde_json::json!({
+            "jsonrpc":"2.0", "id":"oversized", "method":method,
+            "params":{"client_size":{"columns":1024,"rows":257},
+                "idempotency_key":"oversized", "input_bytes":[]}
+        })
+        .to_string();
+        let response = service.dispatch_runtime_control_body(&request, &primary);
+        assert!(response.contains("invalid_params"), "{response}");
+        assert_eq!(format!("{:?}", service.session()), before);
+        assert_eq!(service.event_log().unwrap().latest_event_id(), cutoff);
+    }
+    assert!(
+        service
+            .resize_attached_primary_terminal(
+                &primary,
+                Size {
+                    columns: 1024,
+                    rows: 257
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(format!("{:?}", service.session()), before);
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"healthy","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#,
+        &primary,
+    );
+    assert!(response.contains("\"result\""), "{response}");
+}
+
 /// Verifies pane statuses are source-isolated, bounded, and focus preserving.
 ///
 /// Clearing one source must reveal the previous source rather than removing

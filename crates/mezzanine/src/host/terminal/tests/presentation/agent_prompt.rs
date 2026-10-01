@@ -28,7 +28,7 @@ use unicode_width::UnicodeWidthStr;
 #[test]
 fn render_attached_client_view_keeps_agent_prompt_before_right_divider() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(30, 4).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(30, 4).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -626,7 +626,7 @@ fn prompt_region_presentation_styles_agent_mcp_shadow_hint() {
 #[test]
 fn render_attached_client_view_styles_agent_prompt_shadow_hint() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(24, 4).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(24, 4).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut prompt =
         crate::ui::readline::ReadlinePrompt::new(crate::ui::readline::ReadlinePromptKind::Agent);
@@ -721,7 +721,7 @@ fn prompt_region_presentation_expands_agent_prompt_for_long_input() {
 #[test]
 fn render_attached_client_view_reserves_agent_prompt_row() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(30, 4).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(30, 4).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut screen = TerminalScreen::new(Size::new(30, 3).unwrap(), 10).unwrap();
     screen.feed(b"one\ntwo\nthree");
@@ -784,7 +784,7 @@ fn render_attached_client_view_reserves_agent_prompt_row() {
 #[test]
 fn render_attached_client_view_preserves_prompt_style_collision_content() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(72, 4).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(72, 4).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let source = "i=0; while true; do echo \"$i\"; i=$((i + 1)); sleep 1; done";
     let mut screen = TerminalScreen::new(Size::new(72, 2).unwrap(), 10).unwrap();
@@ -831,7 +831,7 @@ fn render_attached_client_view_preserves_prompt_style_collision_content() {
 #[test]
 fn render_attached_client_view_keeps_agent_prompt_space_transparent_in_copy_mode() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(30, 4).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(30, 4).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut screen = TerminalScreen::new(Size::new(30, 4).unwrap(), 10).unwrap();
     screen.feed(b"one\ntwo\nthree\nfour");
@@ -881,7 +881,7 @@ fn render_attached_client_view_keeps_agent_prompt_space_transparent_in_copy_mode
 #[test]
 fn render_attached_client_view_draws_agent_prompt_state_in_pane() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(30, 5).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(30, 5).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut prompt =
         crate::ui::readline::ReadlinePrompt::new(crate::ui::readline::ReadlinePromptKind::Agent);
@@ -939,7 +939,7 @@ fn render_attached_client_view_draws_agent_prompt_state_in_pane() {
 #[test]
 fn render_attached_client_view_masks_alternate_screen_for_native_agent_overlay() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(40, 5).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(40, 5).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut prompt =
         crate::ui::readline::ReadlinePrompt::new(crate::ui::readline::ReadlinePromptKind::Agent);
@@ -1044,7 +1044,7 @@ fn render_attached_client_view_masks_alternate_screen_for_native_agent_overlay()
 #[test]
 fn render_attached_client_view_draws_one_agent_live_footer_at_prompt_edge() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(64, 6).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(64, 6).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut frame_context = TerminalFrameContext {
         animation_tick_ms: 320,
@@ -1101,7 +1101,7 @@ fn render_attached_client_view_draws_one_agent_live_footer_at_prompt_edge() {
 #[test]
 fn render_agent_live_footer_preserves_lookalike_content_with_wide_neighbor() {
     let mut ids = IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(96, 4).unwrap());
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(96, 4).unwrap()).unwrap();
     window
         .split_active(&mut ids, SplitDirection::Vertical)
         .unwrap();
@@ -1186,7 +1186,7 @@ fn render_agent_live_footer_preserves_lookalike_content_with_wide_neighbor() {
 #[test]
 fn render_attached_client_view_hides_agent_live_footer_while_prompt_has_input() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(48, 5).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(48, 5).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut prompt =
         crate::ui::readline::ReadlinePrompt::new(crate::ui::readline::ReadlinePromptKind::Agent);
@@ -1240,7 +1240,7 @@ fn render_attached_client_view_hides_agent_live_footer_while_prompt_has_input() 
 #[test]
 fn render_agent_working_footer_uses_prompt_background_grayscale_gradient() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(64, 4).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(64, 4).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut frame_context = TerminalFrameContext {
         animation_tick_ms: 320,
@@ -1348,7 +1348,7 @@ fn render_agent_working_footer_uses_prompt_background_grayscale_gradient() {
 #[test]
 fn render_agent_working_footer_uses_dark_grayscale_on_light_theme() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(64, 4).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(64, 4).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut frame_context = TerminalFrameContext {
         animation_tick_ms: 320,
@@ -1414,7 +1414,7 @@ fn render_agent_working_footer_uses_dark_grayscale_on_light_theme() {
 #[test]
 fn render_agent_working_footer_keeps_state_styling_when_suffix_is_truncated() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "main", Size::new(18, 4).unwrap());
+    let window = Window::new(&mut ids, 0, "main", Size::new(18, 4).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
     let mut frame_context = TerminalFrameContext {
         animation_tick_ms: 320,
