@@ -118,6 +118,43 @@ fn context_document_cas_rejects_same_timestamp_change_and_deletion() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A clock rollback must not invalidate an existing document or regress its
+/// timestamp. Revision comparison still rejects stale editor content.
+#[test]
+fn context_document_mutations_preserve_timestamps_after_clock_rollback() {
+    let (store, root) = store("clock-rollback");
+    let document = store
+        .create(
+            ContextDocumentScope::Global,
+            "Clock".to_string(),
+            "before".to_string(),
+            true,
+            100,
+        )
+        .unwrap();
+    let original_revision = store.revision(&document).unwrap();
+    let disabled = store.set_enabled(&document.id, false, 90).unwrap().unwrap();
+    assert_eq!(disabled.updated_at_unix_seconds, 100);
+    assert!(matches!(
+        store
+            .compare_and_swap_content(&document.id, &original_revision, "stale".to_string(), 80)
+            .unwrap(),
+        CompareAndSwapContextDocumentResult::Stale { .. }
+    ));
+    let revision = store.revision(&disabled).unwrap();
+    let CompareAndSwapContextDocumentResult::Updated(updated) = store
+        .compare_and_swap_content(&document.id, &revision, "after".to_string(), 80)
+        .unwrap()
+    else {
+        panic!("current revision must survive clock rollback");
+    };
+    assert_eq!(updated.updated_at_unix_seconds, 100);
+    assert_eq!(updated.content, "after");
+    assert!(!updated.enabled);
+    assert_eq!(store.inspect(&document.id).unwrap().unwrap(), *updated);
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test]
 fn empty_context_document_requires_content_before_enablement() {
     let (store, root) = store("empty-enablement");

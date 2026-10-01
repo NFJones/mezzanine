@@ -112,6 +112,8 @@ impl ContextDocumentStore {
         Ok(document_revision(document))
     }
 
+    /// Updates inclusion atomically, retaining the persisted update instant
+    /// when the supplied wall-clock sample moves backward.
     pub(crate) fn set_enabled(
         &self,
         id: &str,
@@ -130,13 +132,15 @@ impl ContextDocumentStore {
             ));
         }
         document.enabled = enabled;
-        document.updated_at_unix_seconds = now_unix_seconds;
+        document.updated_at_unix_seconds = now_unix_seconds.max(document.updated_at_unix_seconds);
         document.validate()?;
         update_document(&transaction, &document)?;
         transaction.commit()?;
         Ok(Some(document))
     }
 
+    /// Replaces content only for the exact current revision. Clock rollback
+    /// cannot regress metadata or bypass stale/deleted revision outcomes.
     pub(crate) fn compare_and_swap_content(
         &self,
         id: &str,
@@ -157,7 +161,7 @@ impl ContextDocumentStore {
             return Ok(CompareAndSwapContextDocumentResult::Stale { current_revision });
         }
         document.content = content;
-        document.updated_at_unix_seconds = now_unix_seconds;
+        document.updated_at_unix_seconds = now_unix_seconds.max(document.updated_at_unix_seconds);
         document.validate()?;
         update_document(&transaction, &document)?;
         transaction.commit()?;

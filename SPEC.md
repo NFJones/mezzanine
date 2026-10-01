@@ -9528,6 +9528,10 @@ The baseline command capabilities are:
   deleted, renumbered, or wrong-pane conflicts. Intentionally cleared content
   MUST remain durable but MUST be omitted from later model replay and prompt
   summaries.
+  Persisted user-owned context-document enablement and content mutations MUST
+  retain nondecreasing update timestamps across backward wall-clock samples.
+  Full-record revision checks MUST remain authoritative for stale or deleted
+  editor outcomes; timestamp retention MUST NOT bypass those checks.
 - `/show-issues`: Browse local issue records in a pager-backed record browser.
   It MUST default to open issues for the active pane project, support optional
   project glob, kind, state, full-text, and limit filters, preselect a supplied

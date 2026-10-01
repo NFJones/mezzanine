@@ -82,6 +82,9 @@ only later turn assembly.
 Document edits use full-record compare-and-swap checks. Concurrent metadata or
 content changes and deletion retain the private editor draft for explicit
 `/editor-recovery` handling instead of overwriting or recreating the source.
+Enablement and content updates retain a nondecreasing persisted update timestamp
+even when the wall clock moves backward. Revision checks still compare the full
+record rather than treating a timestamp as sufficient proof of freshness.
 `/show-context` continues to browse transient conversation entries and does not
 edit these persisted source documents.
 
