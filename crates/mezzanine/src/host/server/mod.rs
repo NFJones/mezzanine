@@ -2030,7 +2030,13 @@ mod tests {
         let server_task =
             tokio::spawn(async move { serving_host.serve(std::future::pending()).await });
 
-        tokio::time::timeout(Duration::from_secs(3), async {
+        // Verify timer selection independently of process teardown scheduling.
+        let authority_delay = host.router.time_until_next_lease_expiry().unwrap().unwrap();
+        assert!(authority_delay <= Duration::from_secs(1));
+        assert!(authority_delay < host.config.checkpoint_interval);
+        // Revocation also awaits runtime cleanup. Permit parallel-suite process
+        // pressure without allowing checkpoint-driven expiry to satisfy this test.
+        tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 let lease = host.router.get_lease(&created.lease.lease_id).unwrap();
                 if lease.state == crate::storage::lease::RemoteSessionLeaseState::Revoked
