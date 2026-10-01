@@ -400,7 +400,8 @@ impl TerminalScreen {
         self.reset_normal_viewport_origin();
         self.history.clear();
         for line in history_lines {
-            self.history.push_styled_line(line.clone());
+            self.history
+                .push_styled_line(bounded_restored_line(line, self.emoji_width));
         }
 
         self.alternate = AlternateScreenState::new();

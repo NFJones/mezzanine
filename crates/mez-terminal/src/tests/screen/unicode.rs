@@ -51,6 +51,25 @@ fn terminal_screen_documents_combining_mark_boundary_behavior() {
     assert_eq!(screen.cursor_state().column, 2);
 }
 
+/// Adversarial combining output split at byte boundaries must have bounded
+/// retained cell text, leave the cursor stable, and permit ordinary text next.
+#[test]
+fn terminal_screen_bounds_adversarial_combining_run() {
+    let mut screen = TerminalScreen::new(Size::new(12, 2).unwrap(), 10).unwrap();
+    screen.feed(b"e");
+    for _ in 0..4_096 {
+        screen.feed(&[0xcc]);
+        screen.feed(&[0x81]);
+    }
+    assert!(screen.visible_lines()[0].len() <= 256);
+    assert_eq!(screen.cursor_state().column, 1);
+    screen.feed(b"x");
+    assert!(screen.visible_lines()[0].ends_with('x'));
+    assert_eq!(screen.cursor_state().column, 2);
+    screen.resize(Size::new(6, 3).unwrap()).unwrap();
+    assert!(screen.visible_lines()[0].len() <= 257);
+}
+
 /// Verifies that the terminal screen correctly handles UTF-8 multi-byte
 /// characters, including 2-byte and 3-byte sequences, and that wide CJK
 /// characters occupy a single cell position.
@@ -276,6 +295,46 @@ fn terminal_screen_restores_styled_lines_with_complete_graphemes() {
 
     assert_eq!(screen.visible_lines()[0], "ab⚠️cd");
     assert_eq!(screen.visible_styled_lines()[0].text, "ab⚠️cd");
+}
+
+/// Oversized restored graphemes must obey the live-cell budget in both history
+/// and visible rows, including subsequent resize/reflow and history projection.
+#[test]
+fn terminal_screen_bounds_restored_graphemes_and_history() {
+    let text = format!("e{}x", "\u{301}".repeat(4_096));
+    let line = TerminalStyledLine::plain(text);
+    let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
+    screen.restore_normal_styled_history_content(
+        std::slice::from_ref(&line),
+        std::slice::from_ref(&line),
+    );
+    assert!(
+        screen
+            .normal_content_lines()
+            .iter()
+            .all(|line| line.len() <= 257)
+    );
+    assert!(screen.visible_lines()[0].ends_with('x'));
+    screen.resize(Size::new(4, 3).unwrap()).unwrap();
+    assert!(
+        screen
+            .normal_content_lines()
+            .iter()
+            .all(|line| line.len() <= 257)
+    );
+}
+
+/// An oversized cluster followed by a long ordinary suffix must normalize in
+/// one forward pass, retaining the suffix without repeated prefix width scans.
+#[test]
+fn terminal_screen_bounds_restored_grapheme_with_long_suffix() {
+    let suffix = "x".repeat(32_768);
+    let line = TerminalStyledLine::plain(format!("e{}{suffix}", "\u{301}".repeat(4_096)));
+    let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
+    screen.restore_normal_styled_history_content(std::slice::from_ref(&line), &[]);
+    let lines = screen.normal_content_lines();
+    assert!(lines[0].len() <= 256 + suffix.len());
+    assert!(lines[0].ends_with(&suffix));
 }
 
 /// Verifies a width-policy change rebuilds existing emoji footprints before

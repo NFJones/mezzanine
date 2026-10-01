@@ -13140,6 +13140,14 @@ user.
 A conforming Mezzanine implementation MUST provide or pass a terminal
 compatibility test suite.
 
+Live terminal cells MUST retain at most 256 UTF-8 bytes per grapheme. An
+over-budget extension MUST be discarded without advancing the cursor or
+changing the retained glyph's width or style. Extension classification work
+MUST be bounded by that budget plus one scalar, not the original output run.
+Restored display rows and history MUST apply the same UTF-8-safe prefix limit.
+This intentional fidelity limit does not truncate explicit raw-copy metadata
+or alter PTY byte ordering, protocol parsing, or subsequent printable input.
+
 The test suite MUST be organized by terminal compatibility profile. The default
 test suite MUST cover the xterm-compatible profile.
 

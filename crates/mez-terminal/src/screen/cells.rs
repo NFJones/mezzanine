@@ -198,6 +198,12 @@ impl TerminalScreen {
         if graphemes.next() != Some(candidate.as_str()) || graphemes.next().is_some() {
             return false;
         }
+        // The existing cell is capped, so even boundary classification scans
+        // at most the cap plus one scalar. Discard an excess extension without
+        // changing width, cursor, style, or copy projection.
+        if candidate.len() > MAX_TERMINAL_GRAPHEME_BYTES {
+            return true;
+        }
         let old_width = self.cells[self.cursor.row][leading_column]
             .width(self.emoji_width)
             .max(1);

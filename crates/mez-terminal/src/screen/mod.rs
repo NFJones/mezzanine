@@ -141,12 +141,16 @@ struct StyledPrefixCell {
     rendition: GraphicRendition,
 }
 
+/// Maximum UTF-8 bytes retained in one terminal grapheme. Extension work is
+/// bounded by this limit plus one scalar; ordinary scalars remain inline.
+const MAX_TERMINAL_GRAPHEME_BYTES: usize = 256;
+
 /// Inline-first content stored by one live terminal screen cell.
 ///
 /// Untouched blanks, wide-glyph continuation columns, and ordinary Unicode
-/// scalars require no heap allocation. Only multi-scalar extended grapheme
-/// clusters retain an owned string. A written space is represented as a scalar
-/// so reflow can distinguish it from untouched terminal padding.
+/// scalars require no heap allocation. Only bounded multi-scalar extended
+/// grapheme clusters retain an owned string. A written space is represented as
+/// a scalar so reflow distinguishes it from untouched terminal padding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TerminalScreenCellContent {
     /// Untouched or erased terminal padding.
@@ -194,6 +198,7 @@ impl TerminalScreenCell {
 
     /// Builds a leading cell containing complete terminal text.
     fn text(text: &str) -> Self {
+        let text = bounded_terminal_grapheme(text);
         let mut chars = text.chars();
         match (chars.next(), chars.next()) {
             (Some(ch), None) => Self::scalar(ch),
@@ -277,6 +282,42 @@ impl TerminalScreenCell {
     fn is_owned_grapheme(&self) -> bool {
         matches!(self.content, TerminalScreenCellContent::Grapheme(_))
     }
+}
+
+/// Retains a UTF-8-safe prefix of oversized restored graphemes. Live input
+/// uses the same byte budget before committing each extension.
+fn bounded_terminal_grapheme(text: &str) -> &str {
+    let mut end = text.len().min(MAX_TERMINAL_GRAPHEME_BYTES);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// Bounds display text imported from persisted styled history. Raw-copy
+/// metadata is a separate explicit source contract, not live cell storage.
+fn bounded_restored_line(
+    line: &TerminalStyledLine,
+    emoji_width: TerminalEmojiWidth,
+) -> TerminalStyledLine {
+    if terminal_graphemes(&line.text).all(|grapheme| grapheme.len() <= MAX_TERMINAL_GRAPHEME_BYTES)
+    {
+        return line.clone();
+    }
+    let mut bounded = TerminalStyledLine::plain(String::new());
+    bounded.copy_text = line.copy_text.clone();
+    let mut source_column = 0usize;
+    let mut destination_column = 0usize;
+    for grapheme in terminal_graphemes(&line.text) {
+        let retained = bounded_terminal_grapheme(grapheme);
+        let width = terminal_grapheme_width(retained, emoji_width);
+        let rendition = styled_line_rendition_at(line, source_column);
+        push_styled_grapheme_at(&mut bounded, retained, width, rendition, destination_column);
+        destination_column = destination_column.saturating_add(width);
+        source_column =
+            source_column.saturating_add(terminal_grapheme_width(grapheme, emoji_width));
+    }
+    bounded
 }
 
 /// Builds a screen-sized cell grid initialized to blank leading cells.
@@ -984,6 +1025,7 @@ fn write_styled_line_to_row(
     let columns = cells.len();
     let mut column = 0usize;
     for grapheme in terminal_graphemes(&line.text) {
+        let grapheme = bounded_terminal_grapheme(grapheme);
         let width = terminal_grapheme_width(grapheme, emoji_width);
         if width == 0 {
             continue;
@@ -1263,6 +1305,18 @@ fn push_styled_grapheme(
     emoji_width: TerminalEmojiWidth,
 ) {
     let start = styled_line_width(line, emoji_width);
+    push_styled_grapheme_at(line, grapheme, width, rendition, start);
+}
+
+/// Appends styled text at a caller-maintained display column without rescanning
+/// the accumulated prefix. Normalization uses this to remain linear in text.
+fn push_styled_grapheme_at(
+    line: &mut TerminalStyledLine,
+    grapheme: &str,
+    width: usize,
+    rendition: GraphicRendition,
+    start: usize,
+) {
     line.text.push_str(grapheme);
     if rendition == GraphicRendition::default() {
         return;

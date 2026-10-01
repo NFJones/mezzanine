@@ -2,6 +2,27 @@
 
 use super::*;
 
+/// Hostile combining output must remain bounded at the product output boundary
+/// and leave the serialized runtime able to answer ordinary control requests.
+#[test]
+fn runtime_hostile_combining_output_preserves_control_progress() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("owner", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .apply_pane_output_bytes("%1", format!("e{}x", "\u{301}".repeat(16_384)).into_bytes())
+        .unwrap();
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"healthy","method":"session/get","params":{}}"#,
+        &primary,
+    );
+    assert!(response.contains("\"result\""), "{response}");
+    let lines = service.pane_screen("%1").unwrap().visible_lines();
+    assert!(lines[0].len() <= 257);
+    assert!(lines[0].ends_with('x'));
+}
+
 /// A valid resource-bounded size can still fail a later window's split minimum.
 /// Repeated control rejection must not emit layout events, change screens or
 /// canonical geometry, or let the equality fast path accept a corrupt retry.

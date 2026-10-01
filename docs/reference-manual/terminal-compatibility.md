@@ -61,6 +61,14 @@ single emoji-width policy across rendering, prompts, and copy mode. Use
 for one-cell text fallback terminals. The setting does not make all complex
 emoji narrow.
 
+Each terminal grapheme retains at most 256 UTF-8 bytes. Additional scalars that
+extend an over-budget grapheme are discarded without advancing the cursor or
+changing the retained glyph's style or width; subsequent printable text still
+renders normally. This bounds processing and storage for hostile combining
+runs. Restored display/history text uses the same UTF-8-safe prefix limit.
+Ordinary accents, variation selectors, and emoji sequences remain supported.
+Explicit raw-copy source metadata is separate from this display-cell limit.
+
 Rendering preserves styled blank cells and terminal autowrap semantics: a
 printable glyph in the final column sets a pending wrap rather than scrolling
 immediately. Pane-local alternate-screen state is composed into Mez's normal
