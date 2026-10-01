@@ -615,6 +615,39 @@ mod provider_transport_tests {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
+    /// Deadline precedence follows the earlier absolute instant, with total
+    /// expiry winning ties. Progress may refresh a phase but never the total.
+    #[tokio::test(start_paused = true)]
+    async fn provider_transport_deadline_precedence_is_deterministic() {
+        use mez_agent::{ProviderHttpErrorKind, ProviderHttpTimeoutPhase};
+
+        let started = tokio::time::Instant::now();
+        let total = started + Duration::from_millis(110);
+        for (phase_millis, expected, total_limited) in [
+            (60, ProviderHttpTimeoutPhase::InterChunk, false),
+            (110, ProviderHttpTimeoutPhase::Total, true),
+            (150, ProviderHttpTimeoutPhase::Total, true),
+        ] {
+            let phase = started + Duration::from_millis(phase_millis);
+            let (deadline, limited) = super::provider_http_bounded_deadline(phase, total);
+            assert_eq!(deadline, phase.min(total));
+            assert_eq!(limited, total_limited);
+            let error = super::provider_http_deadline_error(
+                ProviderHttpTimeoutPhase::InterChunk,
+                60,
+                110,
+                limited,
+                "test progress",
+            );
+            assert_eq!(error.kind(), ProviderHttpErrorKind::Timeout(expected));
+        }
+        tokio::time::advance(Duration::from_millis(90)).await;
+        let refreshed_phase = tokio::time::Instant::now() + Duration::from_millis(60);
+        let (deadline, limited) = super::provider_http_bounded_deadline(refreshed_phase, total);
+        assert_eq!(deadline, total);
+        assert!(limited, "body progress must not extend the total deadline");
+    }
+
     /// Verifies provider HTTP calls ask for identity response bytes unless a
     /// caller explicitly chooses a different content encoding.
     ///
@@ -1303,8 +1336,8 @@ mod provider_transport_tests {
             body: String::new(),
             timeouts: ProviderHttpTimeouts {
                 connect_timeout_ms: 50,
-                first_byte_timeout_ms: 80,
-                inter_chunk_timeout_ms: 60,
+                first_byte_timeout_ms: 110,
+                inter_chunk_timeout_ms: 110,
                 total_timeout_ms: 110,
             },
             max_response_bytes: None,
