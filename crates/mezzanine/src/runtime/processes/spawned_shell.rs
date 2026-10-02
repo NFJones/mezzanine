@@ -39,6 +39,7 @@ use crate::runtime::status_pills::{
     STATUS_PILL_OUTPUT_LIMIT_BYTES, runtime_status_pill_normalize_output,
 };
 
+use super::launch_accounting::{NativeLaunchLedger, NativeLaunchReason};
 use super::native_shell_inference::NativeShellContext;
 
 /// Minimum captured bytes retained per stream even when the transaction
@@ -225,6 +226,10 @@ pub(crate) struct SpawnedShellExecutor {
     context: NativeShellContext,
     /// Interruption flag shared with the interrupt handle.
     interrupted: Arc<AtomicBool>,
+    /// Explicit per-workload direct-launch evidence and admission policy.
+    launches: NativeLaunchLedger,
+    /// Semantic purpose selected by the actor, not command-string heuristics.
+    launch_reason: NativeLaunchReason,
 }
 
 impl SpawnedShellExecutor {
@@ -233,6 +238,8 @@ impl SpawnedShellExecutor {
         Self {
             context,
             interrupted: Arc::new(AtomicBool::new(false)),
+            launches: NativeLaunchLedger::new(false),
+            launch_reason: NativeLaunchReason::ShellCommand,
         }
     }
 
@@ -241,6 +248,8 @@ impl SpawnedShellExecutor {
         Self {
             context,
             interrupted,
+            launches: NativeLaunchLedger::new(false),
+            launch_reason: NativeLaunchReason::StatusProvider,
         }
     }
 
@@ -427,8 +436,10 @@ impl SpawnedShellExecutor {
         } else {
             (None, None)
         };
-        let child = command.spawn().map_err(|error| {
-            MezError::invalid_state(format!("spawned shell execution failed to start: {error}"))
+        let child = self.launches.launch(self.launch_reason, || {
+            command.spawn().map_err(|error| {
+                MezError::invalid_state(format!("spawned shell execution failed to start: {error}"))
+            })
         })?;
         drop(status_writer);
         Ok(SpawnedChild {
@@ -765,10 +776,12 @@ fn execute_native_shell_dispatch_inner(
         bubblewrap_activity_lease: _bubblewrap_activity_lease,
         seatbelt_workload_lease: _seatbelt_workload_lease,
         request,
+        launch_reason,
         started_at_unix_ms,
     } = dispatch;
     let command = request.transaction.command.clone();
-    let executor = SpawnedShellExecutor::new(context);
+    let mut executor = SpawnedShellExecutor::new(context);
+    executor.launch_reason = launch_reason;
     let mut sandbox_capability = None;
     let result = if request.interactive || request.stateful {
         Err(MezError::invalid_args(
@@ -776,7 +789,9 @@ fn execute_native_shell_dispatch_inner(
         ))
     } else {
         capability_probe
-            .map_or(Ok(None), |probe| probe.run().map(Some))
+            .map_or(Ok(None), |probe| {
+                probe.run_accounted(&executor.launches).map(Some)
+            })
             .and_then(|capability| {
                 sandbox_capability = capability;
                 if capability_probe_only {
@@ -821,6 +836,7 @@ fn execute_native_shell_dispatch_inner(
         started_at_unix_ms,
         sandbox_capability: sandbox_capability.map(Box::new),
         capability_probe_only,
+        launch_counts: executor.launches.snapshot(),
         result,
     }
 }
@@ -1258,8 +1274,77 @@ mod tests {
             bubblewrap_activity_lease: None,
             seatbelt_workload_lease: None,
             request: request(command, Some(5_000)),
+            launch_reason: NativeLaunchReason::ShellCommand,
             started_at_unix_ms: 1,
         }
+    }
+
+    /// The legacy native-patch adapter must expose its direct child launch,
+    /// and the process-free admission guard must reject that same production
+    /// spawn boundary before the command can run. This deliberately does not
+    /// assert that migration of the native patch executor is complete.
+    #[test]
+    fn legacy_native_patch_launch_is_observable_and_rejectable() {
+        let mut executor = SpawnedShellExecutor::new(test_context());
+        executor.launch_reason = NativeLaunchReason::LegacyPatch;
+        let request = request("printf legacy-patch", Some(5_000));
+        let output = executor.execute_shell(&request).unwrap();
+        assert_eq!(output.stdout, "legacy-patch");
+        assert_eq!(
+            executor.launches.snapshot().unwrap(),
+            vec![super::super::launch_accounting::NativeLaunchCount {
+                reason: NativeLaunchReason::LegacyPatch,
+                attempted: 1,
+                launched: 1,
+            }]
+        );
+        executor.launches = NativeLaunchLedger::new(true);
+        assert!(
+            executor
+                .execute_shell(&request)
+                .unwrap_err()
+                .message()
+                .contains("process-free")
+        );
+        assert_eq!(executor.launches.snapshot().unwrap()[0].launched, 0);
+    }
+
+    /// A configured backend cannot evade the process-free guard using an
+    /// absolute executable or a self-reexecuted product helper. The production
+    /// probe owner must reject its launch before trying the missing executable.
+    #[test]
+    fn process_free_probe_rejects_absolute_executable_before_spawn() {
+        let ledger = NativeLaunchLedger::new(true);
+        let probe = super::super::NativeSandboxCapabilityProbe::Bubblewrap(
+            super::super::NativeBubblewrapCapabilityProbe::for_test(
+                "/nonexistent/absolute/mez",
+                Vec::new(),
+                "unused",
+            ),
+        );
+        assert!(
+            probe
+                .run_accounted(&ledger)
+                .unwrap_err()
+                .message()
+                .contains("process-free")
+        );
+        assert_eq!(ledger.snapshot().unwrap()[0].attempted, 1);
+        assert_eq!(ledger.snapshot().unwrap()[0].launched, 0);
+    }
+
+    /// Worker completion carries positive launch evidence for the exact
+    /// actor-selected action purpose, not a heuristic from command text.
+    #[test]
+    fn native_worker_returns_actor_selected_launch_evidence() {
+        let mut dispatch = dispatch_with_probe("printf patch", None);
+        dispatch.launch_reason = NativeLaunchReason::LegacyPatch;
+        let outcome = execute_native_shell_dispatch(dispatch);
+        assert!(outcome.result.is_ok());
+        assert_eq!(
+            outcome.launch_counts.unwrap()[0].reason,
+            NativeLaunchReason::LegacyPatch
+        );
     }
 
     /// Verifies native progress publications carry strictly increasing revisions.

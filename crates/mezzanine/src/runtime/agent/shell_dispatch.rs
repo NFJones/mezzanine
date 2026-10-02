@@ -231,6 +231,24 @@ impl RuntimeSessionService {
         if !current {
             return Ok(false);
         }
+        self.append_agent_trace_turn_event(
+            &self
+                .agent_turn_ledger()
+                .turns()
+                .iter()
+                .find(|turn| turn.turn_id == outcome.turn_id)
+                .map(|turn| turn.pane_id.clone())
+                .ok_or_else(|| MezError::invalid_state("native launch evidence lost its turn"))?,
+            &outcome.turn_id,
+            &format!(
+                "native_direct_launch_counts={}",
+                serde_json::to_string(&outcome.launch_counts).map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "native launch evidence encoding failed: {error}"
+                    ))
+                })?
+            ),
+        )?;
         if let Some(capability) = outcome.sandbox_capability.as_deref().cloned() {
             match capability {
                 crate::security::sandbox::SandboxCapability::Bubblewrap(capability) => {

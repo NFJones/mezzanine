@@ -86,6 +86,8 @@ pub mod messaging;
 pub mod model_capabilities;
 /// Provider-neutral model catalog construction and selection policy.
 pub mod model_catalog;
+/// Process-free semantic execution contracts, independent of shell adapters.
+pub mod native_action;
 pub use model_capabilities::{
     ModelCapabilities, ModelCapabilityMetadataPolicy, OpenAiPromptCacheGeneration,
     OpenAiPromptCacheMode,

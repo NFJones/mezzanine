@@ -10,6 +10,23 @@ including its authority limits, networking behavior, and failure handling.
 Understand [approvals and review](approvals-and-review.md). A sandbox does not
 replace the decision to approve an action.
 
+## Native filesystem contract versus OS confinement
+
+The staged process-free native patch adapter will enforce filesystem authority
+through runtime capabilities, not by confining the daemon with Bubblewrap or
+Seatbelt. Those capabilities must preserve trust and effective scopes, report
+actual enforcement separately from configured backend intent, and reject an
+incompatible mandatory OS process-confinement requirement. They are neither
+sandbox-equivalent protection nor an implicit approved bypass. Current native
+patches still use the legacy shell/backend path described below.
+
+Cancellation of an in-process filesystem worker is cooperative: a deadline or
+dropped worker handle does not stop a blocked syscall. Future commits must be
+fenced before cancellation is acknowledged; already-started commits remain
+in-flight until evidence arrives, and confirmed earlier effects remain applied.
+Unknown effects must not be replayed. See the
+[normative migration contract](../../SPEC.md#process-free-semantic-adapter-contract-and-migration).
+
 ## Select a backend
 
 `permissions.sandbox = "policy-only"` does not confine filesystem or

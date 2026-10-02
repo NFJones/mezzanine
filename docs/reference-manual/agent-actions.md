@@ -79,6 +79,21 @@ result history. Mezzanine can provide bounded correction opportunities for
 model-correctable failures, but a rejected approval or user cancellation is not
 automatically retried.
 
+## Native semantic execution migration
+
+Native patches currently use the legacy fresh-shell adapter and truthfully
+report `spawned_shell`. The replacement contract selects an in-process
+`native_runtime` filesystem adapter before shell lowering; foundational typed
+contracts and direct-launch accounting do not by themselves enable it. Native
+`shell_command` remains an intentional spawned shell; pane/remote patches keep
+their shell adapter. No new action or second native mode is introduced.
+
+The replacement binds approval to exact patch, ordered effects, transaction and
+current authority. It must preserve partial effects and report stalled commits
+as in-flight or unknown, not infer nonexecution from timeout. Runtime filesystem
+capabilities are not OS confinement or an approved bypass. See the
+[normative migration contract](../../SPEC.md#process-free-semantic-adapter-contract-and-migration).
+
 ## Related pages
 
 - [Commands, skills, and macros](../agent/commands-skills-and-macros.md)

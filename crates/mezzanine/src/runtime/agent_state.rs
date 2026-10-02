@@ -125,6 +125,8 @@ pub(crate) struct RuntimeNativeShellDispatch {
     pub(crate) seatbelt_workload_lease: Option<crate::security::sandbox::SeatbeltWorkloadLease>,
     /// Fully materialized spawned-shell request.
     pub(crate) request: ShellExecutionRequest,
+    /// Actor-selected semantic purpose, never inferred from command text.
+    pub(crate) launch_reason: crate::runtime::processes::launch_accounting::NativeLaunchReason,
     /// Runtime wall-clock timestamp used by shell completion metrics.
     pub(crate) started_at_unix_ms: u64,
 }
@@ -177,6 +179,9 @@ pub(crate) struct RuntimeNativeShellOutcome {
     pub(crate) sandbox_capability: Option<Box<crate::security::sandbox::SandboxCapability>>,
     /// Whether this outcome represents only a capability preflight.
     pub(crate) capability_probe_only: bool,
+    /// Direct launch evidence; None means unavailable, not zero launches.
+    pub(crate) launch_counts:
+        Option<Vec<crate::runtime::processes::launch_accounting::NativeLaunchCount>>,
     /// Normalized shell output or a typed worker failure.
     pub(crate) result: std::result::Result<ShellExecutionOutput, RuntimeNativeShellFailure>,
 }

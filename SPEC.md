@@ -8250,6 +8250,56 @@ create an unsandboxed approval or replay the original action. Malformed,
 truncated, unclosed, signalled, or otherwise insufficient evidence MUST remain
 fail-closed; later model-authored actions MUST undergo normal permission checks.
 
+#### Process-free semantic adapter contract and migration
+
+The shell-backed native patch behavior above describes the current legacy
+adapter. The process-free replacement MUST select an adapter before generating
+shell source: pane `shell_command` and `apply_patch` keep the pane/remote shell
+adapter; native `shell_command` keeps the fresh shell and OS sandbox lifecycle;
+native `apply_patch` requires an in-process filesystem adapter. Until that
+replacement is integrated and qualified, native patch results MUST continue to
+report `spawned_shell`, not `native_runtime`. Foundational contracts and launch
+accounting alone MUST NOT be presented as the completed runtime guarantee.
+
+The replacement MUST use shared parsed patch semantics with exact accepted
+payload identity, ordered effects and dependent move endpoints. `apply_patch`
+is a policy descriptor, not executable source. Approval and each short commit
+lease MUST bind the exact operation, transaction and current authority. Runtime
+filesystem capabilities MUST preserve effective trust, read/write scopes,
+planning restrictions and child intersections without a competing authority
+store. They MUST NOT claim OS confinement of the daemon, namespace or network
+isolation, or an approved sandbox bypass. An independently mandatory OS process
+confinement requirement MUST fail closed if incompatible with this adapter.
+Configured backend intent and actual enforcement MUST be reported separately.
+
+Native filesystem workers MUST use bounded resources and cooperative
+cancellation outside the serialized actor. The patch budget remains 30 seconds,
+capped by the turn deadline, not the native shell timeout. Acknowledged
+cancellation MUST fence future commits; a started syscall may remain in flight.
+Dropping a blocking worker or reaching a deadline MUST NOT prove nonexecution.
+Results MUST retain confirmed partial effects and identify in-flight or unknown
+effects without replay. Native results MUST report `native_runtime` and
+`sent_to_pane=false` only for actual in-process execution, without fabricated
+shell exit codes, signals, markers or stdout evidence.
+
+Basic-action execution MUST NOT require shells, utilities, sandbox probes,
+interpreters or re-executed Mez helpers. Executable hooks and stdio MCP are
+explicit process integrations, not concealed basic-action prerequisites;
+required incompatible executable gates MUST block before mutation. Pane
+creation, external editing, clipboard/status commands and other intentionally
+process-oriented UI integrations are outside this filesystem guarantee. A
+literal shell-command-only launch policy MUST reject incompatible integrations
+rather than silently expanding these exclusions. HTTP integrations and passive
+MCP metadata remain runtime-owned, subject to their existing permission gates.
+
+Native launch accounting MUST distinguish direct attempts from successful
+creations and unavailable evidence from zero. Actor-selected launch reasons
+MUST distinguish shell commands, legacy patch shells, sandbox probes and
+intentional status providers. Counters at participating owners are not an OS
+execution-denial boundary or a count of shell descendants. Acceptance MUST
+exercise production dispatch and separately prove zero child launches and zero
+PTY execution writes; empty PATH or helper-only tests are insufficient.
+
 The native workload environment contract MUST be owned by one code path shared
 by the native policy-only, host-access, Bubblewrap, and Seatbelt launch paths,
 and no native workload or code-owned launcher launch MAY inherit the ambient

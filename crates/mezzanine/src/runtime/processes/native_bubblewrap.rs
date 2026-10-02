@@ -75,17 +75,6 @@ impl NativeBubblewrapCapabilityProbe {
         }
     }
 
-    /// Runs the exact native probe outside the serialized runtime actor.
-    pub(crate) fn run(self) -> Result<crate::security::sandbox::BubblewrapCapability> {
-        run_native_bubblewrap_capability_probe(
-            &self.pane_id,
-            &self.pane_environment_signature,
-            self.config_generation,
-            &self.plan,
-            None,
-        )
-    }
-
     /// Runs the exact native probe while observing a caller-owned lifecycle
     /// cancellation fence.
     pub(crate) fn run_with_cancellation(
@@ -98,6 +87,7 @@ impl NativeBubblewrapCapabilityProbe {
             self.config_generation,
             &self.plan,
             Some(cancellation),
+            &super::launch_accounting::NativeLaunchLedger::new(false),
         )
     }
 
@@ -151,17 +141,6 @@ impl NativeSeatbeltCapabilityProbe {
         }
     }
 
-    /// Runs the exact native probe outside the serialized runtime actor.
-    pub(crate) fn run(self) -> Result<crate::security::sandbox::SeatbeltCapability> {
-        run_native_seatbelt_capability_probe(
-            &self.pane_id,
-            &self.pane_environment_signature,
-            self.config_generation,
-            &self.plan,
-            None,
-        )
-    }
-
     /// Runs the exact native probe while observing a caller-owned lifecycle
     /// cancellation fence.
     pub(crate) fn run_with_cancellation(
@@ -174,6 +153,7 @@ impl NativeSeatbeltCapabilityProbe {
             self.config_generation,
             &self.plan,
             Some(cancellation),
+            &super::launch_accounting::NativeLaunchLedger::new(false),
         )
     }
 
@@ -217,16 +197,30 @@ pub(crate) enum NativeSandboxCapabilityProbe {
 }
 
 impl NativeSandboxCapabilityProbe {
-    /// Runs the exact backend probe and returns cacheable typed evidence only
-    /// after strict sentinel validation succeeds.
-    pub(crate) fn run(self) -> Result<crate::security::sandbox::SandboxCapability> {
+    /// Runs a probe with the caller's explicit workload launch ledger.
+    pub(crate) fn run_accounted(
+        self,
+        launches: &super::launch_accounting::NativeLaunchLedger,
+    ) -> Result<crate::security::sandbox::SandboxCapability> {
         match self {
-            Self::Bubblewrap(probe) => probe
-                .run()
-                .map(crate::security::sandbox::SandboxCapability::Bubblewrap),
-            Self::Seatbelt(probe) => probe
-                .run()
-                .map(crate::security::sandbox::SandboxCapability::Seatbelt),
+            Self::Bubblewrap(probe) => run_native_bubblewrap_capability_probe(
+                &probe.pane_id,
+                &probe.pane_environment_signature,
+                probe.config_generation,
+                &probe.plan,
+                None,
+                launches,
+            )
+            .map(crate::security::sandbox::SandboxCapability::Bubblewrap),
+            Self::Seatbelt(probe) => run_native_seatbelt_capability_probe(
+                &probe.pane_id,
+                &probe.pane_environment_signature,
+                probe.config_generation,
+                &probe.plan,
+                None,
+                launches,
+            )
+            .map(crate::security::sandbox::SandboxCapability::Seatbelt),
         }
     }
 
@@ -1297,6 +1291,7 @@ fn run_native_bubblewrap_capability_probe(
     config_generation: u64,
     probe_plan: &crate::security::sandbox::BubblewrapCapabilityProbePlan,
     cancellation: Option<&AtomicBool>,
+    launches: &super::launch_accounting::NativeLaunchLedger,
 ) -> Result<crate::security::sandbox::BubblewrapCapability> {
     let status_sink = std::fs::OpenOptions::new()
         .write(true)
@@ -1351,11 +1346,16 @@ fn run_native_bubblewrap_capability_probe(
             Ok(())
         });
     }
-    let mut child = command.spawn().map_err(|error| {
-        MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
-            &format!("native Bubblewrap capability probe could not start: {error}"),
-        ))
-    })?;
+    let mut child = launches.launch(
+        super::launch_accounting::NativeLaunchReason::SandboxProbe,
+        || {
+            command.spawn().map_err(|error| {
+                MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
+                    &format!("native Bubblewrap capability probe could not start: {error}"),
+                ))
+            })
+        },
+    )?;
     let stdout_reader = child.stdout.take().map(spawn_bounded_probe_reader);
     let stderr_reader = child.stderr.take().map(spawn_bounded_probe_reader);
     let deadline = Instant::now() + NATIVE_BUBBLEWRAP_PROBE_TIMEOUT;
@@ -1432,6 +1432,7 @@ fn run_native_seatbelt_capability_probe(
     config_generation: u64,
     probe_plan: &crate::security::sandbox::SeatbeltCapabilityProbePlan,
     cancellation: Option<&AtomicBool>,
+    launches: &super::launch_accounting::NativeLaunchLedger,
 ) -> Result<crate::security::sandbox::SeatbeltCapability> {
     let mut command = Command::new(&probe_plan.executable);
     command
@@ -1453,11 +1454,16 @@ fn run_native_seatbelt_capability_probe(
             OsStr::from_bytes(&entry.value),
         );
     }
-    let mut child = command.spawn().map_err(|error| {
-        MezError::invalid_state(format!(
-            "native Seatbelt capability probe could not start: {error}"
-        ))
-    })?;
+    let mut child = launches.launch(
+        super::launch_accounting::NativeLaunchReason::SandboxProbe,
+        || {
+            command.spawn().map_err(|error| {
+                MezError::invalid_state(format!(
+                    "native Seatbelt capability probe could not start: {error}"
+                ))
+            })
+        },
+    )?;
     let stdout_reader = child.stdout.take().map(spawn_bounded_probe_reader);
     let stderr_reader = child.stderr.take().map(spawn_bounded_probe_reader);
     let deadline = Instant::now() + NATIVE_BUBBLEWRAP_PROBE_TIMEOUT;

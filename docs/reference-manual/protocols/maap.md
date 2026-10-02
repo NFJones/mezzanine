@@ -48,6 +48,13 @@ authority; its absence cannot suppress authoritative completion.
 
 ## Action catalog
 
+Native semantic execution has a staged
+[migration contract](../../../SPEC.md#process-free-semantic-adapter-contract-and-migration).
+Current shell-backed patches retain `spawned_shell` evidence. Only a qualified
+in-process adapter may report `native_runtime`, `sent_to_pane=false`, and typed
+filesystem outcomes without shell exit/signal evidence. Model action shapes and
+the existing permission owners do not change with these foundational contracts.
+
 | Action | Required fields | Contract boundary |
 | --- | --- | --- |
 | `say` | `status`, `content_type`, `text` | Display-only `progress`, `final`, or `blocked` text. Supported plain-text, Markdown, and diff source may render provisionally while streaming. Field closure and whole-action receipt do not finalize it: exact batch validation and complete current-generation rendering precede permanence; final text following pending runtime-visible work also awaits successful settlement. Commands and patches in text do not execute. |

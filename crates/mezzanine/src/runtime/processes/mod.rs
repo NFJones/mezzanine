@@ -8,6 +8,7 @@ mod adapter_ownership;
 mod bash_compat;
 mod fish_compat;
 mod input_delivery;
+pub(crate) mod launch_accounting;
 mod layout;
 mod lifecycle_events;
 mod managed_shell_handoff;

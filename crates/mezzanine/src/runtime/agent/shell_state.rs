@@ -1060,6 +1060,11 @@ impl RuntimeSessionService {
                 bubblewrap_activity_lease,
                 seatbelt_workload_lease,
                 request,
+                launch_reason: if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+                    crate::runtime::processes::launch_accounting::NativeLaunchReason::LegacyPatch
+                } else {
+                    crate::runtime::processes::launch_accounting::NativeLaunchReason::ShellCommand
+                },
                 started_at_unix_ms,
             },
         );

@@ -134,6 +134,13 @@ pane shell. Use `/shell-mode status` to inspect the effective mode,
 `/shell-mode native` or `/shell-mode pane` for a pane override, and append
 `--global` to persist the default for panes without an override.
 
+Native patch execution is currently shell-backed. The process-free filesystem
+replacement is staged behind typed contracts and launch-accounting work; do not
+interpret native mode today as a zero-child guarantee. Its target transport is
+`native_runtime`, while actual shell commands retain `spawned_shell`. There is
+no second native mode or automatic fallback. See the
+[migration contract](../../SPEC.md#process-free-semantic-adapter-contract-and-migration).
+
 Pane mode requires a supported Bash, Fish, Zsh, or POSIX `sh` prompt to be
 ready for input. A full-screen program, password prompt, or uncertain shell
 boundary makes injection unsafe; return it to an empty prompt. Runtime-created
