@@ -289,10 +289,9 @@ fn runtime_control_initialize_resizes_started_initial_pane_for_primary_terminal(
     assert_eq!(view.lines.len(), 40);
     assert_eq!(region.columns, 100);
     assert_eq!(region.rows, 38);
-    assert!(
-        view.cursor_row >= 38,
-        "agent prompt cursor should render at attached terminal bottom: {view:?}"
-    );
+    assert_eq!(view.cursor_row, 37);
+    assert!(view.lines[view.cursor_row].contains("❱"));
+    assert!(view.lines[view.cursor_row + 1].contains("Enter send"));
 
     service.terminate_all_pane_processes().unwrap();
 }

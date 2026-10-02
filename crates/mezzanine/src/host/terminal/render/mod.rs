@@ -260,6 +260,23 @@ pub fn render_attached_client_view_with_screen_and_row_resolvers<'a>(
     config: &TerminalClientLoopConfig,
     client_size: Size,
 ) -> Result<Option<RenderedClientView>> {
+    let mut projection_config = None;
+    if config
+        .frame_context
+        .panes
+        .values()
+        .any(|pane| pane.agent_composer.is_some())
+    {
+        let mut projected = config.clone();
+        for (pane_id, pane) in &mut projected.frame_context.panes {
+            if let Some(composer) = pane.agent_composer.as_mut() {
+                composer.read_only =
+                    role != ClientViewRole::Primary || pane_id != window.active_pane().id.as_str();
+            }
+        }
+        projection_config = Some(projected);
+    }
+    let config = projection_config.as_ref().unwrap_or(config);
     let styled_lines = panes::draw_styled_window_from_screen_and_row_resolvers(
         window,
         config,

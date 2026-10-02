@@ -1,6 +1,7 @@
 //! Terminal rendering and presentation behavior.
 
 mod agent_prompt;
+mod composer;
 mod copy_mode;
 mod frames;
 mod layout;

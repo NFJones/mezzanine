@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod composer_bindings;
 mod external_editor;
 mod input;
 mod interrupt;

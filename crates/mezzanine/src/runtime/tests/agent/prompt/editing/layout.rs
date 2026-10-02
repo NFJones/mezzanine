@@ -2,6 +2,39 @@
 
 use super::*;
 
+/// Composer hints use effective mux bindings: prefix interception removes the
+/// baseline newline hint, and editor help uses the configured prefix.
+/// This checks runtime facts rather than hardcoding the default Ctrl+A route.
+#[test]
+fn runtime_composer_help_respects_effective_binding_overrides() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "composer-bindings".into(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[keys]\nescape = \"C-j\"\nedit_prompt = \"e\"\n".into(),
+        }])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let context = config.frame_context.panes["%1"]
+        .agent_composer
+        .as_ref()
+        .unwrap();
+    assert_eq!(context.editor_binding.as_deref(), Some("C-j e"));
+    assert!(!context.editing_help.as_deref().unwrap().contains("Ctrl+J"));
+    assert!(context.editing_help.as_deref().unwrap().contains("Ctrl+R"));
+    assert!(!context.guides_active_task);
+}
+
 /// Verifies that the initial primary attach applies the attached terminal size
 /// to existing window geometry. The first pane is created at bootstrap size
 /// before a client is attached, so agent prompt rendering must depend on the
@@ -39,10 +72,9 @@ fn runtime_primary_attach_resizes_initial_window_for_agent_prompt() {
     assert_eq!(view.authoritative_size, Size::new(120, 40).unwrap());
     assert_eq!(region.columns, 120);
     assert_eq!(region.rows, 38);
-    assert!(
-        view.cursor_row >= 38,
-        "agent prompt cursor should render at attached terminal bottom: {view:?}"
-    );
+    assert_eq!(view.cursor_row, 37);
+    assert!(view.lines[view.cursor_row].contains("❱"));
+    assert!(view.lines[view.cursor_row + 1].contains("Enter send"));
 }
 
 /// Verifies wrapped agent input grows beyond the former six-row limit, remains

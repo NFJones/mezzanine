@@ -3088,6 +3088,26 @@ preceding it where that gutter is shown. This marker is presentation-only and
 MUST NOT alter submitted input, assistant transcript `mez> ` labels, or copied
 source content.
 
+At pane-body widths of at least 64 cells and heights of at least 14 rows, the
+editable agent composer MUST include a lightweight separator/context row and
+a display-only help row around the existing input surface. The context MUST
+distinguish idle `Ask Mez`, a running turn accepting steering (`Guide this task`),
+slash-command drafts, pending approval review, history search and discarded
+paste ownership. Live state and elapsed time MUST remain visible while drafting
+at this geometry. Help MUST describe actual readline precedence: reverse-search
+Enter accepts without submission, Tab cycles completion, ordinary Enter submits,
+and active-work Escape interrupts before prompt decoding. Effective mux bindings
+MUST suppress intercepted baseline hints and supply the actual editor route.
+Observers and unfocused panes MUST not advertise editable input or display a
+competing cursor. Small panes retain the compact prompt without these optional
+rows. The shared prompt block MUST govern reservation and cursor offsets; total
+reserved rows remain bounded at approximately half the body. State/duration/help
+changes alone MUST NOT change reservation at fixed draft and geometry. These
+rows MUST NOT enter the draft, source copy, transcript, model context or history.
+Copy mode retains transparent prompt reservation and external editor takeover
+retains its existing independent surface. No new keys or configuration fields
+are introduced by this presentation change.
+
 When the user submits a non-empty agent prompt, the visible prompt input MUST be
 cleared in the same terminal update that accepts the submission, before any
 provider response or later agent state transition is required. Additional

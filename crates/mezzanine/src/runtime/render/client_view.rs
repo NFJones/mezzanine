@@ -1086,10 +1086,75 @@ impl RuntimeSessionService {
                     .map(|input| input.prompt.clone())
                     .unwrap_or_else(|| ReadlinePrompt::new(ReadlinePromptKind::Agent))
             }),
+            agent_composer: Some(self.agent_composer_context(pane_id)),
             agent_display_lines: self.runtime_agent_prompt_display_lines_for_pane(pane_id),
             ..TerminalPaneFrameContext::default()
         };
         agent_prompt_reserved_line_count(width, body_rows, Some(&pane_context))
+    }
+
+    /// Captures submission/decoder facts and effective editor dispatch without
+    /// inserting help into input or creating another presentation-state owner.
+    fn agent_composer_context(&self, pane_id: &str) -> mez_mux::presentation::AgentComposerContext {
+        let bindings = self.key_bindings();
+        let reaches_prompt = |bytes: &[u8]| {
+            !self.presentation.primary_prefix_key_pending
+                && matches!(
+                    mez_mux::input::classify_terminal_input(bytes, bindings),
+                    Ok(mez_mux::input::TerminalInputClassification::ForwardToPane)
+                )
+        };
+        let editor_binding = bindings
+            .edit_prompt
+            .filter(|chord| {
+                *chord != bindings.escape && !self.command_bindings().contains_key(chord)
+            })
+            .map(|chord| {
+                format!(
+                    "{} {}",
+                    crate::ui::command::key_chord_notation(bindings.escape),
+                    crate::ui::command::key_chord_notation(chord)
+                )
+            });
+        mez_mux::presentation::AgentComposerContext {
+            read_only: false,
+            guides_active_task: self
+                .agent_shell_store()
+                .get(pane_id)
+                .and_then(|session| session.running_turn_id.as_deref())
+                .and_then(|id| self.agent_turn_ledger().turn(id))
+                .is_some_and(|turn| turn.state == AgentTurnState::Running),
+            interruptible: self.agent_shell_pane_has_active_turn(pane_id),
+            approval_pending: self
+                .blocked_approvals()
+                .pending()
+                .iter()
+                .any(|approval| approval.pane_id == pane_id),
+            paste_discard_pending: self
+                .presentation
+                .agent_prompt_inputs
+                .get(pane_id)
+                .is_some_and(|state| state.decoder.bracketed_paste_resynchronization_pending()),
+            editor_binding,
+            keys: Some(mez_mux::presentation::AgentComposerKeys {
+                enter: reaches_prompt(b"\r"),
+                escape: reaches_prompt(b"\x1b"),
+                search: reaches_prompt(b"\x12"),
+                cancel_search: reaches_prompt(b"\x03"),
+                tab: reaches_prompt(b"\t"),
+                backtab: reaches_prompt(b"\x1b[Z"),
+            }),
+            editing_help: Some(
+                [
+                    (b"\x0a".as_slice(), "Ctrl+J newline"),
+                    (b"\x12".as_slice(), "Ctrl+R history"),
+                ]
+                .into_iter()
+                .filter_map(|(bytes, hint)| reaches_prompt(bytes).then_some(hint))
+                .collect::<Vec<_>>()
+                .join(" · "),
+            ),
+        }
     }
 
     /// Returns pane-local agent display lines plus the live turn timer footer.
@@ -2040,6 +2105,7 @@ impl RuntimeSessionService {
                         agent_context_usage,
                         history_position,
                         status_pills: self.pane_status_provider_values(&pane_id),
+                        agent_composer: Some(self.agent_composer_context(&pane_id)),
                         agent_prompt: (agent_session.is_some_and(|session| {
                             matches!(session.visibility, AgentShellVisibility::Visible)
                         }) && !self.agent_command_is_active(pane_id.as_str()))

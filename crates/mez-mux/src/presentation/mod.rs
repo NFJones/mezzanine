@@ -644,8 +644,63 @@ pub struct TerminalPaneFrameContext<Prompt = (), DisplayLines = Vec<String>> {
     pub status_pills: BTreeMap<String, String>,
     /// Product-owned prompt state rendered inside the pane body.
     pub agent_prompt: Option<Prompt>,
+    /// Display-only runtime submission and binding context for the composer.
+    pub agent_composer: Option<AgentComposerContext>,
     /// Product-owned supplemental lines rendered above the prompt.
     pub agent_display_lines: DisplayLines,
+}
+
+/// Runtime-owned composer facts; never draft bytes or execution authority.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentComposerContext {
+    /// This projection cannot accept input (observer or unfocused pane).
+    pub read_only: bool,
+    /// Ordinary prose submitted now guides an active task rather than starting one.
+    pub guides_active_task: bool,
+    /// Escape currently interrupts before readline decoding.
+    pub interruptible: bool,
+    /// A pending approval requires its existing review surface, not typed prose.
+    pub approval_pending: bool,
+    /// The input decoder is discarding rejected paste bytes.
+    pub paste_discard_pending: bool,
+    /// Effective prefix/editor binding, absent when overridden or unavailable.
+    pub editor_binding: Option<String>,
+    /// Baseline editing hints that survive effective mux interception.
+    pub editing_help: Option<String>,
+    /// Effective routing availability for every state-specific control.
+    pub keys: Option<AgentComposerKeys>,
+}
+
+/// Whether a baseline composer key reaches readline rather than mux dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentComposerKeys {
+    /// Carriage-return submission/acceptance.
+    pub enter: bool,
+    /// Escape reset/interruption.
+    pub escape: bool,
+    /// Reverse-search repeat.
+    pub search: bool,
+    /// Reverse-search cancellation.
+    pub cancel_search: bool,
+    /// Forward completion cycling.
+    pub tab: bool,
+    /// Backward completion cycling.
+    pub backtab: bool,
+}
+
+impl Default for AgentComposerKeys {
+    /// Synthetic contexts retain baseline controls; runtime contexts set each
+    /// field from effective dispatch classification.
+    fn default() -> Self {
+        Self {
+            enter: true,
+            escape: true,
+            search: true,
+            cancel_search: true,
+            tab: true,
+            backtab: true,
+        }
+    }
 }
 
 impl<Prompt, DisplayLines: Default> Default for TerminalPaneFrameContext<Prompt, DisplayLines> {
@@ -676,6 +731,7 @@ impl<Prompt, DisplayLines: Default> Default for TerminalPaneFrameContext<Prompt,
             history_position: None,
             status_pills: BTreeMap::new(),
             agent_prompt: None,
+            agent_composer: None,
             agent_display_lines: DisplayLines::default(),
         }
     }

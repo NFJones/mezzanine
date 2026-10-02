@@ -547,6 +547,8 @@ pub(super) struct AgentPromptBlock {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) prompt_live_footer_suffixes: Vec<Option<(usize, String)>>,
+    /// Display-only separator/help rows, styled independently of editable input.
+    pub(super) decoration_rows: Vec<usize>,
     /// Stores the cursor row value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -608,6 +610,10 @@ impl AgentPromptBlock {
         for (line_index, line) in self.prompt_lines.iter().enumerate() {
             let mut styled_line =
                 themed_full_width_line(line, width, agent_prompt_input_rendition(ui_theme));
+            if self.decoration_rows.contains(&line_index) {
+                styled_line =
+                    themed_text_line(line, width, display_overlay_text_rendition(ui_theme));
+            }
             for shadow_span in self
                 .prompt_shadow_spans
                 .get(line_index)
@@ -703,6 +709,7 @@ pub(super) fn render_agent_prompt_block(
             prompt_lines: Vec::new(),
             prompt_shadow_spans: Vec::new(),
             prompt_live_footer_suffixes: Vec::new(),
+            decoration_rows: Vec::new(),
             cursor_row: 0,
             cursor_column: 0,
             cursor_visible: false,
@@ -715,26 +722,63 @@ pub(super) fn render_agent_prompt_block(
         .map(|context| context.agent_display_lines.as_slice())
         .unwrap_or(&[]);
     let (display_source, live_footer) = split_agent_live_footer_display_source(display_source);
-    let prompt_max_rows = agent_prompt_max_rows(body_rows);
-    let prompt_layout = if prompt_can_show_agent_live_footer(&prompt) {
+    let composer = pane_context.and_then(|context| context.agent_composer.as_ref());
+    let filtered_footer = live_footer.map(|footer| {
+        if composer.is_some_and(|context| {
+            context.read_only || context.keys.as_ref().is_some_and(|keys| !keys.escape)
+        }) {
+            footer.replace(" • esc to interrupt", "")
+        } else {
+            footer.to_string()
+        }
+    });
+    let live_footer = filtered_footer.as_deref();
+    let comfortable = width >= 64
+        && body_rows >= 14
+        && composer.is_some()
+        && pane_context.is_some_and(|context| context.agent_prompt.is_some());
+    let prompt_max_rows = agent_prompt_max_rows(body_rows)
+        .saturating_sub(if comfortable { 2 } else { 0 })
+        .max(1);
+    let mut prompt_layout = if !comfortable && prompt_can_show_agent_live_footer(&prompt) {
         live_footer
             .map(|footer| render_agent_live_footer_prompt_layout(&prompt, footer, width))
             .unwrap_or_else(|| render_wrapped_prompt_layout(&prompt, width, prompt_max_rows))
     } else {
         render_wrapped_prompt_layout(&prompt, width, prompt_max_rows)
     };
-    let prompt_live_footer_suffixes = if prompt_can_show_agent_live_footer(&prompt) {
-        live_footer
-            .map(|footer| {
-                vec![Some((
-                    terminal_text_width(&format!("{MEZ_UI_PREFIX}{}", prompt.render())),
-                    footer.to_string(),
-                ))]
-            })
-            .unwrap_or_else(|| vec![None; prompt_layout.lines.len()])
-    } else {
-        vec![None; prompt_layout.lines.len()]
-    };
+    let mut prompt_live_footer_suffixes =
+        if !comfortable && prompt_can_show_agent_live_footer(&prompt) {
+            live_footer
+                .map(|footer| {
+                    vec![Some((
+                        terminal_text_width(&format!("{MEZ_UI_PREFIX}{}", prompt.render())),
+                        footer.to_string(),
+                    ))]
+                })
+                .unwrap_or_else(|| vec![None; prompt_layout.lines.len()])
+        } else {
+            vec![None; prompt_layout.lines.len()]
+        };
+    let mut decoration_rows = Vec::new();
+    if comfortable && let Some(composer) = composer {
+        let (label, help) = agent_composer_help(&prompt, composer);
+        let header = live_footer.map_or_else(
+            || format!("── {label} ──"),
+            |status| format!("── {label} · {status}"),
+        );
+        prompt_layout.lines.insert(0, fit_width(&header, width));
+        prompt_layout.shadow_spans.insert(0, Vec::new());
+        prompt_live_footer_suffixes.insert(0, None);
+        prompt_layout.cursor_row += 1;
+        decoration_rows.push(0);
+        decoration_rows.push(prompt_layout.lines.len());
+        prompt_layout
+            .lines
+            .push(fit_width(&format!("  {help}"), width));
+        prompt_layout.shadow_spans.push(Vec::new());
+        prompt_live_footer_suffixes.push(None);
+    }
     let display_capacity = body_rows.saturating_sub(prompt_layout.lines.len());
     let display_count = display_source.len().min(display_capacity);
     let display_start = display_source.len().saturating_sub(display_count);
@@ -749,10 +793,110 @@ pub(super) fn render_agent_prompt_block(
         prompt_lines: prompt_layout.lines,
         prompt_shadow_spans: prompt_layout.shadow_spans,
         prompt_live_footer_suffixes,
+        decoration_rows,
         cursor_row: prompt_layout.cursor_row,
         cursor_column: prompt_layout.cursor_column,
         cursor_visible: prompt_layout.cursor_visible,
     }
+}
+
+/// Derives display-only help from actual readline precedence and runtime facts.
+/// Selectors cycle on Tab; Enter still submits. Reverse search accepts a match
+/// without submission; active-turn Escape always interrupts before readline.
+fn agent_composer_help(
+    prompt: &ReadlinePrompt,
+    context: &mez_mux::presentation::AgentComposerContext,
+) -> (&'static str, String) {
+    if context.read_only {
+        return (
+            "Agent draft",
+            "Read-only view · focus the owning primary pane to edit".to_string(),
+        );
+    }
+    let defaults = mez_mux::presentation::AgentComposerKeys::default();
+    let keys = context.keys.as_ref().unwrap_or(&defaults);
+    let stop = keys.escape && (context.interruptible || context.guides_active_task);
+    if context.paste_discard_pending {
+        return (
+            "Paste discarded",
+            if keys.escape {
+                format!(
+                    "Discarding payload · Esc {}",
+                    if stop { "stop first" } else { "reset input" }
+                )
+            } else {
+                "Discarding payload · finish mux prefix before resetting input".to_string()
+            },
+        );
+    }
+    if prompt.reverse_search_active() {
+        let mut hints = Vec::new();
+        if keys.enter {
+            hints.push("Enter accept");
+        }
+        if keys.search {
+            hints.push("Ctrl+R search");
+        }
+        if keys.cancel_search {
+            hints.push("Ctrl+C cancel");
+        }
+        if stop {
+            hints.push("Esc stop");
+        }
+        return ("Search history", hints.join(" · "));
+    }
+    let send = if prompt.buffer.line().trim_start().starts_with('/') {
+        "command"
+    } else if context.guides_active_task {
+        "guide"
+    } else {
+        "send"
+    };
+    let label = if context.approval_pending {
+        "Approval required"
+    } else if send == "command" {
+        "Agent command"
+    } else if context.guides_active_task {
+        "Guide this task"
+    } else {
+        "Ask Mez"
+    };
+    let mut hints = Vec::new();
+    if context.approval_pending {
+        hints.push("/show-approvals review".to_string());
+    }
+    if prompt.selector.is_some() {
+        if keys.tab {
+            hints.push("Tab next".to_string());
+        }
+        if keys.backtab {
+            hints.push("Shift+Tab previous".to_string());
+        }
+    }
+    if keys.enter {
+        hints.push(format!("Enter {send}"));
+    }
+    if !context.approval_pending && prompt.selector.is_none() {
+        let editing = context
+            .editing_help
+            .as_deref()
+            .unwrap_or("Ctrl+J newline · Ctrl+R history");
+        if !editing.is_empty() {
+            hints.push(editing.to_string());
+        }
+    }
+    if stop {
+        hints.push("Esc stop".to_string());
+    }
+    if let Some(binding) = context.editor_binding.as_deref() {
+        hints.push(format!("{binding} editor"));
+    }
+    let help = if hints.is_empty() {
+        "Controls intercepted by effective mux bindings".to_string()
+    } else {
+        hints.join(" · ")
+    };
+    (label, help)
 }
 
 /// Separates the live agent footer from regular pane-local display rows.

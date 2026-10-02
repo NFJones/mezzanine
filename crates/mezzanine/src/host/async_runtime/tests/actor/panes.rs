@@ -525,14 +525,9 @@ async fn async_actor_control_initialize_resizes_worker_owned_initial_pane() {
             .iter()
             .rposition(|line| line.contains("❱"))
             .unwrap();
-        assert!(
-            prompt_row >= 38,
-            "agent prompt text should render at attached terminal bottom: {view:?}"
-        );
-        assert!(
-            view.cursor_row >= 38,
-            "agent prompt cursor should render at attached terminal bottom: {view:?}"
-        );
+        assert_eq!(prompt_row, 37);
+        assert_eq!(view.cursor_row, prompt_row);
+        assert!(view.lines[prompt_row + 1].contains("Enter send"));
         let effects = handle.drain_pane_io_side_effects("%1", 8).await.unwrap();
         assert!(
             effects.iter().any(|effect| matches!(

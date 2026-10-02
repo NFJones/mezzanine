@@ -76,6 +76,17 @@ enabled.
 The editable prompt begins with `❱ ` (and `▐ ❱ ` when the agent gutter is
 shown). This display-only input marker does not change assistant transcript
 rows, which continue to use `mez> `.
+In roomy panes (at least 64 columns and 14 body rows), a lightweight context row
+and help row surround the input. `Ask Mez` indicates ordinary submission;
+`Guide this task` indicates prose will steer the running turn. Status and elapsed
+time remain visible while drafting. Search, slash commands, pending approvals
+and discarded paste show their own context; prose does not approve a request.
+Tab cycles completion and Enter still submits, while Enter in reverse search
+accepts the match without submitting. Active-work Escape retains interruption
+precedence. The editor hint uses effective bindings, and intercepted baseline
+hints are omitted. Observers and unfocused panes show a read-only cue.
+Small panes keep the compact editor. Decoration never becomes submitted or
+copied conversation text; reservation remains stable as status/help changes.
 The prompt remains in this in-pane entry area by default. Press `Ctrl+A e` (or
 the active key preset's `edit_prompt` binding) to request external editing;
 closing a successful editor returns the text to the same prompt and never
