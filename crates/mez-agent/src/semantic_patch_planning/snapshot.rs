@@ -1,9 +1,10 @@
-//! Remote snapshot parsing and text-file state for semantic patches.
+//! Typed snapshots and matching text with a pane-shell snapshot codec.
 //!
 //! The apply-patch read phase emits a deterministic marker-framed snapshot of
 //! every touched path. This module parses that transport format, normalizes
 //! regular files into text-file state for hunk matching, and exposes the final
-//! file-change representation consumed by the shell transaction generator.
+//! file-change representation shared by native and shell adapters. Raw captured
+//! bytes are retained for exact preconditions; no-op matching preserves them.
 
 use super::{
     APPLY_PATCH_CONTENT_BEGIN_MARKER, APPLY_PATCH_CONTENT_END_MARKER,
@@ -19,18 +20,18 @@ use std::collections::BTreeMap;
 
 /// One path snapshot emitted by the apply-patch read phase.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ApplyPatchSnapshot {
+pub struct ApplyPatchSnapshot {
     /// The model-authored relative path.
-    pub(super) path: String,
+    pub path: String,
     /// The shell-resolved absolute path.
-    pub(super) resolved_path: String,
+    pub resolved_path: String,
     /// File-system state observed during the read phase.
-    state: ApplyPatchSnapshotState,
+    pub state: ApplyPatchSnapshotState,
 }
 
 /// File-system state for one apply-patch snapshot path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ApplyPatchSnapshotState {
+pub enum ApplyPatchSnapshotState {
     /// A regular file and its exact bytes.
     Regular(Vec<u8>),
     /// No file or symlink exists at the target path.
@@ -47,20 +48,20 @@ enum ApplyPatchSnapshotState {
 
 /// Verified file change generated from a parsed patch and remote snapshots.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ApplyPatchFileChange {
+pub struct ApplyPatchFileChange {
     /// The model-authored relative path.
-    pub(super) path: String,
+    pub path: String,
     /// The shell-resolved absolute path captured during the read phase.
-    pub(super) resolved_path: String,
+    pub resolved_path: String,
     /// Original file state used for concurrency checks.
-    pub(super) original: ApplyPatchOriginalState,
+    pub original: ApplyPatchOriginalState,
     /// Final bytes to write, or `None` when deleting the path.
-    pub(super) final_bytes: Option<Vec<u8>>,
+    pub final_bytes: Option<Vec<u8>>,
 }
 
 /// Original file state used by the write phase.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ApplyPatchOriginalState {
+pub enum ApplyPatchOriginalState {
     /// Original bytes of an existing regular file.
     Regular(Vec<u8>),
     /// The file was absent when the read phase ran.

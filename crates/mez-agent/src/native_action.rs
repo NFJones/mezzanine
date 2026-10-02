@@ -74,6 +74,11 @@ impl NativePatchOperation {
     /// Parses an accepted patch without shell lowering or filesystem access.
     /// Rejects unsupported stripping rather than changing approval identity.
     pub fn parse(patch: &str, strip: Option<u64>) -> Result<Self, LocalActionPlanningError> {
+        if patch.len() > crate::semantic_patch_planning::native::NATIVE_PATCH_SOURCE_BYTES {
+            return Err(LocalActionPlanningError::new(
+                "apply_patch: native source byte budget exceeded",
+            ));
+        }
         if strip.is_some() {
             return Err(LocalActionPlanningError::new(
                 "apply_patch strip is unsupported for Mezzanine patch blocks",
@@ -81,6 +86,12 @@ impl NativePatchOperation {
         }
         let parsed = parse_mez_patch(patch)
             .map_err(|error| LocalActionPlanningError::new(format!("apply_patch: {error}")))?;
+        if parsed.operations.len() > crate::semantic_patch_planning::native::NATIVE_PATCH_OPERATIONS
+        {
+            return Err(LocalActionPlanningError::new(
+                "apply_patch: native operation budget exceeded",
+            ));
+        }
         let effects = parsed
             .operations
             .iter()

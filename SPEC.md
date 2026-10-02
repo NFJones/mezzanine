@@ -8272,6 +8272,22 @@ isolation, or an approved sandbox bypass. An independently mandatory OS process
 confinement requirement MUST fail closed if incompatible with this adapter.
 Configured backend intent and actual enforcement MUST be reported separately.
 
+The shared pure patch engine MUST retain raw snapshot bytes as concurrency
+preimages, independently of normalized matching text. Semantic no-ops MUST NOT
+rewrite line endings. Native planning MUST keep authored operation identity and
+intermediate preimages for repeated paths; move destination publication precedes
+source deletion. Native diff generation MUST use bounded in-process work, never
+an external utility. The current native diff adapter uses linear full-file
+unified hunks rather than minimal edit scripts, capped at 256 KiB of UTF-8 display
+source. Its source, snapshot, per-file and retained-plan budgets are respectively
+1 MiB, 32 MiB, 16 MiB and 64 MiB, with at most 1,024 operations. Display truncation
+MUST NOT remove typed changes or confirmations. Canonical native result projection
+MUST bind the exact plan and action, verify endpoint kind/order and retain both
+move endpoints independently. Confirmed success requires all planned endpoints;
+only a positively planned no-op may succeed without mutation confirmations.
+In-flight work stays nonterminal and unknown effects MUST NOT authorize replay.
+These pure adapters do not themselves enable native filesystem dispatch.
+
 The native filesystem primitive boundary MUST use held directory handles and
 no-follow descriptor-relative operations on Linux and macOS. Physical lookup
 MUST expand symlinks before interpreting subsequent parent traversal, bound

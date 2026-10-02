@@ -88,6 +88,8 @@ pub mod model_capabilities;
 pub mod model_catalog;
 /// Process-free semantic execution contracts, independent of shell adapters.
 pub mod native_action;
+/// Canonical projection of typed native patch confirmation evidence.
+pub mod native_result;
 pub use model_capabilities::{
     ModelCapabilities, ModelCapabilityMetadataPolicy, OpenAiPromptCacheGeneration,
     OpenAiPromptCacheMode,

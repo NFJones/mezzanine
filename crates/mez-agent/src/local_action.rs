@@ -101,6 +101,8 @@ pub struct LocalActionPlan {
 }
 
 /// Returns the canonical shell plan for a provider-authored local action.
+/// Legacy adapter entry point; native semantic dispatch must use
+/// `local_action_adapter_plan` before generating shell source.
 pub fn local_action_plan(
     action: &AgentAction,
 ) -> LocalActionPlanningResult<Option<LocalActionPlan>> {
@@ -130,6 +132,43 @@ pub fn local_action_plan(
         AgentActionPayload::ApplyPatch { patch, strip } => apply_patch_plan(patch, *strip)
             .map(Some)
             .map_err(|error| LocalActionPlanningError::new(error.message())),
+        _ => Ok(None),
+    }
+}
+
+/// Typed adapter plan selected before semantic patch shell lowering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalActionAdapterPlan {
+    /// Existing pane or spawned shell request; transport stays explicit.
+    Shell {
+        /// Selected adapter, never inferred from generated source.
+        adapter: crate::native_action::RequiredLocalAdapter,
+        /// Shell source owned only by this adapter.
+        plan: LocalActionPlan,
+    },
+    /// Parsed native patch without command text, sidecars or interpreter paths.
+    NativePatch(crate::native_action::NativePatchOperation),
+}
+
+/// Selects an adapter before lowering an action. Native patch planning needs
+/// neither a shell executable nor a filesystem; execution remains product-owned.
+pub fn local_action_adapter_plan(
+    action: &AgentAction,
+    native: bool,
+) -> LocalActionPlanningResult<Option<LocalActionAdapterPlan>> {
+    use crate::native_action::{NativePatchOperation, RequiredLocalAdapter};
+    match &action.payload {
+        AgentActionPayload::ApplyPatch { patch, strip } if native => {
+            NativePatchOperation::parse(patch, *strip)
+                .map(LocalActionAdapterPlan::NativePatch)
+                .map(Some)
+        }
+        AgentActionPayload::ShellCommand { .. } | AgentActionPayload::ApplyPatch { .. } => Ok(
+            local_action_plan(action)?.map(|plan| LocalActionAdapterPlan::Shell {
+                adapter: RequiredLocalAdapter::select(plan.kind, native),
+                plan,
+            }),
+        ),
         _ => Ok(None),
     }
 }

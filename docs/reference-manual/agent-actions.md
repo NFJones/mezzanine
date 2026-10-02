@@ -88,6 +88,14 @@ contracts and direct-launch accounting do not by themselves enable it. Native
 `shell_command` remains an intentional spawned shell; pane/remote patches keep
 their shell adapter. No new action or second native mode is introduced.
 
+The shared matcher now retains exact raw preimages, including CRLF, separately
+from normalized matching text. No-op patches do not normalize line endings.
+The shell-free planning adapter preserves authored order and dependent move
+endpoints, and produces bounded linear full-file unified diffs in Rust rather
+than invoking `diff`. Typed result projection retains confirmations even when
+display is truncated and requires every planned endpoint before success. These
+adapters still await production native filesystem dispatch integration.
+
 The replacement binds approval to exact patch, ordered effects, transaction and
 current authority. It must preserve partial effects and report stalled commits
 as in-flight or unknown, not infer nonexecution from timeout. Runtime filesystem

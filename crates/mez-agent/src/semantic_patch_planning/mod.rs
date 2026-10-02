@@ -1,8 +1,10 @@
-//! Mezzanine patch matching and shell transaction planning.
+//! Shared typed Mezzanine patch matching with native and shell adapters.
 //!
-//! This module owns deterministic interpretation of shell-produced snapshots,
-//! hunk matching and diagnostics, and shell read/write transaction generation.
-//! Product adapters retain pane execution and project error conversion.
+//! This module owns deterministic snapshot matching and diagnostics. Native
+//! planning consumes typed authorized snapshots without shell source; pane
+//! adapters retain snapshot codecs and read/write shell generation. Exact raw
+//! preimages remain separate from normalized matcher text. Product adapters own
+//! filesystem authorization, execution, cancellation and error conversion.
 
 use crate::semantic_patch::{
     MezPatch, MezPatchOperation, SemanticPatchPlanningError, SemanticPatchPlanningResult as Result,
@@ -14,6 +16,8 @@ use base64::Engine;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod matcher;
+/// Shell-free ordered semantic planning and bounded native diff generation.
+pub mod native;
 mod path_resolution;
 mod snapshot;
 #[cfg(test)]
@@ -22,10 +26,12 @@ mod transaction;
 
 use matcher::apply_patch_hunks_to_file;
 use path_resolution::apply_patch_path_resolution_lines;
+pub use snapshot::{
+    ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchSnapshot, ApplyPatchSnapshotState,
+};
 use snapshot::{
-    ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchSnapshot, ApplyPatchTextFile,
-    ensure_missing_state, ensure_regular_state, parse_apply_patch_snapshot_output,
-    snapshot_text_state,
+    ApplyPatchTextFile, ensure_missing_state, ensure_regular_state,
+    parse_apply_patch_snapshot_output, snapshot_text_state,
 };
 pub use transaction::{
     ApplyPatchConfirmedSection, ApplyPatchProgress, ApplyPatchProgressDecoder,
@@ -162,11 +168,12 @@ pub fn parse_apply_patch_file_outcomes(output: &str) -> Result<Vec<ApplyPatchFil
 }
 
 /// Planned per-file patch outcomes after matching hunks against snapshots.
-struct ApplyPatchPlan {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyPatchPlan {
     /// Verified file changes that can be applied independently.
-    changes: Vec<ApplyPatchFileChange>,
+    pub changes: Vec<ApplyPatchFileChange>,
     /// File-specific diagnostics for patch operations that could not be planned.
-    errors: Vec<(String, String)>,
+    pub errors: Vec<(String, String)>,
 }
 
 /// Returns the shell transaction phase represented by a generated apply-patch
@@ -402,7 +409,10 @@ fn apply_patch_parse_error<T>(message: &str) -> Result<T> {
     )))
 }
 
-fn apply_mez_patch_to_snapshots(
+/// Matches shared parsed semantics against typed snapshots without shell source,
+/// filesystem access or executable discovery. Exact captured preimages remain
+/// distinct from normalized matching text. Product adapters authorize snapshots.
+pub fn apply_mez_patch_to_snapshots(
     patch: &MezPatch,
     snapshots: &BTreeMap<String, ApplyPatchSnapshot>,
 ) -> Result<ApplyPatchPlan> {
@@ -431,22 +441,21 @@ fn apply_mez_patch_to_snapshots(
                 "apply_patch: missing remote snapshot for path: {path}"
             ))
         })?;
-        let original_state = match original.get(&path).cloned().flatten() {
-            Some(file) => ApplyPatchOriginalState::Regular(file.into_bytes()),
-            None => ApplyPatchOriginalState::Missing,
+        let original_state = match &snapshot.state {
+            ApplyPatchSnapshotState::Regular(bytes) => {
+                ApplyPatchOriginalState::Regular(bytes.clone())
+            }
+            ApplyPatchSnapshotState::Missing => ApplyPatchOriginalState::Missing,
+            _ => return apply_patch_parse_error("snapshot was not regular or missing"),
         };
         let final_bytes = current
             .get(&path)
             .cloned()
             .flatten()
             .map(|file| file.into_bytes());
-        let unchanged = match (&original_state, &final_bytes) {
-            (ApplyPatchOriginalState::Regular(original), Some(final_bytes)) => {
-                original == final_bytes
-            }
-            (ApplyPatchOriginalState::Missing, None) => true,
-            _ => false,
-        };
+        // A semantic no-op must not normalize line endings merely because
+        // matching text uses LF. Changed files retain raw original bytes above.
+        let unchanged = original.get(&path) == current.get(&path);
         if unchanged {
             continue;
         }
