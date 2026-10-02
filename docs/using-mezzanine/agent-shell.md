@@ -56,7 +56,12 @@ validated log presentation without synthetic streaming previews. Missing
 progress does not suppress or duplicate the completed answer. Provisional
 action previews do not prove execution; rejected source does not become an action
 result. Matching command previews and multiple headers can remain visible
-across acceptance; a final answer following pending actions
+across acceptance. Accepted command previews and summaries stay separate from
+their batch rationale: shell readiness, approval waits, execution failures, and
+settling a live output tail do not erase or replace those intent rows. In a
+multi-action batch, validation retains the already-rendered accepted prefix;
+later actions still follow their normal ordering and execution gates. A final
+answer following pending actions
 stays provisional and is recorded only if those actions complete successfully.
 Failed deferred URL fetches and web searches can enter bounded model correction
 after their in-flight siblings settle. Their results become context rather than

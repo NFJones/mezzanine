@@ -688,7 +688,9 @@ impl RuntimeSessionService {
             || !is_model_shell_command)
             && !is_internal_apply_patch_write_phase
             && !emitted_action_log;
-        if should_emit_fallback_action_status {
+        if should_emit_fallback_action_status
+            && (!is_model_shell_command || !preview_already_presented)
+        {
             let emitted_thinking =
                 self.append_agent_action_model_thinking_to_terminal_buffer(&turn.pane_id, action)?;
             if !emitted_thinking {
@@ -969,7 +971,9 @@ impl RuntimeSessionService {
             || !is_model_shell_command)
             && !is_internal_apply_patch_write_phase
             && !emitted_action_log;
-        if should_emit_fallback_action_status {
+        if should_emit_fallback_action_status
+            && (!is_model_shell_command || !preview_already_presented)
+        {
             let emitted_thinking =
                 self.append_agent_action_model_thinking_to_terminal_buffer(&turn.pane_id, action)?;
             if !emitted_thinking {

@@ -2719,6 +2719,12 @@ the permanent-component ordering barrier: their updates MUST NOT block later
 validated logs, and their exact owner retires on settlement or cancellation.
 Only finalized rationale, action, and result components are permanent: later
 provider revisions, actions, and unrelated pane writes MUST NOT remove them.
+Accepted shell-summary and command-intent rows MUST remain separate from their
+batch rationale and from replaceable output tails. Their retention MUST NOT
+depend on pane shell readiness or on execution still being running. When only
+an ordered prefix of a multi-action response has been projected, validation MUST
+retain that exact accepted prefix without clearing it for later static replay;
+unprojected siblings and execution results retain their own publication gates.
 Source that is merely visible, even if its string or object has closed, remains
 provisional and MAY be removed on malformed or rejected validation, mismatch,
 provider failure, cancellation, retry, claim loss, or interrupted turn. Such

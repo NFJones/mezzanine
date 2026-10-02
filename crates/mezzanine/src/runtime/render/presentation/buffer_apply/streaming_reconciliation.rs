@@ -213,8 +213,10 @@ impl RuntimeSessionService {
         Ok(Self::build_agent_streaming_say_projection(work)?.screen)
     }
 
-    /// Retains exact installed rationale and successful progress predecessors
-    /// when a later component falls back to ordinary completion presentation.
+    /// Retains the exact installed rationale and accepted action prefix when a
+    /// later component falls back to ordinary completion presentation. Command
+    /// intent is retained independently of readiness or execution settlement;
+    /// only already projected, validated source can become a permanent row.
     pub(super) fn retain_validated_streaming_rationale_for_fallback(
         &mut self,
         pane_id: &str,
@@ -244,19 +246,11 @@ impl RuntimeSessionService {
         if presentation.projected_context.as_ref() != Some(&context) {
             return Ok(false);
         }
-        let first_unpromotable = presentation
-            .shell_commands
-            .keys()
-            .chain(presentation.action_headers.keys())
-            .copied()
-            .min()
-            .unwrap_or(usize::MAX);
-        let retained_actions = presentation
+        let mut retained_actions = presentation
             .actions
             .iter()
             .filter(|(index, source)| {
-                **index < first_unpromotable
-                    && source.complete
+                source.complete
                     && source.status == mez_agent::SayStatus::Progress
                     && presentation.projected_actions.as_ref().is_some_and(|rows| {
                         rows.iter().any(|row| {
@@ -281,6 +275,53 @@ impl RuntimeSessionService {
             })
             .map(|(index, source)| (*index, source.clone()))
             .collect::<std::collections::BTreeMap<_, _>>();
+        let mut retained_commands = presentation
+            .shell_commands
+            .iter()
+            .filter(|(index, source)| {
+                source.complete
+                    && presentation.projected_actions.as_ref().is_some_and(|rows| {
+                        rows.iter().any(|row| {
+                            row.action_index == **index
+                                && matches!(
+                                    row.kind,
+                                    crate::runtime::render::RuntimeStreamingSayProjectedActionKind::ShellCommand {
+                                        truncated: false,
+                                    }
+                                )
+                        })
+                    })
+                    && batch.actions.get(**index).is_some_and(|action| {
+                        matches!(&action.payload, AgentActionPayload::ShellCommand {
+                            command, summary, ..
+                        } if command == &source.text
+                            && presentation.shell_summaries.get(index).is_none_or(|source| {
+                                source.complete && &source.text == summary
+                            }))
+                            && execution.action_results.iter().any(|result| {
+                                result.action_id == action.id
+                                    && result.status != mez_agent::ActionStatus::Rejected
+                            })
+                    })
+            })
+            .map(|(index, source)| (*index, source.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        // Retention cannot jump over an unprojected or unaccepted ordinal. In
+        // particular, receipt of later commands does not prove they occupied
+        // the installed screen or authorize promotion ahead of the first one.
+        let first_unpromotable = (0..batch.actions.len())
+            .find(|index| {
+                !retained_actions.contains_key(index) && !retained_commands.contains_key(index)
+            })
+            .unwrap_or(batch.actions.len());
+        retained_actions.retain(|index, _| *index < first_unpromotable);
+        retained_commands.retain(|index, _| *index < first_unpromotable);
+        let retained_summaries = presentation
+            .shell_summaries
+            .iter()
+            .filter(|(index, _)| retained_commands.contains_key(index))
+            .map(|(index, source)| (*index, source.clone()))
+            .collect();
         let work = crate::runtime::RuntimeStreamingSayProjectionWork {
             pane_id: pane_id.to_string(),
             turn_id: turn_id.to_string(),
@@ -292,8 +333,8 @@ impl RuntimeSessionService {
             rationale: rationale.filter(|_| context.thinking_enabled).cloned(),
             actions: retained_actions,
             outbound_messages: std::collections::BTreeMap::new(),
-            shell_commands: std::collections::BTreeMap::new(),
-            shell_summaries: std::collections::BTreeMap::new(),
+            shell_commands: retained_commands,
+            shell_summaries: retained_summaries,
             action_headers: std::collections::BTreeMap::new(),
             thinking_enabled: context.thinking_enabled,
             shell_classification: context.shell_classification,
@@ -331,8 +372,54 @@ impl RuntimeSessionService {
                 .record_agent_streaming_settled_component("rationale");
         }
         for projected in projection.projected_actions {
-            let Some(source) = presentation.actions.get(&projected.action_index) else {
-                continue;
+            let (source, content_type, component) = match projected.kind {
+                crate::runtime::render::RuntimeStreamingSayProjectedActionKind::Say => {
+                    let Some(source) = presentation.actions.get(&projected.action_index) else {
+                        continue;
+                    };
+                    (source.text.as_str(), source.content_type.as_str(), "say")
+                }
+                crate::runtime::render::RuntimeStreamingSayProjectedActionKind::ShellCommand {
+                    truncated: false,
+                } => {
+                    let Some(source) = presentation.shell_commands.get(&projected.action_index)
+                    else {
+                        continue;
+                    };
+                    if context.thinking_enabled
+                        && let Some(summary) =
+                            presentation.shell_summaries.get(&projected.action_index)
+                        && rationale.map(|source| source.text.as_str())
+                            != Some(summary.text.as_str())
+                    {
+                        let lines = agent_thinking_display_lines_for_width(
+                            &summary.text,
+                            context.frame_width,
+                        );
+                        self.persist_agent_presentation_entry(
+                            pane_id,
+                            vec![
+                                AgentTerminalPresentationStyle::Status
+                                    .persistence_name()
+                                    .to_string();
+                                lines.len()
+                            ],
+                            lines,
+                            Vec::new(),
+                            String::new(),
+                            Some((
+                                summary.text.as_str(),
+                                AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
+                            )),
+                        );
+                    }
+                    (
+                        source.text.as_str(),
+                        AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE,
+                        "command",
+                    )
+                }
+                _ => continue,
             };
             self.persist_agent_presentation_entry(
                 pane_id,
@@ -340,12 +427,12 @@ impl RuntimeSessionService {
                 projected.rendered_lines,
                 projected.copy_lines,
                 String::new(),
-                Some((source.text.as_str(), source.content_type.as_str())),
+                Some((source, content_type)),
             );
             promoted.insert(projected.action_index);
             self.integration
                 .runtime_metrics_mut()
-                .record_agent_streaming_settled_component("say");
+                .record_agent_streaming_settled_component(component);
         }
         self.presentation
             .agent_promoted_streaming_say_actions

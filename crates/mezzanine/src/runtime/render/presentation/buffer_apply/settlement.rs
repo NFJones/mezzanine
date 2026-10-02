@@ -360,7 +360,10 @@ impl RuntimeSessionService {
                 .runtime_metrics_mut()
                 .record_agent_streaming_settlement_projection_miss();
         }
-        let command_can_promote = batch.is_some_and(|batch| {
+        // Validated command intent is a permanent log component, not proof of
+        // shell readiness or dispatch. Preserve its exact installed projection
+        // independently of whether execution is pending or already succeeded.
+        let command_can_promote = screen_is_owned && batch.is_some_and(|batch| {
             presentation.rationale.as_ref().is_none_or(|rationale| {
                 rationale.complete && rationale.text == batch.rationale
             })
@@ -380,7 +383,6 @@ impl RuntimeSessionService {
                     })
                 })
                 && !self.agent_verbose_enabled(pane_id)
-                && self.pane_readiness_state(pane_id) == mez_agent::PaneReadinessState::Ready
                 && batch.actions.len()
                     == presentation.shell_commands.len()
                         + presentation.actions.len()
@@ -410,7 +412,7 @@ impl RuntimeSessionService {
                         })
                         && execution.action_results.get(*action_index).is_some_and(|result| {
                             result.action_id == batch.actions[*action_index].id
-                                && result.status == mez_agent::ActionStatus::Running
+                                && matches!(result.status, mez_agent::ActionStatus::Running | mez_agent::ActionStatus::Succeeded)
                         })
                 })
                 && presentation
