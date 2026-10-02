@@ -3447,15 +3447,7 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
     // The child publishes only after exec and atomically renames the report.
     // Do not retry until forbidden values disappear: the first complete report
     // is authoritative even if it exposes a real launch-boundary failure.
-    let mut reported = None;
-    for _ in 0..200 {
-        if let Ok(bytes) = fs::read(&report) {
-            reported = Some(bytes);
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let reported = reported.expect("agent-owned child must publish its environment after exec");
+    let reported = wait_for_first_pane_report(&mut agent_process, &report);
     let agent_environment = reported
         .split(|byte| *byte == b'\n')
         .filter_map(|line| {
@@ -3486,10 +3478,63 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
     let _ = fs::remove_dir_all(root);
 }
 
+/// Waits for the first atomically published report while draining terminal
+/// output. The deadline bounds scheduling/startup latency, not report contents:
+/// a complete report with forbidden values is returned immediately, never retried.
+fn wait_for_first_pane_report(process: &mut mez_mux::process::PaneProcess, path: &Path) -> Vec<u8> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match fs::read(path) {
+            Ok(bytes) => return bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("pane report read failed: {error}"),
+        }
+        let sequence = process.output_activity_sequence();
+        let _ = process.read_available_output(64 * 1024).unwrap();
+        if process.poll_exit().unwrap().is_some() {
+            return fs::read(path).expect("pane exited before publishing its report");
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "pane did not publish its report within ten seconds"
+        );
+        process.wait_for_output_activity_after(sequence, remaining.min(Duration::from_millis(10)));
+    }
+}
+
+/// Delayed publication past the old one-second window must still be observed,
+/// including output that would fill the PTY if the waiter failed to drain it.
+/// The first complete report is authoritative even when it carries a sentinel.
+#[test]
+fn pane_report_wait_drains_output_and_accepts_first_delayed_report() {
+    let root = temp_root("delayed-pane-environment-report");
+    let report = root.join("report");
+    let pending = root.join("pending");
+    let mut service = test_runtime_service();
+    let command = format!(
+        "sleep 1.1; i=0; while [ $i -lt 4096 ]; do printf 'output to drain\\n'; i=$((i+1)); done; printf 'SENTINEL=forbidden\\n' > {}; mv {} {}; exec cat",
+        mez_agent::shell_quote(&pending.to_string_lossy()),
+        mez_agent::shell_quote(&pending.to_string_lossy()),
+        mez_agent::shell_quote(&report.to_string_lossy())
+    );
+    // Explicit pane commands prepend exec; keep the compound script inside
+    // its own shell rather than replacing the process with its first sleep.
+    let command = format!("/bin/sh -c {}", mez_agent::shell_quote(&command));
+    let started = service.start_initial_pane_process(Some(&command)).unwrap();
+    let mut process = service
+        .take_running_pane_process_for_adapter(&started.pane_id)
+        .unwrap();
+    assert_eq!(
+        wait_for_first_pane_report(&mut process, &report),
+        b"SENTINEL=forbidden\n"
+    );
+    process.terminate(Duration::from_millis(100)).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Reads one pane root process's exec-time environment for pane-creation tests.
-///
-/// Host metadata can briefly lag a freshly spawned child, so the read retries
-/// without mutating process-global state or serializing tests.
+/// Host metadata can briefly lag a newly spawned child; no values are filtered.
 fn pane_root_exec_environment(
     process: &mez_mux::process::PaneProcess,
 ) -> Vec<mez_mux::process::RawEnvironmentEntry> {
