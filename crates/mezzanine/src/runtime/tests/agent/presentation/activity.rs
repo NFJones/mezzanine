@@ -397,6 +397,35 @@ fn activity_disclosure_retains_source_and_replays_only_bounded_preview() {
             .normal_content_lines(),
         screen_before
     );
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(40, 12).unwrap())
+        .unwrap();
+    let overlay = service.primary_display_overlay().unwrap();
+    let mut resized_browser = overlay.record_browser.as_ref().unwrap().browser.clone();
+    assert!(resized_browser.is_detail_view());
+    assert_eq!(resized_browser.active_record_id(), Some("1"));
+    let mez_mux::record_browser::RecordBrowserOutcome::CopyRequested { markdown } = resized_browser
+        .apply_action(mez_mux::record_browser::RecordBrowserAction::CopyActive)
+        .unwrap()
+    else {
+        panic!("export expected after resize");
+    };
+    assert_eq!(markdown, exported);
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(80, 24).unwrap())
+        .unwrap();
+    let observer = service
+        .session
+        .attach_observer_with_terminal("activity-observer", None, 121)
+        .unwrap();
+    service
+        .prepare_client_render(&observer, ClientViewRole::Observer)
+        .unwrap();
+    assert!(service.primary_display_overlay().is_none());
+    service
+        .prepare_client_render(&primary, ClientViewRole::Primary)
+        .unwrap();
+    assert!(service.active_record_browser_is_detail());
     let other = service
         .attach_primary("other", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
