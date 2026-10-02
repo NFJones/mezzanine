@@ -1304,15 +1304,23 @@ impl RuntimeSessionService {
                     prose_width,
                 )));
             };
-            self.presentation.copy.paste_buffers.set_with_origin(
-                "record-browser",
-                &markdown,
-                Some("display-overlay:record-browser".to_string()),
-            )?;
+            let buffer_error = self
+                .presentation
+                .copy
+                .paste_buffers
+                .set_with_origin(
+                    "record-browser",
+                    &markdown,
+                    Some("display-overlay:record-browser".to_string()),
+                )
+                .err();
             if !self.presentation.copy.host_clipboard.copy(&markdown) {
-                record_browser.browser.set_error(Some(
-                    "Could not copy the focused record to the host clipboard.".to_string(),
-                ));
+                let message = if buffer_error.is_some() {
+                    "Could not copy the focused record to the host clipboard; the export also exceeds the internal buffer limit. The previous buffer and retained source are unchanged."
+                } else {
+                    "Could not copy the focused record to the host clipboard."
+                };
+                record_browser.browser.set_error(Some(message.to_string()));
                 return Ok(Some(render_record_browser_overlay(
                     overlay,
                     &mut self.presentation.overlay_action_registry,
@@ -1330,7 +1338,11 @@ impl RuntimeSessionService {
                 prose_width,
             );
             self.show_primary_notice_overlay(vec![
-                "Focused record copied to clipboard.".to_string(),
+                if buffer_error.is_some() {
+                    "Focused record queued for clipboard copy; too large for the internal buffer, which is unchanged.".to_string()
+                } else {
+                    "Focused record copied to clipboard.".to_string()
+                },
             ])?;
             return Ok(Some(changed));
         }

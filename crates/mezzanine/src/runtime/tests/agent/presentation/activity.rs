@@ -2,6 +2,179 @@
 
 use super::*;
 
+/// Keyboard export must deliver exact activity JSON even when it exceeds the
+/// internal paste-buffer cap. The cap stays intact, an existing buffer survives,
+/// and disclosure/history ownership does not change during clipboard delivery.
+#[test]
+fn activity_large_keyboard_export_preserves_exact_destination_and_history() {
+    use crate::storage::transcript::activity::{
+        ACTIVITY_CONTENT_TYPE, ActivityComponentKind, ActivitySource,
+    };
+    let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
+    TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
+    let mut service = test_runtime_service();
+    *service.host_clipboard_mut_for_tests() =
+        HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .prepare_client_render(&primary, ClientViewRole::Primary)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let store = AgentTranscriptStore::new(temp_root("activity-large-keyboard-export"))
+        .with_presentation_compaction_threshold(16 * 1024 * 1024)
+        .unwrap();
+    service.set_agent_transcript_store(store.clone());
+    let source = ActivitySource {
+        version: 1,
+        conversation_id: conversation.clone(),
+        turn_id: "turn".into(),
+        response_id: "response".into(),
+        action_id: Some("action".into()),
+        action_ordinal: Some(0),
+        transaction: None,
+        mutation: None,
+        kind: ActivityComponentKind::Result,
+        status: "succeeded".into(),
+        content_type: "text/plain; charset=utf-8".into(),
+        source: "exact payload 雪\r\n".repeat(70_000),
+        preview_source: Some("bounded preview".into()),
+        intent: Default::default(),
+    };
+    store
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            conversation_id: conversation.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            pane_id: "%1".into(),
+            turn_id: Some("turn".into()),
+            terminal_width: 80,
+            style_names: vec!["status".into()],
+            display_lines: vec!["bounded preview".into()],
+            copy_lines: Vec::new(),
+            ansi_text: None,
+            source_text: Some(source.encode().unwrap()),
+            source_content_type: Some(ACTIVITY_CONTENT_TYPE.into()),
+        })
+        .unwrap();
+    let before = store.inspect_presentation(&conversation).unwrap();
+    let read = crate::runtime::commands::read_context_browser_for_command(
+        &store,
+        &conversation,
+        "%1",
+        "/show-context activity",
+    )
+    .unwrap();
+    let mut browser = read.browser;
+    let mez_mux::record_browser::RecordBrowserOutcome::CopyRequested { markdown: expected } =
+        browser
+            .apply_action(mez_mux::record_browser::RecordBrowserAction::CopyActive)
+            .unwrap()
+    else {
+        panic!("exact export expected");
+    };
+    assert!(expected.len() > mez_mux::paste::DEFAULT_PASTE_BUFFER_LIMIT_BYTES);
+    service
+        .paste_buffers_mut()
+        .set("record-browser", "prior buffer")
+        .unwrap();
+    service.register_pending_record_browser_overlay("%1", "show-context", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        "%1",
+        "/show-context activity",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-context".into(),
+            body: read.markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests("%1", &response)
+        .unwrap();
+    let step = AttachedTerminalClientStepPlan {
+        actions: vec![TerminalClientLoopAction::ForwardToPane(b"y".to_vec())],
+        output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+    service
+        .apply_attached_terminal_step_plan(&primary, &step)
+        .unwrap();
+    assert_eq!(
+        TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().as_slice(),
+        [expected.as_str()]
+    );
+    assert_eq!(
+        service.paste_buffers().get("record-browser"),
+        Some("prior buffer")
+    );
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(
+        overlay
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .active_record_id(),
+        Some("1")
+    );
+    assert!(
+        !overlay
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .is_detail_view()
+    );
+    assert!(
+        service
+            .primary_error_status_overlay()
+            .unwrap()
+            .contains("internal buffer")
+    );
+    *service.host_clipboard_mut_for_tests() =
+        HostClipboard::new(record_failed_host_clipboard_copy, empty_host_clipboard_read);
+    service
+        .apply_attached_terminal_step_plan(&primary, &step)
+        .unwrap();
+    assert_eq!(
+        TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().as_slice(),
+        [expected.as_str(), expected.as_str()]
+    );
+    assert_eq!(
+        service.paste_buffers().get("record-browser"),
+        Some("prior buffer")
+    );
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("Could not copy"))
+    );
+    assert_eq!(
+        overlay
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .active_record_id(),
+        Some("1")
+    );
+    assert_eq!(store.inspect_presentation(&conversation).unwrap(), before);
+}
+
 /// Accepted command intent is durable before any result exists. The ordered
 /// producer publishes it once, records acceptance rather than success, and
 /// replay uses the ordinary command renderer without changing its source.

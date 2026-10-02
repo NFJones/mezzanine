@@ -66,6 +66,10 @@ to the list without altering conversation logs. `/show-context activity <sequenc
 opens the activity containing that presentation sequence. Press `y` to export
 versioned JSON with ordered presentation sequences and exact activity sources;
 JSON escaping preserves source bytes without adding display headings or gutters.
+Exports larger than the internal paste-buffer cap still go intact to the
+clipboard adapter; the previous internal buffer stays unchanged and a notice
+explains why. Adapter failure stays visible in the browser. Queuing a clipboard
+copy does not acknowledge desktop delivery.
 Other record browsers still copy their detail Markdown. Details distinguish
 accepted intent from observed outcomes and retain source beyond the bounded live
 preview where available. The snapshot reads at most the latest 200 cleartext

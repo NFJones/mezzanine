@@ -2624,7 +2624,12 @@ detail; Escape returns to the preserved list. Activity `y` copy MUST export
 version-one JSON containing ordered `(presentation sequence, activity source)`
 components, preserving exact source bytes reversibly rather than copying display
 headings, fences or gutters. Other record browsers retain their detail-Markdown
-copy contract. These controls MUST NOT mutate
+copy contract. An export exceeding the internal paste-buffer limit MUST NOT
+prevent exact clipboard-adapter delivery or truncate evidence. The previous
+buffer MUST remain unchanged, with a visible notice explaining the omission;
+clipboard admission failure MUST remain visible without closing the browser.
+Clipboard admission is not an acknowledgment of desktop delivery.
+These controls MUST NOT mutate
 execution, approvals, model context, chronology, log level or the conversation
 screen. Payload text cannot register controls. Reads occur at explicit command
 preparation, off actor ownership for attached commands, never in rendering.
