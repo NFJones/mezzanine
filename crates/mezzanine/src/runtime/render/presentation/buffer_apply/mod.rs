@@ -2141,6 +2141,18 @@ impl RuntimeSessionService {
         action: &AgentAction,
         header: &str,
     ) -> Result<()> {
+        self.append_agent_action_header_with_activity(pane_id, action, header, None)
+    }
+
+    /// Renders an executor-admitted header with explicit response ownership.
+    /// Existing promotion fences still prevent another write of accepted rows.
+    pub(in crate::runtime) fn append_agent_action_header_with_activity(
+        &mut self,
+        pane_id: &str,
+        action: &AgentAction,
+        header: &str,
+        activity: Option<crate::storage::transcript::activity::ActivitySource>,
+    ) -> Result<()> {
         // Only the execution owner can settle a provider-projected header.
         // Matching the turn, action id and final display text prevents a
         // provisional preview from becoming execution evidence by itself.
@@ -2170,11 +2182,24 @@ impl RuntimeSessionService {
         }
         let rendered_line =
             agent_action_execution_rendered_line(header, &self.presentation.settings.ui_theme);
+        let encoded = activity.and_then(|mut source| {
+            source.content_type = AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE.to_string();
+            source.source = header.to_string();
+            source.encode().ok()
+        });
         self.append_agent_terminal_log_rendered_lines_to_buffer(
             pane_id,
             AgentTerminalPresentationStyle::Status,
             &[rendered_line],
-            Some((header, AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE)),
+            Some(encoded.as_deref().map_or(
+                (header, AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE),
+                |source| {
+                    (
+                        source,
+                        crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE,
+                    )
+                },
+            )),
         )?;
         Ok(())
     }

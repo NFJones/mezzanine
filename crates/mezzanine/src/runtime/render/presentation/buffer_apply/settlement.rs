@@ -247,22 +247,12 @@ impl RuntimeSessionService {
                 for index in 0..batch.actions.len() {
                     if index == header_index {
                         if !rejected_header {
-                            self.persist_agent_presentation_entry(
-                                pane_id,
-                                vec![
-                                    AgentTerminalPresentationStyle::Status
-                                        .persistence_name()
-                                        .to_string();
-                                    rendered_lines.len()
-                                ],
-                                rendered_lines.clone(),
-                                Vec::new(),
-                                String::new(),
-                                Some((
-                                    &accepted_header,
-                                    AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE,
-                                )),
-                            );
+                            self.persist_activity_action_projection(
+                                pane_id, execution,
+                                (index, crate::storage::transcript::activity::ActivityComponentKind::Header),
+                                (AgentTerminalPresentationStyle::Status.persistence_name().to_string(), rendered_lines.clone(), Vec::new()),
+                                (&accepted_header, AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE),
+                            )?;
                             self.integration
                                 .runtime_metrics_mut()
                                 .record_agent_streaming_settled_component("header");
@@ -676,22 +666,25 @@ impl RuntimeSessionService {
                     .into_iter()
                     .map(|wrapped| wrapped.line.display)
                     .collect::<Vec<_>>();
-                    self.persist_agent_presentation_entry(
+                    self.persist_activity_action_projection(
                         pane_id,
-                        vec![
+                        execution,
+                        (
+                            index,
+                            crate::storage::transcript::activity::ActivityComponentKind::Header,
+                        ),
+                        (
                             AgentTerminalPresentationStyle::Status
                                 .persistence_name()
-                                .to_string();
-                            rendered_lines.len()
-                        ],
-                        rendered_lines.clone(),
-                        Vec::new(),
-                        String::new(),
-                        Some((
+                                .to_string(),
+                            rendered_lines.clone(),
+                            Vec::new(),
+                        ),
+                        (
                             &static_header,
                             AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE,
-                        )),
-                    );
+                        ),
+                    )?;
                     self.integration
                         .runtime_metrics_mut()
                         .record_agent_streaming_settled_component("header");
@@ -849,19 +842,22 @@ impl RuntimeSessionService {
                 .into_iter()
                 .map(|wrapped| wrapped.line.display)
                 .collect::<Vec<_>>();
-                self.persist_agent_presentation_entry(
+                self.persist_activity_action_projection(
                     pane_id,
-                    vec![
+                    execution,
+                    (
+                        index,
+                        crate::storage::transcript::activity::ActivityComponentKind::Header,
+                    ),
+                    (
                         AgentTerminalPresentationStyle::Status
                             .persistence_name()
-                            .to_string();
-                        rendered_lines.len()
-                    ],
-                    rendered_lines,
-                    Vec::new(),
-                    String::new(),
-                    Some((&header, AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE)),
-                );
+                            .to_string(),
+                        rendered_lines,
+                        Vec::new(),
+                    ),
+                    (&header, AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE),
+                )?;
                 self.presentation.agent_accepted_streaming_headers.insert(
                     (pane_id.to_string(), turn_id.to_string(), action.id.clone()),
                     header,

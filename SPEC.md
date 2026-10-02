@@ -2595,6 +2595,8 @@ action ordinal; source wrapping MUST NOT repaint accepted rows or duplicate
 them at settlement. Action summaries MUST retain their accepted action ordinal
 and remain distinct from response-wide rationale. Promoted summaries and command
 intent MUST preserve the same source order and renderer as static presentation.
+Ordered and promoted action headers MUST retain their accepted action identity;
+header receipt MUST NOT invent execution success or an executor transaction.
 Command components MUST report `accepted`,
 not infer running or success before executor evidence. Their bounded source and
 omission state MUST replay through the ordinary command renderer. The current

@@ -50,7 +50,9 @@ settlement and response-wide rationale. Rationale retains its response identity
 whether it arrived through streaming or a complete response; it does not claim
 an action or executor attempt. Accepted action summaries retain their action
 ordinal separately from response-wide rationale. Promoted summaries and command
-previews keep their original source order and renderer. An `accepted` command
+previews keep their original source order and renderer. Accepted action headers
+also retain action identity without implying execution success or an attempt.
+An `accepted` command
 is not evidence of execution or success.
 Enter or click a row to open detail; Escape returns
 to the list without altering conversation logs. `/show-context activity <sequence>`

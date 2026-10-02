@@ -742,10 +742,16 @@ impl RuntimeSessionService {
                     continue;
                 };
                 if !header.is_empty() {
-                    self.append_agent_action_execution_header_to_terminal_buffer(
+                    let activity = self.activity_action_source(
+                        pane_id, execution, index,
+                        crate::storage::transcript::activity::ActivityComponentKind::Header,
+                        (&header, "application/vnd.mezzanine.agent-presentation.action-header+text; charset=utf-8"),
+                    )?;
+                    self.append_agent_action_header_with_activity(
                         pane_id,
                         &approved_action,
                         &header,
+                        activity,
                     )?;
                 }
                 self.presentation

@@ -564,7 +564,8 @@ async fn streaming_progress_and_header_case_with_outcome(
     assert_eq!(
         entries
             .iter()
-            .filter(|entry| entry.source_text.as_deref() == Some("web search: matching query"))
+            .filter(|entry| presentation_semantic_source(entry).as_deref()
+                == Some("web search: matching query"))
             .count(),
         usize::from(!blocked)
     );

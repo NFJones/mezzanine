@@ -177,7 +177,8 @@ async fn runtime_streaming_matching_header_survives_reconciliation() {
     assert_eq!(
         entries
             .iter()
-            .filter(|entry| entry.source_text.as_deref() == Some("web search: matching header"))
+            .filter(|entry| presentation_semantic_source(entry).as_deref()
+                == Some("web search: matching header"))
             .count(),
         1,
         "{entries:?}"
@@ -185,12 +186,28 @@ async fn runtime_streaming_matching_header_survives_reconciliation() {
     assert_eq!(
         entries
             .iter()
-            .filter(
-                |entry| entry.source_text.as_deref() == Some("web search: second matching header")
-            )
+            .filter(|entry| presentation_semantic_source(entry).as_deref()
+                == Some("web search: second matching header"))
             .count(),
         1
     );
+    use crate::storage::transcript::activity::{
+        ACTIVITY_CONTENT_TYPE, ActivityComponentKind, ActivitySource,
+    };
+    let headers = entries
+        .iter()
+        .filter(|entry| entry.source_content_type.as_deref() == Some(ACTIVITY_CONTENT_TYPE))
+        .map(|entry| ActivitySource::decode(entry.source_text.as_deref().unwrap()).unwrap())
+        .filter(|source| source.kind == ActivityComponentKind::Header)
+        .collect::<Vec<_>>();
+    assert_eq!(headers.len(), 2);
+    assert_eq!(headers[0].response_id, headers[1].response_id);
+    assert_ne!(headers[0].action_id, headers[1].action_id);
+    for (ordinal, header) in headers.iter().enumerate() {
+        assert_eq!(header.action_ordinal, Some(ordinal));
+        assert_eq!(header.status, "accepted");
+        assert!(header.transaction.is_none());
+    }
 }
 
 /// A changed accepted header must instead replace the unvalidated preview,
@@ -509,7 +526,7 @@ async fn runtime_streaming_header_mismatch_retains_matching_progress() {
         assert_eq!(
             entries
                 .iter()
-                .filter(|entry| entry.source_text.as_deref() == Some(source))
+                .filter(|entry| presentation_semantic_source(entry).as_deref() == Some(source))
                 .count(),
             1,
             "{entries:?}"
