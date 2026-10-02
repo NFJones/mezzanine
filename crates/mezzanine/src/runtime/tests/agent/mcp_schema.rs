@@ -434,6 +434,9 @@ fn service_with_marker_hook(marker: &Path) -> RuntimeSessionService {
         }])
         .unwrap();
     assert_eq!(report.hooks_configured, 1);
+    // This fixture protects executable-hook ordering in the pane adapter;
+    // native basic-action hooks are explicitly unavailable without launching.
+    service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Pane));
     service
 }
 

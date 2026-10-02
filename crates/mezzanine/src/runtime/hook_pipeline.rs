@@ -1,8 +1,10 @@
-//! Runtime Hook Pipeline implementation.
+//! Runtime hook admission, execution and failure projection.
 //!
-//! This module owns the runtime hook pipeline boundary for Mezzanine. It keeps related
-//! state transitions and helper routines localized so neighboring modules
-//! interact through typed APIs instead of duplicating subsystem details.
+//! Native basic-action events cannot queue or launch executable handlers.
+//! Required pre-action protections fail closed, optional/completed handlers are
+//! diagnosed without erasing effects, and pane/actual-shell integrations retain
+//! their existing boundaries. Runtime action and approval ownership distinguish
+//! semantic operations from legacy shell-shaped payloads before admission.
 
 use super::{
     AuditActor, BTreeSet, DEFAULT_PTY_READ_LIMIT_BYTES, Duration, EventKind, EventVisibility,
@@ -19,6 +21,90 @@ use super::{
 // Configured pre-action and completion hook execution.
 
 impl RuntimeSessionService {
+    /// Determines whether this agent event belongs to a native basic-action
+    /// path. Runtime action/approval ownership overrides shell-shaped payload
+    /// labels used by the legacy patch adapter. UI lifecycle integrations are
+    /// outside this gate; actual shell-command hooks remain intentional work.
+    fn native_basic_hook_path(&self, event: HookEvent, payload: &str) -> bool {
+        if !matches!(
+            event,
+            HookEvent::UserPromptSubmit
+                | HookEvent::AgentTurnStart
+                | HookEvent::AgentTurnStop
+                | HookEvent::PermissionRequest
+                | HookEvent::PermissionDecision
+                | HookEvent::PreShellCommand
+                | HookEvent::PostShellCommand
+                | HookEvent::PreMcpToolUse
+                | HookEvent::PostMcpToolUse
+        ) {
+            return false;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+            return false;
+        };
+        let approval = value
+            .get("approval_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| self.blocked_approvals().get(id));
+        let pane = runtime_hook_target_pane_id(payload)
+            .or_else(|| {
+                value
+                    .get("turn_id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|id| self.agent_turn_ledger().turn(id))
+                    .map(|turn| turn.pane_id.clone())
+            })
+            .or_else(|| approval.map(|approval| approval.pane_id.clone()));
+        let Some(pane) = pane else {
+            return false;
+        };
+        if self.effective_agent_shell_mode_for_pane(&pane)
+            != crate::runtime::config::ShellMode::Native
+        {
+            return false;
+        }
+        let action_kind = value
+            .get("turn_id")
+            .and_then(serde_json::Value::as_str)
+            .zip(value.get("action_id").and_then(serde_json::Value::as_str))
+            .and_then(|(turn, id)| {
+                self.agent_turn_executions()
+                    .get(turn)
+                    .and_then(|execution| execution.response.action_batch.as_ref())
+                    .and_then(|batch| batch.actions.iter().find(|action| action.id == id))
+                    .map(|action| action.action_type())
+            })
+            .or_else(|| approval.map(|approval| approval.action_kind.as_str()))
+            .or_else(|| {
+                value
+                    .get("semantic_action_type")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .or_else(|| value.get("action_type").and_then(serde_json::Value::as_str));
+        action_kind != Some("shell_command")
+    }
+
+    /// Emits a bounded incompatibility diagnostic without running or queueing
+    /// an executable handler. Completed effects are never rolled back.
+    fn record_native_hook_incompatibility(&mut self, plan: &HookExecutionPlan) -> Result<()> {
+        self.append_lifecycle_event(EventKind::HookFailed, serde_json::json!({
+            "hook_id": plan.hook_id, "hook_event": runtime_hook_event_name(plan.event),
+            "failure_kind": "native_process_incompatible", "retryable": false,
+            "message": "executable hook unavailable on native basic-action path; no handler ran",
+        }).to_string())?;
+        if let Some(pane) = plan.target_pane_id.as_deref() {
+            self.append_agent_status_text_to_terminal_buffer(
+                pane,
+                &format!(
+                    "agent: executable hook `{}` unavailable on native basic-action path",
+                    plan.hook_id
+                ),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Runs the append primary lifecycle event operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -81,6 +167,10 @@ impl RuntimeSessionService {
         )?;
         for mut plan in event_plan.plans {
             plan.target_pane_id = runtime_hook_target_pane_id(event_payload_json);
+            if self.native_basic_hook_path(event, event_payload_json) {
+                self.record_native_hook_incompatibility(&plan)?;
+                continue;
+            }
             if plan.run_in_focused_shell {
                 let _ = self
                     .integration
@@ -165,6 +255,22 @@ impl RuntimeSessionService {
         )?;
         for mut plan in event_plan.plans {
             plan.target_pane_id = runtime_hook_target_pane_id(event_payload_json);
+            if self.native_basic_hook_path(event, event_payload_json) {
+                let required = self
+                    .integration
+                    .hook_definitions()
+                    .iter()
+                    .any(|definition| definition.id == plan.hook_id && definition.required);
+                self.record_native_hook_incompatibility(&plan)?;
+                if required || plan.on_failure == HookOnFailure::Block {
+                    return Ok(RuntimeHookPipelineDecision::Block(RuntimeHookPipelineBlock {
+                        hook_id: plan.hook_id, event,
+                        failure_kind: HookFailureKind::ShellUnavailable,
+                        message: "required executable gate is incompatible with native basic-action execution; no handler ran".to_string(),
+                    }));
+                }
+                continue;
+            }
             if let Some(continuation) = continuation.as_ref()
                 && self.agent_pre_shell_hook_completed(continuation, &plan.hook_id)
             {

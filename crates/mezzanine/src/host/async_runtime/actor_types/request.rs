@@ -885,6 +885,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     /// Credential refresh and MCP discovery run outside the serialized actor.
     /// The later claim request applies the outcome and revalidates turn state.
     PrepareConfiguredAgentProviderTask {
+        /// Exact turn whose pane determines native integration admission.
+        turn_id: String,
         /// Returns the immutable preparation inputs extracted from actor state.
         reply: oneshot::Sender<Result<RuntimeAgentProviderPreparationWork>>,
     },

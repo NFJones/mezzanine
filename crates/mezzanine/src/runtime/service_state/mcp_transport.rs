@@ -17,6 +17,8 @@ use std::collections::BTreeMap;
 pub(crate) struct RuntimeAgentProviderPreparationWork {
     /// Configured MCP startup plans that still require discovery.
     pub(crate) mcp_plans: Vec<McpStartupPlan>,
+    /// Whether this explicit preparation path admits stdio process startup.
+    pub(crate) allow_stdio: bool,
     /// Environment used to resolve configured MCP transport inputs.
     pub(crate) environment: BTreeMap<String, String>,
     /// Optional credential store shared by provider and authenticated MCP setup.

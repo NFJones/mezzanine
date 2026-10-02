@@ -1742,8 +1742,8 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
-            AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask { reply } => {
-                let result = self.service.prepare_agent_provider_work();
+            AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask { turn_id, reply } => {
+                let result = self.service.prepare_agent_provider_work(&turn_id);
                 let _ = reply.send(result);
                 false
             }

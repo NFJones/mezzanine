@@ -8330,6 +8330,24 @@ literal shell-command-only launch policy MUST reject incompatible integrations
 rather than silently expanding these exclusions. HTTP integrations and passive
 MCP metadata remain runtime-owned, subject to their existing permission gates.
 
+Native provider preparation MUST leave pending stdio servers configured and
+MUST NOT start them implicitly. HTTP discovery remains admitted through the
+existing network/credential boundary. Explicit `/list-mcp`, retry and configured
+session startup are intentional integration initialization, separate from basic
+action preparation; an already initialized stdio transport remains an explicit
+MCP integration, not a filesystem helper. Passive server search/get MUST NOT
+initialize either transport or invent a callable schema for deferred discovery.
+Native basic-action prompt, turn, permission, semantic patch and MCP hook paths
+MUST NOT execute or queue program/focused-shell handlers. Required or blocking
+pre-action handlers MUST fail closed with an incompatibility diagnostic even
+when a required handler declares warn/ignore. Optional and post-action handlers
+MUST report that no handler ran without erasing committed effects. Actual
+shell-command hook paths and pane-mode hooks retain their existing execution
+rules. Legacy shell-shaped patch hook payloads retain `action_type` and add
+`semantic_action_type` to distinguish the original action; current runtime
+action/approval ownership remains authoritative for admission. No new config
+field, event name or second native mode is introduced by this gate.
+
 Native launch accounting MUST distinguish direct attempts from successful
 creations and unavailable evidence from zero. Actor-selected launch reasons
 MUST distinguish shell commands, legacy patch shells, sandbox probes and
@@ -12681,6 +12699,12 @@ its `on_failure` policy.
 
 Non-agent hooks MAY invoke arbitrary programs outside the pane shell according
 to user configuration and policy.
+
+The native basic-action admission restriction in the process-free semantic
+adapter contract takes precedence over the executable hook rules below. A
+required incompatible pre-action gate blocks; an optional or completed handler
+is diagnosed without execution. UI/session lifecycle and actual shell-command
+integrations retain their separately admitted process boundaries.
 
 Agent hooks MUST execute through the regular agent shell action loop. If an
 agent hook is configured as a shell invocation, it MUST be queued for the

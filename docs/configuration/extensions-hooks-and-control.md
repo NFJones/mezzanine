@@ -35,6 +35,21 @@ an operation that has not completed; after the triggering event has completed,
 the same failure is reported as a warning. Inspect hook failures with
 `show-messages` and audit records rather than assuming an event completed.
 
+Native basic-action paths do not execute or queue program/focused-shell hooks
+for prompt, turn, permission, semantic patch or MCP events. A required or
+blocking pre-action handler blocks explicitly as incompatible, including a
+required handler configured with warn/ignore. Optional and completion handlers
+report that no handler ran; completed effects are not rolled back. Hooks for
+actual shell commands and pane-mode actions retain their existing behavior.
+Legacy patch shell-event payloads keep `action_type = shell_command` and add
+`semantic_action_type = apply_patch`; runtime ownership determines admission.
+No configuration field or event name changed.
+
+Pane creation, external editors, clipboard/status commands and session/UI
+lifecycle hooks are intentional process integrations outside the filesystem
+guarantee, not hidden exceptions that a native patch may use as helpers. This
+does not promise a globally process-free terminal multiplexer.
+
 Synchronous program-hook output capture is cancellation-aware: a timed-out hook
 does not wait for pipe EOF from escaped descendants. After normal child exit,
 both output readers share a bounded drain grace period. If that drain cannot

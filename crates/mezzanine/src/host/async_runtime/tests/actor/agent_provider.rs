@@ -44,7 +44,7 @@ done"#,
             scope: ConfigScope::Primary,
             trusted: true,
             text: format!(
-                "[mcp_servers.fixture]\ncommand = \"/bin/sh\"\nargs = [\"-c\", {}]\nstartup_timeout_ms = 5000\napproval = \"allow\"\n",
+                "[agents]\nshell_mode = \"pane\"\n[mcp_servers.fixture]\ncommand = \"/bin/sh\"\nargs = [\"-c\", {}]\nstartup_timeout_ms = 5000\napproval = \"allow\"\n",
                 serde_json::to_string(&script).unwrap()
             ),
         }])
@@ -59,6 +59,8 @@ done"#,
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    // This fixture deliberately exercises pane-mode implicit stdio discovery;
+    // native provider preparation does not launch executable integrations.
     service
         .execute_agent_shell_command(&primary, "exercise slow provider preparation")
         .unwrap();

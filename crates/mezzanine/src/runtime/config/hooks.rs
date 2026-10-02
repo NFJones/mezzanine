@@ -72,11 +72,12 @@ pub(crate) fn runtime_pre_shell_hook_payload(
     command: &str,
 ) -> String {
     format!(
-        r#"{{"turn_id":"{}","agent_id":"{}","pane_id":"{}","action_id":"{}","action_type":"shell_command","command":"{}","command_sha256":"{}"}}"#,
+        r#"{{"turn_id":"{}","agent_id":"{}","pane_id":"{}","action_id":"{}","action_type":"shell_command","semantic_action_type":"{}","command":"{}","command_sha256":"{}"}}"#,
         json_escape(&turn.turn_id),
         json_escape(&turn.agent_id),
         json_escape(&turn.pane_id),
         json_escape(&action.id),
+        action.action_type(),
         json_escape(command),
         exact_command_sha256(DEFAULT_COMMAND_SHELL_CLASSIFICATION, command)
     )
@@ -94,11 +95,12 @@ pub(crate) fn runtime_post_shell_hook_payload(
     exit_code: i32,
 ) -> String {
     format!(
-        r#"{{"turn_id":"{}","agent_id":"{}","pane_id":"{}","action_id":"{}","action_type":"shell_command","status":"{:?}","is_error":{},"exit_code":{}}}"#,
+        r#"{{"turn_id":"{}","agent_id":"{}","pane_id":"{}","action_id":"{}","action_type":"shell_command","semantic_action_type":"{}","status":"{:?}","is_error":{},"exit_code":{}}}"#,
         json_escape(&turn.turn_id),
         json_escape(&turn.agent_id),
         json_escape(&turn.pane_id),
         json_escape(&action.id),
+        action.action_type(),
         result.status,
         result.is_error,
         exit_code

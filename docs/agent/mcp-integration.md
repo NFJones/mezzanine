@@ -25,6 +25,15 @@ so ordinary agent work continues with a reduced tool catalog. `/list-mcp`
 shows the failure reason and whether retry is available; an explicit retry or
 re-enable can attempt discovery again.
 
+Native provider preparation does not implicitly start pending stdio servers.
+Their configured directory metadata remains visible, but no callable tools are
+invented before discovery. Use explicit `/list-mcp` or retry to initialize an
+integration; configured session startup is also an intentional integration
+boundary. Already initialized stdio transports remain available through the
+normal explicit MCP call/approval path. HTTP preparation retains its direct
+network and credential checks. `mcp_server_search` and `mcp_server_get` remain
+passive metadata operations and never start transports themselves.
+
 ## Discover and use tools for one task
 
 Use `mcp_server_search` when the relevant configured server is not already

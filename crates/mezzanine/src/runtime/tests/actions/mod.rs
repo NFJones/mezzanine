@@ -9,6 +9,7 @@ mod issues;
 mod mcp;
 mod memory;
 mod messaging;
+mod native_integrations;
 mod native_lifecycle;
 mod network;
 mod patch;

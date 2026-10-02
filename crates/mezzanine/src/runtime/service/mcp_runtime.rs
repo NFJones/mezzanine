@@ -39,6 +39,7 @@ impl RuntimeSessionService {
     ) -> RuntimeAgentProviderPreparationOutcome {
         let RuntimeAgentProviderPreparationWork {
             mcp_plans,
+            allow_stdio,
             environment,
             auth_store,
             provider_auth_refresh_leeway_seconds,
@@ -50,6 +51,9 @@ impl RuntimeSessionService {
         for plan in mcp_plans {
             let server_id = plan.server_id.clone();
             let result = match &plan.transport {
+                McpStartupTransportPlan::Stdio { .. } if !allow_stdio => Err(MezError::forbidden(
+                    "native provider preparation cannot start stdio MCP; use explicit MCP discovery",
+                )),
                 McpStartupTransportPlan::Stdio { .. } => {
                     async {
                         let mut connection =
@@ -204,21 +208,32 @@ impl RuntimeSessionService {
     /// worker, while the actor remains available for lifecycle requests.
     pub(crate) fn prepare_agent_provider_work(
         &mut self,
+        turn_id: &str,
     ) -> Result<RuntimeAgentProviderPreparationWork> {
-        self.prepare_external_provider_work(true)
+        let pane_id = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.pane_id.clone())
+            .ok_or_else(|| MezError::invalid_state("provider preparation turn is unavailable"))?;
+        let allow_stdio = self.effective_agent_shell_mode_for_pane(&pane_id)
+            != crate::runtime::config::ShellMode::Native;
+        self.prepare_external_provider_work(true, allow_stdio)
     }
 
     /// Extracts MCP-only discovery work for commands that do not need provider auth refresh.
     pub(crate) fn prepare_runtime_mcp_discovery_work(
         &mut self,
     ) -> Result<RuntimeAgentProviderPreparationWork> {
-        self.prepare_external_provider_work(false)
+        self.prepare_external_provider_work(false, true)
     }
 
     /// Extracts one immutable external-preparation snapshot from actor state.
     fn prepare_external_provider_work(
         &mut self,
         refresh_provider_credential: bool,
+        allow_stdio: bool,
     ) -> Result<RuntimeAgentProviderPreparationWork> {
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let auth_store = self.integration.auth_store().cloned();
@@ -235,7 +250,16 @@ impl RuntimeSessionService {
         let result = (|| {
             let server_ids = runtime_mcp_pending_discovery_server_ids(&registry, |server| {
                 runtime_mcp_server_has_live_auth_recovery(server, auth_store.as_ref())
-            });
+            })
+            .into_iter()
+            .filter(|server_id| {
+                allow_stdio
+                    || registry.list_servers().iter().any(|server| {
+                        server.configured.id == *server_id
+                            && server.configured.kind == mez_agent::mcp::McpServerKind::Http
+                    })
+            })
+            .collect::<Vec<_>>();
             if !server_ids.is_empty() {
                 self.append_runtime_mcp_initialization_started_event(
                     "runtime-mcp-ensure",
@@ -278,6 +302,7 @@ impl RuntimeSessionService {
             }
             Ok(RuntimeAgentProviderPreparationWork {
                 mcp_plans: plans,
+                allow_stdio,
                 environment,
                 auth_store,
                 provider_auth_refresh_leeway_seconds: leeway_seconds,

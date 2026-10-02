@@ -998,7 +998,12 @@ impl AsyncRuntimeSessionHandle {
         turn_id: String,
     ) -> Result<Option<RuntimeAgentProviderDispatch>> {
         let preparation = self
-            .request(|reply| AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask { reply })
+            .request(
+                |reply| AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+                    turn_id: turn_id.clone(),
+                    reply,
+                },
+            )
             .await??;
         let preparation =
             super::RuntimeSessionService::execute_agent_provider_preparation(preparation).await;
