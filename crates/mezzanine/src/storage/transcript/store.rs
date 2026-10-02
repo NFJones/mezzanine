@@ -47,6 +47,21 @@ use mez_agent::transcript::{
 use mez_agent::{AgentConversationKind, AllowedActionSet};
 use mez_mux::readline::ReadlineHistoryEntry;
 
+/// Consumes one test-injected failure countdown and returns its previous value.
+/// Zero stays exhausted; concurrent callers consume distinct countdown values.
+/// CAS retains Rust 1.91 support without the deprecated `fetch_update` API.
+#[cfg(test)]
+fn consume_failure_countdown(counter: &AtomicU8) -> u8 {
+    let mut remaining = counter.load(Ordering::SeqCst);
+    while let Some(next) = remaining.checked_sub(1) {
+        match counter.compare_exchange_weak(remaining, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(previous) => return previous,
+            Err(current) => remaining = current,
+        }
+    }
+    0
+}
+
 /// Captured logical transcript with a separate committed prefix for publication.
 /// Queued and worker-owned entries may be replayed but never prove durability.
 #[derive(Debug, Clone)]
@@ -990,13 +1005,7 @@ impl AgentTranscriptStore {
             ));
         }
         #[cfg(test)]
-        if self
-            .fail_transcript_append_attempts
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_ok()
-        {
+        if consume_failure_countdown(&self.fail_transcript_append_attempts) > 0 {
             return Err(MezError::from(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
                 "injected consecutive transcript append failure",
@@ -1769,14 +1778,7 @@ impl AgentTranscriptStore {
     /// corrupt objective metadata fails closed rather than being published.
     pub fn user_objective(&self, conversation_id: &str) -> Result<Option<String>> {
         #[cfg(test)]
-        if self
-            .fail_user_objective_read_countdown
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .unwrap_or(0)
-            == 1
-        {
+        if consume_failure_countdown(&self.fail_user_objective_read_countdown) == 1 {
             return Err(MezError::invalid_state(
                 "injected second user objective metadata read failure",
             ));

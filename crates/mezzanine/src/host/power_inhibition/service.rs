@@ -353,17 +353,67 @@ mod tests {
     }
 
     impl FakeState {
+        /// Consumes one injected failure without wrapping an exhausted counter.
+        /// Compare-and-exchange preserves Rust 1.91 support and acquire/release
+        /// ordering without the deprecated `fetch_update` API.
         fn fail_next(counter: &AtomicUsize) -> bool {
-            counter
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-                    remaining.checked_sub(1)
-                })
-                .is_ok()
+            let mut remaining = counter.load(Ordering::Acquire);
+            while let Some(next) = remaining.checked_sub(1) {
+                match counter.compare_exchange_weak(
+                    remaining,
+                    next,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => return true,
+                    Err(current) => remaining = current,
+                }
+            }
+            false
         }
 
         fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
         }
+    }
+
+    /// Failure injection must stop at zero rather than wrap and keep failing.
+    /// Exercise both an initially empty counter and exhaustion after two uses
+    /// so replacing the deprecated atomic API cannot change retry fixtures.
+    #[test]
+    fn failure_countdown_stops_at_zero() {
+        let counter = AtomicUsize::new(0);
+        assert!(!FakeState::fail_next(&counter));
+        counter.store(2, Ordering::Release);
+        assert!(FakeState::fail_next(&counter));
+        assert!(FakeState::fail_next(&counter));
+        assert!(!FakeState::fail_next(&counter));
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+
+    /// Concurrent backend calls must consume each injected failure exactly once.
+    /// A shared start barrier and more attempts than failures exercise the CAS
+    /// retry path while verifying that exhaustion never underflows the counter.
+    #[test]
+    fn failure_countdown_is_exact_under_contention() {
+        let counter = AtomicUsize::new(5);
+        let barrier = std::sync::Barrier::new(8);
+        let consumed = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        (0..4).filter(|_| FakeState::fail_next(&counter)).count()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .sum::<usize>()
+        });
+        assert_eq!(consumed, 5);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
     }
 
     #[derive(Debug)]

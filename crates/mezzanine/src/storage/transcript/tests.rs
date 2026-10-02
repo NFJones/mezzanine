@@ -1,5 +1,8 @@
 //! Tests for transcript persistence, forking, and TSV escaping.
 
+/// Regression coverage for shared, saturating failure-injection countdowns.
+mod failure_countdowns;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
