@@ -5,6 +5,71 @@
 
 use super::*;
 
+/// Replays production incremental frame bytes into a modeled attached terminal.
+/// An independent full draw is the oracle for both cells and style spans, so
+/// stale rows or line-edit optimizations cannot silently overwrite thinking
+/// text even when the retained agent screen itself remains correct.
+fn assert_attached_command_frame_matches_full_draw(
+    service: &RuntimeSessionService,
+    actual: &mut TerminalScreen,
+    previous: &mut Option<mez_mux::attached_client::AttachedTerminalOutputFrameState>,
+) {
+    use mez_mux::attached_client::{
+        AttachedTerminalModeTransitions, AttachedTerminalOutputFrameState,
+        encode_attached_terminal_output_frame_with_styles,
+        encode_attached_terminal_output_update_frame_with_verified_size,
+    };
+    use mez_mux::presentation::{
+        AttachedTerminalOutputModes, compose_client_presentation_with_styles,
+    };
+
+    let size = actual.size();
+    let view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            size,
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let (lines, spans) = compose_client_presentation_with_styles(&view, None);
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: view.cursor_visible,
+        cursor_blink: view.cursor_blink,
+        cursor_blink_interval_ms: view.cursor_blink_interval_ms,
+        cursor_row: view.cursor_row,
+        cursor_column: view.cursor_column,
+        application_keypad: view.application_keypad,
+        bracketed_paste: view.bracketed_paste,
+        host_mouse_reporting: view.host_mouse_reporting,
+        ..AttachedTerminalOutputModes::default()
+    };
+    let update = encode_attached_terminal_output_update_frame_with_verified_size(
+        &lines,
+        &spans,
+        None,
+        modes,
+        previous.as_ref(),
+        AttachedTerminalModeTransitions::default(),
+        Some(size),
+    );
+    if previous.is_some() {
+        assert!(!update.windows(4).any(|bytes| bytes == b"\x1b[2J"));
+    }
+    actual.feed(&update);
+    let mut expected = TerminalScreen::new(size, 200).unwrap();
+    expected.feed(&encode_attached_terminal_output_frame_with_styles(
+        &lines, &spans, None, modes,
+    ));
+    assert_eq!(
+        actual.visible_styled_lines(),
+        expected.visible_styled_lines()
+    );
+    *previous = Some(AttachedTerminalOutputFrameState::new_with_modes(
+        &lines, &spans, modes,
+    ));
+}
+
 /// Verifies exact streamed rationale and command rows become the authoritative
 /// shell-action presentation without restoring or appending the preview again.
 ///
@@ -276,30 +341,47 @@ async fn runtime_streaming_command_intent_survives_validation_and_tail_settlemen
                 .cloned()
                 .unwrap();
             service.remove_pending_agent_provider_task(&turn.turn_id);
+            let content_size = service
+                .pane_process_size_for(service.session().active_window().unwrap(), "%1")
+                .unwrap();
             set_agent_pane_screen_for_test(
                 &mut service,
                 "%1",
-                TerminalScreen::new(Size::new(72, rows).unwrap(), 200).unwrap(),
+                TerminalScreen::new(content_size, 200).unwrap(),
             );
             let rationale = "Keep the reasoning above the command";
             let summary = "Inspect the retained command log";
             let command = "printf retained-command";
+            let mut attached = TerminalScreen::new(Size::new(72, rows).unwrap(), 200).unwrap();
+            let mut previous_frame = None;
+            let mut rationale_closed = false;
             for event in [
                 mez_agent::StreamingSayEvent::RationaleStarted,
                 mez_agent::StreamingSayEvent::RationaleTextDelta {
-                    text: rationale.to_string(),
+                    text: "Keep the reasoning ".to_string(),
+                },
+                mez_agent::StreamingSayEvent::RationaleTextDelta {
+                    text: "above the command".to_string(),
                 },
                 mez_agent::StreamingSayEvent::RationaleTextComplete,
                 mez_agent::StreamingSayEvent::ShellCommandSummaryStarted { action_index: 0 },
                 mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta {
                     action_index: 0,
-                    text: summary.to_string(),
+                    text: "Inspect the retained ".to_string(),
+                },
+                mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta {
+                    action_index: 0,
+                    text: "command log".to_string(),
                 },
                 mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { action_index: 0 },
                 mez_agent::StreamingSayEvent::ShellCommandStarted { action_index: 0 },
                 mez_agent::StreamingSayEvent::ShellCommandTextDelta {
                     action_index: 0,
-                    text: command.to_string(),
+                    text: "printf ".to_string(),
+                },
+                mez_agent::StreamingSayEvent::ShellCommandTextDelta {
+                    action_index: 0,
+                    text: "retained-command".to_string(),
                 },
                 mez_agent::StreamingSayEvent::ShellCommandTextComplete { action_index: 0 },
                 mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
@@ -320,6 +402,33 @@ async fn runtime_streaming_command_intent_survives_validation_and_tail_settlemen
                     service
                         .apply_agent_streaming_say_projection_result(projection)
                         .unwrap();
+                }
+                assert_attached_command_frame_matches_full_draw(
+                    &service,
+                    &mut attached,
+                    &mut previous_frame,
+                );
+                rationale_closed |=
+                    matches!(event, mez_agent::StreamingSayEvent::RationaleTextComplete);
+                if rationale_closed {
+                    let retained = service
+                        .agent_pane_screen("%1")
+                        .unwrap()
+                        .normal_content_lines()
+                        .join("\n");
+                    assert_eq!(
+                        retained.matches(rationale).count(),
+                        1,
+                        "{event:?}: {retained}"
+                    );
+                    if rows == 24 {
+                        let visible = attached.visible_lines().join("\n");
+                        assert_eq!(
+                            visible.matches(rationale).count(),
+                            1,
+                            "{event:?}: {visible}"
+                        );
+                    }
                 }
             }
             let projected = service.agent_pane_screen("%1").unwrap().clone();
@@ -355,6 +464,11 @@ async fn runtime_streaming_command_intent_survives_validation_and_tail_settlemen
                             .apply_agent_streaming_say_projection_result(projection)
                             .unwrap();
                     }
+                    assert_attached_command_frame_matches_full_draw(
+                        &service,
+                        &mut attached,
+                        &mut previous_frame,
+                    );
                 }
                 assert!(
                     service.agent_pane_screen("%1").unwrap() == &projected,
@@ -436,6 +550,11 @@ async fn runtime_streaming_command_intent_survives_validation_and_tail_settlemen
                 action_id: "retained-command".to_string(),
                 marker: "retained-command-attempt".to_string(),
             };
+            assert_attached_command_frame_matches_full_draw(
+                &service,
+                &mut attached,
+                &mut previous_frame,
+            );
             for (revision, lines) in [
                 (1, vec!["first output".to_string()]),
                 (
@@ -449,6 +568,11 @@ async fn runtime_streaming_command_intent_survives_validation_and_tail_settlemen
                 service
                     .update_agent_shell_output_preview("%1", owner.clone(), revision, &lines)
                     .unwrap();
+                assert_attached_command_frame_matches_full_draw(
+                    &service,
+                    &mut attached,
+                    &mut previous_frame,
+                );
                 let text = service
                     .agent_pane_screen("%1")
                     .unwrap()
@@ -459,6 +583,11 @@ async fn runtime_streaming_command_intent_survives_validation_and_tail_settlemen
                 }
             }
             assert!(service.settle_agent_shell_output_preview("%1", &owner));
+            assert_attached_command_frame_matches_full_draw(
+                &service,
+                &mut attached,
+                &mut previous_frame,
+            );
             service
                 .append_agent_status_text_to_terminal_buffer("%1", "command settled")
                 .unwrap();
@@ -469,6 +598,11 @@ async fn runtime_streaming_command_intent_survives_validation_and_tail_settlemen
                     crate::runtime::RuntimeProviderLogInput::Settled(&execution),
                 )
                 .unwrap();
+            assert_attached_command_frame_matches_full_draw(
+                &service,
+                &mut attached,
+                &mut previous_frame,
+            );
             let text = service
                 .agent_pane_screen("%1")
                 .unwrap()
@@ -490,11 +624,16 @@ async fn runtime_streaming_command_intent_survives_validation_and_tail_settlemen
             set_agent_pane_screen_for_test(
                 &mut service,
                 "%1",
-                TerminalScreen::new(Size::new(72, rows).unwrap(), 200).unwrap(),
+                TerminalScreen::new(content_size, 200).unwrap(),
             );
             service
                 .replay_agent_presentation_entries_to_terminal_buffer("%1", &entries)
                 .unwrap();
+            assert_attached_command_frame_matches_full_draw(
+                &service,
+                &mut attached,
+                &mut previous_frame,
+            );
             let replayed = service
                 .agent_pane_screen("%1")
                 .unwrap()
