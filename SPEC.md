@@ -9629,6 +9629,8 @@ The baseline command capabilities are:
   Mezzanine process, including conversations whose panes or active agent
   sessions have been closed or replaced. Both tables MUST use the same
   per-model columns, including an explicitly cumulative cache hit percentage.
+  The input column MUST be labeled `Input` and MUST retain the existing
+  billed-input calculation; changing the label MUST NOT change accounting.
   The main status table MUST separately expose the latest concrete execution-
   model request cache hit without allowing auxiliary routing/model-sizing
   calls to overwrite it. If a provider omits

@@ -20,7 +20,7 @@ use crate::ui::command::auth_status_store_table_row;
 const TOKEN_USAGE_TABLE_COLUMNS: [&str; 7] = [
     "Provider",
     "Model",
-    "Billed input",
+    "Input",
     "Cached input",
     "Output",
     "Reasoning",

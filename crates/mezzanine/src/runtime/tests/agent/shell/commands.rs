@@ -297,6 +297,10 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         .find("### Mez Session Token Usage")
         .expect("instance token usage heading should be present");
     assert!(session_heading < instance_heading, "{response}");
+    let token_header =
+        "| Provider | Model | Input | Cached input | Output | Reasoning | Cumulative Cache Hit % |";
+    assert_eq!(response.matches(token_header).count(), 2, "{response}");
+    assert!(!response.contains("Billed input"), "{response}");
     assert!(
         response.contains("| openai | gpt-fast | 160 | unknown | 34 | 9 | unknown |"),
         "{response}"
@@ -486,10 +490,16 @@ fn runtime_agent_shell_extended_status_persists_rolling_token_usage() {
     }
     assert!(
         extended.contains(
-            "| Provider | Model | Billed input | Cached input | Output | Reasoning | Cumulative Cache Hit % |"
+            "| Provider | Model | Input | Cached input | Output | Reasoning | Cumulative Cache Hit % |"
         ),
         "{extended}"
     );
+    assert_eq!(
+        extended.matches("| Provider | Model | Input |").count(),
+        3,
+        "{extended}"
+    );
+    assert!(!extended.contains("Billed input"), "{extended}");
     assert!(
         extended.contains("| openai | gpt-durable | 60 | 40 | 20 | 5 | 40.00% |"),
         "{extended}"
@@ -642,6 +652,27 @@ fn runtime_agent_shell_extended_status_limits_tables_to_history_age() {
             "{extended}"
         );
     }
+    assert_eq!(
+        extended.matches("| Provider | Model | Input |").count(),
+        2,
+        "{extended}"
+    );
+    let empty_window = extended
+        .split("### 1-Day Token Usage")
+        .nth(1)
+        .unwrap()
+        .split("### 7-Day Token Usage")
+        .next()
+        .unwrap();
+    assert!(empty_window.contains("| Provider | Model | Input | Cached input | Output | Reasoning | Cumulative Cache Hit % |"), "{empty_window}");
+    assert!(
+        !empty_window.contains("| openai | gpt-history |"),
+        "{empty_window}"
+    );
+    assert!(
+        extended.contains("| openai | gpt-history | 10 | unknown | 1 | 0 | unknown |"),
+        "{extended}"
+    );
 }
 
 /// Verifies that `/init` creates a project instruction scaffold in the active

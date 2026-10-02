@@ -41,6 +41,11 @@ multiplexer controls remain available.
 | Select model behavior | `/model`, `/routing`, `/latency`, `/thinking`, `/personality`, and `/list-personalities` |
 | Work with local stores | `/memory`, `/remember`, `/show-memories`, `/issue`, and `/show-issues` |
 
+`/status` labels the token table's input column `Input` for pane, session,
+and displayed `/status --extended` rolling tables. This is the existing billed
+input value, not a change to provider accounting; cached input and cumulative
+cache-hit percentages remain separate columns.
+
 `/approve` decides a pending action in the current pane; use
 `/show-approvals` when the request may belong to another pane. `/sandbox`
 reports or changes pane-local sandbox state, while advanced setup, profiles,
