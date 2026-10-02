@@ -73,9 +73,149 @@ fn action_holds_later_log(action: &mez_agent::AgentAction) -> bool {
 }
 
 impl RuntimeSessionService {
-    /// Routes both effective streaming and non-streaming responses through the
-    /// same presentation owner. Callers retain claim fencing and execution
-    /// authority; this boundary only owns visible source and handoff ordering.
+    /// Binds a visible result preview to its accepted response and explicit
+    /// executor transaction. Missing ownership retains the legacy projection.
+    pub(crate) fn append_activity_result_for_execution(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        action: &mez_agent::AgentAction,
+        result: &mez_agent::ActionResult,
+        text: &str,
+        transaction: Option<&str>,
+    ) -> Result<()> {
+        let Some(ordinal) = execution.response.action_batch.as_ref().and_then(|batch| {
+            batch
+                .actions
+                .iter()
+                .position(|candidate| candidate == action)
+        }) else {
+            return self
+                .append_agent_action_result_text_to_terminal_buffer(pane_id, action, result, text);
+        };
+        if result.turn_id != execution.request.turn_id {
+            return Err(crate::error::MezError::invalid_state(
+                "activity result belongs to another execution turn",
+            ));
+        }
+        let group = super::provider_execution::provider_log_execution_group_id(execution)?;
+        self.append_ordered_activity_result(
+            pane_id,
+            (group.as_str(), ordinal, transaction),
+            action,
+            result,
+            text,
+            self.activity_intent_for_result(pane_id, execution, action),
+        )
+    }
+
+    /// Captures accepted visible intent from typed batch/action fields only.
+    fn activity_intent_for_result(
+        &self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        action: &mez_agent::AgentAction,
+    ) -> crate::storage::transcript::activity::ActivityIntent {
+        use crate::storage::transcript::activity::ActivityIntent;
+        let visible = self.agent_thinking_enabled(pane_id);
+        let (summary, command) = match &action.payload {
+            AgentActionPayload::ShellCommand {
+                summary, command, ..
+            } => (visible.then(|| summary.clone()), Some(command.clone())),
+            _ => (None, None),
+        };
+        ActivityIntent {
+            rationale: visible
+                .then(|| {
+                    execution
+                        .response
+                        .action_batch
+                        .as_ref()
+                        .map(|batch| batch.rationale.clone())
+                })
+                .flatten(),
+            summary,
+            command,
+            header: crate::runtime::render::agent_action_execution_display_header(action),
+        }
+    }
+
+    /// Preserves the existing visible outcome while binding disclosure to its
+    /// exact response/action owner. No hidden tool output or tracing is added.
+    fn append_ordered_activity_outcome(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        action: &mez_agent::AgentAction,
+        result: &mez_agent::ActionResult,
+        is_error: bool,
+        line: &str,
+    ) -> Result<()> {
+        use crate::runtime::render::AgentTerminalPresentationStyle;
+        use crate::storage::transcript::activity::{
+            ACTIVITY_CONTENT_TYPE, ActivityComponentKind, ActivitySource,
+        };
+        if result.turn_id != execution.request.turn_id
+            || result.action_id != action.id
+            || result.action_type != action.action_type()
+        {
+            return Err(crate::error::MezError::invalid_state(
+                "activity outcome differs from execution owner",
+            ));
+        }
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
+            return Ok(());
+        };
+        let Some(ordinal) = execution.response.action_batch.as_ref().and_then(|batch| {
+            batch
+                .actions
+                .iter()
+                .position(|candidate| candidate == action)
+        }) else {
+            return Ok(());
+        };
+        let style = if is_error {
+            AgentTerminalPresentationStyle::Error
+        } else {
+            AgentTerminalPresentationStyle::Status
+        };
+        let rows = vec![(style, line.to_string())];
+        let source =
+            serde_json::to_string(&vec![(style.persistence_name(), line)]).map_err(|error| {
+                crate::error::MezError::invalid_args(format!(
+                    "activity outcome encoding failed: {error}"
+                ))
+            })?;
+        let activity = ActivitySource {
+            version: 1,
+            conversation_id: session.session_id.clone(),
+            turn_id: result.turn_id.clone(),
+            response_id: super::provider_execution::provider_log_execution_group_id(execution)?
+                .as_str()
+                .to_string(),
+            action_id: Some(action.id.clone()),
+            action_ordinal: Some(ordinal),
+            transaction: None,
+            kind: ActivityComponentKind::Outcome,
+            status: format!("{:?}", result.status).to_ascii_lowercase(),
+            content_type:
+                "application/vnd.mezzanine.agent-presentation.styled-lines+json; charset=utf-8"
+                    .to_string(),
+            source,
+            preview_source: None,
+            intent: self.activity_intent_for_result(pane_id, execution, action),
+        };
+        match activity.encode() {
+            Ok(encoded) => self.append_agent_terminal_styled_lines_with_source(
+                pane_id,
+                &rows,
+                Some((&encoded, ACTIVITY_CONTENT_TYPE)),
+            ),
+            Err(_) => self.append_agent_terminal_styled_lines_to_buffer(pane_id, &rows),
+        }
+    }
+
+    /// Routes accepted provider source through the existing presentation owner.
     pub(crate) fn ingest_provider_log(
         &mut self,
         pane_id: &str,
@@ -307,6 +447,14 @@ impl RuntimeSessionService {
         action: &mez_agent::AgentAction,
         result: &mez_agent::ActionResult,
     ) -> Result<()> {
+        if result.turn_id != execution.request.turn_id
+            || result.action_id != action.id
+            || result.action_type != action.action_type()
+        {
+            return Err(crate::error::MezError::invalid_state(
+                "activity result differs from execution owner",
+            ));
+        }
         let Some(conversation_id) = self
             .agent_shell_store()
             .get(pane_id)
@@ -344,8 +492,13 @@ impl RuntimeSessionService {
             .agent_published_provider_headers
             .contains(&key)
         {
-            self.append_agent_action_result_text_to_terminal_buffer(
-                pane_id, action, result, &text,
+            self.append_ordered_activity_result(
+                pane_id,
+                (key.3.as_str(), key.4, None),
+                action,
+                result,
+                &text,
+                self.activity_intent_for_result(pane_id, execution, action),
             )?;
             self.presentation
                 .agent_published_provider_results
@@ -496,8 +649,13 @@ impl RuntimeSessionService {
                 if let Some((action, result, text)) =
                     self.presentation.agent_queued_provider_results.remove(&key)
                 {
-                    self.append_agent_action_result_text_to_terminal_buffer(
-                        pane_id, &action, &result, &text,
+                    self.append_ordered_activity_result(
+                        pane_id,
+                        (key.3.as_str(), key.4, None),
+                        &action,
+                        &result,
+                        &text,
+                        self.activity_intent_for_result(pane_id, execution, &action),
                     )?;
                     self.presentation
                         .agent_published_provider_results
@@ -509,7 +667,15 @@ impl RuntimeSessionService {
                     .remove(&key)
                 {
                     for (is_error, line) in outcomes {
-                        if is_error {
+                        if let Some(result) = execution
+                            .action_results
+                            .iter()
+                            .find(|result| result.action_id == action.id)
+                        {
+                            self.append_ordered_activity_outcome(
+                                pane_id, execution, action, result, is_error, &line,
+                            )?;
+                        } else if is_error {
                             self.append_agent_error_text_to_terminal_buffer(pane_id, &line)?;
                         } else {
                             self.append_agent_status_text_to_terminal_buffer(pane_id, &line)?;
@@ -1099,11 +1265,9 @@ impl RuntimeSessionService {
                     .agent_published_provider_headers
                     .contains(&key)
                 {
-                    if is_error {
-                        self.append_agent_error_text_to_terminal_buffer(pane_id, &line)?;
-                    } else {
-                        self.append_agent_status_text_to_terminal_buffer(pane_id, &line)?;
-                    }
+                    self.append_ordered_activity_outcome(
+                        pane_id, execution, action, result, is_error, &line,
+                    )?;
                     self.presentation
                         .agent_published_provider_outcomes
                         .insert(outcome_key);

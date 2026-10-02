@@ -66,6 +66,11 @@ pub(crate) enum OverlayActionTarget {
         /// Zero-based prompt option index in the rendered selector.
         index: usize,
     },
+    /// Opens retained activity detail inside the current browser, without I/O.
+    ActivityDetail {
+        /// Exact durable presentation sequence registered by the producer.
+        sequence: u64,
+    },
 }
 
 impl OverlayActionTarget {
@@ -79,6 +84,7 @@ impl OverlayActionTarget {
             Self::TerminalCommand { .. }
             | Self::SetTheme { .. }
             | Self::SetKeyPreset { .. }
+            | Self::ActivityDetail { .. }
             | Self::RecordBrowserPromptSelect { .. } => None,
         }
     }
@@ -89,7 +95,9 @@ impl OverlayActionTarget {
             Self::TerminalCommand { name, args } => Some(join_command_line("", name, args)),
             Self::SetTheme { name } => Some(format!("set-theme {name}")),
             Self::SetKeyPreset { name } => Some(format!("set-key-preset {name}")),
-            Self::RecordBrowserOpen { .. } | Self::RecordBrowserPromptSelect { .. } => None,
+            Self::RecordBrowserOpen { .. }
+            | Self::RecordBrowserPromptSelect { .. }
+            | Self::ActivityDetail { .. } => None,
         }
     }
 }
@@ -296,6 +304,13 @@ pub(crate) fn overlay_record_browser_open_target(
         .trim()
         .strip_prefix('/')
         .unwrap_or(open_command.trim());
+    if let Some(sequence) = body.strip_prefix("show-context activity ") {
+        let sequence = sequence
+            .parse::<u64>()
+            .ok()
+            .filter(|sequence| *sequence > 0)?;
+        return Some(OverlayActionTarget::ActivityDetail { sequence });
+    }
     let (command_name, record_id) = body.split_once(char::is_whitespace)?;
     if !RECORD_BROWSER_OPEN_COMMANDS.contains(&command_name) {
         return None;

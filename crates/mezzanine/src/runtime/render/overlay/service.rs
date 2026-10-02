@@ -296,6 +296,32 @@ impl RuntimeSessionService {
             return Ok(true);
         };
         match target {
+            OverlayActionTarget::ActivityDetail { sequence } => {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                    return Ok(true);
+                };
+                let Some(browser) = overlay.record_browser.as_mut() else {
+                    return Ok(true);
+                };
+                if browser.command != "show-context"
+                    || browser.source.is_some()
+                    || !browser.browser.set_active_record_id(&sequence.to_string())
+                {
+                    return Ok(true);
+                }
+                browser.browser.set_scroll_offset(overlay.scroll_offset);
+                browser
+                    .browser
+                    .apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)?;
+                overlay.scroll_offset = 0;
+                Ok(render_record_browser_overlay(
+                    overlay,
+                    &mut self.presentation.overlay_action_registry,
+                    &self.presentation.settings.ui_theme,
+                    usize::from(self.session.authoritative_size.columns),
+                    self.presentation.settings.terminal_agent_wrap_column_cap,
+                ))
+            }
             OverlayActionTarget::RecordBrowserPromptSelect { index } => {
                 self.execute_record_browser_prompt_select(primary_client_id, index)
             }

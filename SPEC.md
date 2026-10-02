@@ -2587,6 +2587,25 @@ records MAY instead replay their byte stream unchanged and rely on physical
 pane wrapping, because inserting boundaries into escape-bearing terminal data
 could change control semantics. Mixed histories MUST preserve presentation
 order.
+The explicit `/show-context activity [presentation-sequence]` view MUST provide
+client-local list/detail disclosure of identity-bearing retained outcomes and
+result previews. The current snapshot is limited to the latest 200 cleartext
+presentation records within 8 MiB; it MUST NOT imply complete historical or raw
+output retention. Activity-v1 semantic sources in presentation TSV v2 bind the
+conversation, turn, provider response group, action id/ordinal, component kind,
+observed status and any explicitly supplied transaction. Grouping MUST compare
+these fields exactly, never labels, timestamps or adjacent rows. Missing attempt
+evidence remains missing. Legacy sources remain ungrouped, and ANSI bytes are
+not rewritten. Forking MUST rebind the envelope conversation owner while
+retaining source and original response identity. Replay MUST use the bounded
+preview source through the original renderer, not expand full detail into logs.
+Keyboard Enter and registered mouse row actions MUST open the same retained
+detail; Escape returns to the preserved list. These controls MUST NOT mutate
+execution, approvals, model context, chronology, log level or the conversation
+screen. Payload text cannot register controls. Reads occur at explicit command
+preparation, off actor ownership for attached commands, never in rendering.
+This retained browser does not introduce automatic inline log folding or infer
+component identity for provisional output tails or legacy rows.
 Process presentation geometry, agent transcript geometry, and actual PTY
 interaction geometry MUST be calculated independently. A pane resize MUST
 reflow the retained process screen at the full process presentation geometry,

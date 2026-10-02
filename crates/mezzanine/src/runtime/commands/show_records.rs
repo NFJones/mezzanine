@@ -5,6 +5,7 @@
 //! save-to-file behavior close to the live slash-command runtime while leaving
 //! the browser state itself backend-agnostic.
 
+use super::activity::read_activity_browser;
 use super::{
     AgentShellCommandOutcome, MezError, Result, RuntimeSessionService, json_escape,
     parse_slash_command, runtime_remember_scope_display,
@@ -71,6 +72,26 @@ impl RuntimeSessionService {
         let slash = parse_slash_command(input)?.ok_or_else(|| {
             MezError::invalid_args("show-context command must be a slash command")
         })?;
+        if slash.args.split_whitespace().next() == Some("activity") {
+            let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
+                MezError::invalid_state("activity requires an active pane session")
+            })?;
+            let store = self
+                .persistence
+                .cloned_transcript_store()
+                .ok_or_else(|| MezError::invalid_state("activity requires transcript storage"))?;
+            let read = read_activity_browser(&store, &session.session_id, pane_id, &slash.args)?;
+            self.register_pending_record_browser_overlay(
+                pane_id,
+                "show-context",
+                read.browser,
+                None,
+            );
+            return Ok(AgentShellCommandOutcome::Display {
+                command: "show-context".to_string(),
+                body: read.markdown,
+            });
+        }
         let args = slash.args.split_whitespace().collect::<Vec<_>>();
         if args.len() > 1 {
             return Err(MezError::invalid_args(
@@ -1106,6 +1127,9 @@ pub(crate) fn read_context_browser_for_command(
 ) -> Result<RuntimeContextBrowserRead> {
     let slash = parse_slash_command(input)?
         .ok_or_else(|| MezError::invalid_args("show-context command must be a slash command"))?;
+    if slash.args.split_whitespace().next() == Some("activity") {
+        return read_activity_browser(store, conversation_id, pane_id, &slash.args);
+    }
     let args = slash.args.split_whitespace().collect::<Vec<_>>();
     let detail_sequence = match args.as_slice() {
         [] => None,
@@ -1149,6 +1173,11 @@ pub(crate) fn show_context_args_are_browser_form(input: &str) -> bool {
     let Ok(Some(invocation)) = parse_slash_command(input) else {
         return false;
     };
+    if invocation.args.split_whitespace().next() == Some("activity") {
+        let args = invocation.args.split_whitespace().collect::<Vec<_>>();
+        return matches!(args.as_slice(), ["activity"])
+            || matches!(args.as_slice(), ["activity", sequence] if sequence.parse::<u64>().is_ok());
+    }
     let mut args = invocation.args.split_whitespace();
     match (args.next(), args.next()) {
         (None, None) => true,

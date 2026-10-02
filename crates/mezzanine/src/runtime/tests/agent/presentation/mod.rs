@@ -47,6 +47,7 @@ fn ensure_agent_copy_mode_for_test<'a>(
 }
 
 mod action_progress;
+mod activity;
 mod copying;
 mod logging;
 mod markdown;

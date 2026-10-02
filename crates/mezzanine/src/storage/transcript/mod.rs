@@ -17,6 +17,9 @@ mod catalog;
 /// Crash-safe tar+zstd lifecycle storage for saved conversations.
 mod archive;
 
+/// Versioned identity-bearing presentation source, separate from model context.
+pub(crate) mod activity;
+
 /// Exposes the encoding module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

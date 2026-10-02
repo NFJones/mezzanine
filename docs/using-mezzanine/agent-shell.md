@@ -44,6 +44,16 @@ words. Markdown emphasis remains authored structure, not rail styling. The
 two-cell `▐ ` footprint is unchanged, as are copied source and continuation
 offsets. This styling change does not rewrite legacy ANSI-only records.
 
+Use `/show-context activity` to inspect recent identity-bearing action outcomes
+and retained result previews. Enter or click a row to open detail; Escape returns
+to the list without altering conversation logs. `/show-context activity <sequence>`
+opens the activity containing that presentation sequence. Details distinguish
+accepted intent from observed outcomes and retain source beyond the bounded live
+preview where available. The snapshot reads at most the latest 200 cleartext
+presentation records within 8 MiB; legacy rows and unavailable attempt identities
+are not guessed. This is a client-local inspection view, not automatic inline
+folding, a log-level change, an approval route or a promise of all raw output.
+
 Streaming rationale that exactly matches a validated completion can remain
 visible without a second copy being appended. A matching action header may
 remain while its accepted action is pending, together with matching progress

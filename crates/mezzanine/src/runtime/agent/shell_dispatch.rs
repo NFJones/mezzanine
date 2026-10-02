@@ -619,11 +619,13 @@ impl RuntimeSessionService {
                 && !combined_output.trim().is_empty()
                 && !matching_promoted_patch
             {
-                self.append_agent_action_result_text_to_terminal_buffer(
+                self.append_activity_result_for_execution(
                     &turn.pane_id,
+                    &execution,
                     &action,
                     &result,
                     &combined_output,
+                    Some(&outcome.marker),
                 )?;
             }
             self.run_configured_completed_hooks(

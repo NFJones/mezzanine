@@ -3615,11 +3615,20 @@ impl AgentTranscriptStore {
                 self.append(&forked)?;
             }
             for presentation in self.inspect_presentation(source_conversation_id)? {
-                let forked = AgentPresentationEntry {
+                let mut forked = AgentPresentationEntry {
                     conversation_id: target_conversation_id.to_string(),
                     created_at_unix_seconds,
                     ..presentation
                 };
+                if forked.source_content_type.as_deref()
+                    == Some(super::activity::ACTIVITY_CONTENT_TYPE)
+                {
+                    let mut activity = super::activity::ActivitySource::decode(
+                        forked.source_text.as_deref().unwrap_or_default(),
+                    )?;
+                    activity.conversation_id = target_conversation_id.to_string();
+                    forked.source_text = Some(activity.encode()?);
+                }
                 self.append_presentation(&forked)?;
             }
             self.saved_session(target_conversation_id)?

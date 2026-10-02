@@ -24,9 +24,32 @@ impl RuntimeSessionService {
             let mut sorted_entries = entries.iter().collect::<Vec<_>>();
             sorted_entries.sort_by_key(|entry| entry.sequence);
             for entry in sorted_entries {
+                let activity = if entry.source_content_type.as_deref()
+                    == Some(crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE)
+                {
+                    let source = crate::storage::transcript::activity::ActivitySource::decode(
+                        entry.source_text.as_deref().unwrap_or_default(),
+                    )?;
+                    if source.conversation_id != entry.conversation_id
+                        || entry.turn_id.as_deref() != Some(source.turn_id.as_str())
+                    {
+                        return Err(MezError::invalid_args(
+                            "activity replay identity differs from presentation owner",
+                        ));
+                    }
+                    Some(source)
+                } else {
+                    None
+                };
                 if let (Some(source_text), Some(source_content_type)) = (
-                    entry.source_text.as_deref(),
-                    entry.source_content_type.as_deref(),
+                    activity
+                        .as_ref()
+                        .map(|source| source.preview_source.as_deref().unwrap_or(&source.source))
+                        .or(entry.source_text.as_deref()),
+                    activity
+                        .as_ref()
+                        .map(|source| source.content_type.as_str())
+                        .or(entry.source_content_type.as_deref()),
                 ) {
                     if source_content_type == AGENT_PRESENTATION_USER_PROMPT_CONTENT_TYPE {
                         self.append_agent_user_prompt_to_terminal_buffer(pane_id, source_text)?;

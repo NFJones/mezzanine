@@ -2835,12 +2835,23 @@ impl RuntimeSessionService {
             && !transaction_ref.observed_output_preview.trim().is_empty()
             && !matching_promoted_patch
         {
-            self.append_agent_action_result_text_to_terminal_buffer(
-                pane_id,
-                &observed_action,
-                &observed_result,
-                &transaction_ref.observed_output_preview,
-            )?;
+            if let Some(execution) = self.agent_turn_executions().get(turn_id).cloned() {
+                self.append_activity_result_for_execution(
+                    pane_id,
+                    &execution,
+                    &observed_action,
+                    &observed_result,
+                    &transaction_ref.observed_output_preview,
+                    Some(marker),
+                )?;
+            } else {
+                self.append_agent_action_result_text_to_terminal_buffer(
+                    pane_id,
+                    &observed_action,
+                    &observed_result,
+                    &transaction_ref.observed_output_preview,
+                )?;
+            }
         }
         if self.agent_verbose_enabled(pane_id)
             && let Some(outcomes) = &apply_patch_file_outcomes

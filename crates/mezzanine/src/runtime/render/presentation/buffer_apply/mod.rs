@@ -1114,6 +1114,17 @@ impl RuntimeSessionService {
             source_text: source.map(|(text, _content_type)| text.to_string()),
             source_content_type: source.map(|(_text, content_type)| content_type.to_string()),
         };
+        if entry.source_content_type.as_deref()
+            == Some(crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE)
+        {
+            if let Ok(activity) = crate::storage::transcript::activity::ActivitySource::decode(
+                entry.source_text.as_deref().unwrap_or_default(),
+            ) {
+                entry.turn_id = Some(activity.turn_id);
+            } else {
+                return;
+            }
+        }
         if self.persistence.transcript_uses_adapter() {
             let Ok(path) = store.presentation_path(&entry.conversation_id) else {
                 return;
@@ -1568,6 +1579,17 @@ impl RuntimeSessionService {
         pane_id: &str,
         styled_lines: &[(AgentTerminalPresentationStyle, String)],
     ) -> Result<()> {
+        self.append_agent_terminal_styled_lines_with_source(pane_id, styled_lines, None)
+    }
+
+    /// Appends ordinary styled rows with an explicit identity-bearing source
+    /// when supplied by their producer. Replay and legacy rows use the same UI.
+    pub(in crate::runtime) fn append_agent_terminal_styled_lines_with_source(
+        &mut self,
+        pane_id: &str,
+        styled_lines: &[(AgentTerminalPresentationStyle, String)],
+        source_override: Option<(&str, &str)>,
+    ) -> Result<()> {
         if styled_lines.is_empty() {
             return Ok(());
         }
@@ -1644,7 +1666,7 @@ impl RuntimeSessionService {
                 .collect(),
             wrapped_copy_lines,
             ansi_text,
-            serde_json::to_string(
+            source_override.or(serde_json::to_string(
                 &styled_lines
                     .iter()
                     .map(|(style, line)| (style.persistence_name(), line))
@@ -1652,7 +1674,7 @@ impl RuntimeSessionService {
             )
             .ok()
             .as_deref()
-            .map(|source| (source, AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE)),
+            .map(|source| (source, AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE))),
         );
         Ok(())
     }
@@ -2042,6 +2064,125 @@ impl RuntimeSessionService {
                 .map(|line| (AgentTerminalPresentationStyle::Status, line)),
         );
         self.append_agent_terminal_styled_lines_to_buffer(pane_id, &styled_lines)
+    }
+
+    /// Records ordered settled result identity from its existing response owner,
+    /// not from display headers or adjacency. Retained source is presentation
+    /// data only; display bounds never replace the full accepted result source.
+    pub(crate) fn append_ordered_activity_result(
+        &mut self,
+        pane_id: &str,
+        owner: (&str, usize, Option<&str>),
+        action: &AgentAction,
+        result: &ActionResult,
+        text: &str,
+        intent: crate::storage::transcript::activity::ActivityIntent,
+    ) -> Result<()> {
+        use crate::storage::transcript::activity::{
+            ACTIVITY_CONTENT_TYPE, ActivityComponentKind, ActivitySource,
+        };
+        let (response_id, ordinal, transaction) = owner;
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
+            return Ok(());
+        };
+        let diff = agent_action_result_uses_diff_preview(action);
+        if result.action_id != action.id || !result.is_terminal() {
+            return Err(MezError::invalid_state(
+                "activity result has mismatched or nonterminal action ownership",
+            ));
+        }
+        if result.is_error && !diff {
+            return self
+                .append_agent_action_result_text_to_terminal_buffer(pane_id, action, result, text);
+        }
+        let mut preview_lines = Vec::new();
+        if !diff {
+            let Some(header) = agent_action_result_display_header(action) else {
+                return Ok(());
+            };
+            preview_lines.push((AgentTerminalPresentationStyle::Command, header));
+            preview_lines.extend(
+                bounded_agent_action_result_display_lines(text)
+                    .into_iter()
+                    .map(|line| (AgentTerminalPresentationStyle::Status, line)),
+            );
+        }
+        let preview_source = if diff {
+            None
+        } else {
+            Some(
+                serde_json::to_string(
+                    &preview_lines
+                        .iter()
+                        .map(|(style, line)| (style.persistence_name(), line))
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|error| {
+                    MezError::invalid_args(format!("activity preview encoding failed: {error}"))
+                })?,
+            )
+        };
+        let source = if diff {
+            text.to_string()
+        } else {
+            serde_json::to_string(&vec![(
+                AgentTerminalPresentationStyle::Status.persistence_name(),
+                text,
+            )])
+            .map_err(|error| {
+                MezError::invalid_args(format!("activity styled source encoding failed: {error}"))
+            })?
+        };
+        let activity = ActivitySource {
+            version: 1,
+            conversation_id: session.session_id.clone(),
+            turn_id: result.turn_id.clone(),
+            response_id: response_id.to_string(),
+            action_id: Some(action.id.clone()),
+            action_ordinal: Some(ordinal),
+            transaction: transaction.map(str::to_string),
+            kind: ActivityComponentKind::Result,
+            status: format!("{:?}", result.status).to_ascii_lowercase(),
+            content_type: if diff {
+                "text/x-diff; charset=utf-8"
+            } else {
+                AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE
+            }
+            .to_string(),
+            source,
+            preview_source,
+            intent,
+        };
+        // Results beyond presentation retention keep the preexisting bounded
+        // preview; never fail an already settled action to add optional UI data.
+        let encoded = match activity.encode() {
+            Ok(encoded) => encoded,
+            Err(_) => {
+                return self.append_agent_action_result_text_to_terminal_buffer(
+                    pane_id, action, result, text,
+                );
+            }
+        };
+        if diff {
+            let width = self.agent_terminal_markdown_frame_width(pane_id)?;
+            let lines = readable_agent_diff_display_lines_for_width(
+                text,
+                &self.presentation.settings.ui_theme,
+                width,
+            );
+            return self.append_agent_terminal_rendered_lines_to_buffer(
+                pane_id,
+                AgentTerminalPresentationStyle::DiffContext,
+                &lines,
+                &[],
+                Some((&encoded, ACTIVITY_CONTENT_TYPE)),
+            );
+        }
+        self.append_agent_terminal_styled_lines_with_source(
+            pane_id,
+            &preview_lines,
+            Some((&encoded, ACTIVITY_CONTENT_TYPE)),
+        )
     }
 
     /// Returns whether a cleaned action result preview should render in normal

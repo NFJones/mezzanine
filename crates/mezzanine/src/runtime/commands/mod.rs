@@ -60,6 +60,7 @@ use mez_agent::{
     append_mcp_context, normalize_model_catalog_values, resolve_provider_api,
 };
 
+mod activity;
 mod approval;
 mod artifacts;
 mod compaction;
@@ -81,6 +82,9 @@ mod shell_mode;
 mod show_records;
 mod slash;
 mod status;
+
+#[cfg(test)]
+pub(crate) use show_records::read_context_browser_for_command;
 
 pub(crate) use issues::{runtime_issue_database_path, runtime_issues_enabled};
 

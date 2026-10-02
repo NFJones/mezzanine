@@ -158,6 +158,18 @@ impl AgentPresentationEntry {
         if let Some(content_type) = self.source_content_type.as_deref() {
             validate_non_empty("presentation source content type", content_type)?;
         }
+        if self.source_content_type.as_deref() == Some(super::activity::ACTIVITY_CONTENT_TYPE) {
+            let source = super::activity::ActivitySource::decode(
+                self.source_text.as_deref().unwrap_or_default(),
+            )?;
+            if source.conversation_id != self.conversation_id
+                || self.turn_id.as_deref() != Some(source.turn_id.as_str())
+            {
+                return Err(MezError::invalid_args(
+                    "activity source differs from presentation owner",
+                ));
+            }
+        }
         if self.terminal_width == 0 {
             return Err(MezError::invalid_args(
                 "presentation terminal width must be non-zero",

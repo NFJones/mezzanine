@@ -3583,12 +3583,8 @@ pub(crate) use overlay::{
 };
 #[cfg(test)]
 use overlay::{runtime_agent_shell_markdown_overlay_content, runtime_human_readable_display_lines};
+pub(in crate::runtime) use presentation::AgentTerminalPresentationStyle;
 pub(crate) use presentation::agent_action_execution_display_header;
-use presentation::{
-    AgentTerminalPresentationStyle, agent_display_lines_are_error,
-    agent_display_lines_are_low_level_status, agent_prompt_error_display_lines,
-    overlay_styled_lines, render_command_markdown_body_lines_for_width,
-};
 #[cfg(test)]
 use presentation::{
     agent_action_result_uses_diff_preview, agent_thinking_display_lines_for_width,
@@ -3596,6 +3592,11 @@ use presentation::{
     readable_agent_diff_display_lines_for_width, render_agent_markdown_body_lines,
     render_command_markdown_body_lines, rendered_line_rendition_at, wrap_agent_terminal_text,
     wrapped_prefixed_agent_terminal_lines,
+};
+use presentation::{
+    agent_display_lines_are_error, agent_display_lines_are_low_level_status,
+    agent_prompt_error_display_lines, overlay_styled_lines,
+    render_command_markdown_body_lines_for_width,
 };
 use time::{runtime_human_system_uptime, runtime_local_datetime_seconds_string};
 
