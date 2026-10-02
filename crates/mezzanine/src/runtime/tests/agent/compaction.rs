@@ -539,17 +539,100 @@ fn runtime_provider_compaction_does_not_summarize_byte_heavy_exact_history() {
     assert!(failure.contains("protected_block_estimate="), "{text}");
 }
 
-/// Diagnoses saved history through canonical replay without modifying the
-/// archive, sending provider requests, or displaying private payloads. Only
-/// aggregate planning costs and execution-owner identities are reported.
+/// Saved-history replay must allow another compaction range after an earlier
+/// summary leaves byte-heavy evidence above the provider's token allowance.
+/// Persist synthetic closed execution groups around exact user barriers so the
+/// regression is hermetic on Linux and macOS, preserves causal ownership, and
+/// never reads or modifies a developer's private saved conversations.
 #[test]
-fn diagnostic_incident_history_compaction_selection() {
-    let store = AgentTranscriptStore::new("/home/neil/.config/mezzanine/agent-sessions");
-    let mut entries = store
-        .inspect("41f18049-2b78-49e2-b715-b3a99871daaf")
-        .unwrap();
-    entries.retain(|entry| entry.sequence < 1215);
+fn runtime_saved_history_compaction_replans_retained_byte_heavy_evidence() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+    let root = temp_root("saved-history-compaction-replanning");
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "synthetic-compaction-history";
+    let first_group = mez_agent::ContextExecutionGroupId::new("first-history-group").unwrap();
+    let second_group = mez_agent::ContextExecutionGroupId::new("second-history-group").unwrap();
+    let execution_block = |source, label, content, group, ordinal| {
+        mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+            source, label, content, group, ordinal, None,
+        )
+        .unwrap()
+        .to_transcript_content()
+    };
+    let entries = [
+        (
+            TranscriptRole::User,
+            "Keep the original task exact".to_string(),
+            "first-turn",
+        ),
+        (
+            TranscriptRole::System,
+            execution_block(
+                ContextSourceKind::TranscriptAssistant,
+                "first decision",
+                "first decision".to_string(),
+                first_group.clone(),
+                1,
+            ),
+            "first-turn",
+        ),
+        (
+            TranscriptRole::System,
+            execution_block(
+                ContextSourceKind::ActionResult,
+                "first result",
+                "first ".repeat(4_000),
+                first_group.clone(),
+                2,
+            ),
+            "first-turn",
+        ),
+        (
+            TranscriptRole::User,
+            "Preserve the exact later instruction".to_string(),
+            "second-turn",
+        ),
+        (
+            TranscriptRole::System,
+            execution_block(
+                ContextSourceKind::TranscriptAssistant,
+                "second decision",
+                "second decision".to_string(),
+                second_group.clone(),
+                1,
+            ),
+            "second-turn",
+        ),
+        (
+            TranscriptRole::System,
+            execution_block(
+                ContextSourceKind::ActionResult,
+                "byte-heavy result",
+                "x".repeat(200_000),
+                second_group.clone(),
+                2,
+            ),
+            "second-turn",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (role, content, turn_id))| TranscriptEntry {
+        conversation_id: conversation_id.to_string(),
+        sequence: u64::try_from(index + 1).unwrap(),
+        created_at_unix_seconds: 1,
+        role,
+        turn_id: turn_id.to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        content,
+    })
+    .collect::<Vec<_>>();
+    store.append_many(&entries).unwrap();
+    let entries = store.inspect(conversation_id).unwrap();
     let history = crate::runtime::control::runtime_agent_transcript_context("%1", &entries);
+    assert_eq!(history.execution_events.len(), 4);
     let mut context = mez_agent::AgentContext::import_durable_blocks(history.blocks).unwrap();
     context
         .restore_imported_execution_events(&history.execution_events)
@@ -560,70 +643,82 @@ fn diagnostic_incident_history_compaction_selection() {
         "openai",
     );
     let plan = mez_agent::plan_model_context_compaction_for_provider(
-        &context, 600_000, 10, high_water, projection,
+        &context, 22_500, 10, high_water, projection,
     )
     .unwrap();
-    let mut selected_owners = std::collections::BTreeMap::<String, usize>::new();
-    for event in context.chronology().iter().filter(|event| {
-        plan.replacement_event_sequences()
-            .contains(&event.sequence())
-    }) {
-        let owner = event
-            .execution_group_id()
-            .map(|id| id.as_str().split(':').next().unwrap_or("unknown"))
-            .unwrap_or("ungrouped");
-        *selected_owners.entry(owner.to_string()).or_default() += 1;
-    }
-    println!(
-        "saved_history blocks={} selected_blocks={} selected_owners={selected_owners:?} summary_allowance={} additional_flag={} planning_budget={:?}",
-        context.blocks().len(),
-        plan.replacement_blocks().len(),
-        plan.summary_budget_words(),
-        plan.requires_additional_segments(),
-        plan.planning_budget()
+    assert!(plan.changes_context());
+    assert!(!plan.requires_additional_segments());
+    assert_eq!(plan.replacement_blocks().len(), 2);
+    assert!(
+        context
+            .chronology()
+            .iter()
+            .filter(|event| {
+                plan.replacement_event_sequences()
+                    .contains(&event.sequence())
+            })
+            .all(|event| event.execution_group_id() == Some(&first_group))
     );
     let (candidate, _) =
         mez_agent::apply_model_context_compaction_plan(context, &plan, "synthetic short summary")
             .unwrap();
-    let mut protected = 0usize;
-    let mut optional = 0usize;
-    let mut owner_costs = std::collections::BTreeMap::<String, usize>::new();
-    for (index, (block, cost)) in candidate
+    let optional: usize = candidate
         .blocks()
         .iter()
         .zip(mez_agent::projected_context_block_input_tokens(
             &candidate,
             Some(projection),
         ))
-        .enumerate()
-    {
-        if block.retention() == mez_agent::ContextRetention::Exact
-            || block.source == ContextSourceKind::TranscriptUser
-        {
-            protected += cost;
-        } else {
-            optional += cost;
-        }
-        let owner = candidate
-            .metadata_for_block(index)
-            .and_then(|metadata| metadata.execution_group_id())
-            .map(|id| id.as_str().split(':').next().unwrap_or("unknown"))
-            .unwrap_or("ungrouped");
-        *owner_costs.entry(owner.to_string()).or_default() += cost;
-    }
+        .filter(|(block, _)| {
+            block.retention() != mez_agent::ContextRetention::Exact
+                && block.source != ContextSourceKind::TranscriptUser
+        })
+        .map(|(_, cost)| cost)
+        .sum();
+    assert!(optional > 28_500);
     let next = mez_agent::plan_model_context_compaction_for_provider_tokens(
-        &candidate, 760_000, 0, high_water, projection,
+        &candidate, 28_500, 0, high_water, projection,
     )
     .unwrap();
-    println!(
-        "after_first_summary protected_estimate={protected} optional_estimate={optional} owner_costs={owner_costs:?} next_changes={} next_selected_blocks={}",
-        next.changes_context(),
-        next.replacement_blocks().len()
-    );
-    assert!(plan.changes_context());
-    assert!(!plan.requires_additional_segments());
-    assert!(optional > 760_000);
     assert!(next.changes_context());
+    assert_eq!(next.replacement_blocks().len(), 2);
+    assert!(
+        candidate
+            .chronology()
+            .iter()
+            .filter(|event| {
+                next.replacement_event_sequences()
+                    .contains(&event.sequence())
+            })
+            .all(|event| event.execution_group_id() == Some(&second_group))
+    );
+    let (compacted, _) = mez_agent::apply_model_context_compaction_plan(
+        candidate,
+        &next,
+        "remaining evidence summarized",
+    )
+    .unwrap();
+    let contents = compacted
+        .chronology()
+        .iter()
+        .map(|event| event.block().content.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        contents,
+        [
+            "Keep the original task exact",
+            "synthetic short summary",
+            "Preserve the exact later instruction",
+            "remaining evidence summarized",
+        ]
+    );
+    let tokens: usize =
+        mez_agent::projected_context_block_input_tokens(&compacted, Some(projection))
+            .into_iter()
+            .sum();
+    assert!(tokens < 28_500);
+    assert_eq!(store.inspect(conversation_id).unwrap(), entries);
+    fs::remove_dir_all(root).unwrap();
 }
 
 /// Verifies large bracketed-paste agent prompt input is displayed compactly in
