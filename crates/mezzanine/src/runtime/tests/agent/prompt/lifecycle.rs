@@ -4054,13 +4054,13 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
     );
     assert!(
         assistant_line.style_spans.iter().any(|span| {
-            span.start == 0
+            span.start == 2
                 && span.rendition.foreground
                     == Some(theme.colors.agent_transcript_assistant.foreground)
                 && span.rendition.background.is_none()
-                && span.rendition.bold
+                && !span.rendition.bold
         }),
-        "assistant gutter and label should use themed foreground without a background: {:?}",
+        "assistant label should use normal-weight themed foreground without a background: {:?}",
         assistant_line.style_spans
     );
     let user_line = service
@@ -4081,12 +4081,12 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
     );
     assert!(
         user_line.style_spans.iter().any(|span| {
-            span.start == 0
+            span.start == 2
                 && span.rendition.foreground == Some(theme.colors.agent_transcript_user.foreground)
                 && span.rendition.background.is_none()
                 && span.rendition.bold
         }),
-        "user gutter and label should use themed foreground without a background: {:?}",
+        "user label should use themed foreground independently of the rail: {:?}",
         user_line.style_spans
     );
     service
@@ -4105,7 +4105,7 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
         .unwrap();
     assert!(
         error_line.style_spans.iter().any(|span| {
-            span.start == 0
+            span.start == 2
                 && span.rendition.foreground == Some(theme.colors.agent_transcript_error.foreground)
                 && span.rendition.background.is_none()
                 && span.rendition.bold
@@ -4119,7 +4119,7 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
         .unwrap();
     assert!(
         command_line.style_spans.iter().any(|span| {
-            span.start == 0
+            span.start == 2
                 && span.rendition.foreground
                     == Some(theme.colors.agent_transcript_command.foreground)
                 && span.rendition.background.is_none()

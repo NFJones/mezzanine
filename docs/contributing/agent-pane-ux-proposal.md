@@ -6,7 +6,9 @@ Design proposal with the first composer stage implemented. The runtime now
 supplies typed submission/binding context and the shared prompt block adds
 display-only context/help in comfortable geometry, retaining compact panes and
 existing input semantics. The quieter rail and expandable activity sections
-remain proposals. The evidence table below records the original inspected
+now have separate status: rail/category styling is separated with normal-weight
+assistant/status text, while the proposed thin glyph and expandable activity
+remain unimplemented. The evidence table below records the original inspected
 baseline, not every current behavior. Synthetic rendering/layout regressions
 are not measured usability or real-terminal font evaluation.
 

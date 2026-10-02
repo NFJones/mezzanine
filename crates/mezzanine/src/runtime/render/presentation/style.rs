@@ -89,13 +89,12 @@ impl AgentTerminalPresentationStyle {
         }
     }
 
-    /// Returns the SGR prefix used before rendering a transcript gutter.
+    /// Returns the SGR prefix used for transcript labels and simple styled bodies.
     pub(super) fn sgr_prefix(self, ui_theme: &UiTheme) -> String {
         let mut rendition = agent_text_foreground_rendition(self.color_pair(ui_theme));
         match self {
-            Self::Status | Self::DiffContext => rendition.dim = true,
+            Self::Status | Self::Assistant | Self::DiffContext => {}
             Self::UserPrompt
-            | Self::Assistant
             | Self::Error
             | Self::Command
             | Self::DiffHeader
@@ -168,6 +167,13 @@ pub(crate) fn agent_text_foreground_rendition(pair: UiColorPair) -> GraphicRendi
         foreground: Some(pair.foreground),
         ..GraphicRendition::default()
     }
+}
+
+/// Returns a quiet foreground-only rail independent of message category.
+/// No ANSI dim or bold is applied: important body/label contrast and authored
+/// rich-text emphasis remain separate, and no background paints terminal cells.
+pub(crate) fn agent_gutter_rendition(ui_theme: &UiTheme) -> GraphicRendition {
+    agent_text_foreground_rendition(ui_theme.colors.agent_transcript_status)
 }
 
 /// Returns a foreground-only rendition for one agent transcript name marker.

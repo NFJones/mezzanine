@@ -2547,7 +2547,13 @@ user-facing response, MUST remain visible by default so the agent never appears
 silent. These agent-authored lines, their gutter prefix characters, and their
 speaker labels MUST be visually distinct through named theme colors while
 preserving their plain-text content for copy mode, history export, and terminal
-observation. Structured agent-mode log rows and rendered transcript
+observation. The two-cell transcript rail MUST use foreground-only status-theme
+styling independently of message category, without bold or ANSI dim. Assistant
+labels and status/rationale prose MUST remain normal-weight and undimmed;
+user, error and command labels retain their category accents. Authored Markdown
+emphasis and diff styling remain independent. The existing `▐ ` glyph and source
+copy offsets are retained; legacy ANSI-only records MUST NOT be heuristically
+rewritten to adopt current styling. Structured agent-mode log rows and rendered transcript
 presentation rows MUST wrap at the smaller of the pane terminal width or the
 configured `terminal.agent_wrap_column_cap` display-cell limit (120 by default)
 before they are persisted or replayed. This includes status, lifecycle, error,
