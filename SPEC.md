@@ -2597,6 +2597,10 @@ and remain distinct from response-wide rationale. Promoted summaries and command
 intent MUST preserve the same source order and renderer as static presentation.
 Ordered and promoted action headers MUST retain their accepted action identity;
 header receipt MUST NOT invent execution success or an executor transaction.
+Executor-confirmed mutation components MUST retain the exact attempt/transaction
+kind, section index and path supplied by the executor, with `confirmed` status.
+This status describes only the released section, never whole-action success;
+later failure MUST NOT erase or duplicate that positively confirmed effect.
 Command components MUST report `accepted`,
 not infer running or success before executor evidence. Their bounded source and
 omission state MUST replay through the ordinary command renderer. The current

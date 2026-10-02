@@ -440,6 +440,7 @@ fn activity_fork_preserves_response_identity_and_exact_source() {
             action_id: Some("same".into()),
             action_ordinal: Some(0),
             transaction: None,
+            mutation: None,
             kind: ActivityComponentKind::Result,
             status: "succeeded".into(),
             content_type: "text/plain".into(),

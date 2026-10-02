@@ -52,6 +52,9 @@ an action or executor attempt. Accepted action summaries retain their action
 ordinal separately from response-wide rationale. Promoted summaries and command
 previews keep their original source order and renderer. Accepted action headers
 also retain action identity without implying execution success or an attempt.
+Confirmed mutation details retain the executor's section index, path and
+attempt/transaction identity. `confirmed` applies to that section only; a later
+failure can coexist with the retained effect and does not imply rollback.
 An `accepted` command
 is not evidence of execution or success.
 Enter or click a row to open detail; Escape returns

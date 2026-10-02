@@ -88,6 +88,10 @@ pub(super) fn read_activity_browser(
             "## Retained result\n\n{}",
             literal_activity_source(&body)
         ));
+        if let Some(mutation) = activity.mutation.as_ref() {
+            detail.push_str(&format!("\n\n## Confirmed section {}\n\n{}\n\nConfirmation applies only to this section, not whole-action success.",
+                mutation.section_index, literal_activity_source(&mutation.path)));
+        }
         let identity = (
             activity.turn_id.clone(),
             activity.response_id.clone(),
@@ -106,6 +110,13 @@ pub(super) fn read_activity_browser(
                 activity.status,
                 literal_activity_source(&body)
             ));
+            if let Some(mutation) = activity.mutation.as_ref() {
+                record.markdown.push_str(&format!(
+                    "\n\nConfirmed section {} (not whole-action success):\n\n{}",
+                    mutation.section_index,
+                    literal_activity_source(&mutation.path)
+                ));
+            }
             if let Some((_, status)) = record.metadata.iter_mut().find(|(key, _)| key == "status") {
                 *status = activity.status.clone();
             }

@@ -106,6 +106,7 @@ impl RuntimeSessionService {
             action_id: None,
             action_ordinal: None,
             transaction: None,
+            mutation: None,
             kind: ActivityComponentKind::Rationale,
             status: "accepted".to_string(),
             content_type:
@@ -178,6 +179,7 @@ impl RuntimeSessionService {
             action_id: Some(action.id.clone()),
             action_ordinal: Some(ordinal),
             transaction: None,
+            mutation: None,
             kind: ActivityComponentKind::Command,
             status: "accepted".to_string(),
             content_type: "text/plain".to_string(),
@@ -311,6 +313,7 @@ impl RuntimeSessionService {
             action_id: Some(action.id.clone()),
             action_ordinal: Some(ordinal),
             transaction: None,
+            mutation: None,
             kind: ActivityComponentKind::Outcome,
             status: format!("{:?}", result.status).to_ascii_lowercase(),
             content_type:

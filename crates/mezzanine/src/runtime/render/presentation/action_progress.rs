@@ -940,6 +940,50 @@ impl RuntimeSessionService {
             } else {
                 AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE
             };
+            // Confirmation is per mutation component, not whole-action success.
+            // Promotion has already checked exact execution/source/lineage fences.
+            let activity = if key.component.is_confirmed() {
+                if let Some(execution) = self.agent_turn_executions().get(&key.turn_id)
+                    && let Some(ordinal) =
+                        execution.response.action_batch.as_ref().and_then(|batch| {
+                            batch
+                                .actions
+                                .iter()
+                                .position(|action| action.id == key.action_id)
+                        })
+                {
+                    self.activity_action_source(pane_id, execution, ordinal,
+                        crate::storage::transcript::activity::ActivityComponentKind::ConfirmedMutation,
+                        (&component.source, source_content_type))?
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let encoded = activity.and_then(|mut source| {
+                source.status = "confirmed".to_string();
+                if let ActionPresentationComponentIdentity::ConfirmedMutation {
+                    section_index,
+                    path,
+                } = &key.component
+                {
+                    source.mutation =
+                        Some(crate::storage::transcript::activity::ActivityMutation {
+                            section_index: *section_index,
+                            path: path.clone(),
+                        });
+                }
+                source.transaction = Some(match &key.execution {
+                    ActionPresentationExecutionIdentity::Attempt(marker) => {
+                        format!("attempt:{marker}")
+                    }
+                    ActionPresentationExecutionIdentity::Transaction(marker) => {
+                        format!("transaction:{marker}")
+                    }
+                });
+                source.encode().ok()
+            });
             self.persist_agent_presentation_entry(
                 pane_id,
                 flattened
@@ -952,7 +996,15 @@ impl RuntimeSessionService {
                     .collect(),
                 Vec::new(),
                 ansi_text,
-                Some((&component.source, source_content_type)),
+                Some(encoded.as_deref().map_or(
+                    (component.source.as_str(), source_content_type),
+                    |source| {
+                        (
+                            source,
+                            crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE,
+                        )
+                    },
+                )),
             );
         }
         Ok(true)

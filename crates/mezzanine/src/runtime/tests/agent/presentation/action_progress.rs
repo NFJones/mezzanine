@@ -615,6 +615,8 @@ fn runtime_action_progress_confirmed_diff_survives_failure_without_duplicates() 
         "write-marker",
         "# __MEZ_APPLY_PATCH_WRITE_PHASE__",
     );
+    let store = AgentTranscriptStore::new(temp_root("confirmed-activity-attribution"));
+    service.set_agent_transcript_store(store.clone());
     let diff = "diff --git a/note.txt b/note.txt\n--- a/note.txt\n+++ b/note.txt\n@@ -1 +1 @@\n-old\n+confirmed-new\n";
     let progress = transaction_progress(
         &turn.turn_id,
@@ -658,6 +660,26 @@ fn runtime_action_progress_confirmed_diff_survives_failure_without_duplicates() 
         .normal_content_lines()
         .join("\n");
     assert_eq!(pane_text.matches("confirmed-new").count(), 1, "{pane_text}");
+    let entries = store.inspect_presentation(&turn.conversation_id).unwrap();
+    assert_eq!(entries.len(), 1);
+    let source = crate::storage::transcript::activity::ActivitySource::decode(
+        entries[0].source_text.as_deref().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        source.kind,
+        crate::storage::transcript::activity::ActivityComponentKind::ConfirmedMutation
+    );
+    assert_eq!(source.status, "confirmed");
+    assert_eq!(source.action_id.as_deref(), Some(action.id.as_str()));
+    assert_eq!(source.action_ordinal, Some(0));
+    assert_eq!(
+        source.transaction.as_deref(),
+        Some("transaction:write-marker")
+    );
+    assert_eq!(source.mutation.as_ref().unwrap().section_index, 0);
+    assert_eq!(source.mutation.as_ref().unwrap().path, "note.txt");
+    assert_eq!(source.source, diff);
     assert_eq!(
         service.action_presentation_progress_counts_for_tests("%1"),
         (0, 1)

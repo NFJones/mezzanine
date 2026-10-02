@@ -54,6 +54,9 @@ pub(crate) struct ActivitySource {
     pub action_ordinal: Option<usize>,
     /// Executor transaction identity when positively available.
     pub transaction: Option<String>,
+    /// Confirmed executor section and path; absent for non-mutation components.
+    #[serde(default)]
+    pub mutation: Option<ActivityMutation>,
     /// Explicit producer category.
     pub kind: ActivityComponentKind,
     /// Evidence-backed lifecycle state, not inferred from component receipt.
@@ -68,6 +71,16 @@ pub(crate) struct ActivitySource {
     /// Accepted intent supplied by the response owner, not inferred from logs.
     #[serde(default)]
     pub intent: ActivityIntent,
+}
+
+/// Exact executor-confirmed mutation endpoint, independent of diff parsing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ActivityMutation {
+    /// Zero-based executor-confirmed section ordinal.
+    pub section_index: usize,
+    /// Exact executor-supplied user-visible path, not inferred from diff text.
+    pub path: String,
 }
 
 /// Visible accepted intent retained independently of settled result details.
@@ -98,6 +111,17 @@ impl ActivitySource {
             || self.action_id.is_some() != self.action_ordinal.is_some()
             || self.action_id.as_deref().is_some_and(|value| !token(value))
             || self
+                .mutation
+                .as_ref()
+                .is_some_and(|mutation| !token(&mutation.path))
+            || (self.kind == ActivityComponentKind::ConfirmedMutation
+                && (self.mutation.is_none()
+                    || self.transaction.is_none()
+                    || self.action_id.is_none()
+                    || self.status != "confirmed"))
+            || (self.kind != ActivityComponentKind::ConfirmedMutation && self.mutation.is_some())
+            || (self.status == "confirmed" && self.kind != ActivityComponentKind::ConfirmedMutation)
+            || self
                 .transaction
                 .as_deref()
                 .is_some_and(|value| !token(value))
@@ -120,6 +144,7 @@ impl ActivitySource {
             || !matches!(
                 self.status.as_str(),
                 "accepted"
+                    | "confirmed"
                     | "running"
                     | "blocked"
                     | "rejected"
@@ -181,6 +206,7 @@ mod tests {
             action_id: Some("action".into()),
             action_ordinal: Some(0),
             transaction: None,
+            mutation: None,
             kind: ActivityComponentKind::Result,
             status: "succeeded".into(),
             content_type: "text/plain".into(),

@@ -2308,6 +2308,7 @@ impl RuntimeSessionService {
             action_id: Some(action.id.clone()),
             action_ordinal: Some(ordinal),
             transaction: transaction.map(str::to_string),
+            mutation: None,
             kind: ActivityComponentKind::Result,
             status: format!("{:?}", result.status).to_ascii_lowercase(),
             content_type: if diff {
