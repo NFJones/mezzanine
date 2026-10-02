@@ -2,6 +2,101 @@
 
 use super::*;
 
+/// Diagnoses a saved-session resume using only a disposable copy of its files.
+/// The explicit source directory is read-only evidence; the worker renders the
+/// copied presentation without provider I/O or touching the original catalog.
+#[test]
+#[ignore = "requires an explicit local saved-session evidence directory"]
+fn diagnostic_saved_session_resume_from_disposable_copy() {
+    let source = std::path::PathBuf::from(
+        std::env::var_os("MEZ_RESUME_DIAGNOSTIC_SOURCE").expect("explicit session directory"),
+    );
+    let conversation_id = source.file_name().unwrap().to_str().unwrap().to_string();
+    let root = temp_root("runtime-resume-crash-diagnostic");
+    let destination = root.join(&conversation_id);
+    std::fs::create_dir_all(&destination).unwrap();
+    for entry in std::fs::read_dir(&source).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            std::fs::copy(entry.path(), destination.join(entry.file_name())).unwrap();
+        }
+    }
+    let transcript_store = AgentTranscriptStore::new(root);
+    let mut service = test_runtime_service();
+    std::fs::copy(
+        source.parent().unwrap().join("active-agent-sessions.tsv"),
+        transcript_store.agent_session_metadata_path_for_tests(),
+    )
+    .unwrap();
+    let mut metadata = transcript_store
+        .load_agent_session_metadata("$1790712711571452756")
+        .unwrap()
+        .into_iter()
+        .find(|metadata| metadata.conversation_id == conversation_id)
+        .unwrap();
+    let runtime_id = service.session().id.to_string();
+    metadata.mezzanine_session_id = runtime_id.clone();
+    metadata.pane_id = "%1".to_string();
+    transcript_store
+        .save_agent_session_metadata(&runtime_id, &[metadata])
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(140, 42).unwrap(), 120)
+        .unwrap();
+    if std::env::var_os("MEZ_RESUME_DIAGNOSTIC_RESTORE").is_some() {
+        eprintln!("diagnostic: restore original running-turn metadata");
+        assert_eq!(
+            service
+                .restore_agent_sessions_from_transcript_store()
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            service.agent_shell_store().get("%1").unwrap().session_id,
+            conversation_id,
+        );
+        eprintln!("diagnostic: metadata restoration completed");
+        return;
+    }
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    eprintln!("diagnostic: dispatch resume");
+    service
+        .execute_agent_shell_command(&primary, &format!("/resume {conversation_id}"))
+        .unwrap();
+    let dispatch = service
+        .take_pending_deferred_agent_commands()
+        .pop()
+        .unwrap();
+    let work = service
+        .claim_agent_command_work(
+            &dispatch.primary_client_id,
+            &dispatch.pane_id,
+            &dispatch.command,
+            &dispatch.input,
+            dispatch.claim_generation,
+            &dispatch.conversation_id,
+        )
+        .unwrap()
+        .unwrap();
+    eprintln!("diagnostic: prepare direct resume projection");
+    let outcome = RuntimeSessionService::execute_deferred_agent_command(&work);
+    assert!(matches!(
+        outcome,
+        crate::runtime::RuntimeAgentCommandAsyncOutcome::DirectResume { .. }
+    ));
+    eprintln!("diagnostic: install direct resume projection");
+    assert!(service.complete_agent_command_work(&work, outcome).unwrap());
+    assert_eq!(
+        service.agent_shell_store().get("%1").unwrap().session_id,
+        conversation_id,
+    );
+    eprintln!("diagnostic: resume completed");
+}
+
 /// Verifies `/resume` completion includes saved conversation ids supplied by
 /// the runtime transcript store.
 #[test]

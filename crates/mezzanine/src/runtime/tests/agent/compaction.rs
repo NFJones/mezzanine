@@ -300,6 +300,93 @@ fn runtime_zero_budget_recovery_resumes_fitting_first_segment() {
     assert!(chronology[3].block().content.starts_with("result result"));
 }
 
+/// Diagnoses saved history through canonical replay without modifying the
+/// archive, sending provider requests, or displaying private payloads. Only
+/// aggregate planning costs and execution-owner identities are reported.
+#[test]
+fn diagnostic_incident_history_compaction_selection() {
+    let store = AgentTranscriptStore::new("/home/neil/.config/mezzanine/agent-sessions");
+    let mut entries = store
+        .inspect("41f18049-2b78-49e2-b715-b3a99871daaf")
+        .unwrap();
+    entries.retain(|entry| entry.sequence < 1215);
+    let history = crate::runtime::control::runtime_agent_transcript_context("%1", &entries);
+    let mut context = mez_agent::AgentContext::import_durable_blocks(history.blocks).unwrap();
+    context
+        .restore_imported_execution_events(&history.execution_events)
+        .unwrap();
+    let high_water = context.event_sequence_high_water_mark();
+    let projection = mez_agent::ProviderBudgetProjection::new(
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        "openai",
+    );
+    let plan = mez_agent::plan_model_context_compaction_for_provider(
+        &context, 600_000, 10, high_water, projection,
+    )
+    .unwrap();
+    let mut selected_owners = std::collections::BTreeMap::<String, usize>::new();
+    for event in context.chronology().iter().filter(|event| {
+        plan.replacement_event_sequences()
+            .contains(&event.sequence())
+    }) {
+        let owner = event
+            .execution_group_id()
+            .map(|id| id.as_str().split(':').next().unwrap_or("unknown"))
+            .unwrap_or("ungrouped");
+        *selected_owners.entry(owner.to_string()).or_default() += 1;
+    }
+    println!(
+        "saved_history blocks={} selected_blocks={} selected_owners={selected_owners:?} summary_allowance={} additional_flag={} planning_budget={:?}",
+        context.blocks().len(),
+        plan.replacement_blocks().len(),
+        plan.summary_budget_words(),
+        plan.requires_additional_segments(),
+        plan.planning_budget()
+    );
+    let (candidate, _) =
+        mez_agent::apply_model_context_compaction_plan(context, &plan, "synthetic short summary")
+            .unwrap();
+    let mut protected = 0usize;
+    let mut optional = 0usize;
+    let mut owner_costs = std::collections::BTreeMap::<String, usize>::new();
+    for (index, (block, cost)) in candidate
+        .blocks()
+        .iter()
+        .zip(mez_agent::projected_context_block_input_tokens(
+            &candidate,
+            Some(projection),
+        ))
+        .enumerate()
+    {
+        if block.retention() == mez_agent::ContextRetention::Exact
+            || block.source == ContextSourceKind::TranscriptUser
+        {
+            protected += cost;
+        } else {
+            optional += cost;
+        }
+        let owner = candidate
+            .metadata_for_block(index)
+            .and_then(|metadata| metadata.execution_group_id())
+            .map(|id| id.as_str().split(':').next().unwrap_or("unknown"))
+            .unwrap_or("ungrouped");
+        *owner_costs.entry(owner.to_string()).or_default() += cost;
+    }
+    let next = mez_agent::plan_model_context_compaction_for_provider_tokens(
+        &candidate, 760_000, 0, high_water, projection,
+    )
+    .unwrap();
+    println!(
+        "after_first_summary protected_estimate={protected} optional_estimate={optional} owner_costs={owner_costs:?} next_changes={} next_selected_blocks={}",
+        next.changes_context(),
+        next.replacement_blocks().len()
+    );
+    assert!(plan.changes_context());
+    assert!(!plan.requires_additional_segments());
+    assert!(optional > 760_000);
+    assert!(next.changes_context());
+}
+
 /// Verifies large bracketed-paste agent prompt input is displayed compactly in
 /// the pane transcript while the agent turn receives the exact pasted payload.
 #[test]
