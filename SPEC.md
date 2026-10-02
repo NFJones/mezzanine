@@ -2589,7 +2589,10 @@ could change control semantics. Mixed histories MUST preserve presentation
 order.
 The explicit `/show-context activity [presentation-sequence]` view MUST provide
 client-local list/detail disclosure of identity-bearing accepted command intent,
-retained outcomes and result previews. Command components MUST report `accepted`,
+response-wide rationale, retained outcomes and result previews. Static and
+promoted rationale MUST use the same response identity without inventing an
+action ordinal; source wrapping MUST NOT repaint accepted rows or duplicate
+them at settlement. Command components MUST report `accepted`,
 not infer running or success before executor evidence. Their bounded source and
 omission state MUST replay through the ordinary command renderer. The current
 snapshot is limited to the latest 200 cleartext

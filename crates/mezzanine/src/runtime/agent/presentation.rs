@@ -73,8 +73,52 @@ fn action_holds_later_log(action: &mez_agent::AgentAction) -> bool {
 }
 
 impl RuntimeSessionService {
-    /// Captures accepted command intent at its existing response ordinal. This
-    /// is not evidence that execution started or succeeded.
+    /// Captures response-wide rationale independently of action components.
+    fn append_activity_rationale_for_execution(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        text: &str,
+    ) -> Result<()> {
+        let source = self.activity_rationale_source(pane_id, execution, text)?;
+        self.append_agent_thinking_with_activity(pane_id, text, source)
+    }
+
+    /// Returns response-wide accepted identity for both static and promoted
+    /// rationale. Absence of a conversation retains the existing no-op path.
+    pub(in crate::runtime) fn activity_rationale_source(
+        &self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        text: &str,
+    ) -> Result<Option<crate::storage::transcript::activity::ActivitySource>> {
+        use crate::storage::transcript::activity::{ActivityComponentKind, ActivitySource};
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
+            return Ok(None);
+        };
+        let source = ActivitySource {
+            version: 1,
+            conversation_id: session.session_id.clone(),
+            turn_id: execution.request.turn_id.clone(),
+            response_id: super::provider_execution::provider_log_execution_group_id(execution)?
+                .as_str()
+                .to_string(),
+            action_id: None,
+            action_ordinal: None,
+            transaction: None,
+            kind: ActivityComponentKind::Rationale,
+            status: "accepted".to_string(),
+            content_type:
+                "application/vnd.mezzanine.agent-presentation.thinking+text; charset=utf-8"
+                    .to_string(),
+            source: text.to_string(),
+            preview_source: None,
+            intent: Default::default(),
+        };
+        Ok(Some(source))
+    }
+
+    /// Captures accepted command intent without claiming executor evidence.
     fn append_activity_command_for_execution(
         &mut self,
         pane_id: &str,
@@ -938,7 +982,11 @@ impl RuntimeSessionService {
             let (action_index, payload) = match component {
                 RuntimeValidatedLogComponent::Rationale(text) => {
                     if batch_rationale_was_presented {
-                        self.append_agent_thinking_text_to_terminal_buffer(pane_id, text.trim())?;
+                        self.append_activity_rationale_for_execution(
+                            pane_id,
+                            execution,
+                            text.trim(),
+                        )?;
                     }
                     continue;
                 }

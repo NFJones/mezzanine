@@ -3,6 +3,24 @@
 use super::*;
 use crate::runtime::CopyMode;
 
+/// Returns retained renderer payload rather than activity envelope JSON so
+/// presentation parity tests compare exact semantic bytes across record versions.
+fn presentation_semantic_source(
+    entry: &crate::storage::transcript::AgentPresentationEntry,
+) -> Option<String> {
+    if entry.source_content_type.as_deref()
+        == Some(crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE)
+    {
+        entry.source_text.as_deref().map(|source| {
+            crate::storage::transcript::activity::ActivitySource::decode(source)
+                .unwrap()
+                .source
+        })
+    } else {
+        entry.source_text.clone()
+    }
+}
+
 /// Installs one conversation-bound agent screen for presentation-focused tests.
 ///
 /// Presentation writers require a pane agent session so delayed output cannot

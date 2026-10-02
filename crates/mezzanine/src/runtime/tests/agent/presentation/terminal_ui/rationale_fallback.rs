@@ -158,7 +158,7 @@ fn runtime_streaming_rationale_and_command_fallback_retains_only_rationale() {
     assert_eq!(
         entries
             .iter()
-            .filter(|entry| entry.source_text.as_deref() == Some(rationale))
+            .filter(|entry| presentation_semantic_source(entry).as_deref() == Some(rationale))
             .count(),
         1,
         "the fallback rationale must be persisted exactly once"
@@ -555,7 +555,8 @@ async fn runtime_streaming_rationale_only_keeps_visible_generation() {
     assert_eq!(
         entries
             .iter()
-            .filter(|entry| entry.source_text.as_deref() == Some("Inspect validated output"))
+            .filter(|entry| presentation_semantic_source(entry).as_deref()
+                == Some("Inspect validated output"))
             .count(),
         1
     );

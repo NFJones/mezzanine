@@ -209,17 +209,16 @@ impl RuntimeSessionService {
                     presentation.rationale.as_ref(),
                     replacement.projected_rationale.as_ref(),
                 ) {
-                    self.persist_agent_presentation_entry(
+                    self.persist_activity_rationale_projection(
                         pane_id,
-                        vec![row.style.clone(); row.rendered_lines.len()],
-                        row.rendered_lines.clone(),
-                        row.copy_lines.clone(),
-                        String::new(),
-                        Some((
-                            source.text.as_str(),
-                            AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
-                        )),
-                    );
+                        execution,
+                        (
+                            row.style.clone(),
+                            row.rendered_lines.clone(),
+                            row.copy_lines.clone(),
+                        ),
+                        &source.text,
+                    )?;
                     promoted.insert(STREAMED_RATIONALE_PRESENTED_MARKER);
                     self.integration
                         .runtime_metrics_mut()
@@ -472,17 +471,16 @@ impl RuntimeSessionService {
                 presentation.projected_rationale.as_ref(),
             )
         {
-            self.persist_agent_presentation_entry(
+            self.persist_activity_rationale_projection(
                 pane_id,
-                vec![projection.style.clone(); projection.rendered_lines.len()],
-                projection.rendered_lines.clone(),
-                projection.copy_lines.clone(),
-                String::new(),
-                Some((
-                    rationale.text.as_str(),
-                    AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
-                )),
-            );
+                execution,
+                (
+                    projection.style.clone(),
+                    projection.rendered_lines.clone(),
+                    projection.copy_lines.clone(),
+                ),
+                &rationale.text,
+            )?;
             self.presentation
                 .agent_promoted_streaming_say_actions
                 .insert(
@@ -640,17 +638,16 @@ impl RuntimeSessionService {
                 presentation.rationale.as_ref(),
                 presentation.projected_rationale.as_ref(),
             ) {
-                self.persist_agent_presentation_entry(
+                self.persist_activity_rationale_projection(
                     pane_id,
-                    vec![projection.style.clone(); projection.rendered_lines.len()],
-                    projection.rendered_lines.clone(),
-                    projection.copy_lines.clone(),
-                    String::new(),
-                    Some((
-                        rationale.text.as_str(),
-                        AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
-                    )),
-                );
+                    execution,
+                    (
+                        projection.style.clone(),
+                        projection.rendered_lines.clone(),
+                        projection.copy_lines.clone(),
+                    ),
+                    &rationale.text,
+                )?;
             }
             let mut promoted = std::collections::BTreeSet::new();
             if presentation.projected_rationale.is_some() {
@@ -820,17 +817,16 @@ impl RuntimeSessionService {
             presentation.rationale.as_ref(),
             presentation.projected_rationale.as_ref(),
         ) {
-            self.persist_agent_presentation_entry(
+            self.persist_activity_rationale_projection(
                 pane_id,
-                vec![projection.style.clone(); projection.rendered_lines.len()],
-                projection.rendered_lines.clone(),
-                projection.copy_lines.clone(),
-                String::new(),
-                Some((
-                    rationale.text.as_str(),
-                    AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
-                )),
-            );
+                execution,
+                (
+                    projection.style.clone(),
+                    projection.rendered_lines.clone(),
+                    projection.copy_lines.clone(),
+                ),
+                &rationale.text,
+            )?;
             self.integration
                 .runtime_metrics_mut()
                 .record_agent_streaming_settled_component("rationale");

@@ -355,17 +355,12 @@ impl RuntimeSessionService {
         )?;
         let mut promoted = std::collections::BTreeSet::new();
         if let (Some(rationale), Some(row)) = (rationale, projection.projected_rationale) {
-            self.persist_agent_presentation_entry(
+            self.persist_activity_rationale_projection(
                 pane_id,
-                vec![row.style.clone(); row.rendered_lines.len()],
-                row.rendered_lines,
-                row.copy_lines,
-                String::new(),
-                Some((
-                    rationale.text.as_str(),
-                    AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
-                )),
-            );
+                execution,
+                (row.style, row.rendered_lines, row.copy_lines),
+                &rationale.text,
+            )?;
             promoted.insert(STREAMED_RATIONALE_PRESENTED_MARKER);
             self.integration
                 .runtime_metrics_mut()

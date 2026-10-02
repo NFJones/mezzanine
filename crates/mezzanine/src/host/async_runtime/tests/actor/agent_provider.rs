@@ -679,7 +679,18 @@ async fn actor_provider_completion_case(
                 _ => None,
             })
             .flatten()
-            .filter_map(|entry| Some((entry.source_text?, entry.source_content_type?)))
+            .filter_map(|entry| {
+                let text = entry.source_text?;
+                let content_type = entry.source_content_type?;
+                if content_type == crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE {
+                    let activity =
+                        crate::storage::transcript::activity::ActivitySource::decode(&text)
+                            .unwrap();
+                    Some((activity.source, activity.content_type))
+                } else {
+                    Some((text, content_type))
+                }
+            })
             .collect::<Vec<_>>();
         assert_eq!(
             handle.shutdown().await.unwrap(),

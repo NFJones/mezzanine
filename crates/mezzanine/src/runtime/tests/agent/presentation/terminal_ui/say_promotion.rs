@@ -838,10 +838,24 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                     .unwrap()
                     .normal_styled_content_lines();
                 let entries = store.inspect_presentation(&conversation_id).unwrap();
+                let semantic_source =
+                    |entry: &crate::storage::transcript::AgentPresentationEntry| {
+                        if entry.source_content_type.as_deref()
+                            == Some(crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE)
+                        {
+                            entry.source_text.as_deref().map(|text| {
+                                crate::storage::transcript::activity::ActivitySource::decode(text)
+                                    .unwrap()
+                                    .source
+                            })
+                        } else {
+                            entry.source_text.clone()
+                        }
+                    };
                 assert_eq!(
                     entries
                         .iter()
-                        .filter(|entry| entry.source_text.as_deref() == Some(rationale))
+                        .filter(|entry| semantic_source(entry).as_deref() == Some(rationale))
                         .count(),
                     1,
                     "{case}: {entries:?}"
@@ -864,8 +878,8 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                 assert_eq!(
                     entries
                         .iter()
-                        .filter_map(|entry| entry.source_text.as_deref())
-                        .filter(|text| [rationale, source, later].contains(text))
+                        .filter_map(semantic_source)
+                        .filter(|text| [rationale, source, later].contains(&text.as_str()))
                         .collect::<Vec<_>>(),
                     vec![rationale, source, later],
                     "{case}: {entries:?}"
@@ -876,7 +890,7 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                         .into_iter()
                         .filter(|entry| {
                             [source, rationale, later]
-                                .contains(&entry.source_text.as_deref().unwrap_or(""))
+                                .contains(&semantic_source(entry).as_deref().unwrap_or(""))
                         })
                         .map(|entry| (entry.display_lines, entry.copy_lines))
                         .collect::<Vec<_>>(),

@@ -262,7 +262,7 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
         assert_eq!(
             entries
                 .iter()
-                .filter(|entry| entry.source_text.as_deref() == Some(rationale))
+                .filter(|entry| presentation_semantic_source(entry).as_deref() == Some(rationale))
                 .count(),
             1,
             "{entries:?}"
@@ -285,8 +285,8 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
         );
         let sources = entries
             .iter()
-            .filter_map(|entry| entry.source_text.as_deref())
-            .filter(|source| [rationale, summary, command].contains(source))
+            .filter_map(presentation_semantic_source)
+            .filter(|source| [rationale, summary, command].contains(&source.as_str()))
             .collect::<Vec<_>>();
         assert_eq!(sources, [rationale, summary, command]);
         service.terminate_all_pane_processes().unwrap();
@@ -615,7 +615,9 @@ async fn runtime_streaming_command_intent_survives_validation_and_tail_settlemen
                         .inspect_presentation(&conversation_id)
                         .unwrap()
                         .iter()
-                        .filter(|entry| entry.source_text.as_deref() == Some(source))
+                        .filter(
+                            |entry| presentation_semantic_source(entry).as_deref() == Some(source)
+                        )
                         .count(),
                     1
                 );

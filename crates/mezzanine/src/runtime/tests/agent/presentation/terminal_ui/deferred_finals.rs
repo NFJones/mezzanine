@@ -570,10 +570,10 @@ async fn streaming_progress_and_header_case_with_outcome(
     );
     let ordered_sources = entries
         .iter()
-        .filter_map(|entry| entry.source_text.as_deref())
+        .filter_map(presentation_semantic_source)
         .filter(|source| {
             matches!(
-                *source,
+                source.as_str(),
                 "Look up matching query" | "searching now" | "web search: matching query"
             )
         })

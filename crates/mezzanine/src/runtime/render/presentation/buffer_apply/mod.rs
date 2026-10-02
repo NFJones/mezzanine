@@ -1056,6 +1056,38 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Persists accepted rationale without repainting its promoted rows. Static
+    /// and streamed producers share the exact response-bound semantic envelope.
+    fn persist_activity_rationale_projection(
+        &mut self,
+        pane_id: &str,
+        execution: &mez_agent::AgentTurnExecution,
+        rows: (String, Vec<String>, Vec<String>),
+        text: &str,
+    ) -> Result<()> {
+        let encoded = self
+            .activity_rationale_source(pane_id, execution, text)?
+            .and_then(|source| source.encode().ok());
+        let source =
+            encoded
+                .as_deref()
+                .map_or((text, AGENT_PRESENTATION_THINKING_CONTENT_TYPE), |source| {
+                    (
+                        source,
+                        crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE,
+                    )
+                });
+        self.persist_agent_presentation_entry(
+            pane_id,
+            vec![rows.0; rows.1.len()],
+            rows.1,
+            rows.2,
+            String::new(),
+            Some(source),
+        );
+        Ok(())
+    }
+
     /// Persists one durable user-visible agent presentation entry.
     pub(super) fn persist_agent_presentation_entry(
         &mut self,
@@ -1296,6 +1328,17 @@ impl RuntimeSessionService {
         pane_id: &str,
         text: &str,
     ) -> Result<()> {
+        self.append_agent_thinking_with_activity(pane_id, text, None)
+    }
+
+    /// Uses the existing rationale renderer with explicit accepted component
+    /// identity. Missing identity and replay retain the legacy source contract.
+    pub(in crate::runtime) fn append_agent_thinking_with_activity(
+        &mut self,
+        pane_id: &str,
+        text: &str,
+        activity: Option<crate::storage::transcript::activity::ActivitySource>,
+    ) -> Result<()> {
         if self.agent_thinking_enabled(pane_id) {
             let content_width = self.agent_terminal_markdown_frame_width(pane_id)?;
             let rendition = agent_terminal_label_rendition(
@@ -1318,12 +1361,26 @@ impl RuntimeSessionService {
                     }
                 })
                 .collect::<Vec<_>>();
+            let encoded = activity.and_then(|mut activity| {
+                activity.content_type = AGENT_PRESENTATION_THINKING_CONTENT_TYPE.to_string();
+                activity.source = text.to_string();
+                activity.preview_source = None;
+                activity.encode().ok()
+            });
             self.append_agent_terminal_rendered_lines_to_buffer(
                 pane_id,
                 AgentTerminalPresentationStyle::Status,
                 &rendered_lines,
                 &[],
-                Some((text, AGENT_PRESENTATION_THINKING_CONTENT_TYPE)),
+                Some(encoded.as_deref().map_or(
+                    (text, AGENT_PRESENTATION_THINKING_CONTENT_TYPE),
+                    |source| {
+                        (
+                            source,
+                            crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE,
+                        )
+                    },
+                )),
             )?;
         }
         Ok(())

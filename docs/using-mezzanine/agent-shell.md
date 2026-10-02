@@ -46,7 +46,9 @@ offsets. This styling change does not rewrite legacy ANSI-only records.
 
 Use `/show-context activity` to inspect recent identity-bearing action outcomes
 and retained result previews, plus accepted command intent captured before
-settlement. An `accepted` command is not evidence of execution or success.
+settlement and response-wide rationale. Rationale retains its response identity
+whether it arrived through streaming or a complete response; it does not claim
+an action or executor attempt. An `accepted` command is not evidence of execution or success.
 Enter or click a row to open detail; Escape returns
 to the list without altering conversation logs. `/show-context activity <sequence>`
 opens the activity containing that presentation sequence. Details distinguish

@@ -62,11 +62,22 @@ fn activity_command_intent_is_recorded_before_settlement() {
         .session_id
         .clone();
     let entries = store.inspect_presentation(&conversation).unwrap();
-    let command_entry = entries
+    let sources = entries
         .iter()
-        .find(|entry| entry.source_content_type.as_deref() == Some(ACTIVITY_CONTENT_TYPE))
+        .filter(|entry| entry.source_content_type.as_deref() == Some(ACTIVITY_CONTENT_TYPE))
+        .map(|entry| ActivitySource::decode(entry.source_text.as_deref().unwrap()).unwrap())
+        .collect::<Vec<_>>();
+    let rationale = sources
+        .iter()
+        .find(|source| source.kind == ActivityComponentKind::Rationale)
         .unwrap();
-    let source = ActivitySource::decode(command_entry.source_text.as_deref().unwrap()).unwrap();
+    assert_eq!(rationale.source, "accepted rationale");
+    assert!(rationale.action_id.is_none() && rationale.action_ordinal.is_none());
+    let source = sources
+        .iter()
+        .find(|source| source.kind == ActivityComponentKind::Command)
+        .unwrap();
+    assert_eq!(source.response_id, rationale.response_id);
     assert_eq!(source.kind, ActivityComponentKind::Command);
     assert_eq!(source.status, "accepted");
     assert_eq!(source.source, command);
@@ -179,6 +190,9 @@ fn activity_production_outcome_is_identity_bound_and_published_once() {
                 entry.source_text.as_deref().unwrap(),
             )
             .unwrap()
+        })
+        .filter(|source| {
+            source.kind == crate::storage::transcript::activity::ActivityComponentKind::Outcome
         })
         .collect::<Vec<_>>();
     assert_eq!(activity.len(), 1);
