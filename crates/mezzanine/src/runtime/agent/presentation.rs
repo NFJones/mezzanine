@@ -73,6 +73,47 @@ fn action_holds_later_log(action: &mez_agent::AgentAction) -> bool {
 }
 
 impl RuntimeSessionService {
+    /// Captures accepted command intent at its existing response ordinal. This
+    /// is not evidence that execution started or succeeded.
+    fn append_activity_command_for_execution(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        action: &mez_agent::AgentAction,
+        command: &str,
+    ) -> Result<()> {
+        use crate::storage::transcript::activity::{ActivityComponentKind, ActivitySource};
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
+            return Ok(());
+        };
+        let Some(ordinal) = execution.response.action_batch.as_ref().and_then(|batch| {
+            batch
+                .actions
+                .iter()
+                .position(|candidate| candidate == action)
+        }) else {
+            return self.append_agent_command_preview_to_terminal_buffer(pane_id, command);
+        };
+        let activity = ActivitySource {
+            version: 1,
+            conversation_id: session.session_id.clone(),
+            turn_id: execution.request.turn_id.clone(),
+            response_id: super::provider_execution::provider_log_execution_group_id(execution)?
+                .as_str()
+                .to_string(),
+            action_id: Some(action.id.clone()),
+            action_ordinal: Some(ordinal),
+            transaction: None,
+            kind: ActivityComponentKind::Command,
+            status: "accepted".to_string(),
+            content_type: "text/plain".to_string(),
+            source: String::new(),
+            preview_source: None,
+            intent: self.activity_intent_for_result(pane_id, execution, action),
+        };
+        self.append_agent_command_preview_with_activity(pane_id, command, false, Some(activity))
+    }
+
     /// Binds a visible result preview to its accepted response and explicit
     /// executor transaction. Missing ownership retains the legacy projection.
     pub(crate) fn append_activity_result_for_execution(
@@ -422,7 +463,7 @@ impl RuntimeSessionService {
             .agent_published_provider_headers
             .contains(&key)
         {
-            self.append_agent_command_preview_to_terminal_buffer(pane_id, command)?;
+            self.append_activity_command_for_execution(pane_id, execution, action, command)?;
             self.presentation
                 .agent_published_provider_commands
                 .insert(source_key);
@@ -641,7 +682,9 @@ impl RuntimeSessionService {
                     .agent_queued_provider_commands
                     .remove(&key)
                 {
-                    self.append_agent_command_preview_to_terminal_buffer(pane_id, &command)?;
+                    self.append_activity_command_for_execution(
+                        pane_id, execution, action, &command,
+                    )?;
                     self.presentation
                         .agent_published_provider_commands
                         .insert((key.clone(), command));

@@ -1451,6 +1451,23 @@ impl RuntimeSessionService {
         command: &str,
         source_was_truncated: bool,
     ) -> Result<()> {
+        self.append_agent_command_preview_with_activity(
+            pane_id,
+            command,
+            source_was_truncated,
+            None,
+        )
+    }
+
+    /// Renders command intent with explicit producer identity when available.
+    /// The envelope uses the same bounded source and omission renderer as replay.
+    pub(in crate::runtime) fn append_agent_command_preview_with_activity(
+        &mut self,
+        pane_id: &str,
+        command: &str,
+        source_was_truncated: bool,
+        activity: Option<crate::storage::transcript::activity::ActivitySource>,
+    ) -> Result<()> {
         /// Defines the MAX AGENT COMMAND PREVIEW LINES const used by this subsystem.
         ///
         /// Keeping this value documented makes the contract explicit at the module
@@ -1485,19 +1502,32 @@ impl RuntimeSessionService {
             .iter()
             .map(|line| line.display.clone())
             .collect::<Vec<_>>();
+        let content_type = if source.truncated {
+            AGENT_PRESENTATION_TRUNCATED_COMMAND_PREVIEW_CONTENT_TYPE
+        } else {
+            AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE
+        };
+        let encoded = activity.and_then(|mut activity| {
+            activity.content_type = content_type.to_string();
+            activity.source = source.text.clone();
+            activity.preview_source = None;
+            activity.encode().ok()
+        });
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
             AgentTerminalPresentationStyle::Command,
             &rendered_lines,
             &copy_lines,
-            Some((
-                &source.text,
-                if source.truncated {
-                    AGENT_PRESENTATION_TRUNCATED_COMMAND_PREVIEW_CONTENT_TYPE
-                } else {
-                    AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE
-                },
-            )),
+            Some(
+                encoded
+                    .as_deref()
+                    .map_or((&source.text, content_type), |encoded| {
+                        (
+                            encoded,
+                            crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE,
+                        )
+                    }),
+            ),
         )
     }
 

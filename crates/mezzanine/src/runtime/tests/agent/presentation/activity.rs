@@ -2,6 +2,100 @@
 
 use super::*;
 
+/// Accepted command intent is durable before any result exists. The ordered
+/// producer publishes it once, records acceptance rather than success, and
+/// replay uses the ordinary command renderer without changing its source.
+#[test]
+fn activity_command_intent_is_recorded_before_settlement() {
+    use crate::storage::transcript::activity::{
+        ACTIVITY_CONTENT_TYPE, ActivityComponentKind, ActivitySource,
+    };
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("activity-command-intent"));
+    service.set_agent_transcript_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let command = "printf 'accepted 雪'";
+    let action = mez_agent::AgentAction {
+        id: "intent".into(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect acceptance".into(),
+            command: command.into(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-intent"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".into(),
+            model: "test".into(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "accepted rationale".into(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    service
+        .queue_ordered_provider_command("%1", &execution, &action, command)
+        .unwrap();
+    let conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let entries = store.inspect_presentation(&conversation).unwrap();
+    let command_entry = entries
+        .iter()
+        .find(|entry| entry.source_content_type.as_deref() == Some(ACTIVITY_CONTENT_TYPE))
+        .unwrap();
+    let source = ActivitySource::decode(command_entry.source_text.as_deref().unwrap()).unwrap();
+    assert_eq!(source.kind, ActivityComponentKind::Command);
+    assert_eq!(source.status, "accepted");
+    assert_eq!(source.source, command);
+    assert_eq!(source.action_id.as_deref(), Some("intent"));
+    assert_eq!(source.action_ordinal, Some(0));
+    assert!(source.transaction.is_none());
+    service
+        .queue_ordered_provider_command("%1", &execution, &action, command)
+        .unwrap();
+    assert_eq!(store.inspect_presentation(&conversation).unwrap(), entries);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 20).unwrap(), 120).unwrap(),
+    );
+    service
+        .replay_agent_presentation_entries_to_terminal_buffer("%1", &entries)
+        .unwrap();
+    assert!(
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .iter()
+            .any(|line| line.contains("$ printf"))
+    );
+    assert!(execution.action_results.is_empty());
+}
+
 /// The production response/outcome presenter preserves exact denial ownership
 /// and publishes it once. Retrying presentation does not replay an action or
 /// append a second durable result, and hidden tool payload is not disclosed.

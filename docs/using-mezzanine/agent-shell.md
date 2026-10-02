@@ -45,7 +45,9 @@ two-cell `▐ ` footprint is unchanged, as are copied source and continuation
 offsets. This styling change does not rewrite legacy ANSI-only records.
 
 Use `/show-context activity` to inspect recent identity-bearing action outcomes
-and retained result previews. Enter or click a row to open detail; Escape returns
+and retained result previews, plus accepted command intent captured before
+settlement. An `accepted` command is not evidence of execution or success.
+Enter or click a row to open detail; Escape returns
 to the list without altering conversation logs. `/show-context activity <sequence>`
 opens the activity containing that presentation sequence. Details distinguish
 accepted intent from observed outcomes and retain source beyond the bounded live

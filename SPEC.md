@@ -2588,8 +2588,11 @@ pane wrapping, because inserting boundaries into escape-bearing terminal data
 could change control semantics. Mixed histories MUST preserve presentation
 order.
 The explicit `/show-context activity [presentation-sequence]` view MUST provide
-client-local list/detail disclosure of identity-bearing retained outcomes and
-result previews. The current snapshot is limited to the latest 200 cleartext
+client-local list/detail disclosure of identity-bearing accepted command intent,
+retained outcomes and result previews. Command components MUST report `accepted`,
+not infer running or success before executor evidence. Their bounded source and
+omission state MUST replay through the ordinary command renderer. The current
+snapshot is limited to the latest 200 cleartext
 presentation records within 8 MiB; it MUST NOT imply complete historical or raw
 output retention. Activity-v1 semantic sources in presentation TSV v2 bind the
 conversation, turn, provider response group, action id/ordinal, component kind,
