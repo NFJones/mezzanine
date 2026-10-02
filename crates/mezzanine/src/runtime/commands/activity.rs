@@ -87,7 +87,8 @@ pub(super) fn read_activity_browser(
             }
         }
         detail.push_str(&format!(
-            "## Retained result\n\n{}",
+            "## {}\n\n{}",
+            activity_component_heading(activity.kind),
             literal_activity_source(&body)
         ));
         if let Some(mutation) = activity.mutation.as_ref() {
@@ -205,6 +206,23 @@ pub(super) fn read_activity_browser(
         source: None,
         markdown,
     })
+}
+
+/// Returns a disclosure heading from producer-owned semantics, never status
+/// guesses or source text. Accepted intent is not represented as a result.
+fn activity_component_heading(
+    kind: crate::storage::transcript::activity::ActivityComponentKind,
+) -> &'static str {
+    use crate::storage::transcript::activity::ActivityComponentKind;
+    match kind {
+        ActivityComponentKind::Rationale => "Accepted rationale",
+        ActivityComponentKind::Summary => "Accepted action summary",
+        ActivityComponentKind::Command => "Accepted command intent",
+        ActivityComponentKind::Header => "Accepted action header",
+        ActivityComponentKind::Result => "Retained result",
+        ActivityComponentKind::Outcome => "Observed outcome",
+        ActivityComponentKind::ConfirmedMutation => "Confirmed mutation evidence",
+    }
 }
 
 /// Renders untrusted retained bytes literally with a fence longer than any

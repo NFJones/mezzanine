@@ -84,6 +84,30 @@ fn activity_command_intent_is_recorded_before_settlement() {
     assert_eq!(source.action_id.as_deref(), Some("intent"));
     assert_eq!(source.action_ordinal, Some(0));
     assert!(source.transaction.is_none());
+    let read = crate::runtime::commands::read_context_browser_for_command(
+        &store,
+        &conversation,
+        "%1",
+        "/show-context activity",
+    )
+    .unwrap();
+    let command_detail = read
+        .browser
+        .records()
+        .iter()
+        .find(|record| {
+            record
+                .metadata
+                .iter()
+                .any(|(key, value)| key == "action" && value == "intent")
+        })
+        .unwrap();
+    assert!(
+        command_detail
+            .markdown
+            .contains("## Accepted command intent")
+    );
+    assert!(!command_detail.markdown.contains("## Retained result"));
     service
         .queue_ordered_provider_command("%1", &execution, &action, command)
         .unwrap();
