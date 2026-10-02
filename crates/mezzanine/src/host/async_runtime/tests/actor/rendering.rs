@@ -2588,6 +2588,18 @@ async fn async_actor_metrics_track_render_and_terminal_control_requests() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_skips_unchanged_pane_output_composition_but_keeps_full_redraw() {
     let mut service = test_service();
+    // Resolved config includes the window clock. Crossing a second changes
+    // that config legitimately; this fixture tests unchanged pane generations.
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "stable-render-suppression".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"\"\n".to_string(),
+        }])
+        .unwrap();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
