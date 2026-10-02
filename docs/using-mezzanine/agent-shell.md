@@ -48,7 +48,10 @@ Use `/show-context activity` to inspect recent identity-bearing action outcomes
 and retained result previews, plus accepted command intent captured before
 settlement and response-wide rationale. Rationale retains its response identity
 whether it arrived through streaming or a complete response; it does not claim
-an action or executor attempt. An `accepted` command is not evidence of execution or success.
+an action or executor attempt. Accepted action summaries retain their action
+ordinal separately from response-wide rationale. Promoted summaries and command
+previews keep their original source order and renderer. An `accepted` command
+is not evidence of execution or success.
 Enter or click a row to open detail; Escape returns
 to the list without altering conversation logs. `/show-context activity <sequence>`
 opens the activity containing that presentation sequence. Details distinguish

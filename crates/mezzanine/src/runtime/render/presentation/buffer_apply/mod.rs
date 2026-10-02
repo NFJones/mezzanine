@@ -1088,6 +1088,39 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Persists accepted action components without repainting promoted rows.
+    /// Original media types and bounded source remain the replay authority.
+    fn persist_activity_action_projection(
+        &mut self,
+        pane_id: &str,
+        execution: &mez_agent::AgentTurnExecution,
+        owner: (
+            usize,
+            crate::storage::transcript::activity::ActivityComponentKind,
+        ),
+        rows: (String, Vec<String>, Vec<String>),
+        source: (&str, &str),
+    ) -> Result<()> {
+        let encoded = self
+            .activity_action_source(pane_id, execution, owner.0, owner.1, source)?
+            .and_then(|activity| activity.encode().ok());
+        let source = encoded.as_deref().map_or(source, |source| {
+            (
+                source,
+                crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE,
+            )
+        });
+        self.persist_agent_presentation_entry(
+            pane_id,
+            vec![rows.0; rows.1.len()],
+            rows.1,
+            rows.2,
+            String::new(),
+            Some(source),
+        );
+        Ok(())
+    }
+
     /// Persists one durable user-visible agent presentation entry.
     pub(super) fn persist_agent_presentation_entry(
         &mut self,
@@ -1998,12 +2031,34 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         action: &AgentAction,
+        execution: Option<&mez_agent::AgentTurnExecution>,
     ) -> Result<bool> {
         let thinking_lines = agent_action_model_thinking_lines(action);
         if thinking_lines.is_empty() {
             return Ok(false);
         }
-        self.append_agent_thinking_text_to_terminal_buffer(pane_id, &thinking_lines.join("\n"))?;
+        let text = thinking_lines.join("\n");
+        let activity = if let Some(execution) = execution {
+            if let Some(ordinal) = execution.response.action_batch.as_ref().and_then(|batch| {
+                batch
+                    .actions
+                    .iter()
+                    .position(|candidate| candidate == action)
+            }) {
+                self.activity_action_source(
+                    pane_id,
+                    execution,
+                    ordinal,
+                    crate::storage::transcript::activity::ActivityComponentKind::Summary,
+                    (&text, AGENT_PRESENTATION_THINKING_CONTENT_TYPE),
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        self.append_agent_thinking_with_activity(pane_id, &text, activity)?;
         Ok(true)
     }
 

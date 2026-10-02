@@ -691,8 +691,11 @@ impl RuntimeSessionService {
         if should_emit_fallback_action_status
             && (!is_model_shell_command || !preview_already_presented)
         {
-            let emitted_thinking =
-                self.append_agent_action_model_thinking_to_terminal_buffer(&turn.pane_id, action)?;
+            let emitted_thinking = self.append_agent_action_model_thinking_to_terminal_buffer(
+                &turn.pane_id,
+                action,
+                execution,
+            )?;
             if !emitted_thinking {
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,
@@ -974,8 +977,11 @@ impl RuntimeSessionService {
         if should_emit_fallback_action_status
             && (!is_model_shell_command || !preview_already_presented)
         {
-            let emitted_thinking =
-                self.append_agent_action_model_thinking_to_terminal_buffer(&turn.pane_id, action)?;
+            let emitted_thinking = self.append_agent_action_model_thinking_to_terminal_buffer(
+                &turn.pane_id,
+                action,
+                execution,
+            )?;
             if !emitted_thinking {
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,

@@ -118,6 +118,36 @@ impl RuntimeSessionService {
         Ok(Some(source))
     }
 
+    /// Builds an accepted action component from the validated batch ordinal.
+    /// Missing ownership remains absent rather than inferred from display text.
+    pub(in crate::runtime) fn activity_action_source(
+        &self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        ordinal: usize,
+        kind: crate::storage::transcript::activity::ActivityComponentKind,
+        source: (&str, &str),
+    ) -> Result<Option<crate::storage::transcript::activity::ActivitySource>> {
+        let Some(action) = execution
+            .response
+            .action_batch
+            .as_ref()
+            .and_then(|batch| batch.actions.get(ordinal))
+        else {
+            return Ok(None);
+        };
+        let Some(mut activity) = self.activity_rationale_source(pane_id, execution, source.0)?
+        else {
+            return Ok(None);
+        };
+        activity.action_id = Some(action.id.clone());
+        activity.action_ordinal = Some(ordinal);
+        activity.kind = kind;
+        activity.content_type = source.1.to_string();
+        activity.intent = self.activity_intent_for_result(pane_id, execution, action);
+        Ok(Some(activity))
+    }
+
     /// Captures accepted command intent without claiming executor evidence.
     fn append_activity_command_for_execution(
         &mut self,

@@ -391,22 +391,12 @@ impl RuntimeSessionService {
                             &summary.text,
                             context.frame_width,
                         );
-                        self.persist_agent_presentation_entry(
-                            pane_id,
-                            vec![
-                                AgentTerminalPresentationStyle::Status
-                                    .persistence_name()
-                                    .to_string();
-                                lines.len()
-                            ],
-                            lines,
-                            Vec::new(),
-                            String::new(),
-                            Some((
-                                summary.text.as_str(),
-                                AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
-                            )),
-                        );
+                        self.persist_activity_action_projection(
+                            pane_id, execution,
+                            (projected.action_index, crate::storage::transcript::activity::ActivityComponentKind::Summary),
+                            (AgentTerminalPresentationStyle::Status.persistence_name().to_string(), lines, Vec::new()),
+                            (&summary.text, AGENT_PRESENTATION_THINKING_CONTENT_TYPE),
+                        )?;
                     }
                     (
                         source.text.as_str(),
@@ -416,14 +406,31 @@ impl RuntimeSessionService {
                 }
                 _ => continue,
             };
-            self.persist_agent_presentation_entry(
-                pane_id,
-                vec![projected.style.clone(); projected.rendered_lines.len()],
-                projected.rendered_lines,
-                projected.copy_lines,
-                String::new(),
-                Some((source, content_type)),
-            );
+            if component == "command" {
+                self.persist_activity_action_projection(
+                    pane_id,
+                    execution,
+                    (
+                        projected.action_index,
+                        crate::storage::transcript::activity::ActivityComponentKind::Command,
+                    ),
+                    (
+                        projected.style.clone(),
+                        projected.rendered_lines,
+                        projected.copy_lines,
+                    ),
+                    (source, content_type),
+                )?;
+            } else {
+                self.persist_agent_presentation_entry(
+                    pane_id,
+                    vec![projected.style.clone(); projected.rendered_lines.len()],
+                    projected.rendered_lines,
+                    projected.copy_lines,
+                    String::new(),
+                    Some((source, content_type)),
+                );
+            }
             promoted.insert(projected.action_index);
             self.integration
                 .runtime_metrics_mut()

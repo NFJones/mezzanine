@@ -2592,7 +2592,10 @@ client-local list/detail disclosure of identity-bearing accepted command intent,
 response-wide rationale, retained outcomes and result previews. Static and
 promoted rationale MUST use the same response identity without inventing an
 action ordinal; source wrapping MUST NOT repaint accepted rows or duplicate
-them at settlement. Command components MUST report `accepted`,
+them at settlement. Action summaries MUST retain their accepted action ordinal
+and remain distinct from response-wide rationale. Promoted summaries and command
+intent MUST preserve the same source order and renderer as static presentation.
+Command components MUST report `accepted`,
 not infer running or success before executor evidence. Their bounded source and
 omission state MUST replay through the ordinary command renderer. The current
 snapshot is limited to the latest 200 cleartext

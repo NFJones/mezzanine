@@ -157,7 +157,7 @@ async fn runtime_streaming_multiple_commands_keep_matching_previews() {
                 .inspect_presentation(&conversation_id)
                 .unwrap()
                 .iter()
-                .filter(|entry| entry.source_text.as_deref() == Some(command))
+                .filter(|entry| presentation_semantic_source(entry).as_deref() == Some(command))
                 .count(),
             1,
         );
@@ -166,10 +166,10 @@ async fn runtime_streaming_multiple_commands_keep_matching_previews() {
     let entries = store.inspect_presentation(&conversation_id).unwrap();
     let sources = entries
         .iter()
-        .filter_map(|entry| entry.source_text.as_deref())
+        .filter_map(presentation_semantic_source)
         .filter(|source| {
             matches!(
-                *source,
+                source.as_str(),
                 "summary 0" | "printf first" | "summary 1" | "printf second"
             )
         })
@@ -393,7 +393,7 @@ async fn runtime_streaming_progress_and_shell_keep_matching_rows() {
         assert_eq!(
             entries
                 .iter()
-                .filter(|entry| entry.source_text.as_deref() == Some(source))
+                .filter(|entry| presentation_semantic_source(entry).as_deref() == Some(source))
                 .count(),
             1,
             "{entries:?}"

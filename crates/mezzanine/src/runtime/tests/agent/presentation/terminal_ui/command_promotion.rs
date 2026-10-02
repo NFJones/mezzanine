@@ -270,7 +270,7 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
         assert_eq!(
             entries
                 .iter()
-                .filter(|entry| entry.source_text.as_deref() == Some(summary))
+                .filter(|entry| presentation_semantic_source(entry).as_deref() == Some(summary))
                 .count(),
             1,
             "{entries:?}"
@@ -278,7 +278,7 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
         assert_eq!(
             entries
                 .iter()
-                .filter(|entry| entry.source_text.as_deref() == Some(command))
+                .filter(|entry| presentation_semantic_source(entry).as_deref() == Some(command))
                 .count(),
             1,
             "{entries:?}"
@@ -289,6 +289,32 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
             .filter(|source| [rationale, summary, command].contains(&source.as_str()))
             .collect::<Vec<_>>();
         assert_eq!(sources, [rationale, summary, command]);
+        use crate::storage::transcript::activity::{
+            ACTIVITY_CONTENT_TYPE, ActivityComponentKind, ActivitySource,
+        };
+        let components = entries
+            .iter()
+            .filter(|entry| entry.source_content_type.as_deref() == Some(ACTIVITY_CONTENT_TYPE))
+            .map(|entry| ActivitySource::decode(entry.source_text.as_deref().unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        let rationale_component = components
+            .iter()
+            .find(|source| source.kind == ActivityComponentKind::Rationale)
+            .unwrap();
+        for kind in [
+            ActivityComponentKind::Summary,
+            ActivityComponentKind::Command,
+        ] {
+            let component = components
+                .iter()
+                .find(|source| source.kind == kind)
+                .unwrap();
+            assert_eq!(component.response_id, rationale_component.response_id);
+            assert_eq!(component.action_id.as_deref(), Some("shell-streamed"));
+            assert_eq!(component.action_ordinal, Some(0));
+            assert_eq!(component.status, "accepted");
+            assert!(component.transaction.is_none());
+        }
         service.terminate_all_pane_processes().unwrap();
         drop(primary);
     }

@@ -895,22 +895,22 @@ impl RuntimeSessionService {
                     .unwrap_or_default();
                 let rendered_lines =
                     agent_thinking_display_lines_for_width(&source.text, frame_width);
-                self.persist_agent_presentation_entry(
+                self.persist_activity_action_projection(
                     pane_id,
-                    vec![
+                    execution,
+                    (
+                        projection.action_index,
+                        crate::storage::transcript::activity::ActivityComponentKind::Summary,
+                    ),
+                    (
                         AgentTerminalPresentationStyle::Status
                             .persistence_name()
-                            .to_string();
-                        rendered_lines.len()
-                    ],
-                    rendered_lines,
-                    Vec::new(),
-                    String::new(),
-                    Some((
-                        source.text.as_str(),
-                        AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
-                    )),
-                );
+                            .to_string(),
+                        rendered_lines,
+                        Vec::new(),
+                    ),
+                    (&source.text, AGENT_PRESENTATION_THINKING_CONTENT_TYPE),
+                )?;
             }
             let source = match projection.kind {
                 crate::runtime::render::RuntimeStreamingSayProjectedActionKind::Say => {
@@ -936,14 +936,35 @@ impl RuntimeSessionService {
                     ))
                 }
             };
-            self.persist_agent_presentation_entry(
-                pane_id,
-                vec![projection.style.clone(); projection.rendered_lines.len()],
-                projection.rendered_lines.clone(),
-                projection.copy_lines.clone(),
-                String::new(),
-                source,
-            );
+            if matches!(
+                projection.kind,
+                crate::runtime::render::RuntimeStreamingSayProjectedActionKind::ShellCommand { .. }
+            ) && let Some(source) = source
+            {
+                self.persist_activity_action_projection(
+                    pane_id,
+                    execution,
+                    (
+                        projection.action_index,
+                        crate::storage::transcript::activity::ActivityComponentKind::Command,
+                    ),
+                    (
+                        projection.style.clone(),
+                        projection.rendered_lines.clone(),
+                        projection.copy_lines.clone(),
+                    ),
+                    source,
+                )?;
+            } else {
+                self.persist_agent_presentation_entry(
+                    pane_id,
+                    vec![projection.style.clone(); projection.rendered_lines.len()],
+                    projection.rendered_lines.clone(),
+                    projection.copy_lines.clone(),
+                    String::new(),
+                    source,
+                );
+            }
             self.integration
                 .runtime_metrics_mut()
                 .record_agent_streaming_settled_component(match projection.kind {
