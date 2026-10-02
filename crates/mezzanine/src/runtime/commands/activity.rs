@@ -39,6 +39,8 @@ pub(super) fn read_activity_browser(
     let mut records: Vec<RecordBrowserRecord> = Vec::new();
     let mut groups = std::collections::BTreeMap::new();
     let mut sequences = std::collections::BTreeMap::new();
+    let mut exports: std::collections::BTreeMap<String, Vec<(u64, ActivitySource)>> =
+        std::collections::BTreeMap::new();
     for entry in entries {
         // Pane ids describe historical producers, not current attachments.
         // The store query and envelope bind disclosure to the conversation.
@@ -101,6 +103,10 @@ pub(super) fn read_activity_browser(
         );
         if let Some(&index) = groups.get(&identity) {
             let record: &mut RecordBrowserRecord = &mut records[index];
+            exports
+                .entry(record.id.clone())
+                .or_default()
+                .push((entry.sequence, activity.clone()));
             // Source order is durable sequence order, not worker arrival or a
             // status severity guess. A later component retains its own status.
             record.markdown.push_str(&format!(
@@ -130,6 +136,10 @@ pub(super) fn read_activity_browser(
         }
         groups.insert(identity, records.len());
         sequences.insert(entry.sequence, entry.sequence.to_string());
+        exports.insert(
+            entry.sequence.to_string(),
+            vec![(entry.sequence, activity.clone())],
+        );
         records.push(RecordBrowserRecord {
             id: entry.sequence.to_string(),
             open_command: Some(format!("/show-context activity {}", entry.sequence)),
@@ -161,13 +171,21 @@ pub(super) fn read_activity_browser(
         });
     }
     let mut browser = RecordBrowser::new("Retained activity", records, Vec::new())?;
+    for (id, components) in exports {
+        let source =
+            serde_json::to_string(&serde_json::json!({"version": 1, "components": components}))
+                .map_err(|error| {
+                    MezError::invalid_args(format!("activity export encoding failed: {error}"))
+                })?;
+        browser.set_record_copy_source(&id, source);
+    }
     browser.set_table_id_column("Activity");
     browser.set_table_columns_with_labels(vec![
         ("Action".into(), "action".into()),
         ("Status".into(), "status".into()),
         ("Turn".into(), "turn".into()),
     ]);
-    browser.set_help(Some("Enter or click opens retained detail · Esc back · y copies detail · snapshot limited to latest 200 records / 8 MiB; legacy ungrouped rows omitted".into()), Some("Esc returns to list without altering logs · y copies retained detail".into()));
+    browser.set_help(Some("Enter or click opens retained detail · Esc back · y exports exact activity JSON · snapshot limited to latest 200 records / 8 MiB; legacy ungrouped rows omitted".into()), Some("Esc returns to list without altering logs · y exports exact activity JSON".into()));
     browser.set_empty_message(Some("No identity-bearing activity retained in this snapshot. Legacy rows remain in the conversation/context views.".into()));
     if let Some(sequence) = detail {
         if !sequences

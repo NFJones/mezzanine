@@ -323,6 +323,20 @@ fn activity_disclosure_retains_source_and_replays_only_bounded_preview() {
             .markdown
             .contains("retained-tail-marker")
     );
+    let mez_mux::record_browser::RecordBrowserOutcome::CopyRequested { markdown: exported } =
+        browser
+            .apply_action(mez_mux::record_browser::RecordBrowserAction::CopyActive)
+            .unwrap()
+    else {
+        panic!("source export expected");
+    };
+    let export: serde_json::Value = serde_json::from_str(&exported).unwrap();
+    assert_eq!(export["version"], 1);
+    assert_eq!(export["components"].as_array().unwrap().len(), 1);
+    let decoded: (u64, crate::storage::transcript::activity::ActivitySource) =
+        serde_json::from_value(export["components"][0].clone()).unwrap();
+    assert_eq!(decoded, (entries[0].sequence, source));
+    assert!(!exported.contains("## Retained result"));
     browser
         .apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)
         .unwrap();

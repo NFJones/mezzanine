@@ -190,6 +190,8 @@ pub struct RecordBrowser {
     /// every retained record body. Detail loading detaches only when it
     /// replaces the active record's Markdown.
     records: Arc<Vec<RecordBrowserRecord>>,
+    /// Optional producer-owned exact exports, separate from decorated detail.
+    copy_sources: Arc<std::collections::BTreeMap<String, String>>,
     kind_filter_choices: Vec<RecordBrowserFilterChoice>,
     selected_kind_filter_value: String,
     scope_toggle_enabled: bool,
@@ -215,6 +217,8 @@ pub struct RecordBrowser {
 impl PartialEq for RecordBrowser {
     fn eq(&self, other: &Self) -> bool {
         (Arc::ptr_eq(&self.records, &other.records) || self.records == other.records)
+            && (Arc::ptr_eq(&self.copy_sources, &other.copy_sources)
+                || self.copy_sources == other.copy_sources)
             && self.title == other.title
             && self.scope_indicator == other.scope_indicator
             && self.kind_filter_choices == other.kind_filter_choices
@@ -269,6 +273,7 @@ impl RecordBrowser {
             title,
             scope_indicator: None,
             records: Arc::new(records),
+            copy_sources: Arc::new(std::collections::BTreeMap::new()),
             kind_filter_choices,
             selected_kind_filter_value: String::new(),
             scope_toggle_enabled: false,
@@ -440,6 +445,17 @@ impl RecordBrowser {
         &self.records
     }
 
+    /// Sets an exact copy payload for an existing stable record id.
+    /// Unknown ids return false and add nothing. Navigation shares immutable
+    /// exports; replacing detail invalidates its override to prevent stale copy.
+    pub fn set_record_copy_source(&mut self, record_id: &str, source: String) -> bool {
+        if !self.records.iter().any(|record| record.id == record_id) {
+            return false;
+        }
+        Arc::make_mut(&mut self.copy_sources).insert(record_id.to_string(), source);
+        true
+    }
+
     /// Reports whether two browser states retain the same immutable record collection.
     #[cfg(test)]
     pub(crate) fn shares_record_storage_with(&self, other: &Self) -> bool {
@@ -473,6 +489,7 @@ impl RecordBrowser {
             return false;
         };
         record.markdown = markdown;
+        Arc::make_mut(&mut self.copy_sources).remove(&record.id);
         true
     }
 
@@ -543,13 +560,19 @@ impl RecordBrowser {
                     return Ok(RecordBrowserOutcome::Ignored);
                 };
                 Ok(RecordBrowserOutcome::CopyRequested {
-                    markdown: detail_markdown(
-                        record,
-                        self.scope_indicator.as_deref(),
-                        self.detail_help.as_deref(),
-                        self.deletion_enabled,
-                        !self.kind_filter_choices.is_empty(),
-                    ),
+                    markdown: self
+                        .copy_sources
+                        .get(&record.id)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            detail_markdown(
+                                record,
+                                self.scope_indicator.as_deref(),
+                                self.detail_help.as_deref(),
+                                self.deletion_enabled,
+                                !self.kind_filter_choices.is_empty(),
+                            )
+                        }),
                 })
             }
             RecordBrowserAction::SubmitActive => {
@@ -1202,6 +1225,48 @@ mod tests {
         assert_eq!(
             empty.apply_action(RecordBrowserAction::CopyActive).unwrap(),
             RecordBrowserOutcome::Ignored
+        );
+    }
+
+    /// Exact export overrides remain separate from view Markdown, survive
+    /// cloned navigation, and are invalidated when their record is replaced.
+    #[test]
+    fn record_browser_exact_copy_override_is_scoped_and_invalidated() {
+        let mut browser =
+            RecordBrowser::new("Activity", vec![browser_record("one", "First")], Vec::new())
+                .unwrap();
+        assert!(!browser.set_record_copy_source("missing", "wrong".into()));
+        let source = "雪\r\n\0exact bytes";
+        assert!(browser.set_record_copy_source("one", source.into()));
+        let mut cloned = browser.clone();
+        cloned
+            .apply_action(RecordBrowserAction::OpenActive)
+            .unwrap();
+        assert_eq!(
+            cloned
+                .apply_action(RecordBrowserAction::CopyActive)
+                .unwrap(),
+            RecordBrowserOutcome::CopyRequested {
+                markdown: source.into()
+            }
+        );
+        assert!(!browser.is_detail_view());
+        assert!(cloned.set_active_record_markdown("Changed body".into()));
+        let RecordBrowserOutcome::CopyRequested { markdown } = cloned
+            .apply_action(RecordBrowserAction::CopyActive)
+            .unwrap()
+        else {
+            panic!("copy expected");
+        };
+        assert!(markdown.contains("Changed body"));
+        assert!(!markdown.contains("exact bytes"));
+        assert_eq!(
+            browser
+                .apply_action(RecordBrowserAction::CopyActive)
+                .unwrap(),
+            RecordBrowserOutcome::CopyRequested {
+                markdown: source.into()
+            }
         );
     }
 

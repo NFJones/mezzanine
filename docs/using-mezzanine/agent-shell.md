@@ -59,7 +59,10 @@ An `accepted` command
 is not evidence of execution or success.
 Enter or click a row to open detail; Escape returns
 to the list without altering conversation logs. `/show-context activity <sequence>`
-opens the activity containing that presentation sequence. Details distinguish
+opens the activity containing that presentation sequence. Press `y` to export
+versioned JSON with ordered presentation sequences and exact activity sources;
+JSON escaping preserves source bytes without adding display headings or gutters.
+Other record browsers still copy their detail Markdown. Details distinguish
 accepted intent from observed outcomes and retain source beyond the bounded live
 preview where available. The snapshot reads at most the latest 200 cleartext
 presentation records within 8 MiB; legacy rows and unavailable attempt identities

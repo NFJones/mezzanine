@@ -741,6 +741,27 @@ fn activity_confirmed_sections_share_transaction_without_losing_endpoints() {
     .unwrap();
     assert_eq!(read.browser.records().len(), 1);
     assert!(read.browser.is_detail_view());
+    let mut export_browser = read.browser.clone();
+    let mez_mux::record_browser::RecordBrowserOutcome::CopyRequested { markdown } = export_browser
+        .apply_action(mez_mux::record_browser::RecordBrowserAction::CopyActive)
+        .unwrap()
+    else {
+        panic!("activity export expected");
+    };
+    let export: serde_json::Value = serde_json::from_str(&markdown).unwrap();
+    let components: Vec<(u64, crate::storage::transcript::activity::ActivitySource)> =
+        serde_json::from_value(export["components"].clone()).unwrap();
+    assert_eq!(components.len(), entries.len());
+    for ((sequence, source), entry) in components.iter().zip(&entries) {
+        assert_eq!(*sequence, entry.sequence);
+        assert_eq!(
+            *source,
+            crate::storage::transcript::activity::ActivitySource::decode(
+                entry.source_text.as_deref().unwrap()
+            )
+            .unwrap()
+        );
+    }
     for source in [
         "note.txt",
         "other.txt",
