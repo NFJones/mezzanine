@@ -685,3 +685,93 @@ fn runtime_action_progress_confirmed_diff_survives_failure_without_duplicates() 
         (0, 1)
     );
 }
+
+/// Multiple positively confirmed endpoints share an exact transaction group,
+/// but retain separate section evidence. Explicit detail from another pane and
+/// source-backed replay must preserve both sections without new durable rows.
+#[test]
+fn activity_confirmed_sections_share_transaction_without_losing_endpoints() {
+    let action = patch_action();
+    let (mut service, turn) = running_action_progress_fixture(
+        action.clone(),
+        "sections-marker",
+        "# __MEZ_APPLY_PATCH_WRITE_PHASE__",
+    );
+    let store = AgentTranscriptStore::new(temp_root("activity-confirmed-sections"));
+    service.set_agent_transcript_store(store.clone());
+    for (section, path, text) in [
+        (0, "note.txt", "first-effect"),
+        (1, "other.txt", "second-effect"),
+    ] {
+        let diff = format!(
+            "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-old\n+{text}\n"
+        );
+        let progress = transaction_progress(
+            &turn.turn_id,
+            &action.id,
+            "sections-marker",
+            1,
+            ActionPresentationComponentIdentity::confirmed_mutation(section, path),
+            &diff,
+        );
+        assert!(
+            service
+                .apply_action_presentation_progress(progress.clone())
+                .unwrap()
+        );
+        assert!(
+            service
+                .promote_confirmed_action_presentation_progress(&progress)
+                .unwrap()
+        );
+        assert!(
+            !service
+                .promote_confirmed_action_presentation_progress(&progress)
+                .unwrap()
+        );
+    }
+    let entries = store.inspect_presentation(&turn.conversation_id).unwrap();
+    assert_eq!(entries.len(), 2);
+    let read = crate::runtime::commands::read_context_browser_for_command(
+        &store,
+        &turn.conversation_id,
+        "%2",
+        "/show-context activity 2",
+    )
+    .unwrap();
+    assert_eq!(read.browser.records().len(), 1);
+    assert!(read.browser.is_detail_view());
+    for source in [
+        "note.txt",
+        "other.txt",
+        "first-effect",
+        "second-effect",
+        "Confirmed section 0",
+        "Confirmed section 1",
+    ] {
+        assert!(
+            read.markdown.contains(source),
+            "{source}: {}",
+            read.markdown
+        );
+    }
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 20).unwrap(), 120).unwrap(),
+    );
+    service
+        .replay_agent_presentation_entries_to_terminal_buffer("%1", &entries)
+        .unwrap();
+    let replay = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(replay.matches("first-effect").count(), 1);
+    assert_eq!(replay.matches("second-effect").count(), 1);
+    assert_eq!(
+        store.inspect_presentation(&turn.conversation_id).unwrap(),
+        entries
+    );
+}

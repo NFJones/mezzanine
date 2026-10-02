@@ -230,4 +230,53 @@ mod tests {
         later.content_type = ACTIVITY_CONTENT_TYPE.into();
         assert!(later.encode().is_err());
     }
+
+    /// Confirmed mutation evidence requires an explicit action, executor and
+    /// endpoint. Missing fields and confirmation attached to other component
+    /// kinds are rejected rather than interpreted as whole-action success.
+    #[test]
+    fn activity_confirmation_requires_exact_endpoint_evidence() {
+        let source = ActivitySource {
+            version: 1,
+            conversation_id: "conversation".into(),
+            turn_id: "turn".into(),
+            response_id: "response".into(),
+            action_id: Some("action".into()),
+            action_ordinal: Some(0),
+            transaction: Some("attempt:exact".into()),
+            mutation: Some(ActivityMutation {
+                section_index: 1,
+                path: "note.txt".into(),
+            }),
+            kind: ActivityComponentKind::ConfirmedMutation,
+            status: "confirmed".into(),
+            content_type: "text/x-diff; charset=utf-8".into(),
+            source: "diff".into(),
+            preview_source: None,
+            intent: ActivityIntent::default(),
+        };
+        assert_eq!(
+            ActivitySource::decode(&source.encode().unwrap()).unwrap(),
+            source
+        );
+        let mut invalid = source.clone();
+        invalid.mutation = None;
+        assert!(invalid.encode().is_err());
+        invalid = source.clone();
+        invalid.transaction = None;
+        assert!(invalid.encode().is_err());
+        invalid = source.clone();
+        invalid.action_id = None;
+        invalid.action_ordinal = None;
+        assert!(invalid.encode().is_err());
+        invalid = source.clone();
+        invalid.status = "succeeded".into();
+        assert!(invalid.encode().is_err());
+        invalid = source.clone();
+        invalid.kind = ActivityComponentKind::Result;
+        assert!(invalid.encode().is_err());
+        invalid = source;
+        invalid.mutation.as_mut().unwrap().path = "bad\npath".into();
+        assert!(invalid.encode().is_err());
+    }
 }
