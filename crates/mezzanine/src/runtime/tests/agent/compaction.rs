@@ -4,6 +4,142 @@ use super::*;
 use crate::runtime::current_unix_seconds;
 use mez_agent::messaging::{Envelope, MessageScope};
 
+/// Diagnostic reproduction for a durable first range followed by a valid
+/// legacy execution block without durable group metadata. Such history is
+/// eligible for turn-local compaction, but the staged durability probe currently
+/// raises the reported mapping error before it can choose a safe fallback.
+#[test]
+fn diagnostic_staged_compaction_legacy_range_mapping_failure() {
+    let second = mez_agent::TranscriptContextEvent::execution_block(
+        ContextSourceKind::TranscriptAssistant,
+        "second answer",
+        "SECOND_RANGE_SOURCE ".repeat(1_200),
+    )
+    .unwrap()
+    .to_transcript_content();
+    let (mut service, store, turn_id) =
+        queue_observed_input_compaction_with_second_group(Some(second));
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "17000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    let task = service.take_pending_agent_compaction_task("%1").unwrap();
+    service.claim_agent_compaction_task_state("%1", task);
+    assert!(
+        service
+            .apply_agent_compaction_completed_event(
+                "%1",
+                runtime_test_compaction_response("first summary"),
+            )
+            .unwrap()
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let failure = normalized_pane_log_text(&pane_text);
+    assert!(
+        failure.contains("staged compaction range cannot be mapped to durable transcript rows"),
+        "{pane_text}"
+    );
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
+}
+
+/// Reproduces the same staged mapping failure with typed, closed live work.
+/// The running turn owns these events, but no durable row exists yet; selecting
+/// them is valid for turn-local compaction and is not transcript corruption.
+#[test]
+fn diagnostic_staged_compaction_live_range_mapping_failure() {
+    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let queued = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap()
+        .clone();
+    service.fail_current_agent_compaction_task("%1");
+    let context = service.agent_turn_contexts_mut().get_mut(&turn_id).unwrap();
+    context
+        .append_user_event("steering", "Keep this instruction exact")
+        .unwrap();
+    let group = mez_agent::ContextExecutionGroupId::new("live-closed-group").unwrap();
+    context
+        .append_assistant_event(
+            "live decision",
+            "LIVE_RANGE_SOURCE ".repeat(1_200),
+            group.clone(),
+        )
+        .unwrap();
+    context
+        .append_evidence_event(
+            ContextSourceKind::ActionResult,
+            "live result",
+            "settled",
+            group,
+            None,
+            true,
+        )
+        .unwrap();
+    let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
+        context,
+        20_000,
+        1,
+        context.event_sequence_high_water_mark(),
+        mez_agent::ProviderBudgetProjection::new(
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            "runtime-batch",
+        ),
+    )
+    .unwrap();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { trigger, .. } =
+        queued.target
+    else {
+        panic!("expected observed-input compaction");
+    };
+    assert!(
+        service
+            .queue_agent_active_turn_compaction(
+                &turn_id,
+                queued.model_profile_name,
+                queued.model_profile,
+                trigger,
+                plan
+            )
+            .unwrap()
+    );
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "17000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    complete_runtime_test_compaction(&mut service, "%1", "first summary");
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let failure = normalized_pane_log_text(&pane_text);
+    assert!(
+        failure.contains("staged compaction range cannot be mapped to durable transcript rows"),
+        "{pane_text}"
+    );
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
+}
+
 /// Verifies the runtime applies raw-retention config for compaction recovery.
 ///
 /// Provider context-limit recovery and manual compaction both use the
