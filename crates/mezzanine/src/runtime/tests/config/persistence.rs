@@ -459,13 +459,30 @@ fn runtime_rejected_theme_candidate_does_not_queue_candidate_redraw() {
 /// render the same primary view without rebuilding frame context and mouse hit
 /// regions. This protects the optimized hot path used by control requests that
 /// need both config and a rendered frame.
+///
+/// A fixed status template excludes independently captured wall-clock and uptime
+/// values: public rendering refreshes them, while resolved rendering preserves
+/// the supplied snapshot. Their boundary behavior is covered separately below.
 #[test]
 fn runtime_render_client_view_with_resolved_config_matches_public_render() {
-    let service = test_runtime_service();
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nenabled = true\nright_status = \"parity-status\"\n[terminal]\nreduced_motion = true\n".to_string(),
+        }])
+        .unwrap();
     let client_size = Size::new(80, 24).unwrap();
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();
+    let status = config.frame_context.window_status.as_ref().unwrap();
+    assert!(status.datetime_local.is_empty());
+    assert!(status.system_uptime.is_empty());
     let direct = service
         .render_client_view(ClientViewRole::Primary, client_size, &config)
         .unwrap();
@@ -473,6 +490,63 @@ fn runtime_render_client_view_with_resolved_config_matches_public_render() {
         .render_client_view_with_resolved_config(ClientViewRole::Primary, client_size, &config)
         .unwrap();
     assert_eq!(resolved, direct);
+}
+
+/// Verifies resolved rendering uses the supplied status snapshot even across
+/// second and uptime-minute boundaries. Explicit adjacent values avoid sleeps,
+/// host clock dependence and global time overrides in the parallel test suite.
+#[test]
+fn runtime_resolved_render_preserves_status_snapshots_across_clock_boundaries() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nenabled = true\nright_status = \"#{datetime.local} #{system.uptime}\"\n[terminal]\nreduced_motion = true\n".to_string(),
+        }])
+        .unwrap();
+    let client_size = Size::new(100, 24).unwrap();
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    for (datetime, uptime, other_datetime) in [
+        ("2026-05-09 12:00:59", "59s", "2026-05-09 12:01:00"),
+        ("2026-05-09 12:01:00", "1m", "2026-05-09 12:00:59"),
+    ] {
+        let mut snapshot = config.clone();
+        let status = snapshot.frame_context.window_status.as_mut().unwrap();
+        status.datetime_local = datetime.to_string();
+        status.system_uptime = uptime.to_string();
+        let view = service
+            .render_client_view_with_resolved_config(
+                ClientViewRole::Primary,
+                client_size,
+                &snapshot,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            view.lines
+                .iter()
+                .any(|line| line.contains(datetime) && line.contains(uptime)),
+            "{:?}",
+            view.lines
+        );
+        assert!(view.lines.iter().all(|line| !line.contains(other_datetime)));
+        assert_eq!(
+            service
+                .render_client_view_with_resolved_config(
+                    ClientViewRole::Primary,
+                    client_size,
+                    &snapshot
+                )
+                .unwrap(),
+            Some(view)
+        );
+    }
 }
 
 /// Verifies that live runtime `config/set` and `config/unset` requests apply
