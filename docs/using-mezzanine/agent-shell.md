@@ -55,6 +55,10 @@ also retain action identity without implying execution success or an attempt.
 Confirmed mutation details retain the executor's section index, path and
 attempt/transaction identity. `confirmed` applies to that section only; a later
 failure can coexist with the retained effect and does not imply rollback.
+Visible executor progress becomes retained detail only after exact successful
+settlement. Failed or mismatched provisional output is not retained by this
+view. Successful promotion keeps executor identity and replays only its bounded
+preview, not the full retained detail or renderer JSON.
 An `accepted` command
 is not evidence of execution or success.
 Enter or click a row to open detail; Escape returns

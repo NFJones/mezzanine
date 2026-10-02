@@ -507,15 +507,88 @@ fn runtime_action_progress_hidden_read_body_does_not_render_in_normal_mode() {
     );
 }
 
-/// Verifies a failed provisional component rolls back to its exact baseline,
-/// while a successful result whose canonical content exactly matches the
-/// retained cumulative source promotes that source and tells final-result
-/// presentation to suppress replay. Neither path mutates the canonical result.
+/// Optional envelope failure must not expand a settled shell tail on replay.
+/// An oversized accepted rationale forces fallback while exact result matching
+/// still authorizes presentation promotion, not another execution.
+#[test]
+fn activity_progress_envelope_fallback_replays_only_visible_tail() {
+    let action = shell_action();
+    let (mut service, turn) =
+        running_action_progress_fixture(action.clone(), "fallback-marker", "sleep 1");
+    let store = AgentTranscriptStore::new(temp_root("progress-envelope-fallback"));
+    service.set_agent_transcript_store(store.clone());
+    service
+        .agent_turn_executions_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .response
+        .action_batch
+        .as_mut()
+        .unwrap()
+        .rationale = "r".repeat(2 * 1024 * 1024 + 1);
+    let output = "omitted-prefix\nrow1\nrow2\nrow3\nrow4\nvisible-tail";
+    let progress = transaction_progress(
+        &turn.turn_id,
+        &action.id,
+        "fallback-marker",
+        1,
+        ActionPresentationComponentIdentity::ShellOutput,
+        output,
+    );
+    assert!(
+        service
+            .apply_action_presentation_progress(progress.clone())
+            .unwrap()
+    );
+    let result = mez_agent::ActionResult::succeeded(&turn, &action, vec![output.into()], None);
+    assert!(
+        service
+            .reconcile_action_presentation_progress(&progress, &result)
+            .unwrap()
+    );
+    let live = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!live.contains("omitted-prefix"));
+    assert!(live.contains("visible-tail"));
+    let entries = store.inspect_presentation(&turn.conversation_id).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].source_content_type.as_deref(),
+        Some("application/vnd.mezzanine.agent-presentation.styled-lines+json; charset=utf-8")
+    );
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 20).unwrap(), 120).unwrap(),
+    );
+    service
+        .replay_agent_presentation_entries_to_terminal_buffer("%1", &entries)
+        .unwrap();
+    let replay = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!replay.contains("omitted-prefix"), "{replay}");
+    assert!(replay.contains("visible-tail"));
+    assert_eq!(
+        store.inspect_presentation(&turn.conversation_id).unwrap(),
+        entries
+    );
+}
+
+/// Exact success promotes retained output; failure rolls it back without
+/// altering the canonical result or redispatching execution.
 #[test]
 fn runtime_action_progress_reconciles_provisional_results_without_replay() {
     let action = shell_action();
     let (mut service, turn) =
         running_action_progress_fixture(action.clone(), "marker-1", "sleep 1");
+    let store = AgentTranscriptStore::new(temp_root("settled-progress-activity"));
+    service.set_agent_transcript_store(store.clone());
     let failed_progress = transaction_progress(
         &turn.turn_id,
         &action.id,
@@ -549,6 +622,12 @@ fn runtime_action_progress_reconciles_provisional_results_without_replay() {
         .join("\n");
     assert!(!rolled_back.contains("provisional-failure-output"));
 
+    assert!(
+        store
+            .inspect_presentation(&turn.conversation_id)
+            .unwrap()
+            .is_empty()
+    );
     let successful_progress = transaction_progress(
         &turn.turn_id,
         &action.id,
@@ -600,6 +679,41 @@ fn runtime_action_progress_reconciles_provisional_results_without_replay() {
     assert_eq!(
         service.action_presentation_progress_counts_for_tests("%1"),
         (0, 0)
+    );
+    let entries = store.inspect_presentation(&turn.conversation_id).unwrap();
+    assert_eq!(entries.len(), 1);
+    let source = crate::storage::transcript::activity::ActivitySource::decode(
+        entries[0].source_text.as_deref().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(source.status, "succeeded");
+    assert_eq!(source.action_id.as_deref(), Some(action.id.as_str()));
+    assert_eq!(source.transaction.as_deref(), Some("transaction:marker-1"));
+    assert!(source.mutation.is_none());
+    let retained: Vec<(String, String)> = serde_json::from_str(&source.source).unwrap();
+    assert_eq!(
+        retained,
+        vec![("status".to_string(), "exact-success-output".to_string())]
+    );
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 20).unwrap(), 120).unwrap(),
+    );
+    service
+        .replay_agent_presentation_entries_to_terminal_buffer("%1", &entries)
+        .unwrap();
+    let replay = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(replay.matches("exact-success-output").count(), 1);
+    assert!(!replay.contains("provisional-failure-output"));
+    assert!(!replay.contains("[["));
+    assert_eq!(
+        store.inspect_presentation(&turn.conversation_id).unwrap(),
+        entries
     );
 }
 

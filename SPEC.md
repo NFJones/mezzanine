@@ -2601,6 +2601,11 @@ Executor-confirmed mutation components MUST retain the exact attempt/transaction
 kind, section index and path supplied by the executor, with `confirmed` status.
 This status describes only the released section, never whole-action success;
 later failure MUST NOT erase or duplicate that positively confirmed effect.
+Visible provisional executor output MAY become retained activity only after an
+exact successful result matches its source. Failed or mismatched provisional
+output MUST remain absent from durable disclosure. Promoted output MUST retain
+its explicit executor identity, a valid semantic source, and bounded preview
+source; replay MUST NOT print renderer JSON or expand omitted output into logs.
 Command components MUST report `accepted`,
 not infer running or success before executor evidence. Their bounded source and
 omission state MUST replay through the ordinary command renderer. The current

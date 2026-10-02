@@ -940,9 +940,40 @@ impl RuntimeSessionService {
             } else {
                 AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE
             };
+            let styled_source = if key.component.is_confirmed() {
+                None
+            } else {
+                Some(
+                    serde_json::to_string(&vec![("status", &component.source)]).map_err(
+                        |error| {
+                            MezError::invalid_state(format!(
+                                "progress source encoding failed: {error}"
+                            ))
+                        },
+                    )?,
+                )
+            };
+            let replay_source = styled_source.as_deref().unwrap_or(&component.source);
+            let preview_source = if key.component.is_confirmed() {
+                None
+            } else {
+                Some(
+                    serde_json::to_string(
+                        &flattened
+                            .iter()
+                            .map(|(style, line)| (style.persistence_name(), &line.display))
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(|error| {
+                        MezError::invalid_state(format!(
+                            "progress preview encoding failed: {error}"
+                        ))
+                    })?,
+                )
+            };
             // Confirmation is per mutation component, not whole-action success.
             // Promotion has already checked exact execution/source/lineage fences.
-            let activity = if key.component.is_confirmed() {
+            let activity = {
                 if let Some(execution) = self.agent_turn_executions().get(&key.turn_id)
                     && let Some(ordinal) =
                         execution.response.action_batch.as_ref().and_then(|batch| {
@@ -952,17 +983,30 @@ impl RuntimeSessionService {
                                 .position(|action| action.id == key.action_id)
                         })
                 {
-                    self.activity_action_source(pane_id, execution, ordinal,
-                        crate::storage::transcript::activity::ActivityComponentKind::ConfirmedMutation,
-                        (&component.source, source_content_type))?
+                    let kind = if key.component.is_confirmed() {
+                        crate::storage::transcript::activity::ActivityComponentKind::ConfirmedMutation
+                    } else {
+                        crate::storage::transcript::activity::ActivityComponentKind::Result
+                    };
+                    self.activity_action_source(
+                        pane_id,
+                        execution,
+                        ordinal,
+                        kind,
+                        (replay_source, source_content_type),
+                    )?
                 } else {
                     None
                 }
-            } else {
-                None
             };
             let encoded = activity.and_then(|mut source| {
-                source.status = "confirmed".to_string();
+                source.status = if key.component.is_confirmed() {
+                    "confirmed"
+                } else {
+                    "succeeded"
+                }
+                .to_string();
+                source.preview_source = preview_source.clone();
                 if let ActionPresentationComponentIdentity::ConfirmedMutation {
                     section_index,
                     path,
@@ -997,7 +1041,10 @@ impl RuntimeSessionService {
                 Vec::new(),
                 ansi_text,
                 Some(encoded.as_deref().map_or(
-                    (component.source.as_str(), source_content_type),
+                    (
+                        preview_source.as_deref().unwrap_or(replay_source),
+                        source_content_type,
+                    ),
                     |source| {
                         (
                             source,
