@@ -2,6 +2,112 @@
 
 use super::*;
 
+/// The production response/outcome presenter preserves exact denial ownership
+/// and publishes it once. Retrying presentation does not replay an action or
+/// append a second durable result, and hidden tool payload is not disclosed.
+#[test]
+fn activity_production_outcome_is_identity_bound_and_published_once() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("activity-production-outcome"));
+    service.set_agent_transcript_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "denied-action".into(),
+        payload: mez_agent::AgentActionPayload::ListAgents {
+            agent_type: None,
+            scope: None,
+        },
+    };
+    let result = mez_agent::ActionResult {
+        protocol: "maap/1".into(),
+        turn_id: "turn-activity".into(),
+        agent_id: "agent-%1".into(),
+        action_id: action.id.clone(),
+        action_type: "list_agents",
+        status: ActionStatus::Denied,
+        content: vec![mez_agent::ActionContentBlock::text(
+            "hidden-payload-sentinel",
+        )],
+        structured_content_json: None,
+        permission_evaluation: None,
+        is_error: true,
+        error: Some(mez_agent::ActionError {
+            code: "policy_denied".into(),
+            message: "visible denial diagnostic".into(),
+            data_json: None,
+        }),
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-activity"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".into(),
+            model: "test".into(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "accepted rationale".into(),
+                actions: vec![action],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![result],
+        final_turn: false,
+        terminal_state: AgentTurnState::Blocked,
+    };
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    service
+        .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    let conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let before = store.inspect_presentation(&conversation).unwrap();
+    let activity = before
+        .iter()
+        .filter(|entry| {
+            entry.source_content_type.as_deref()
+                == Some(crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE)
+        })
+        .map(|entry| {
+            crate::storage::transcript::activity::ActivitySource::decode(
+                entry.source_text.as_deref().unwrap(),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(activity.len(), 1);
+    assert_eq!(activity[0].turn_id, "turn-activity");
+    assert_eq!(activity[0].action_id.as_deref(), Some("denied-action"));
+    assert_eq!(activity[0].action_ordinal, Some(0));
+    assert_eq!(activity[0].status, "denied");
+    assert!(activity[0].source.contains("visible denial diagnostic"));
+    assert!(!activity[0].source.contains("hidden-payload-sentinel"));
+    assert!(
+        !service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .iter()
+            .any(|line| line.contains("hidden-payload-sentinel"))
+    );
+    service
+        .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    assert_eq!(store.inspect_presentation(&conversation).unwrap(), before);
+}
+
 /// Result disclosure retains source beyond the bounded live preview; replay
 /// reproduces that preview and opening/back navigation leaves history intact.
 #[test]
@@ -9,6 +115,9 @@ fn activity_disclosure_retains_source_and_replays_only_bounded_preview() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .prepare_client_render(&primary, ClientViewRole::Primary)
         .unwrap();
     let store = AgentTranscriptStore::new(temp_root("activity-result-source"));
     service.set_agent_transcript_store(store.clone());
@@ -165,6 +274,28 @@ fn activity_disclosure_retains_source_and_replays_only_bounded_preview() {
             .unwrap()
             .normal_content_lines(),
         screen_before
+    );
+    let other = service
+        .attach_primary("other", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .prepare_client_render(&other, ClientViewRole::Primary)
+        .unwrap();
+    assert!(service.primary_display_overlay().is_none());
+    service
+        .prepare_client_render(&primary, ClientViewRole::Primary)
+        .unwrap();
+    assert!(service.active_record_browser_is_detail());
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .active_record_id(),
+        Some("1")
     );
     assert_eq!(store.inspect_presentation(&conversation).unwrap(), entries);
 }
