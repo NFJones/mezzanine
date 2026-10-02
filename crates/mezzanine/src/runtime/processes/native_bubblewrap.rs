@@ -19,16 +19,14 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use mez_agent::permissions::{
-    PathScopes, PermissionEvaluation, ResolvedPathEvidence, ResolvedPathKind,
-};
+use mez_agent::permissions::{PathScopes, PermissionEvaluation};
 use mez_agent::shell::PaneEnvironmentEvidence;
 use mez_agent::{
     AgentAction, AgentActionPayload, AgentTurnRecord, EnvironmentGroup, EnvironmentSignature,
@@ -38,6 +36,11 @@ use mez_agent::{
 use mez_mux::process::RawEnvironmentEntry;
 
 use crate::error::{MezError, Result};
+use crate::security::filesystem::host_resolved_path_scopes;
+#[cfg(test)]
+use crate::security::filesystem::resolve_host_path;
+#[cfg(test)]
+use mez_agent::permissions::ResolvedPathKind;
 
 use super::native_shell_inference::NativeShellContext;
 
@@ -938,43 +941,7 @@ impl crate::runtime::RuntimeSessionService {
         turn: &AgentTurnRecord,
         context: &NativeShellContext,
     ) -> Result<Option<PathScopes>> {
-        self.refresh_project_trust_store_from_disk_if_changed()?;
-        let resources = &self.configured_permissions().resources;
-        let (read_scopes, write_scopes) =
-            if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
-                (
-                    resources.read_scopes.clone(),
-                    resources.write_scopes.clone(),
-                )
-            } else if let Some(project_root) = self.native_trusted_project_root(context) {
-                let project_root = project_root.to_string_lossy().into_owned();
-                (vec![project_root.clone()], vec![project_root])
-            } else {
-                return Ok(None);
-            };
-        let primary = host_resolved_path_scopes(
-            context.working_directory(),
-            &read_scopes,
-            &write_scopes,
-            &[],
-        )?;
-        let Some(scope) = self.subagent_scope_declaration_for_turn(turn) else {
-            return Ok(Some(primary));
-        };
-        if scope.read_scopes.is_empty() && scope.write_scopes.is_empty() {
-            return host_resolved_path_scopes(Path::new(&scope.current_directory), &[], &[], &[])
-                .map(Some);
-        }
-        let child = host_resolved_path_scopes(
-            Path::new(&scope.current_directory),
-            &scope.read_scopes,
-            &scope.write_scopes,
-            &[],
-        )?;
-        primary
-            .intersection(&child)
-            .map_err(|error| MezError::invalid_state(error.message()))
-            .map(Some)
+        self.native_filesystem_scopes_for_turn(turn, context.working_directory())
     }
 
     /// Resolves maximum native Bubblewrap authority directly from host
@@ -1035,162 +1002,6 @@ impl crate::runtime::RuntimeSessionService {
         .trusted_root()
         .map(Path::to_path_buf)
     }
-}
-
-/// Canonicalizes requested native authority and effect paths without invoking
-/// a pane shell, retaining exact evidence for existing and create-target paths.
-fn host_resolved_path_scopes(
-    current_directory: &Path,
-    read_requests: &[String],
-    write_requests: &[String],
-    additional_requests: &[String],
-) -> Result<PathScopes> {
-    let current_directory = std::fs::canonicalize(current_directory).map_err(|error| {
-        MezError::invalid_state(format!(
-            "native Bubblewrap could not canonicalize the root-process working directory: {error}"
-        ))
-    })?;
-    let mut evidence = BTreeMap::new();
-    for requested in read_requests
-        .iter()
-        .chain(write_requests)
-        .chain(additional_requests)
-    {
-        evidence
-            .entry(requested.clone())
-            .or_insert(resolve_host_path(&current_directory, requested)?);
-    }
-    let read_scopes = read_requests
-        .iter()
-        .map(|requested| {
-            let resolved = &evidence[requested];
-            if resolved.kind != ResolvedPathKind::Existing {
-                return Err(MezError::invalid_state(format!(
-                    "sandbox read scope does not exist: {requested}"
-                )));
-            }
-            Ok(resolved.canonical_path.clone())
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let write_scopes = write_requests
-        .iter()
-        .map(|requested| Ok(evidence[requested].canonical_path.clone()))
-        .collect::<Result<Vec<_>>>()?;
-    PathScopes::try_host_resolved_with_evidence(
-        current_directory.to_string_lossy().into_owned(),
-        read_scopes,
-        write_scopes,
-        evidence,
-    )
-    .map_err(|error| MezError::invalid_state(error.message()))
-}
-
-/// Resolves one path against the root-process cwd, preserving the nearest
-/// canonical existing parent when the final write target does not exist yet.
-fn resolve_host_path(current_directory: &Path, requested: &str) -> Result<ResolvedPathEvidence> {
-    if requested.is_empty() || requested.contains('\0') || requested.starts_with('~') {
-        return Err(MezError::invalid_args(
-            "native path resolution requires a non-empty, unexpanded path without NUL bytes",
-        ));
-    }
-    let requested_path = Path::new(requested);
-    let joined = if requested_path.is_absolute() {
-        requested_path.to_path_buf()
-    } else {
-        current_directory.join(requested_path)
-    };
-    let target = lexical_absolute_path(&joined)?;
-    if std::fs::symlink_metadata(&target).is_ok() {
-        let canonical = std::fs::canonicalize(&target).map_err(|error| {
-            MezError::invalid_state(format!(
-                "native path resolution could not canonicalize {requested}: {error}"
-            ))
-        })?;
-        let object_kind = resolved_path_object_kind(&canonical)?;
-        let canonical = canonical.to_string_lossy().into_owned();
-        return Ok(ResolvedPathEvidence {
-            canonical_path: canonical.clone(),
-            kind: ResolvedPathKind::Existing,
-            nearest_existing_parent: canonical,
-            object_kind,
-        });
-    }
-    let mut probe = target.as_path();
-    let mut suffix = Vec::new();
-    while std::fs::symlink_metadata(probe).is_err() {
-        let name = probe.file_name().ok_or_else(|| {
-            MezError::invalid_state(format!(
-                "native path resolution found no existing parent for {requested}"
-            ))
-        })?;
-        suffix.push(name.to_os_string());
-        probe = probe.parent().ok_or_else(|| {
-            MezError::invalid_state(format!(
-                "native path resolution found no existing parent for {requested}"
-            ))
-        })?;
-    }
-    let nearest = std::fs::canonicalize(probe).map_err(|error| {
-        MezError::invalid_state(format!(
-            "native path resolution could not canonicalize the parent of {requested}: {error}"
-        ))
-    })?;
-    let mut canonical = nearest.clone();
-    for component in suffix.iter().rev() {
-        canonical.push(component);
-    }
-    Ok(ResolvedPathEvidence {
-        canonical_path: canonical.to_string_lossy().into_owned(),
-        kind: ResolvedPathKind::CreateTarget,
-        nearest_existing_parent: nearest.to_string_lossy().into_owned(),
-        object_kind: resolved_path_object_kind(&nearest)?,
-    })
-}
-
-/// Classifies one canonical existing enforcement object without following a
-/// second path supplied by the caller.
-fn resolved_path_object_kind(
-    path: &Path,
-) -> Result<mez_agent::permissions::ResolvedPathObjectKind> {
-    let metadata = std::fs::metadata(path).map_err(|error| {
-        MezError::invalid_state(format!(
-            "native path resolution could not classify a canonical path: {error}"
-        ))
-    })?;
-    let file_type = metadata.file_type();
-    #[cfg(unix)]
-    use std::os::unix::fs::FileTypeExt;
-    Ok(if file_type.is_dir() {
-        mez_agent::permissions::ResolvedPathObjectKind::Directory
-    } else if file_type.is_file() {
-        mez_agent::permissions::ResolvedPathObjectKind::File
-    } else if file_type.is_socket() {
-        mez_agent::permissions::ResolvedPathObjectKind::UnixSocket
-    } else {
-        mez_agent::permissions::ResolvedPathObjectKind::Other
-    })
-}
-
-/// Normalizes an absolute Unix path without consulting a shell or accepting
-/// traversal above the filesystem root.
-fn lexical_absolute_path(path: &Path) -> Result<PathBuf> {
-    let mut normalized = PathBuf::from("/");
-    for component in path.components() {
-        match component {
-            Component::RootDir => normalized = PathBuf::from("/"),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Normal(part) => normalized.push(part),
-            Component::Prefix(_) => {
-                return Err(MezError::invalid_args(
-                    "native path resolution does not accept platform path prefixes",
-                ));
-            }
-        }
-    }
-    Ok(normalized)
 }
 
 /// Builds the pane-equivalent environment signature from root-process
@@ -1755,6 +1566,37 @@ mod tests {
                 .to_string_lossy()
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A parent component following a symlink must refer to the symlink
+    /// target's parent, not the lexical parent of the link's spelling. Scope
+    /// evidence must agree with kernel resolution for existing and new paths.
+    #[test]
+    fn native_host_resolution_expands_symlinks_before_parent_components() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-native-link-parent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("physical/child")).unwrap();
+        std::fs::write(root.join("physical/file"), b"physical").unwrap();
+        std::fs::write(root.join("file"), b"lexical").unwrap();
+        std::os::unix::fs::symlink("physical/child", root.join("link")).unwrap();
+        let physical = std::fs::canonicalize(root.join("physical")).unwrap();
+        let existing = resolve_host_path(&root, "link/../file").unwrap();
+        let create = resolve_host_path(&root, "link/../new").unwrap();
+        assert_eq!(
+            existing.canonical_path,
+            physical.join("file").to_string_lossy()
+        );
+        assert_eq!(
+            create.canonical_path,
+            physical.join("new").to_string_lossy()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Verifies a missing configured read scope fails closed because a

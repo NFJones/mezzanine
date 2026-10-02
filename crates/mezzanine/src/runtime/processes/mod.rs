@@ -13,6 +13,7 @@ mod layout;
 mod lifecycle_events;
 mod managed_shell_handoff;
 mod native_bubblewrap;
+mod native_filesystem_authority;
 mod native_shell_inference;
 mod native_workload_environment;
 pub(crate) mod output_filter;

@@ -5,6 +5,8 @@
 
 pub(crate) mod audit;
 pub(crate) mod auth;
+/// Descriptor-relative filesystem resolution and native capability boundaries.
+pub(crate) mod filesystem;
 pub(crate) mod permissions;
 pub(crate) mod project;
 /// Protected Iroh endpoint identity, pairing invitations, and remote trust.

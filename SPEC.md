@@ -8272,6 +8272,28 @@ isolation, or an approved sandbox bypass. An independently mandatory OS process
 confinement requirement MUST fail closed if incompatible with this adapter.
 Configured backend intent and actual enforcement MUST be reported separately.
 
+The native filesystem primitive boundary MUST use held directory handles and
+no-follow descriptor-relative operations on Linux and macOS. Physical lookup
+MUST expand symlinks before interpreting subsequent parent traversal, bound
+expansion, and distinguish missing entries from permission/I/O errors. A live
+root PID/start token, compatible effective credentials and cwd identity MUST
+be revalidated without selecting a shell or forwarding environment values.
+Existing file snapshots MUST be bounded and reject nonregular objects before
+consumption, including nonblocking opens to prevent special-node swaps from
+blocking reads. Current scopes and captured ancestry/object/preimage evidence
+MUST be checked before staging and publication. Parent-directory creation MUST
+be explicit, separately authorized and retained as an effect, not an implicit
+extension of a file-only grant. Staging MUST be exclusive, destination-bound
+and verified against exact planned bytes; cleanup MUST not remove a replaced
+unowned entry. Adds MUST use atomic no-replace publication; updates replace one
+entry atomically and preserve ordinary mode bits while suppressing privilege
+bits. Ownership, ACLs and xattrs are not preserved by this primitive adapter;
+hard-link siblings retain their old object. Revalidation followed by rename or
+unlink MUST NOT be described as atomic compare-and-swap against arbitrary
+external writers: relocation/replacement after the final check remains a race.
+Actor-owned short commit leases and conflicting-write serialization remain
+required when the dependent filesystem dispatcher integrates these primitives.
+
 Native filesystem workers MUST use bounded resources and cooperative
 cancellation outside the serialized actor. The patch budget remains 30 seconds,
 capped by the turn deadline, not the native shell timeout. Acknowledged

@@ -20,6 +20,29 @@ incompatible mandatory OS process-confinement requirement. They are neither
 sandbox-equivalent protection nor an implicit approved bypass. Current native
 patches still use the legacy shell/backend path described below.
 
+The implemented primitive layer holds directory descriptors and resolves links
+before parent traversal, bounded to 40 link expansions. It rejects nonregular
+snapshots, stale root lifetime/credentials/cwd, scope escapes, changed preimages
+and replaced ancestry before staging/publication. Adds use atomic no-replace;
+updates replace a single directory entry, leaving hard-link siblings unchanged.
+Ordinary mode bits are preserved but privilege bits are suppressed; ownership,
+ACLs and xattrs are not preserved. Missing parent creation is separately
+authorized, never implied by a file-only grant. Staged bytes and entry identity
+are checked before publication and transaction-owned cleanup.
+
+Publication also rejects changed target mode/ownership and staged safe-mode,
+owner or link-count changes, even when inode and bytes are unchanged. On macOS,
+independent supplementary-group evidence is currently unavailable for another
+PID; daemon-side filesystem capabilities fail closed for those targets rather
+than substitute daemon groups. The daemon's own process remains verifiable.
+This limitation does not change existing spawned-shell sandbox execution.
+
+This is not atomic compare-and-swap against arbitrary external writers. A rename
+or replacement after the final validation remains possible. The dependent
+dispatcher must supply current actor commit leases, conflicting-write
+serialization, cancellation and effect attribution; the primitives alone do
+not enable in-process native patch dispatch.
+
 Cancellation of an in-process filesystem worker is cooperative: a deadline or
 dropped worker handle does not stop a blocked syscall. Future commits must be
 fenced before cancellation is acknowledged; already-started commits remain
