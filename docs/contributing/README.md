@@ -15,6 +15,7 @@ This section owns the following contributor guidance:
 
 - [Workspace architecture](architecture.md)
 - [Development and validation](development-and-validation.md)
+- [Agent pane UX proposal](agent-pane-ux-proposal.md) (design proposal, not current behavior)
 
 ## Related pages
 
