@@ -1400,7 +1400,29 @@ impl RuntimeSessionService {
                         )
                         .is_some_and(|limit| retry_estimate.input_tokens <= limit)
                     };
-                if plan.requires_additional_segments() && !candidate_fits {
+                // A word-budgeted plan can leave byte-heavy history oversized
+                // without advertising additional segments. When shortening
+                // this summary cannot cover the complete request's excess,
+                // advance to later eligible source instead of failing the turn.
+                let later_range_budget = if matches!(
+                    trigger,
+                    RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. }
+                ) {
+                    runtime_compaction_safe_input_limit(
+                        model_profile.max_input_tokens(),
+                        model_profile.context_window_tokens(),
+                        model_profile.max_output_tokens(),
+                    )
+                    .filter(|limit| {
+                        retry_estimate.input_tokens.saturating_sub(*limit)
+                            >= mez_agent::provider_text_input_token_estimate(&final_summary)
+                    })
+                } else {
+                    None
+                };
+                if !candidate_fits
+                    && (plan.requires_additional_segments() || later_range_budget.is_some())
+                {
                     let attempts = match &task.target {
                         RuntimeAgentCompactionTarget::ActiveTurn { staged, .. } => {
                             staged.as_ref().map_or(0, |state| state.attempts)
@@ -1420,7 +1442,25 @@ impl RuntimeSessionService {
                     } else {
                         None
                     };
-                    let (budget, token_costs) = plan.planning_budget();
+                    let (budget, token_costs) = if plan.requires_additional_segments() {
+                        // Preserve the frozen allowance for a plan that already
+                        // accounted for later ranges before its first summary.
+                        plan.planning_budget()
+                    } else if let Some(limit) = later_range_budget {
+                        let block_tokens = mez_agent::projected_context_block_input_tokens(
+                            &prepared.to_agent_context(),
+                            Some(mez_agent::ProviderBudgetProjection::new(
+                                api,
+                                &model_profile.provider,
+                            )),
+                        )
+                        .into_iter()
+                        .fold(0usize, usize::saturating_add);
+                        let overhead = retry_estimate.input_tokens.saturating_sub(block_tokens);
+                        (limit.saturating_sub(overhead).max(1), true)
+                    } else {
+                        plan.planning_budget()
+                    };
                     let provider =
                         mez_agent::ProviderBudgetProjection::new(api, &model_profile.provider);
                     let next_plan = if token_costs {
@@ -1440,7 +1480,25 @@ impl RuntimeSessionService {
                             provider,
                         )
                     }
-                    .map_err(|error| MezError::invalid_state(error.message()))?;
+                    .map_err(|error| {
+                        let diagnostic = runtime_compaction_candidate_size_diagnostic(
+                            &prepared.to_agent_context(),
+                            Some(provider),
+                            retry_estimate.input_tokens,
+                            later_range_budget.unwrap_or_else(|| {
+                                runtime_compaction_safe_input_limit(
+                                    model_profile.max_input_tokens(),
+                                    model_profile.context_window_tokens(),
+                                    model_profile.max_output_tokens(),
+                                )
+                                .unwrap_or_default()
+                            }),
+                        );
+                        MezError::invalid_state(format!(
+                            "compaction cannot select another closed range: {}; {diagnostic}",
+                            error.message()
+                        ))
+                    })?;
                     if !next_plan.changes_context() {
                         return Err(MezError::invalid_state(
                             "pre-summary recovery has no additional closed segment",

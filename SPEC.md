@@ -7030,8 +7030,12 @@ allowance, compaction MAY request a shorter model-authored summary of the same
 frozen source while the complete candidate estimate and enforceable output
 ceiling strictly decrease. A repeated or non-improving candidate MUST fail
 without publication. If that summary cannot cover the excess,
-compaction MAY summarize another eligible closed range beyond an exact barrier;
-all earlier summaries MUST remain provisional until the combined replay passes
+provider-context recovery MUST attempt another eligible closed range beyond an
+exact barrier before declaring exhaustion, even when the initial planner's
+word allowance did not advertise additional segments. This fallback MUST use
+provider-projected token estimates with complete-request overhead reserved;
+an already staged plan MUST retain its frozen allowance and progress guards.
+All earlier summaries MUST remain provisional until the combined replay passes
 the complete request check and publishes one atomic epoch. Each attempted
 complete candidate MUST make bounded progress; no failed candidate may publish
 an epoch or resume the provider turn. Exhaustion MUST fail visibly with

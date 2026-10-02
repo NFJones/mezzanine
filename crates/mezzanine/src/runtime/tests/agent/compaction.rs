@@ -300,6 +300,245 @@ fn runtime_zero_budget_recovery_resumes_fitting_first_segment() {
     assert!(chronology[3].block().content.starts_with("result result"));
 }
 
+/// Provider-limit recovery must continue beyond a word-budgeted first range
+/// when retained byte-heavy evidence still exceeds the complete request limit.
+/// Earlier summaries stay provisional, exact barriers survive, and only the
+/// final fitting candidate can resume the original turn without action replay.
+#[test]
+fn runtime_provider_compaction_continues_after_word_budget_underestimates_retained_history() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "diagnostic-word-wire".to_string(),
+        path: None,
+        format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary,
+        trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"word-wire\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.word-wire]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 30000\n".to_string(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"diagnostic","method":"agent/shell/command","params":{"idempotency_key":"diagnostic-word-wire","input":"continue"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#));
+    service
+        .agent_turn_contexts_mut()
+        .get_mut("turn-1")
+        .unwrap()
+        .replace_after_compaction(vec![
+            ContextBlock::assistant_event("first decision", "first decision"),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "first result",
+                "first ".repeat(4_000),
+            ),
+            ContextBlock::user_event("barrier", "preserve exact instruction"),
+            ContextBlock::assistant_event("second decision", "second decision"),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "byte-heavy result",
+                "x".repeat(200_000),
+            ),
+        ])
+        .unwrap();
+    let original = service.agent_turn_contexts().get("turn-1").unwrap().clone();
+    let high_water = original.event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests("turn-1", high_water)
+        .unwrap();
+    let error = MezError::invalid_state("provider context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+        );
+    assert!(
+        service
+            .recover_agent_provider_context_limit_failure(
+                &AgentId::opaque("agent-%1").unwrap(),
+                "turn-1",
+                &error,
+                1,
+            )
+            .unwrap()
+    );
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } =
+        &task.target
+    else {
+        panic!("expected recovery plan");
+    };
+    assert_eq!(plan.planning_budget(), (22_500, false));
+    assert!(!plan.requires_additional_segments());
+    assert!(
+        plan.replacement_blocks()
+            .iter()
+            .all(|block| !block.label.contains("byte-heavy"))
+    );
+    let (candidate, _) =
+        mez_agent::apply_model_context_compaction_plan(original.clone(), plan, "short summary")
+            .unwrap();
+    let next = mez_agent::plan_model_context_compaction_for_provider_tokens(
+        &candidate,
+        28_500,
+        0,
+        high_water,
+        mez_agent::ProviderBudgetProjection::new(
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            "runtime-batch",
+        ),
+    )
+    .unwrap();
+    assert!(next.changes_context());
+    assert!(
+        next.replacement_blocks()
+            .iter()
+            .any(|block| block.label == "byte-heavy result")
+    );
+    complete_runtime_test_compaction(&mut service, "%1", "short summary");
+    assert_eq!(
+        service.agent_turn_ledger().turn("turn-1").unwrap().state,
+        AgentTurnState::Running
+    );
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
+    assert_eq!(service.agent_turn_contexts().get("turn-1"), Some(&original));
+    let retry = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("retained byte-heavy history must queue a later summary");
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        plan,
+        staged: Some(staged),
+        ..
+    } = &retry.target
+    else {
+        panic!("first summary must remain staged");
+    };
+    assert_eq!(staged.attempts, 1);
+    assert!(
+        plan.replacement_blocks()
+            .iter()
+            .any(|block| block.label == "byte-heavy result")
+    );
+    complete_runtime_test_compaction(&mut service, "%1", "second range summarized");
+    assert_eq!(
+        service.agent_turn_ledger().turn("turn-1").unwrap().state,
+        AgentTurnState::Running
+    );
+    assert!(service.agent_provider_task_is_pending("turn-1"));
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_none()
+    );
+    let chronology = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .chronology();
+    assert_eq!(chronology[0].block().content, "short summary");
+    assert_eq!(chronology[1].block().content, "preserve exact instruction");
+    assert_eq!(chronology[2].block().content, "second range summarized");
+    assert_eq!(chronology.len(), 3);
+}
+
+/// A byte-heavy direct-user instruction cannot become summary input merely
+/// because the earlier word-budgeted range leaves the full request oversized.
+/// Exhaustion must settle boundedly without a continuation or partial epoch,
+/// preserving the original durable transcript rather than truncating the prompt.
+#[test]
+fn runtime_provider_compaction_does_not_summarize_byte_heavy_exact_history() {
+    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
+    service.fail_current_agent_compaction_task("%1");
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let original_rows = store.inspect(&conversation_id).unwrap();
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), "30000".to_string());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile.clone());
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn_id)
+        .unwrap()
+        .replace_after_compaction(vec![
+            ContextBlock::assistant_event("first decision", "first decision"),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "first result",
+                "first ".repeat(4_000),
+            ),
+            ContextBlock::user_event("exact retained instruction", "x".repeat(200_000)),
+        ])
+        .unwrap();
+    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
+    let plan = mez_agent::plan_model_context_compaction_for_provider(
+        context,
+        22_500,
+        10,
+        context.event_sequence_high_water_mark(),
+        mez_agent::ProviderBudgetProjection::new(
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            "runtime-batch",
+        ),
+    )
+    .unwrap();
+    assert!(plan.changes_context());
+    assert!(!plan.requires_additional_segments());
+    assert!(
+        plan.replacement_blocks()
+            .iter()
+            .all(|block| block.source != ContextSourceKind::TranscriptUser)
+    );
+    assert!(
+        service
+            .queue_agent_context_limit_recovery_compaction(
+                &turn_id,
+                "observed-input-exact-history".to_string(),
+                profile,
+                1,
+                plan,
+            )
+            .unwrap()
+    );
+    complete_runtime_test_compaction(&mut service, "%1", "short summary");
+    assert_eq!(
+        service.agent_turn_ledger().turn(&turn_id).unwrap().state,
+        AgentTurnState::Failed
+    );
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_none()
+    );
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert!(
+        store
+            .inspect(&conversation_id)
+            .unwrap()
+            .starts_with(&original_rows)
+    );
+    let text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let failure = normalized_pane_log_text(&text);
+    assert!(failure.contains("protected exact context"), "{text}");
+    assert!(failure.contains("protected_block_estimate="), "{text}");
+}
+
 /// Diagnoses saved history through canonical replay without modifying the
 /// archive, sending provider requests, or displaying private payloads. Only
 /// aggregate planning costs and execution-owner identities are reported.

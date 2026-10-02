@@ -178,6 +178,11 @@ another eligible closed range beyond an exact barrier. Earlier summaries remain
 provisional until one combined epoch fits the refreshed request. A non-reducing
 or exhausted retry fails without replacing the previous transcript projection;
 its diagnostic reports component estimates, not task content.
+Provider-context recovery also searches later eligible history when shrinking
+the current summary cannot cover the excess. A positive whitespace-word
+allowance is not proof that code-heavy history fits the complete request.
+This fallback budgets provider-projected token estimates after reserving
+request overhead, while existing staged plans retain their frozen allowance.
 Messages and steering arriving during staging remain in canonical arrival order.
 Mez verifies the frozen source is unchanged and rebases appended events with
 their original identities and metadata; peer mail remains lower-trust reference
@@ -186,13 +191,13 @@ distinct, delivery cursors are not replayed, and the final request budget includ
 these arrivals before publication. A genuine frozen-source rewrite fails closed.
 If the first segment has no summary allowance because later eligible closed
 history remains raw, planning accounts for those later segments before failing.
-Each segment is still summarized separately at its original anchor, with at most
-three additional provisional segment attempts; exact instructions and unfinished
+Each segment is still summarized separately at its original anchor, advancing
+through distinct later closed ranges; exact instructions and unfinished
 work stay raw. No intermediate summary resumes the turn or publishes an epoch.
 When the selected closed source exceeds the compactor's configured input cap,
 temporary chunks preserve all source bytes (including Unicode) and are summarized
-within a finite response budget that reserves a final synthesis response. An
-irreducibly large request or exhausted chunk budget fails without publishing a
+with strictly shrinking split and synthesis work and per-request bounds. An
+irreducibly large request or non-progressing recovery fails without publishing a
 partial summary or restarting settled execution.
 The compacted block carries only a short lossy-context warning and the
 model-authored summary; pane, model, entry counts, and other audit metadata
