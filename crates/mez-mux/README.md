@@ -50,6 +50,13 @@ with `session` and `layout` for domain state, `process` for PTY ownership, or
 | `presentation`, `render`, `overlay`, `theme` | Multi-surface presentation and visual policy |
 | `selector`, `record_browser` | Selection and record-browsing interfaces |
 
+The `render::rich_text` facade shares one semantic row and source-coordinate
+contract across CommonMark events, fenced-block presentation, table geometry,
+wrapping, and source-copy projection. Specialized fence callbacks remain
+caller-owned and precede generic syntax highlighting; all generic paths retain
+terminal-control sanitation and raw-source copy metadata. Its regression owners
+separately cover tables, block spacing, fences, and wrapping.
+
 ## Workspace boundaries
 
 `mez-mux` consumes shared identifiers from [`mez-core`](../mez-core/README.md)
