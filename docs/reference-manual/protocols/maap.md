@@ -30,7 +30,7 @@ malformed, or out-of-bounds objective publishes nothing, never fails the turn,
 and never clears the previously published value.
 
 ```json
-{"rationale":"Inspect the owner before making a focused change.","actions":[{"type":"shell_command","summary":"Locating the owner module","command":"rg -n 'target_symbol' crates"}]}
+{"rationale":"Inspect the owner before making a focused change.","objective":null,"actions":[{"type":"shell_command","summary":"Locating the owner module","command":"rg -n 'target_symbol' crates"}]}
 ```
 
 Structured providers carry one complete batch through their native tool or
@@ -163,6 +163,35 @@ move-with-update operations. Paths are normally relative to the pane working
 directory and cannot traverse with `..`. Patch failures are recoverable
 evidence: inspect fresh owner context and submit a smaller anchored patch;
 do not claim a mutation succeeded until its result confirms it.
+
+The file directives are `*** Add File: PATH`, `*** Update File: PATH`, and
+`*** Delete File: PATH`. A move uses `*** Move to: PATH` immediately after an
+update directive and still requires an update hunk. There is no
+`*** Replace File` directive. Update hunks begin with `@@`, optionally followed
+by a distinctive anchor, and prefix each line with a space for exact context,
+`-` for removal, or `+` for addition. Copy context and removed lines verbatim
+from current file evidence. Add-file content uses only `+` lines.
+
+For example, this is patch text to encode in the action's `patch` string, not
+a shell command or a unified diff:
+
+```text
+*** Begin Patch
+*** Update File: note.txt
+@@
+ unchanged heading
+-old text
++new text
+*** End Patch
+```
+
+Whole-file replacement uses `*** Update File` with `@@ replace whole file`
+and only `+` lines, without old/context lines. `*** End of File` within an
+update marks a result without a final newline. Under active, non-bypassed
+Bubblewrap, absolute targets may be inside effective configured write scopes;
+other execution modes require relative paths. These path checks do not confine
+an unsandboxed shell, and a multi-file patch is not an all-or-nothing transaction:
+confirmed earlier file changes may remain after a later operation fails.
 
 `web_search` and `fetch_url` execute through the runtime HTTP executor and are
 policy/audit controlled. `send_message` lowers to MMP; plain `text/plain` is

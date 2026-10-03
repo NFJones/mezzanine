@@ -73,6 +73,23 @@ the draft. During a running turn, ordinary submitted text guides that task
 rather than starting an independent one. In reverse history search, Enter
 accepts the match without submitting it; submit with a later Enter.
 
+| Prompt control | Behavior |
+| --- | --- |
+| Up / Down | Move between multiline draft rows; at the top or bottom, browse that prompt's submitted history. |
+| `Ctrl+R` | Start case-insensitive reverse history search; repeat to find an earlier match. Agent and command prompts search separate histories. |
+| Enter during reverse search | Accept the displayed match without submitting it. |
+| Esc, `Ctrl+C`, Left, Up, or Down during reverse search | Cancel search and restore the draft present when search started. |
+| Esc at an idle agent prompt | Clear the draft without closing the agent prompt or sending input to the pane process. |
+| Esc during active agent work | Interrupt the active turn before ordinary prompt editing handles the key. |
+| Esc at the command prompt | Close the prompt without sending input to the pane process. |
+| `Ctrl+L` | Move the active pane's used visible rows into retained history and clear its live viewport without closing the prompt. |
+
+Large bracketed pastes may appear as byte-count placeholders. Each placeholder
+represents one complete pasted payload and moves or deletes as a single editing
+unit. Submission sends the exact full text, not the placeholder label; pasted
+newlines do not submit the prompt. Ordinary typed text is not collapsed merely
+because it is long.
+
 External editing is also non-submitting. After a successful editor close, the
 edited text returns to the in-pane prompt for review and normal submission.
 While the editor is open, it exclusively owns the complete attached terminal:

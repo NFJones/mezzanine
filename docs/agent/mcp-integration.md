@@ -27,7 +27,11 @@ mez config validate
 
 Pass each stdio argument with a separate `--arg`. A server gets a usable `PATH`,
 but other environment variables must be explicitly configured or listed in
-`env_vars`; do not assume it inherits every variable from your pane shell.
+`env_vars`. Pass-through values and HTTP `bearer_token_env` values come from the
+Mez server process environment, not the interactive pane shell. Supply required
+variables securely before starting that server; exporting one later in a pane
+does not update the server environment. `permissions.env_whitelist` controls
+shell workloads, not MCP servers.
 
 For an HTTP integration:
 
@@ -49,6 +53,13 @@ the configuration reference. To use the stored credential instead, remove the
 reference with `mez config unset mcp_servers.<id>.bearer_token_env` and reload
 configuration. Changing an HTTP URL can make stored credentials stale and
 require login again.
+
+If the integration supports only a static bearer token, prefer a securely
+supplied `bearer_token_env`. The current `mez mcp login --token` option accepts
+the secret as a command argument, not through a hidden prompt or token file;
+process listings, shell history, and command logs may expose it. A configured
+but missing bearer-token variable fails authentication rather than falling back
+to stored credentials.
 
 These CLI commands change persistent configuration; reload the running session's
 configuration or start a new session before relying on the changes. `mez mcp

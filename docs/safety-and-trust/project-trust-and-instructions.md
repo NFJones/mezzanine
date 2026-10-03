@@ -35,6 +35,13 @@ policy**. It cannot grant credentials, tools, host access, or permission to
 override security requirements. Do not rely on an instruction such as “never
 read secrets” as a substitute for scopes and confinement.
 
+Once a provider request chain has been accepted, the turn's front-loaded
+guidance is frozen; discovered changes are deferred to the next turn rather
+than rewriting that active chain. Editing `AGENTS.md` is therefore not an
+immediate way to restrict running work. Stop consequential work when a boundary
+must change, then check the effective guidance and policy before starting a
+new turn.
+
 ## Review a project overlay
 
 Project configuration is discovered under `.mezzanine/config.toml`,

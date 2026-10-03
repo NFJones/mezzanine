@@ -78,6 +78,18 @@ hang visible. Use a timeout of at least 120 seconds for every direct test
 command as well. `just test` already supplies Cargo's `--quiet` option; retain
 that option when running a direct `cargo test` command.
 
+For direct test commands, use the short physical temporary directory that the
+`just test` recipe selects. On macOS, inherited `TMPDIR` values can exceed
+Unix-domain socket path limits, and `/tmp` is a symlink to `/private/tmp`:
+
+```sh
+canonical_tmp="$(cd /tmp && pwd -P)"
+TMPDIR="$canonical_tmp" timeout 120s cargo test -p mez-agent --lib --all-features --quiet semantic_apply_patch_replace_whole_file
+```
+
+Increase the timeout when compilation or the selected suite needs more time;
+120 seconds is a minimum, not the expected duration of the workspace suite.
+
 The optional `just test-real-bubblewrap` acceptance test requires Linux and a
 working Bubblewrap environment. Run it when a change affects the real
 confinement path. `just test-real-seatbelt` requires macOS and executable
@@ -101,6 +113,15 @@ suite:
 Wrap test-running recipes that do not supply their own timeout, including the
 release-load and Iroh benchmark recipes, in `timeout` with a budget of at least
 120 seconds; allow extra time for release compilation or a multi-run sweep.
+
+For real X11 forwarding validation on Linux, install `Xvfb` and `xauth`, then
+run `sh scripts/test-x11-forwarding.sh` with the physical `TMPDIR` above. The
+script starts an authenticated temporary Xvfb server and runs the ignored
+trusted/untrusted setup round-trip acceptance test with quiet Cargo output and
+a 300-second timeout. Missing tools or X SECURITY support fail the check rather
+than downgrading untrusted forwarding to trusted mode. Linux CI runs this
+separate acceptance step; the ordinary workspace suite does not run the ignored
+test.
 
 For native Linux power-inhibition changes, the optional
 `MEZ_REAL_LINUX_POWER_INHIBITION=1 just test-real-linux-power-inhibition`

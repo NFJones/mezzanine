@@ -101,6 +101,14 @@ approval grants do not become authority in a restored session:
 | `mez snapshot resume <snapshot-id>` | Reconstruct the saved layout model without starting a daemon; add `--serve` to launch fresh panes in a foreground daemon. |
 | `mez snapshot resume-latest [--session-id ID]` | Reconstruct the newest matching layout model without starting a daemon; it also accepts `--serve`. |
 
+**Current store limitation:** live `snapshot create` writes the selected
+daemon's `layouts` store, while the offline commands above read `snapshots`.
+Consequently, listing or resuming offline does not find a layout just created
+through that live request. Use command-prompt `save-layout --name NAME` and
+`load-layout --name NAME` for live layouts; loading replaces topology and starts
+fresh pane processes. Offline inspection and resume apply only to snapshots
+already in the offline store. See [recovery guidance](../operations/lifecycle-detach-and-recovery.md#snapshot-and-resume-deliberately).
+
 Both restore commands accept `--restart-command <command>`. Use it with
 `--serve` when restarted pane processes must remain alive; without `--serve`,
 the reconstructed runtime is transient and terminates those processes before

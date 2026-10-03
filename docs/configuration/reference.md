@@ -20,6 +20,7 @@ precedence, trust, and validation. Compare settings against the checked-in
 - [Persistent host](#host) and [Iroh transport](#transportiroh)
 - [Runtime](#runtime), [terminal](#terminal), [keys](#keys), and [key
   presets](#key_preset-and-key_presets)
+- [External editor](#external_editor)
 - [Window frames](#frameswindow), [pane frames](#framespane), and [frame
   template fields](#frame-template-fields)
 - [Theme selection](#theme) and [named themes](#themesname)
@@ -182,7 +183,7 @@ shown.
 | `theme` | table | see below | Active theme aliases and colors. |
 | `themes` | map | `{}` | User-defined named themes. |
 | `history` | table | see below | Per-pane history buffering. |
-| `memory` | table | see below | Persistent memory storage, retrieval, injection, and retention defaults. |
+| `memory` | table | see below | Persistent memory availability, search, and retention defaults; not automatic prompt injection. |
 | `issues` | table | see below | Local project issue tracking storage and availability. |
 | `agents` | table | see below | Agent defaults and limits. |
 | `model_profiles` | map | omitted on first launch; built-in catalog shown below | Model profile definitions. |
@@ -892,7 +893,7 @@ description.
 | `agents.default_provider` | string | `"openai"` | Provider profile used by default. |
 | `agents.default_model_profile` | string | `"default"` | Model profile used by default. |
 | `agents.active_turn_sleep_inhibition` | string | `"disabled"` | Primary-user-only host power policy: `disabled`, `system` (best-effort prevention of automatic idle system sleep), or `system-and-display` (also request display wakefulness where supported; higher battery use). It is held only while at least one canonical agent turn is `Running`, including a detached session, and releases when the final turn settles or the runtime stops or fails. Native Linux uses systemd-logind's `idle` inhibitor and the desktop `org.freedesktop.ScreenSaver` service; WSL is unsupported. macOS uses IOKit assertions. Unsupported platforms and failed requests are nonfatal, and unavailable display inhibition may leave system-only protection. Neither mode overrides explicit sleep, lid-close, thermal, or critical-battery safeguards, and model-authored config changes cannot alter it. See [Power inhibition](../operations/power-inhibition.md). |
-| `agents.shell_only` | boolean | `true` | Require local system actions to use shell-backed execution rather than an unmediated local executor; `agents.shell_mode` selects native or pane transport. |
+| `agents.shell_only` | boolean | `true` | Accepted declaration, not a runtime execution switch. Changing it does not enable another local executor or prohibit explicit process integrations such as MCP and hooks. Use `agents.shell_mode` for shell transport and `agents.enabled_actions` for the action catalog. |
 | `agents.enabled_actions` | string array | all executable MAAP actions | Authoritative action allowlist captured as a full schema-bearing snapshot when an agent session or child session is created. Ordinary provider requests, retries, repairs, continuations, and failure summaries retain that exact snapshot, including `spawn_agent` sizing metadata and the complete resolved execution profile for each size, even if configuration reloads while the session remains open. New sessions use the current configuration. Legacy snapshots without a resolved sizing profile remain readable but reject explicit sizing selections. Internal non-MAAP interaction kinds suppress tool emission without changing the stored catalog. Valid values are `say`, `shell_command`, `apply_patch`, `web_search`, `fetch_url`, `send_message`, `wait`, `spawn_agent`, `close_agent`, `config_change`, `mcp_server_search`, `mcp_server_get`, `mcp_call`, `memory_search`, `memory_store`, `list_agents`, `issue_add`, `issue_update`, `issue_query`, and `issue_delete`; controller-only capability and skill actions are not configurable. Integration availability, permission, subagent depth and terminal-profile policy, and argument checks still run when an enabled action is selected and return explicit action results when it cannot run. |
 | `agents.shell_mode` | string | `"native"` | Default agent shell execution transport: `native` runs each action in a freshly spawned shell inferred from the pane root process without sending pane input; `pane` sends shell-backed actions through the pane shell. Use `/shell-mode status` to view the effective pane mode, configured global mode, and override provenance in the pager. Use `/shell-mode pane` or `/shell-mode native` for an active-pane override, or append `--global` to persist the default for panes without an override. |
 | `agents.compaction_raw_retention_percent` | integer | `10` | Initial percent of complete raw groups retained outside model-authored summary input; provider context-limit backoff may grow the exact tail one complete group at a time; 1 to 100. |
@@ -1622,11 +1623,11 @@ unsandboxed retry, and the grant is consumed exactly once.
 | `mcp_servers.<name>.command` | string | omitted | Stdio server command. |
 | `mcp_servers.<name>.args` | string array | omitted | Stdio server arguments. |
 | `mcp_servers.<name>.url` | string | omitted | Streamable HTTP server URL. |
-| `mcp_servers.<name>.env` | map | omitted | Extra environment values. |
-| `mcp_servers.<name>.env_vars` | string array | omitted | Environment variable names to pass through. |
+| `mcp_servers.<name>.env` | map | omitted | Explicit non-secret environment values for a stdio server. |
+| `mcp_servers.<name>.env_vars` | string array | omitted | Names to pass through from the Mez server process environment, not the interactive pane shell. |
 | `mcp_servers.<name>.cwd` | string | omitted | Server working directory. |
 | `mcp_servers.<name>.http_headers` | map | omitted | HTTP headers for streamable HTTP servers. |
-| `mcp_servers.<name>.bearer_token_env` | string | omitted | Environment variable containing a bearer token. |
+| `mcp_servers.<name>.bearer_token_env` | string | omitted | Mez server environment variable containing an HTTP bearer token. Takes precedence over stored credentials; a missing variable fails rather than falling back to the store. |
 | `mcp_servers.<name>.enabled_tools` | string array | `[]` | Tool allow-list; empty permits all discovered tools not denied below. |
 | `mcp_servers.<name>.disabled_tools` | string array | `[]` | Tool deny-list. |
 | `mcp_servers.<name>.startup_timeout_sec` | integer | omitted; 10 seconds effective | Optional startup timeout in seconds; mutually exclusive with `startup_timeout_ms`. |
@@ -1669,6 +1670,11 @@ For streamable HTTP servers, `mez mcp login <name>` stores OAuth tokens in the
 auth credential store rather than in `mcp_servers`. Login uses browser
 authorization-code PKCE. `mez mcp login <name> --token <TOKEN>` stores a static
 bearer token in the same auth credential store without OAuth refresh metadata.
+Unlike provider API-key login, this MCP option takes the secret as a command
+argument: it may be exposed in process listings, shell history, or command logs.
+Prefer browser OAuth when supported, or a `bearer_token_env` supplied securely
+to the Mez server before startup. The current MCP CLI has no token-file or
+hidden token-prompt option; do not paste a real token into a documented example.
 When authorization-server metadata advertises an RFC 7591 dynamic client
 registration endpoint and no `--client-id` is provided, Mezzanine registers a
 public native client for the localhost callback and keeps only the returned

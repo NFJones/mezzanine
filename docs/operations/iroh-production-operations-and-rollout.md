@@ -237,6 +237,14 @@ Counters are process-lifetime aggregates and can race with an in-flight state
 transition. Correlate them with lifecycle state and bounded audit events, not
 with secret-bearing application payloads.
 
+Do not extend the payload-free aggregate guarantee to service-manager logs.
+The persistent host writes its server endpoint ID at listener startup and
+client endpoint IDs plus route classes on connections, disconnections, and
+authenticated failures to stderr. These identifiers can correlate devices and
+connection timing even without application payloads. Restrict log access and
+retention, include these records in the deployment's metadata policy, and
+review/redact copies before sharing them.
+
 ## Outage response
 
 ### Relay or lookup outage

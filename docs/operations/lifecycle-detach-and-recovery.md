@@ -66,9 +66,21 @@ See [Persistent multi-session host](persistent-host.md#stop-upgrade-and-recover)
 
 ## Snapshot and resume deliberately
 
-Use `mez snapshot create` to save layout state, and `mez snapshot` to list
-saved snapshots. The `inspect`, `delete`, `resume`, and `resume-latest`
-subcommands operate on those saved layouts. Current snapshots retain shared
+Use `save-layout --name NAME` in the command prompt to save live layout state
+and `load-layout --name NAME` to replace the current session's layout. Loading
+is not a harmless preview: it replaces live topology and starts fresh pane
+processes, so settle running work first.
+
+**Current CLI store mismatch:** `mez snapshot create` sends a live control
+request to the selected daemon, whose store is `layouts`. In contrast,
+`mez snapshot` and its offline `inspect`, `delete`, `resume`, and
+`resume-latest` subcommands read `snapshots`. They therefore do not find layouts
+created by that live request. Do not assume a successful create means the
+offline resume workflow below can recover it, or move live storage by hand to
+hide the mismatch. Use the live layout commands for the `layouts` store; the
+offline commands apply only to snapshots already present in `snapshots`.
+
+Current snapshots retain shared
 session topology, geometry, names, known pane working directories, a landing
 view, and local inter-agent messaging state. Older messaging state without
 resolved audience metadata is discarded rather than replayed to a broader
@@ -92,9 +104,10 @@ same-session recovery, startup reports a diagnostic and falls back to ordinary
 user shells. Check pane surfaces and diagnostics before continuing agent work;
 recovered conversation context does not resume an interrupted action.
 
-Snapshots are stored under Mezzanine's user-private configuration area. The
-snapshot CLI uses its `snapshots` directory, while live session layout commands
-use the separate `layouts` directory. Neither location is configurable. Treat
+Snapshots are stored under Mezzanine's user-private configuration area. Offline
+snapshot CLI commands use its `snapshots` directory, while live creation and
+session layout commands use the separate `layouts` directory. Neither location
+is configurable. Treat
 snapshot files as sensitive metadata: inspect their paths and titles before
 sharing, copying, or backing them up outside your normal private storage
 boundary.

@@ -37,8 +37,9 @@ max_per_remote_client = 8
 cpu_count = 2
 
 # Remote client/server transport. Unix sockets remain the default and local
-# recovery path. Every network behavior is independently opt-in and changes
-# require a daemon restart.
+# recovery path. Inbound listening is disabled; explicit outbound connections
+# are permitted by default. Lookup, relay use, port mapping, environment proxies,
+# and system CA-store use remain disabled. Changes require a daemon restart.
 [transport.iroh]
 enabled = false
 outbound_enabled = true
@@ -115,7 +116,8 @@ zen_mode = false
 zen_focus_label_duration_ms = 1000
 # Disable optional motion and animation when true.
 reduced_motion = false
-# Render provider output incrementally while a validated response is still arriving.
+# Render provisional provider output before final validation. Reduced motion
+# suppresses provisional rendering; this does not control transport streaming.
 streaming_output = true
 # Opt in to enhanced keyboard reporting only while a Mez readline prompt owns input.
 enhanced_keyboard_reporting = false
@@ -451,7 +453,8 @@ default_model_profile = "default"
 # request while work runs. Backends are best-effort and never override explicit
 # sleep, lid-close, thermal, or critical-battery safeguards.
 active_turn_sleep_inhibition = "disabled"
-# Restrict agent terminal work to the shell-mediated action surface.
+# Accepted declaration, not a runtime execution switch. Changing this does not
+# enable another local executor or disable explicit MCP/hook process integrations.
 shell_only = true
 # Static MAAP actions permitted on every ordinary provider request.
 enabled_actions = ["say", "shell_command", "apply_patch", "web_search", "fetch_url", "send_message", "wait", "spawn_agent", "close_agent", "config_change", "mcp_server_search", "mcp_server_get", "mcp_call", "memory_search", "memory_store", "list_agents", "issue_add", "issue_update", "issue_query", "issue_delete"]
@@ -676,6 +679,8 @@ env_whitelist = ["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"]
 
 # Named MCP server definitions. No server is configured by default.
 [mcp_servers]
+# env_vars and HTTP bearer_token_env read the Mez server environment, not exports
+# made later in a pane shell. Keep secret values out of inline env/http_headers.
 # Directly activatable stdio example. For streamable HTTP, remove `command`
 # and `args`, then add this replacement assignment:
 # url = "https://example.invalid/mcp"

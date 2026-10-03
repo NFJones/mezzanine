@@ -136,8 +136,12 @@ it is not a detach command. Use `detach-client` to leave processes running.
 `kill-group` cannot close the final group; terminate the session instead.
 
 `save-layout` and `load-layout` save and restore layout snapshots, not running
-processes or agent conversations. See [CLI snapshots](cli.md#snapshot-forms)
-for what is retained and for offline inspection and restore commands.
+processes or agent conversations. Use `save-layout --name NAME` and
+`load-layout --name NAME`; loading replaces live topology and starts fresh
+processes. These commands use the live `layouts` store. Offline CLI snapshot
+inspection and resume use a separate `snapshots` store and cannot find those
+layouts. See [snapshot recovery](../operations/lifecycle-detach-and-recovery.md#snapshot-and-resume-deliberately)
+before choosing a recovery workflow.
 
 ### Configuration discovery
 

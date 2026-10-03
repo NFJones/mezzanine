@@ -67,6 +67,13 @@ cancelled actions or processes. Use `/new` when you want an independent task
 instead. Detaching the client is different from hiding the agent shell: a
 normal detach leaves tasks running.
 
+In the `/resume` picker, Enter resumes the selected conversation, `i` opens its
+transcript for inspection, and `a` toggles between the current project and all
+saved conversations. Press `d` to delete the selected saved conversation;
+deletion is refused while any live durable agent pane still has it open. Switch
+those panes to `/new` or another conversation first. Hiding the prompt alone
+does not make the conversation eligible for deletion.
+
 ## Inspect and control a conversation
 
 Use `/help` for available commands, `/status` for the pane's active model,

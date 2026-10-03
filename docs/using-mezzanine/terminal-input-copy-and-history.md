@@ -57,7 +57,8 @@ closing the command prompt, or pressing `Esc` at an idle agent prompt.
 
 Press `Ctrl+A [` to enter pane-local copy mode. You can scroll normal terminal
 content, move a selection cursor, and copy without sending keys to the pane
-program. `Ctrl+A ]` pastes the most recent buffer into the active pane.
+program. `Ctrl+A ]` always pastes the most recent buffer into the active pane;
+it does not use the selected active buffer.
 
 Entering or leaving copy mode and moving focus between panes does not change
 the underlying pane text or syntax styling. Only the copy cursor and active
@@ -103,7 +104,9 @@ The command prompt also provides `copy-selection`, `paste-clipboard`,
 Host clipboard behavior depends on the terminal clipboard configuration.
 
 Use `choose-buffer NAME` to choose a named copy target, creating an empty buffer
-if needed, and `paste-buffer -b NAME` to paste that specific buffer. Copying with
+if needed, and `paste-buffer -b NAME` to paste that specific buffer. Without a
+name, the `paste-buffer` command uses the selected active buffer, falling back
+to the most recent buffer when none is selected. Copying with
 Space remains in copy mode; press Escape before returning to ordinary input.
 
 Alternate-screen application content is not added to normal pane scrollback;
@@ -119,7 +122,10 @@ without changing its current screen. Without an explicit confirmation flag,
 These commands do not implicitly expose or clear the hidden surface.
 Clearing displayed agent history does not delete its saved conversation or
 remove the model's retained context. Use `/new` for an independent conversation;
-use the `/resume` picker to delete a saved conversation when needed.
+to delete a saved conversation, open `/resume`, select its row, and press `d`.
+Deletion is rejected while the conversation is bound to any live durable agent
+pane. First use `/new` or resume a different conversation in each pane that
+still has it open; merely hiding the agent shell does not release the binding.
 Use `show-messages` for diagnostics, pending approvals, and visible hook failures.
 
 Command-output views support `/` text search. An empty `/` repeats the previous

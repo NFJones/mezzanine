@@ -57,7 +57,13 @@ setting, while `desired_mode` and `desired_generation` record the latest runtime
 request. `confirmed_mode`, `confirmed_generation`,
 `confirmed_aggregate_state`, the two resource states, `backend_kind`, and
 `last_error_class` describe worker-confirmed progress. A lower confirmed
-generation means the latest desired request is pending or degraded. The status
+generation means the latest desired request is pending or degraded. Matching
+generations alone are not proof of current protection: a later health check
+can lose a resource and fail to reacquire it without changing the desired
+generation or clearing the previously confirmed generation. Check the current
+aggregate and resource states and `last_error_class` as well. Failed acquisition
+or release is retried with bounded exponential backoff; release can remain
+pending while a resource is still held. The status
 never includes raw native errors, D-Bus cookies, file descriptors, IOKit
 assertion identifiers, or other host handles. Starting and retained terminal
 sessions without a live actor report `power_inhibition` as `null`.
@@ -119,4 +125,5 @@ field contract.
 
 Inspect `mez --json host status` during a running turn. Confirm that
 `desired_mode` matches the configured policy and that `confirmed_generation`
-catches up to `desired_generation`.
+catches up to `desired_generation`. Also require the intended resources to be
+reported held and review any error class; generation equality is not enough.

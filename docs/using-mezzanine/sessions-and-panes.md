@@ -94,10 +94,19 @@ the command-prompt `exit` to end that session and its panes.
 
 ## Snapshots
 
-Use `mez snapshot create` to save a layout, `mez snapshot` to list snapshots,
-and `mez snapshot inspect <snapshot-id>` to inspect one. Creation targets the
-live session selected by the control socket; use `-S <socket-path>` or
-`-L <name>` when you need to select a specific session. `mez snapshot resume
+For live layout saving and loading, use `save-layout --name NAME` and
+`load-layout --name NAME` in the command prompt. Loading replaces the current
+topology and starts fresh pane processes; settle running work first.
+
+**Current store limitation:** `mez snapshot create` targets the live session
+selected by the control socket and writes its `layouts` store. Offline
+`mez snapshot`, `inspect`, `delete`, `resume`, and `resume-latest` use the
+separate `snapshots` store and do not find those newly created layouts. Do not
+rely on create followed by offline resume as a recovery workflow. See
+[snapshot recovery](../operations/lifecycle-detach-and-recovery.md#snapshot-and-resume-deliberately).
+
+For snapshots already present in the offline store, `mez snapshot` lists them
+and `mez snapshot inspect <snapshot-id>` inspects one. `mez snapshot resume
 <snapshot-id>` reconstructs the saved topology, names, geometry, and known pane
 working directories without starting a daemon; `resume-latest` selects the
 newest matching snapshot. Add `--serve` to either resume command to run the

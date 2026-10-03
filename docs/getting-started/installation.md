@@ -58,6 +58,11 @@ Cargo-installed executable, run:
 cargo uninstall mezzanine
 ```
 
+If you installed into a custom root, pass `--root /path/to/install-root` to
+both `cargo install` and `cargo uninstall`. For the `just install` fallback,
+use `--root target/mez-install` from the repository root. This is the directory
+containing `bin`, not the `bin` directory itself.
+
 ## Check first-run protection defaults
 
 Linux Bubblewrap confinement requires executable `/usr/bin/bwrap`. macOS
