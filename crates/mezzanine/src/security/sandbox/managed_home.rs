@@ -75,6 +75,15 @@ pub(crate) struct SandboxManagedHomeActivityLock {
     _file: fs::File,
 }
 
+impl Drop for SandboxManagedHomeActivityLock {
+    /// Releases this workload's open-file-description lock before closing its
+    /// descriptor. Fork/dup aliases must not extend the ended workload's lease;
+    /// independently opened workload leases keep their own shared locks.
+    fn drop(&mut self) {
+        let _ = flock(&self._file, FlockOperation::Unlock);
+    }
+}
+
 /// Result of one scoped clear or prune candidate operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SandboxManagedHomeMaintenance {
@@ -1265,6 +1274,43 @@ mod tests {
         assert!(!first.host_path.exists());
         assert!(second.host_path.exists());
         assert!(!remove_bubblewrap_managed_home(&config_root, &first_project).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A duplicated open-file description models a descriptor inherited by an
+    /// unrelated child between fork and exec. Ending the owning workload must
+    /// release its lock even while that duplicate remains open; an independent
+    /// workload must still prevent cleanup until its own lease ends.
+    #[test]
+    fn managed_home_activity_release_survives_duplicated_descriptor() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-home-duplicate-lock-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let config_root = root.join("config");
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let (home, activity) =
+            prepare_bubblewrap_managed_home_for_workload(&config_root, &project).unwrap();
+        let duplicate = activity._file.try_clone().unwrap();
+        let independent = lock_bubblewrap_managed_home(&config_root, &home.project_key).unwrap();
+        drop(activity);
+        assert!(
+            inspect_bubblewrap_managed_home(&config_root, &project)
+                .unwrap()
+                .active
+        );
+        assert!(!remove_bubblewrap_managed_home(&config_root, &project).unwrap());
+        drop(independent);
+        assert!(
+            !inspect_bubblewrap_managed_home(&config_root, &project)
+                .unwrap()
+                .active
+        );
+        assert!(remove_bubblewrap_managed_home(&config_root, &project).unwrap());
+        assert!(!home.host_path.exists());
+        drop(duplicate);
         fs::remove_dir_all(root).unwrap();
     }
 
