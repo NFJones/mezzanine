@@ -4,7 +4,9 @@
 //! They prove rejection before publication, not atomic CAS against arbitrary
 //! external writers after the final check. No test changes the daemon cwd.
 
+use std::ffi::CString;
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 
@@ -216,14 +218,10 @@ fn capability_requires_current_read_and_write_authority() {
 #[test]
 fn capability_rejects_special_nodes_promptly() {
     let fixture = Fixture::new();
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        fixture.directory.join("fifo"),
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        0,
-    )
-    .unwrap();
+    let fifo = fixture.directory.join("fifo");
+    let fifo = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: fifo is a NUL-terminated path in our unique temporary directory.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
     let started = std::time::Instant::now();
     assert!(
         NativeFileCapability::capture(
