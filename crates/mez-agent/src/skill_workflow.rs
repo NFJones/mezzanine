@@ -85,6 +85,8 @@ pub struct SkillSummary {
     pub name: String,
     /// Short usage description from `SKILL.md` front matter.
     pub description: String,
+    /// Winning document's optional model-discovery declaration, not execution authority.
+    pub discovery: Option<bool>,
     /// Effective source scope for this skill.
     pub source: SkillSource,
     /// Path supplied by the product discovery adapter.
@@ -423,12 +425,23 @@ pub struct ParsedSkillDocument {
     pub name: String,
     /// Trimmed non-empty front-matter description.
     pub description: String,
+    /// Presence-preserving declaration for this document only.
+    pub discovery: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SkillFrontMatter {
     name: String,
     description: String,
+    #[serde(default, deserialize_with = "deserialize_discovery")]
+    discovery: Option<bool>,
+}
+
+/// Rejects non-boolean declarations, including null, while omission stays absent.
+fn deserialize_discovery<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error> {
+    bool::deserialize(deserializer).map(Some)
 }
 
 /// Parses and validates one complete `SKILL.md` document.
@@ -451,6 +464,7 @@ pub fn parse_skill_document(text: &str) -> Result<ParsedSkillDocument, SkillCont
     Ok(ParsedSkillDocument {
         name: front_matter.name,
         description: front_matter.description.trim().to_string(),
+        discovery: front_matter.discovery,
     })
 }
 
@@ -526,6 +540,7 @@ mod tests {
         SkillSummary {
             name: name.to_string(),
             description: format!("{name} workflow"),
+            discovery: None,
             source,
             path: PathBuf::from(format!("/{name}/SKILL.md")),
         }
@@ -683,6 +698,13 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.name, "review");
         assert_eq!(parsed.description, "Review workflow: parser coverage");
+
+        assert!(
+            parse_skill_document(
+                "---\nname: review\ndescription: Review\ndiscovery: yes\n---\nBody\n"
+            )
+            .is_err()
+        );
 
         let error =
             parse_skill_document("---\nname: ../review\ndescription: invalid path\n---\nBody\n")

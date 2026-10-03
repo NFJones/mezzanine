@@ -566,6 +566,15 @@ impl RuntimeSessionService {
                 "remote transport policy can only be changed directly by the user",
             )?);
         }
+        if setting_path == "skills" || setting_path.starts_with("skills.") {
+            return Ok(ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Denied,
+                "user_only_skill_discovery_policy",
+                "skill discovery policy can only be changed directly by the user",
+            )?);
+        }
         if runtime_config_change_requests_host_access(setting_path, operation, value.as_deref()) {
             return Ok(ActionResult::failed(
                 turn,

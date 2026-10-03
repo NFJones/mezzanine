@@ -33,6 +33,7 @@ pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "history",
     "memory",
     "issues",
+    "skills",
     "agents",
     "model_profiles",
     "model_presets",

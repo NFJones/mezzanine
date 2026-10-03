@@ -60,6 +60,8 @@ mod provider_models;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod schema;
+mod skills;
+pub(crate) use skills::skill_discovery_policy;
 /// Exposes the types module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

@@ -337,6 +337,7 @@ pub(crate) fn validate_config_text_with_document(
         diagnostics.extend(validate_agent_enabled_actions_config(root));
         diagnostics.extend(validate_subagent_allowed_actions_config(root));
         diagnostics.extend(validate_pane_status_config(root));
+        diagnostics.extend(super::skills::validate_skills_config(root));
 
         if let Some(value) = root.pointer("/terminal/zen_focus_label_duration_ms")
             && !value.as_u64().is_some_and(|duration| duration <= 60000)
@@ -1953,6 +1954,8 @@ fn project_overlay_path_changes_execution_authority(path: &str) -> bool {
         || path.starts_with("transport.")
         || path == "external_editor"
         || path.starts_with("external_editor.")
+        || path == "skills"
+        || path.starts_with("skills.")
         || is_model_profile_approval_policy_path(path)
 }
 

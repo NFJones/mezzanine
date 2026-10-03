@@ -477,6 +477,7 @@ fn builtin_skill_summaries() -> Vec<SkillSummary> {
     .map(|(name, description)| SkillSummary {
         name: name.to_string(),
         description: description.to_string(),
+        discovery: None,
         source: SkillSource::Builtin,
         path: builtin_skill_path(name),
     })
@@ -651,6 +652,7 @@ fn read_skill_summary(
     Ok(SkillSummary {
         name: document.name,
         description: document.description,
+        discovery: document.discovery,
         source,
         path: skill_path.to_path_buf(),
     })

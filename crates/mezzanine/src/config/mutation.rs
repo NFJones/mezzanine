@@ -86,6 +86,11 @@ pub(super) fn parse_mutation_path(path: &str) -> Result<Vec<String>> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn reject_unsupported_mutation_path(segments: &[String]) -> Result<()> {
+    let allow_skill_discovery_override = segments.len() == 4
+        && segments[0] == "skills"
+        && segments[1] == "overrides"
+        && mez_agent::is_valid_skill_name(&segments[2])
+        && segments[3] == "discovery";
     let allow_nested_mcp_external_capability = segments.len() == 4
         && segments.first().map(String::as_str) == Some("mcp_servers")
         && segments.get(2).map(String::as_str) == Some("external_capability")
@@ -124,6 +129,7 @@ pub(super) fn reject_unsupported_mutation_path(segments: &[String]) -> Result<()
         && !allow_nested_mcp_external_capability
         && !allow_named_status_pill_leaf
         && !allow_nested_provider_model_leaf
+        && !allow_skill_discovery_override
     {
         if segments.first().map(String::as_str) == Some("frames") {
             return Err(MezError::config(
@@ -325,6 +331,34 @@ pub(super) fn mutate_yaml_text(
             }
             ConfigMutationOperation::Unset => {
                 lines.remove(record.line);
+                if segments.first().map(String::as_str) == Some("skills") {
+                    // Empty implicit YAML mappings parse as null. Remove only
+                    // empty policy ancestors, preserving siblings and comments.
+                    for depth in (1..segments.len()).rev() {
+                        let prefix = segments[..depth].join(".");
+                        let current = yaml_records(&lines);
+                        let Some(parent) = current.iter().find(|item| item.path == prefix) else {
+                            continue;
+                        };
+                        if parent.has_value
+                            || current
+                                .iter()
+                                .any(|item| item.path.starts_with(&format!("{prefix}.")))
+                        {
+                            break;
+                        }
+                        let comment = lines[parent.line]
+                            .split_once(':')
+                            .map(|(_, tail)| tail.trim_start())
+                            .filter(|tail| tail.starts_with('#'))
+                            .map(|tail| format!("{}{tail}", " ".repeat(parent.indent)));
+                        if let Some(comment) = comment {
+                            lines[parent.line] = comment;
+                        } else {
+                            lines.remove(parent.line);
+                        }
+                    }
+                }
             }
         }
         return Ok(join_lines(&lines, line_ending, text.ends_with('\n')));
@@ -342,6 +376,37 @@ pub(super) fn mutate_yaml_text(
         return Ok(join_lines(&lines, line_ending, text.ends_with('\n')));
     }
     let Some(parent_record) = records.iter().find(|record| record.path == parent) else {
+        if segments.first().map(String::as_str) == Some("skills") {
+            // Only the admitted skill-policy shape may create missing mappings.
+            // Preserve existing YAML and reject any scalar ancestor.
+            let mut depth = 0;
+            let mut insert_at = lines.len();
+            let mut indent = 0;
+            for index in 1..segments.len() {
+                let prefix = segments[..index].join(".");
+                let Some(record) = records.iter().find(|record| record.path == prefix) else {
+                    break;
+                };
+                if record.has_value {
+                    return Err(MezError::config("skill policy parent must be a mapping"));
+                }
+                depth = index;
+                insert_at = yaml_block_end(&records, record);
+                indent = record.indent + 2;
+            }
+            let mut added = Vec::new();
+            for segment in &segments[depth..segments.len() - 1] {
+                added.push(format!("{}{segment}:", " ".repeat(indent)));
+                indent += 2;
+            }
+            added.push(format!(
+                "{}{leaf}: {}",
+                " ".repeat(indent),
+                yaml_scalar(value)
+            ));
+            lines.splice(insert_at..insert_at, added);
+            return Ok(join_lines(&lines, line_ending, true));
+        }
         return Err(MezError::config(format!(
             "configuration mutation cannot create missing nested parent `{parent}`"
         )));
@@ -445,7 +510,7 @@ pub(super) fn yaml_records(lines: &[String]) -> Vec<YamlRecord> {
                 .join("."),
             line: index,
             indent,
-            has_value: !value.trim().is_empty(),
+            has_value: !value.trim().is_empty() && !value.trim_start().starts_with('#'),
         });
     }
 
@@ -513,6 +578,12 @@ pub(super) fn json_mutate_value(
                 "configuration mutation parent `{segment}` is a scalar, not an object"
             )));
         };
+        if !values.contains_key(segment) && segments.first().map(String::as_str) == Some("skills") {
+            if matches!(operation, ConfigMutationOperation::Unset) {
+                return Ok(());
+            }
+            values.insert(segment.clone(), serde_json::json!({}));
+        }
         let Some(next) = values.get_mut(segment) else {
             return Err(MezError::config(format!(
                 "configuration mutation cannot create missing nested parent `{segment}`"

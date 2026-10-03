@@ -129,7 +129,7 @@ the decision.
 
 ## Schema versions and examples
 
-The current schema is version `98` (see the [schema reference](reference.md)).
+The current schema is version `99` (see the [schema reference](reference.md)).
 Older primary user configurations migrate on launch; a configuration declaring
 a newer schema is rejected. Existing project overlays must declare the current
 schema version and are not migrated

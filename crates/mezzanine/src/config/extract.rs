@@ -310,6 +310,15 @@ pub(super) fn validate_known_schema_path(path: &str) -> Option<String> {
         "history" => validate_static_table_path(&segments, "history", HISTORY_KEYS, &[]),
         "memory" => validate_static_table_path(&segments, "memory", MEMORY_KEYS, &[]),
         "issues" => validate_static_table_path(&segments, "issues", ISSUE_KEYS, &[]),
+        "skills" => match segments.as_slice() {
+            ["skills"] | ["skills", "discovery"] | ["skills", "overrides"] => None,
+            ["skills", "overrides", name] | ["skills", "overrides", name, "discovery"]
+                if mez_agent::is_valid_skill_name(name) =>
+            {
+                None
+            }
+            _ => Some("unknown skills policy path or invalid skill name".to_string()),
+        },
         "agents" => validate_agents_path(&segments),
         "model_profiles" => validate_model_profile_path(&segments),
         "model_presets" => validate_model_preset_path(&segments),

@@ -95,4 +95,5 @@ mod migration;
 mod mutation;
 mod parse;
 mod schema_validation;
+mod skills;
 mod validation;

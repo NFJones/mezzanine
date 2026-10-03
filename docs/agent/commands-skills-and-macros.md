@@ -132,6 +132,16 @@ Model-selected skill discovery and loading are disabled and are not available
 through `agents.enabled_actions`. Use `/list-skills` and invoke the chosen
 workflow explicitly with `$<skill-name>`.
 
+Optional frontmatter `discovery: true` or `discovery: false` declares eligibility
+for that document only. Primary config may set `skills.discovery` or
+`skills.overrides.<name>.discovery`. Explicit global false vetoes discovery;
+otherwise per-name operator policy wins over the winning document declaration,
+then global policy, then default false. Omit the global setting to allow selective
+opt-ins. Resolve trust and source precedence first; lower-priority shadows cannot
+opt in their winner. These policy declarations do not yet enable callable model
+discovery/loading actions. Explicit invocation and the full human catalog remain
+unchanged, and auxiliary assets are never automatically executed.
+
 `/sync-builtin-skills` restores managed built-in copies in the user configuration
 root. It preserves valid user overrides that omit the managed-version marker
 and does not change project skills. Review the reported replacements if you

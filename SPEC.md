@@ -3607,6 +3607,7 @@ The top-level configuration object MUST support the following keys:
 - `history`
 - `memory`
 - `issues`
+- `skills`
 - `agents`
 - `model_profiles`
 - `model_presets`
@@ -3621,7 +3622,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 98 is the current implemented configuration schema version for this
+schema version 99 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -3651,6 +3652,9 @@ The `96 -> 97` migration MUST advance only the version; the expanded omitted
 environment defaults MUST NOT overwrite an authored list. The `97 -> 98`
 migration MUST remove obsolete `host.recover_on_start` while preserving other
 host settings. Current-schema layers MUST reject that removed setting.
+The `98 -> 99` migration MUST advance only the version, preserving absent
+discovery policy and authored action allowlists. Schema 99 adds primary-user
+`skills.discovery` and `skills.overrides.<name>.discovery` optional booleans.
 
 The `90 -> 91` migration MUST advance only the schema version. It MUST preserve
 configured and omitted `frames.window.pills.<name>.foreground`,
@@ -9266,6 +9270,18 @@ include:
 
 - `name`: The stable skill identifier.
 - `description`: A short description of when to use the skill.
+
+Optional `discovery` MUST be a boolean when present and applies only to this
+document. Resolve trust and the winning source before discovery policy. An
+explicit primary-user `skills.discovery = false` vetoes all discovery. Otherwise
+the first present per-name operator override, winning-document declaration,
+global setting, or default false determines eligibility. Absent global policy
+is not a veto and permits selective opt-ins. Shadowed sources MUST NOT opt in
+their winner. Project overlays and model-authored config changes MUST NOT alter
+operator discovery policy. Human catalogs and explicit invocation remain usable.
+Filtered model metadata MUST contain only eligible names, descriptions and
+source attribution, never bodies, paths or excluded diagnostic names. Policy
+metadata alone does not expose callable discovery/loading actions.
 
 Skill names MUST contain only lowercase ASCII letters, decimal digits, and
 hyphens. The directory basename MUST match the `name` field. Implementations

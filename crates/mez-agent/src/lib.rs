@@ -162,6 +162,7 @@ pub mod shell_observation;
 pub mod shell_read_observation;
 /// Provider-independent shell-output transport decoding.
 pub mod shell_transport;
+pub mod skill_discovery;
 /// Provider-independent agent skill contracts and parsing.
 pub mod skill_workflow;
 /// Dependency-neutral agent slash-command registry and parsing.

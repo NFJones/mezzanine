@@ -26,7 +26,26 @@ impl RuntimeSessionService {
     /// - `pane_id`: Pane whose current working directory scopes project skills.
     pub(crate) fn effective_skill_catalog_for_pane(&self, pane_id: &str) -> SkillCatalog {
         let project_root = self.trusted_skill_project_root_for_pane(pane_id);
-        discover_skill_catalog(self.integration.config_root(), project_root.as_deref())
+        let mut catalog =
+            discover_skill_catalog(self.integration.config_root(), project_root.as_deref());
+        if let Ok(config) =
+            crate::config::compose_effective_config(self.integration.config_layers())
+        {
+            let policy = crate::config::skill_discovery_policy(&config);
+            let unknown = policy
+                .overrides
+                .keys()
+                .filter(|name| catalog.get(name).is_none())
+                .cloned()
+                .collect::<Vec<_>>();
+            for name in unknown {
+                catalog.diagnostics.push(mez_agent::SkillDiagnostic {
+                    path: PathBuf::from(format!("skills.overrides.{name}.discovery")),
+                    message: "configured skill name is not in the effective human catalog; policy is inert".to_string(),
+                });
+            }
+        }
+        catalog
     }
 
     /// Returns the trusted project root whose skills may apply to one pane.

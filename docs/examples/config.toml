@@ -12,7 +12,14 @@
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 98
+version = 99
+
+# Model-selected skills remain default-off when policy is absent. Explicit false
+# is a global veto; omission permits individual document/operator opt-ins.
+# [skills]
+# discovery = false
+# [skills.overrides.review]
+# discovery = true
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.

@@ -65,7 +65,7 @@ copy/replace examples such as command-rule arrays, or provider catalog fields
 that are materialized only after authentication; they are not activation
 markers.
 
-The current config schema version is `98`. On launch, Mezzanine migrates an
+The current config schema version is `99`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -83,6 +83,8 @@ then Seatbelt; it removes the backend-specific settings. The v96-to-v97
 migration advances the version without materializing expanded omitted defaults
 or changing authored lists. The v97-to-v98 migration removes
 `host.recover_on_start` while preserving other host settings.
+The v98-to-v99 migration advances only the version, leaving discovery policy
+absent/default-off and preserving authored action allowlists.
 
 Project overlays can use `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
 `.mezzanine/config.yml`, or `.mezzanine/config.json` under a project directory.
@@ -171,7 +173,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `98` | Config schema version. Do not change this. |
+| `version` | integer | `99` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
@@ -185,6 +187,7 @@ shown.
 | `history` | table | see below | Per-pane history buffering. |
 | `memory` | table | see below | Persistent memory availability, search, and retention defaults; not automatic prompt injection. |
 | `issues` | table | see below | Local project issue tracking storage and availability. |
+| `skills` | table | omitted | Primary-user discovery policy; absent means default-off, not a global veto. |
 | `agents` | table | see below | Agent defaults and limits. |
 | `model_profiles` | map | omitted on first launch; built-in catalog shown below | Model profile definitions. |
 | `model_presets` | map | omitted on first launch; built-in catalog shown below | Named default and automatic-sizing model-profile selections. |
@@ -199,6 +202,17 @@ shown.
 | `hooks` | map | `{}` | Lifecycle and command hooks. |
 | `audit` | table | see below | Security audit logging. |
 | `extensions` | map | `{}` | Implementation-specific extension data. |
+
+### Skill discovery policy
+
+`skills.discovery` and `skills.overrides.<name>.discovery` are optional booleans.
+An explicit global false is a kill switch. Otherwise precedence is per-name
+operator override, winning `SKILL.md` frontmatter, global policy, then false.
+Trust and source precedence are resolved first; a shadowed document cannot opt
+in its winner. Project overlays and model-authored config changes cannot alter
+this primary-user policy. Unknown configured names are inert with human
+diagnostics. Use direct user config set/unset for these leaves; removing a leaf
+restores absence. Policy does not itself expose skill actions in this release.
 
 Shell discovery, pane layout, local messaging, and snapshot storage are runtime
 behavior rather than configurable schema tables. Use the relevant task and
