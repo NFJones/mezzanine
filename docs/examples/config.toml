@@ -713,16 +713,19 @@ env_whitelist = ["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"]
 provider_refresh_leeway_seconds = 86400
 
 # Repository instruction-file discovery and context-size policy.
+# These declarations are accepted but not consumed by the current pane bootstrap:
+# it reads AGENTS.md with a fixed 32768-byte limit and marks truncation without
+# automatic summarization. Use enabled context documents for additional guidance.
 [instructions]
-# Additional global instruction files loaded for every project.
+# Declared additional global instruction files.
 global_files = []
-# Instruction filenames searched from the project hierarchy.
+# Declared instruction filenames for the project hierarchy.
 project_filenames = ["AGENTS.md"]
-# Maximum bytes read per instruction file before applying on_truncation.
+# Declared per-file byte limit; bootstrap currently uses the fixed limit above.
 max_bytes = 32768
-# Skip hidden directories during instruction discovery by default.
+# Declared hidden-directory discovery policy.
 include_hidden_directories = false
-# Truncation policy: summarize oversized instruction context.
+# Declared truncation policy; automatic summarization is not implemented here.
 on_truncation = "summarize"
 
 # Named lifecycle hooks. No external command executes by default.

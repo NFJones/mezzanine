@@ -107,22 +107,19 @@ programmatically.
 
 ## Compression policy foundation
 
-Schema v71 adds ordered `compression_codecs`, `compression_min_bytes`, and
-`compression_zstd_level` settings. Compression is applied to complete
-Mezzanine application frames, not by Iroh or QUIC. The v2 frame foundation
-supports bounded Zstandard and LZ4 payloads plus per-frame identity fallback.
-The runtime advertises and attempts streaming codecs first, preserving
+Use `compression_codecs` to choose codecs, `compression_min_bytes` to set the
+minimum size for frame-based compression, and `compression_zstd_level` to tune
+Zstandard. The runtime advertises and attempts streaming codecs first, preserving
 configured preference within the streaming and non-streaming classes. It does
 so only before opening an application stream, then keeps the selected codec
 fixed for control, event, and negotiated X11 traffic until that connection
 closes. An interleaved preference list is therefore intentionally reordered by
 codec class.
 
-Schema v75 additionally accepts `lz4-stream` and `zstd-stream` for opt-in
-low-latency trials. These v3 variants reuse bounded direction-local history and
-flush every logical frame; they do not use `compression_min_bytes` bypasses.
-Initialization and event prefaces remain raw, and sensitive frames reset codec
-history. A canary preference list may place a streaming codec first while
+`lz4-stream` and `zstd-stream` are available for opt-in low-latency trials.
+They reuse bounded compression history and flush every logical frame; they do
+not use `compression_min_bytes` bypasses. Sensitive frames reset codec history.
+A canary preference list may place a streaming codec first while
 retaining existing fallbacks, for example:
 
 ```toml
@@ -153,7 +150,7 @@ application outcome must fail visibly instead of being replayed.
 Run the single-threaded release harness from the repository root:
 
 ```text
-just iroh-compression-bench
+timeout 300s just iroh-compression-bench
 ```
 
 It writes `target/iroh-compression-bench.json` by default; override the path
@@ -165,7 +162,7 @@ generated reports rather than this operational runbook.
 Run the content-safe, single-threaded release harness from the repository root:
 
 ```text
-just iroh-render-bench
+timeout 300s just iroh-render-bench
 ```
 
 It writes `target/iroh-render-bench.json` by default; override the path with
@@ -178,7 +175,9 @@ direct or relay path.
 
 1. Confirm the private Unix control socket works and retain a local primary
    administration path.
-2. Run `mez config validate` before restart.
+2. Run `mez config validate` before restart and require `"valid": true` in its
+   output. A zero exit status alone is not a validation pass; see the
+   [host startup guidance](persistent-host.md#start-and-inspect-the-host).
 3. Start one canary persistent host with Iroh enabled by running `mez host
    serve` under the deployment's service manager.
 4. Run `mez --json remote status` through local Unix control.
@@ -283,6 +282,13 @@ Use local Unix control for all trust administration.
   unit, and re-pair through Unix control.
 - After any rotation, verify old profiles fail and the new server endpoint ID is
   delivered through a confidential channel.
+
+An invalid endpoint key can stop host startup before the Unix listener exists.
+If local administration is unavailable, stop automatic restarts, preserve the
+failed state, and start with Iroh disabled in primary-user configuration before
+attempting offline repair. Follow the [identity recovery
+procedure](../safety-and-trust/remote-pairing-and-recovery.md#back-up-or-recover-identity);
+do not assume restarting with the same corrupt key restores Unix access.
 
 ## Disable and return to Unix only
 

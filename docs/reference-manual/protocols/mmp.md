@@ -142,6 +142,31 @@ The current endpoint recognizes that namespace grammar during validation but
 does not dispatch extension types, so it rejects them as unsupported endpoint
 operations. Namespace syntax alone does not advertise extension support.
 
+### Task payloads
+
+`task_status` and `task_result` use the full envelope described above, with
+`content_type: "application/json"` and an object payload. Their required fields
+are validated before acceptance:
+
+| Type | Payload fields |
+| --- | --- |
+| `task_status` | Non-blank string `task_id`, string `state`, and string `summary`. States are `queued`, `running`, `blocked`, `succeeded`, `failed`, or `cancelled`. Optional `progress_percent` is null or an integer from 0 through 100. |
+| `task_result` | Non-blank string `task_id`, boolean `success`, string `summary`, and string `output`. Both strings are required even when empty. |
+
+For example, these are payload objects, not complete requests:
+
+```json
+{"task_id":"task-1","state":"running","progress_percent":25,"summary":"Checking protocol examples."}
+```
+
+```json
+{"task_id":"task-1","success":true,"summary":"Checks passed.","output":"Two focused tests passed."}
+```
+
+Malformed payloads produce `invalid_envelope` without queueing the message.
+Acceptance acknowledges a report, not independent verification of the reported
+task outcome and not authority to execute work.
+
 ## Delivery audience and recipient selection
 
 Raw `send`, `task_status`, and `task_result` envelopes accept optional top-level

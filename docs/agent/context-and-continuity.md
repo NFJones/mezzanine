@@ -13,7 +13,10 @@ Use the [agent shell](../using-mezzanine/agent-shell.md) in an active pane.
 
 Each turn receives the applicable project instructions, selected guidance, and
 the conversation's ordered prompts, replies, and explicit action results. Mez
-refreshes project instructions before provider requests. The agent does not
+assembles discovered project guidance before provider requests, but freezes it
+once a provider request chain has been accepted; changed guidance is deferred
+to the next turn. This is not a guarantee that files are reread before every
+request. The agent does not
 automatically see terminal scrollback, a full-screen application's contents,
 other panes, or files it has not inspected. Ask it to read a file or run a
 bounded command when current evidence is needed.

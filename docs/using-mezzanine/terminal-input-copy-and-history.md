@@ -117,6 +117,9 @@ is visible. Run `clear-history --confirm` to clear that surface's bounded histor
 without changing its current screen. Without an explicit confirmation flag,
 `clear-history` reports that confirmation is required and leaves history intact.
 These commands do not implicitly expose or clear the hidden surface.
+Clearing displayed agent history does not delete its saved conversation or
+remove the model's retained context. Use `/new` for an independent conversation;
+use the `/resume` picker to delete a saved conversation when needed.
 Use `show-messages` for diagnostics, pending approvals, and visible hook failures.
 
 Command-output views support `/` text search. An empty `/` repeats the previous

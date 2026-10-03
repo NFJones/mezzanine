@@ -206,8 +206,11 @@ Good compression does not imply a good network path. Addresses, endpoint
 identities, credentials, and terminal contents are omitted. Local Unix-socket
 clients see an unavailable state because they are not attached through Iroh.
 
-The bottom window bar independently shows a privacy-safe plain-text Iroh status
-pill, such as `good` or `degraded`, for that same live Iroh client.
+The bottom window bar independently shows a privacy-safe Iroh connection pill
+for that same client: `up` while connected, or `dn` when its retained view is
+shown as disconnected. Color indicates sampled path quality; the label itself
+does not distinguish `good`, `degraded`, `poor`, or `unknown`. Use
+`show-iroh-status` to read quality and measurements without relying on color.
 It is hidden while a command-output pager is active and returns after that
 pager closes. It is omitted for local Unix-socket clients and contains no path,
 endpoint, address, relay, peer, or diagnostic information; use

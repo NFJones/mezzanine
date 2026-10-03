@@ -56,6 +56,10 @@ mez config validate
 mez host serve
 ```
 
+Before starting the host, require `"valid": true` in the validation output and
+review diagnostics; a zero exit status alone does not prove the configuration
+is valid. See the [host startup guidance](../operations/persistent-host.md#start-and-inspect-the-host).
+
 Keep that host process running. In another local shell, create the invitation
 through the host's Unix control path, transfer the resulting file through a
 confidential channel, and run the remaining commands on the client device:
@@ -195,22 +199,20 @@ when the source primary detaches.
 
 ### Understand host-scoped profiles and leases
 
-Configuration schema 73 provides a persistent-host Iroh owner with one stable
-endpoint identity and host trust database. Pairing remains mandatory once per
-client device, but invitation redemption and profile checks use protocol-v3
-`host_only` initialization and cannot create, select, or attach a session.
+The persistent host owns one stable endpoint identity and host trust database.
+Pairing remains mandatory once per client device, but invitation redemption and
+profile checks authenticate without creating, selecting, or attaching a session.
 After pairing, authorized create and attach operations do not repeat the
 pairing flow. A host endpoint ID remains transport evidence only; the
 host-scoped trust record carries application authority and revocation state.
 
 Protected client profiles now carry an explicit scope: `host` or
 `legacy_session`. Profiles written before scope metadata existed are loaded as
-`legacy_session`; they are never silently broadened to host authority. A host
-profile uses `host_only` for pairing and health checks. Omitted-target `attach`
-uses atomic default resolution with fallback creation; `new`, explicit lease
-attachment, and `attach --default` use their distinct host routes. Lease
-administration remains local-only: active release or revocation requires
-explicit runtime termination, while device trust revocation continues to
+`legacy_session`; they are never silently broadened to host authority.
+Omitted-target `attach` resolves a default session with fallback creation;
+`new` requests creation, while an explicit target or `attach --default` avoids
+fallback creation. Lease administration remains local-only: active release or
+revocation requires explicit runtime termination, while device trust revocation continues to
 affect that device across leases. Runtime kill, lease release, lease revocation,
 and device trust revocation remain separate operations.
 
@@ -239,6 +241,13 @@ route owner bound to the exact authenticated Iroh connection; primary role by
 itself does not select that owner. Trusted forwarding is a separate explicit
 client request and host permission. Untrusted preparation failure never
 changes the request to trusted mode.
+
+Forwarding exposes the client's selected X server to applications on the remote
+host. Trusted mode can permit access to other X applications, including their
+input and display contents; use it only when that host and its applications are
+trusted with the local desktop. Untrusted mode relies on the X server's
+X SECURITY restrictions, not a general-purpose application sandbox. Pairing
+and encrypted transport do not make a remote GUI application harmless.
 
 The client keeps its real X cookie, authority path, and local display target
 local. The server receives only a random fake session cookie, while each raw
@@ -294,12 +303,27 @@ owner-only permissions and protect backups as credentials. Restoring only one
 side is not sufficient: trust records and outstanding invitations are bound to
 the server endpoint ID.
 
-If the endpoint key is lost, corrupted, or intentionally replaced, prior
-invitations and device credentials no longer authenticate to the new server
-identity. Keep using local Unix control, inspect status, and pair devices again.
-If the trust database is lost or corrupted, do not reconstruct verifiers by
-hand; preserve or replace the failed state offline and re-pair through local
-control.
+If the endpoint key is missing, the next enabled host startup creates a new
+identity; an existing malformed or unsafe key is rejected instead. Key loading
+precedes the host's Unix listener, so a key failure can prevent both remote and
+local administration from starting. Do not repeatedly restart or delete state
+to suppress the diagnostic.
+
+For recovery, stop the service manager's restart loop and the owning host,
+preserve the remote state privately, then disable `transport.iroh.enabled` in
+primary-user configuration and require `"valid": true` from validation. Start
+the host in Unix-only mode and verify local administration. Stop it again before
+repairing remote storage offline, keeping Iroh disabled until repair is complete.
+Restarting interrupts hosted work; inspect interrupted sessions and leases before
+retrying commands.
+
+Restore a known-good endpoint key and trust database together if available.
+Otherwise, deliberately retire the failed state offline and re-pair devices
+after re-enabling Iroh. A new server identity invalidates old invitations and
+device credentials. A missing trust database is treated as empty; a malformed
+one makes trust operations fail rather than reconstructing authority. Do not
+reconstruct verifiers by hand or treat successful `remote status` as a trust
+database integrity check.
 
 ## Privacy and rollout
 

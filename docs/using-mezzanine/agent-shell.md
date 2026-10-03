@@ -7,8 +7,9 @@ boundaries.
 
 ## Prerequisites
 
-Complete [Getting started](../getting-started/README.md) and authenticate a
-provider for model-backed work.
+Complete [Getting started](../getting-started/README.md) and configure a
+provider for model-backed work. Authenticate if that provider requires
+credentials; compatible local backends may need none.
 
 ## Open and use the prompt
 

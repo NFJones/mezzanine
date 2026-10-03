@@ -16,7 +16,7 @@ Understand the [agent overview](overview.md) and
 | --- | --- |
 | Instructions for one task | The ordinary agent prompt. State the goal, owned files, constraints, and expected validation. |
 | A directive for future turns in this pane session | `/directive <text>`; bare `/directive` or `/directive show` inspects it, and `/directive clear` removes it. |
-| Repository workflow and conventions | The project's configured instruction files, normally `AGENTS.md`. |
+| Repository workflow and conventions | Project `AGENTS.md` files, subject to the [current discovery limits](../safety-and-trust/project-trust-and-instructions.md#understand-repository-instructions). |
 | Reusable text for this project or all projects | Enabled [context documents](context-and-continuity.md#reuse-guidance-across-conversations). |
 | A workflow invoked only when wanted | An explicit [skill or macro](commands-skills-and-macros.md#invoke-a-skill-or-macro-explicitly). |
 | Response tone and presentation | A configured personality selected with `/personality`. |
@@ -27,10 +27,13 @@ Keep instructions concise and non-secret. Prefer concrete boundaries such as
 vague demands for autonomy. Do not duplicate large source references in every
 prompt when the agent can inspect the relevant artifact directly.
 
-Project guidance is refreshed before provider requests. Changes to a directive
-or reusable guidance are not a way to rewrite an already completed action or
-retroactively change a running turn's authority. Inspect the effective context
-when a new instruction appears not to be applied.
+Discovered project guidance is assembled before provider requests, but an
+accepted provider request chain retains its existing guidance until the next
+turn. The current pane bootstrap also uses fixed instruction filenames and
+limits rather than the declared [instruction settings](../configuration/reference.md#instructions).
+Changes to a directive or reusable guidance are not a way to rewrite an already
+completed action or retroactively change a running turn's authority. Inspect
+the effective context when a new instruction appears not to be applied.
 
 ## Select a personality
 
@@ -41,9 +44,11 @@ when a new instruction appears not to be applied.
 ```
 
 Replace `<profile-id>` with an ID from the configured catalog. `/personality
-clear` or `/personality default` removes the pane's selection. Profiles can
-include style, prompt additions, and model, planning, or routing preferences; inspect
-their configuration rather than assuming every profile changes only tone.
+clear` or `/personality default` removes the pane's selection and falls back to
+`agents.default_personality`, if configured; it does not force personalities off.
+Profiles can include style, prompt additions, and model, planning, or routing
+preferences; inspect their configuration rather than assuming every profile
+changes only tone.
 Clearing the personality selection does not undo model, planning, or routing
 overrides already applied by that profile; inspect those controls separately.
 `agents.default_personality` sets the configured default. See

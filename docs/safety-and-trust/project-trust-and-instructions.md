@@ -12,12 +12,20 @@ before making a trust decision; a Git marker is not proof of safety.
 
 ## Understand repository instructions
 
-By default, Mezzanine discovers `AGENTS.md` through the pane shell. The project
-root is the nearest ancestor with a `.git` directory or file, or the pane working
-directory when none exists. For a path-scoped task, applicable guidance spans
-the project root and target directory. `instructions.project_filenames` selects
-ordered filenames; each directory contributes at most the first existing file.
-Hidden-directory discovery and content limits are configurable.
+Mezzanine's current pane bootstrap discovers `AGENTS.md` through the pane
+shell and reads at most 32768 bytes per file. The declared `instructions`
+settings do not customize this loader; see the [current limitations](../configuration/reference.md#instructions).
+Keep essential guidance within that limit or use enabled context documents
+for additional guidance.
+
+Instruction-root discovery currently differs by shell: Fish recognizes a
+`.git` directory or file, while the POSIX bootstrap used by other supported
+shells recognizes only a `.git` directory. In a linked worktree with a `.git`
+file and no ancestor `.git` directory, the latter can load guidance only from
+the pane working directory and omit ancestor instructions. Check the effective
+context rather than assuming worktree-root guidance was loaded. This is an
+instruction-discovery limitation, not a change to project trust or filesystem
+authority.
 
 Ancestor guidance applies before descendant guidance; descendant guidance takes
 precedence within its subtree. Mezzanine marks source and scope and reports

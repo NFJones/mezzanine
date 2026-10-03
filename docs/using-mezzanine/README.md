@@ -7,8 +7,10 @@ Learn routine pane, terminal, agent-shell, copy/history, and workflow tasks.
 ## Prerequisites
 
 Install `mez` and start an interactive session as described in
-[Getting started](../getting-started/README.md). Provider authentication is
-needed for model-backed agent work, not ordinary terminal and pane operations.
+[Getting started](../getting-started/README.md). Model-backed agent work needs
+a configured provider and any credentials it requires; compatible local
+backends may need no credentials. Ordinary terminal and pane operations need
+no provider authentication.
 
 ## Chapters
 

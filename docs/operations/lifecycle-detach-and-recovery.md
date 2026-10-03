@@ -81,6 +81,17 @@ with zero attached primaries by default; `--serve
 --attach-primary` creates the documented interactive primary during live
 restore.
 
+Automatic recovery of durable pane-to-agent bindings requires a matching
+session identity. CLI snapshot resume with `--serve` creates a new identity and
+does not inherit the original bindings; use `/resume` in the live session to
+select a saved conversation explicitly. Same-session startup recovery can
+restore matching bindings from the local agent-session store. Those files are
+not included in the snapshot: copying a snapshot alone does not carry its
+conversations to another machine. If binding metadata is unreadable during
+same-session recovery, startup reports a diagnostic and falls back to ordinary
+user shells. Check pane surfaces and diagnostics before continuing agent work;
+recovered conversation context does not resume an interrupted action.
+
 Snapshots are stored under Mezzanine's user-private configuration area. The
 snapshot CLI uses its `snapshots` directory, while live session layout commands
 use the separate `layouts` directory. Neither location is configurable. Treat
@@ -168,9 +179,10 @@ to replace a readable future schema. Keep `named-sessions.json`, `summary.json`,
 and `metadata.json`; they remain rollback and rebuild inputs for this catalog
 version, and compatibility name writes remain enabled.
 
-Before manual recovery or backup, stop the owning daemon so storage is not
-changing, and preserve the payload directories together with metadata, recovery
-receipts, and SQLite sidecars. Do not delete a live database's `-wal` or `-shm`
+Before manual recovery or backup, stop all hosts, session daemons, and CLI
+writers using the same configuration root so storage is not changing. Preserve
+the payload directories together with metadata, recovery receipts, and SQLite
+sidecars. Do not delete a live database's `-wal` or `-shm`
 files to clear a lock. A readable newer schema requires the matching newer
 Mezzanine version, not forced deletion or downgrade. Recheck catalog status
 after recovery and inspect the interrupted conversation before continuing work.

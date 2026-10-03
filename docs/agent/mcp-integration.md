@@ -43,9 +43,12 @@ The interactive login starts browser OAuth when supported by the server.
 `mez mcp status <id>` reports authentication separately from tool availability.
 Use environment references or the separate MCP authentication store for secrets,
 not ordinary configuration. A configured `bearer_token_env` takes precedence
-over stored credentials; login refuses such a server unless explicitly told
-to replace that reference. Changing an HTTP URL can make stored credentials
-stale and require login again.
+over stored credentials. Login refuses such a server unless you pass
+`--replace-env-token`; that flag permits storing credentials but does not remove
+the configuration reference. To use the stored credential instead, remove the
+reference with `mez config unset mcp_servers.<id>.bearer_token_env` and reload
+configuration. Changing an HTTP URL can make stored credentials stale and
+require login again.
 
 These CLI commands change persistent configuration; reload the running session's
 configuration or start a new session before relying on the changes. `mez mcp

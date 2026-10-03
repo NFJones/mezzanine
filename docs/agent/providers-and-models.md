@@ -106,8 +106,13 @@ clear flags. These commands accept `--scope user|project` and `--file` targets.
 
 The LM Studio example starts with an empty model table. Preview with
 `mez config model sync lmstudio` and apply only verified discoveries, or add
-the backend's exact ID manually. Mez does not import OpenAI built-ins into an
-empty custom-provider response or infer token limits from a model name.
+the backend's exact ID manually. Follow the
+[LM Studio setup](../configuration/reference.md#providersname) to create and
+select a profile for that provider before using `/model list`, which lists only
+the active provider. `/refresh-provider-info` refreshes all configured providers
+without selecting one or persisting model records. Mez does not
+import OpenAI built-ins into an empty custom-provider response or infer token
+limits from a model name.
 
 Configured models remain selectable when discovery omits them; unavailable
 live metadata can fall back to configured records, with its source labeled.

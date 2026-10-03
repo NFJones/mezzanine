@@ -47,12 +47,16 @@ Run these commands from the workspace root:
 ```sh
 just build                 # Debug build of all targets and features
 just build-release         # Release build of all targets and features
-just run -- --help         # Run the release mez binary with arguments
+just run --help            # Run the release mez binary with arguments
 ```
 
 `just` without a recipe builds all workspace targets and features in release
 mode. Use `just help` to list the available recipes. Keep generated output in
 `target/` out of source changes and commits.
+
+Pass Mez arguments directly after `just run`; the recipe already inserts
+Cargo's `--` separator. For example, `just run config validate` runs
+`cargo run -p mezzanine --release -- config validate`.
 
 ## Validate changes
 

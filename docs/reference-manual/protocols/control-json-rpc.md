@@ -547,6 +547,15 @@ input/output modes; an optional agent-prompt region; textual `lines`; and
 styles, scroll responsibility, bracketed paste, mouse reporting, and any
 animation refresh interval.
 
+An optional `iroh_status_slot` identifies the row, column, width, and quality
+renditions reserved for client-local Iroh status composition. The built-in
+attach client overlays padded `up` or `dn` text there and selects the rendition
+from its connection-local quality sample; a view without a slot receives no
+overlay. This is an implementation conformance gap: `SPEC.md` requires textual
+`good`, `degraded`, `poor`, or `unknown` labels and omission for ended
+connections, rather than the current connection-state labels. Do not infer
+textual quality from the current pill; use `show-iroh-status` for that value.
+
 For a conditional fetch, send `if_view_identity` with the server-issued lowercase
 SHA-256 identity of the last completely committed exact-client view. The identity
 also covers pending presentation receipt IDs and effective render cadence. When

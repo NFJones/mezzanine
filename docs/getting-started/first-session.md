@@ -8,7 +8,8 @@ complete a small reviewable task.
 ## Prerequisites
 
 - Install `mez`.
-- Complete [authentication](authentication.md) for model-backed agent work.
+- Complete [authentication](authentication.md) for model-backed agent work,
+  or configure a compatible local backend that needs no credentials.
 - Choose a repository or other working directory.
 
 ## Initialize configuration and start

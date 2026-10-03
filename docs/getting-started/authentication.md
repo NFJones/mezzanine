@@ -8,7 +8,8 @@ configuration files.
 ## Prerequisites
 
 - Install `mez` as described in [Install Mezzanine](installation.md).
-- Have an account or API credential accepted by the selected provider.
+- Have an account or API credential accepted by the selected provider, unless
+  configuring a compatible backend that requires no credentials.
 
 ## Sign in interactively
 
@@ -38,6 +39,20 @@ mez auth login --provider anthropic --api-key --api-key-file /secure/path/anthro
 For OpenAI, a device-code flow is also available with
 `mez auth login --device-code`.
 
+DeepSeek also supports API-key authentication:
+
+```sh
+mez auth login --provider deepseek --api-key
+```
+
+For a custom OpenAI-compatible service, configure its API dialect, base URL,
+models, and model profiles separately. Store any required key with
+`mez auth login --provider <configured-provider-name> --api-key`; custom login
+does not create provider connection or model records. A local backend that
+requires no credentials does not need `mez auth login`. See
+[provider configuration](../configuration/agents-providers-and-auth.md) for
+setup, including the LM Studio example in the configuration reference.
+
 ## Credential handling
 
 Use `mez auth`, not `config.toml`, for tokens, bearer credentials, and API
@@ -57,6 +72,10 @@ authenticating another provider later adds only that provider without changing
 an existing default selection. Explicit YAML and JSON primary configurations
 are not rewritten during authentication, so add any required provider and model
 entries to those files yourself.
+
+Run `mez config validate` to check configuration separately from
+`mez auth status`; valid credentials do not establish that the provider and
+model profiles are configured correctly.
 
 Successful authentication does not guarantee a particular entitlement, quota,
 or model. In the agent shell, `/model` shows the active profile and configured

@@ -487,13 +487,14 @@ Default `frames.window.visible_fields`:
 ["window.list", "window.index", "window.name", "window.id", "pane.index", "pane.title", "pane.id", "window.pane_count", "window.buttons", "pane.pwd", "system.uptime", "datetime.local", "iroh.status"]
 ```
 
-`#{iroh.status}` is a client-local, non-clickable status pill. It renders plain
-text such as `good`, `degraded`, `poor`, or `unknown`
-only for the exact client with a live Iroh connection and is omitted without
-padding for Unix-socket, never-Iroh, or disconnected clients. Each connected
-quality uses the matching Iroh theme color pair. It is included by the generated
-default but custom right-status templates must reference it explicitly; detailed
-diagnostics remain in `show-iroh-status`.
+`#{iroh.status}` is a client-local, non-clickable status pill. Current Iroh
+clients render `up` while connected and can render `dn` in a retained view
+after disconnection. Connection quality is conveyed by the matching Iroh theme
+color pair, not a textual quality label; use `show-iroh-status` for readable
+quality diagnostics. Unix-socket and never-Iroh clients omit it. It is included
+by the generated default, but custom right-status templates must reference it
+explicitly. The [protocol reference](../reference-manual/protocols/control-json-rpc.md)
+describes the current difference from SPEC's textual-label contract.
 
 Command-backed status pills are configured under `frames.window.pills.<name>`
 and render only when the active right-status template references
@@ -1154,11 +1155,26 @@ streaming = "enabled" # optional; backend must implement standard OpenAI SSE
 ```
 
 The empty model table avoids guessing which model LM Studio currently serves
-or inventing token limits and capabilities. Use `/refresh-provider-info` to
-observe the live catalog ephemerally for the current session. Use
+or inventing token limits and capabilities. Use
 `mez config model sync lmstudio` to preview the raw catalog and add `--apply`
 for durable records, or persist one exact provider-facing model ID with
-`mez config model add lmstudio MODEL_ID`. Runtime refresh retains its
+`mez config model add lmstudio MODEL_ID`. Then create a profile using that exact
+ID; a provider connection alone does not make `/model` switch providers:
+
+```sh
+MODEL_ID='replace-with-the-exact-id-from-the-catalog'
+mez config set model_profiles.lmstudio-default.provider lmstudio
+mez config set model_profiles.lmstudio-default.model "$MODEL_ID"
+mez config validate
+```
+
+Reload configuration or start a new session, then select `/model lmstudio-default`
+in the agent shell. `/model list` now inspects the active LM Studio provider.
+`/refresh-provider-info` refreshes all configured providers' session catalogs;
+it does not switch the active provider or persist model records.
+Missing stored credentials are allowed for this generic
+compatible connection, so local servers that do not require authentication need
+no `mez auth login`. Runtime refresh retains its
 configured/built-in fallback behavior; durable sync never plans from that
 merged cache and requires explicit `--prune` before treating absence as removal
 evidence.
@@ -1669,13 +1685,22 @@ credentials.
 
 ### `instructions`
 
+These fields are accepted configuration declarations, but the current pane
+bootstrap does not consume them. It searches for `AGENTS.md` from the pane
+directory toward the detected project root, reads at most 32768 bytes per file,
+and marks truncated content rather than automatically summarizing it. Changing
+`global_files`, `project_filenames`, `max_bytes`, `include_hidden_directories`,
+or `on_truncation` does not customize that bootstrap. Keep essential repository
+instructions within the limit; use enabled [context documents](../agent/context-and-continuity.md#reuse-guidance-across-conversations)
+for additional project or global guidance.
+
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `instructions.global_files` | string array | `[]` | Global instruction file paths. |
-| `instructions.project_filenames` | string array | `["AGENTS.md"]` | Project instruction filenames to discover. |
-| `instructions.max_bytes` | integer | `32768` | Maximum bytes read per instruction file. |
-| `instructions.include_hidden_directories` | boolean | `false` | Search hidden directories for instructions. |
-| `instructions.on_truncation` | string | `"summarize"` | Behavior when instruction files exceed `max_bytes`. |
+| `instructions.global_files` | string array | `[]` | Declared global instruction file paths; not consumed by pane bootstrap. |
+| `instructions.project_filenames` | string array | `["AGENTS.md"]` | Declared project instruction filenames; bootstrap currently uses only `AGENTS.md`. |
+| `instructions.max_bytes` | integer | `32768` | Declared per-file byte limit; bootstrap currently uses a fixed 32768-byte limit. |
+| `instructions.include_hidden_directories` | boolean | `false` | Declared hidden-directory discovery policy; not consumed by pane bootstrap. |
+| `instructions.on_truncation` | string | `"summarize"` | Declared truncation policy; bootstrap marks truncated content without automatic summarization. |
 
 ### `hooks.<name>`
 

@@ -23,6 +23,12 @@ decision needs review.
 
 ## Use reusable prompts and coordination
 
+Use `/list-skills` and `/list-macros` to discover the effective catalogs for
+the active pane. Project skills and macros are available only after their
+project root is explicitly trusted; user-scope entries do not require project
+trust. Model-selected skill discovery and invocation are disabled by default,
+so select a skill explicitly rather than asking the agent to load one by name.
+
 Begin a prompt with `$<skill-name>` to invoke an available skill or
 `#<macro-name>` for an ordered macro. Use `@<mcp-server-name>` only when the
 task needs a configured MCP integration. A resolved name becomes retained

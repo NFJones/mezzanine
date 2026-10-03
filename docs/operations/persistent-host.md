@@ -38,6 +38,12 @@ mez config validate
 mez host serve
 ```
 
+Check that validation reports `"valid": true` and review its diagnostics before
+starting the host. A successful command exit alone is not a validation pass:
+invalid configuration can be reported as `"valid": false` without a nonzero
+exit. This command validates the selected primary file; use `mez config layers`
+to inspect project-layer diagnostics as well.
+
 Explicit `mez host serve` does not require `host.enabled = true`. That setting
 controls whether ordinary local commands may auto-start the host; it does not
 prevent an operator or service manager from starting the host explicitly.

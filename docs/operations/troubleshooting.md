@@ -121,11 +121,15 @@ addresses, including non-loopback targets, are accepted: Mez resolves the
 selected endpoint once before dialing, so verify that it is the intended,
 trusted, and reachable X server. Check that `XAUTHORITY` (or the default
 authority file) is owner-private, contains an exact `MIT-MAGIC-COOKIE-1` record
-for that display, and that `xauth` is installed. `--x11` additionally requires
-working X SECURITY untrusted-cookie generation. If that operation fails, fix
-the selected X server or use no forwarding; do not expect or script a fallback
+for that display, and that `xauth` is installed. Both modes require fresh
+X SECURITY authorization generation; `--x11` requests an untrusted credential.
+If that operation fails, fix the selected X server or use no forwarding;
+do not expect or script a fallback
 to trusted mode. `--x11-trusted` also requires the host's explicit
-`allow_trusted` policy.
+`allow_trusted` policy. It is not an authorization-generation workaround and
+can expose other local X applications' input and display contents to remote
+applications. Review the [desktop trust boundary](../safety-and-trust/remote-pairing-and-recovery.md#handle-attach-failures-safely)
+before using it.
 
 Untrusted setup and cleanup run `xauth` under one finite process-lifecycle
 deadline that includes termination and reap. A timeout can leave the X server's
