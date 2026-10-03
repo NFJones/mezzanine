@@ -118,8 +118,10 @@ without submitting it. In native shell mode, `Ctrl+V` pastes host clipboard
 text into the editable prompt while preserving multiline text. Prompt completion
 supports slash commands, `$` skills, `#` macros, and `@` MCP server names where
 enabled.
-The editable prompt begins with `❱ ` (and `▐ ❱ ` when the agent gutter is
-shown). This display-only input marker does not change assistant transcript
+The editable prompt begins with `⟩ ` without a transcript gutter. Input,
+completion shadows and unused row padding do not paint a background; wrapped
+input continues under the marker's body column without adding a gutter.
+This display-only marker does not change submitted text or assistant transcript
 rows, which continue to use `mez> `.
 In roomy panes (at least 64 columns and 14 body rows), a lightweight context row
 and help row surround the input. `Ask Mez` indicates ordinary submission;

@@ -3137,8 +3137,9 @@ presentation-log entries.
 
 The agent shell MUST support inserting literal newlines into the current prompt
 with `Ctrl+J`; Enter MUST remain the normal prompt submission key.
-The editable agent prompt MUST display `❱ `, with the existing `▐ ` gutter
-preceding it where that gutter is shown. This marker is presentation-only and
+The editable agent prompt MUST display `⟩ ` without an outer transcript gutter,
+including its continuation rows. Marker, draft, completion shadow and unused
+input padding MUST use no explicit background rendition. This marker is presentation-only and
 MUST NOT alter submitted input, assistant transcript `mez> ` labels, or copied
 source content.
 

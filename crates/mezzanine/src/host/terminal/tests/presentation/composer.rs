@@ -59,6 +59,41 @@ fn view_at_tick(
         .unwrap()
 }
 
+/// Agent editing has its own gutter-free marker and never paints a background,
+/// including empty compact status, multiline draft and unused row padding.
+/// Rendering must not mutate submitted input or transcript ownership.
+#[test]
+fn composer_editable_input_is_gutter_free_and_transparent() {
+    for size in [Size::new(80, 24).unwrap(), Size::new(40, 12).unwrap()] {
+        for draft in ["", "draft 雪", "first\nsecond"] {
+            let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
+            prompt.buffer.insert_text(draft);
+            let original = prompt.clone();
+            let shown = view(
+                size,
+                &prompt,
+                AgentComposerContext::default(),
+                ClientViewRole::Primary,
+            );
+            assert!(
+                shown.lines.iter().any(|line| line.starts_with("⟩ ")),
+                "{:?}",
+                shown.lines
+            );
+            assert!(
+                !shown
+                    .lines
+                    .iter()
+                    .any(|line| line.contains("▐ ⟩") || line.contains("❱"))
+            );
+            for span in &shown.line_style_spans[shown.cursor_row] {
+                assert!(span.rendition.background.is_none(), "{span:?}");
+            }
+            assert_eq!(prompt, original);
+        }
+    }
+}
+
 /// Only the active state label changes rendition across wave ticks. Draft,
 /// header text, timer, help and geometry remain unchanged, including when
 /// interrupt help is filtered from a read-only projection.

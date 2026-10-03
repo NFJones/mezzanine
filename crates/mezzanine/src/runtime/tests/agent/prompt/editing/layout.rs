@@ -73,7 +73,7 @@ fn runtime_primary_attach_resizes_initial_window_for_agent_prompt() {
     assert_eq!(region.columns, 120);
     assert_eq!(region.rows, 38);
     assert_eq!(view.cursor_row, 37);
-    assert!(view.lines[view.cursor_row].contains("❱"));
+    assert!(view.lines[view.cursor_row].contains("⟩"));
     assert!(view.lines[view.cursor_row + 1].contains("Enter send"));
 }
 

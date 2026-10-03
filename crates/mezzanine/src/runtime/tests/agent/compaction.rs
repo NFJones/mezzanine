@@ -1177,7 +1177,7 @@ fn runtime_agent_prompt_recalls_mixed_paste_display_after_reload() {
     );
     assert_eq!(
         prompt.render(),
-        "❱ typed before [Pasted 70.0 KiB] typed after"
+        "⟩ typed before [Pasted 70.0 KiB] typed after"
     );
 }
 

@@ -523,7 +523,7 @@ async fn async_actor_control_initialize_resizes_worker_owned_initial_pane() {
         let prompt_row = view
             .lines
             .iter()
-            .rposition(|line| line.contains("❱"))
+            .rposition(|line| line.contains("⟩"))
             .unwrap();
         assert_eq!(prompt_row, 37);
         assert_eq!(view.cursor_row, prompt_row);

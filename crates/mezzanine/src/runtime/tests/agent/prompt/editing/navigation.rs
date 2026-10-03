@@ -152,7 +152,7 @@ fn runtime_shared_prompt_history_does_not_bleed_into_pane_logs() {
 fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
     let mut service = test_runtime_service();
     let primary = service
-        .attach_primary("primary", true, Size::new(24, 8).unwrap(), 120)
+        .attach_primary("primary", true, Size::new(22, 8).unwrap(), 120)
         .unwrap();
     service
         .agent_shell_store_mut()
@@ -161,7 +161,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
     service.reload_agent_prompt_history_for_pane("%1").unwrap();
     service.set_pane_screen(
         "%1".to_string(),
-        TerminalScreen::new(Size::new(24, 8).unwrap(), 10).unwrap(),
+        TerminalScreen::new(Size::new(22, 8).unwrap(), 10).unwrap(),
     );
     {
         let prompt_state = service
@@ -307,7 +307,7 @@ fn runtime_agent_prompt_navigation_uses_split_pane_render_width() {
     let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "abcde fghij klmno");
     assert!(prompt_state.prompt.buffer.cursor() < original_cursor);
-    assert_eq!(prompt_state.prompt.buffer.cursor(), "abcde fghij".len());
+    assert_eq!(prompt_state.prompt.buffer.cursor(), "abcde".len());
 }
 
 /// Verifies wrapped agent prompt navigation scrolls the visible prompt window
@@ -371,7 +371,7 @@ fn runtime_agent_prompt_navigation_scrolls_visible_rows_with_cursor() {
         .unwrap()
         .unwrap();
     let view_text = view.lines.join("\n");
-    assert!(view_text.contains("❱ row1"), "{view_text}");
+    assert!(view_text.contains("⟩ row1"), "{view_text}");
     assert!(!view_text.contains("row7"), "{view_text}");
 }
 
@@ -448,7 +448,7 @@ fn runtime_agent_prompt_height_resize_is_pane_local() {
 fn runtime_agent_prompt_accepts_application_cursor_arrow_sequences() {
     let mut service = test_runtime_service();
     let primary = service
-        .attach_primary("primary", true, Size::new(24, 8).unwrap(), 120)
+        .attach_primary("primary", true, Size::new(22, 8).unwrap(), 120)
         .unwrap();
     service
         .agent_shell_store_mut()
@@ -457,7 +457,7 @@ fn runtime_agent_prompt_accepts_application_cursor_arrow_sequences() {
     service.reload_agent_prompt_history_for_pane("%1").unwrap();
     service.set_pane_screen(
         "%1".to_string(),
-        TerminalScreen::new(Size::new(24, 8).unwrap(), 10).unwrap(),
+        TerminalScreen::new(Size::new(22, 8).unwrap(), 10).unwrap(),
     );
     {
         let prompt_state = service

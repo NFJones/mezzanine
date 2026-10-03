@@ -47,6 +47,15 @@ const MIN_PROMPT_SHADOW_CONTRAST_RATIO: f64 = 4.5;
 /// terminal output. Terminal content never receives this prefix.
 const MEZ_UI_PREFIX: &str = "▐ ";
 
+/// Agent editing is gutter-free; other Mezzanine UI keeps its existing prefix.
+fn prompt_ui_prefix(prompt: &ReadlinePrompt) -> &'static str {
+    if prompt.kind == ReadlinePromptKind::Agent {
+        ""
+    } else {
+        MEZ_UI_PREFIX
+    }
+}
+
 /// Runs the render readline prompt status row operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -57,20 +66,22 @@ pub fn render_readline_prompt_status_row(
     width: usize,
 ) -> ReadlinePromptStatusRow {
     let snapshot = prompt.render_snapshot();
+    let prefix = prompt_ui_prefix(prompt);
+    let prefix_width = terminal_text_width(prefix);
     let raw_cursor_column = snapshot.cursor_column;
     let cursor_column = raw_cursor_column
-        .saturating_add(2)
+        .saturating_add(prefix_width)
         .min(width.saturating_sub(1));
     ReadlinePromptStatusRow {
         status: ClientStatusLine {
             kind: ClientStatusKind::Plain,
             text: format!(
-                "{MEZ_UI_PREFIX}{}",
-                fit_width(&snapshot.text, width.saturating_sub(2))
+                "{prefix}{}",
+                fit_width(&snapshot.text, width.saturating_sub(prefix_width))
             ),
         },
         cursor_column,
-        cursor_visible: width > 0 && raw_cursor_column <= width.saturating_sub(2),
+        cursor_visible: width > 0 && raw_cursor_column.saturating_add(prefix_width) < width,
         shadow_hint_columns: snapshot.shadow_hint_columns,
     }
 }
@@ -105,7 +116,7 @@ pub fn compose_readline_prompt_client_presentation(
         if let Some(span) = prompt_shadow_hint_style_span(
             prompt,
             row.shadow_hint_columns,
-            2,
+            terminal_text_width(prompt_ui_prefix(prompt)),
             presentation_width,
             &view.ui_theme,
         ) {
@@ -196,7 +207,7 @@ pub fn compose_prompt_overlay_presentation_with_styles(
             if let Some(span) = prompt_shadow_hint_style_span(
                 prompt,
                 status_row.shadow_hint_columns,
-                2,
+                terminal_text_width(prompt_ui_prefix(prompt)),
                 width,
                 ui_theme,
             ) {
@@ -293,7 +304,7 @@ fn prompt_shadow_hint_rendition(prompt: &ReadlinePrompt, ui_theme: &UiTheme) -> 
 
 /// Returns the contrast-managed shadow-hint rendition for pane-local agent prompts.
 fn agent_prompt_shadow_hint_rendition(ui_theme: &UiTheme) -> GraphicRendition {
-    let background = ui_theme.colors.agent_prompt.background;
+    let background = ui_theme.colors.frame_fill.background;
     let mut rendition = agent_prompt_input_rendition(ui_theme);
     rendition.foreground = Some(
         readable_prompt_shadow_gray(background).unwrap_or(ui_theme.colors.agent_prompt.foreground),
@@ -307,7 +318,6 @@ pub(crate) fn agent_prompt_input_rendition(ui_theme: &UiTheme) -> GraphicRenditi
     let pair = ui_theme.colors.agent_prompt;
     GraphicRendition {
         foreground: Some(pair.foreground),
-        background: Some(pair.background),
         ..GraphicRendition::default()
     }
 }
@@ -315,7 +325,7 @@ pub(crate) fn agent_prompt_input_rendition(ui_theme: &UiTheme) -> GraphicRenditi
 /// Returns a readable shaded foreground for completion shadow text.
 fn prompt_shadow_foreground(prompt: &ReadlinePrompt, ui_theme: &UiTheme) -> TerminalColor {
     let background = if prompt.kind == ReadlinePromptKind::Agent {
-        ui_theme.colors.agent_prompt.background
+        ui_theme.colors.frame_fill.background
     } else {
         ui_theme.colors.prompt.background
     };
@@ -497,15 +507,19 @@ fn render_wrapped_prompt_layout(
     max_rows: usize,
 ) -> WrappedPromptLayout {
     let snapshot = prompt.render_snapshot();
-    let raw_line = format!("{MEZ_UI_PREFIX}{}", snapshot.text);
-    let raw_cursor_index = snapshot.cursor_column.saturating_add(2);
-    let raw_shadow_range = snapshot
-        .shadow_hint_columns
-        .map(|(start, length)| (start.saturating_add(2), start.saturating_add(2 + length)));
+    let prefix = prompt_ui_prefix(prompt);
+    let prefix_width = terminal_text_width(prefix);
+    let raw_line = format!("{prefix}{}", snapshot.text);
+    let raw_cursor_index = snapshot.cursor_column.saturating_add(prefix_width);
+    let raw_shadow_range = snapshot.shadow_hint_columns.map(|(start, length)| {
+        (
+            start.saturating_add(prefix_width),
+            start.saturating_add(prefix_width).saturating_add(length),
+        )
+    });
     let continuation_indent =
         if prompt.kind == ReadlinePromptKind::Agent && !prompt.reverse_search_active() {
-            terminal_text_width(&format!("{MEZ_UI_PREFIX}{AGENT_PROMPT_TEXT_PREFIX}"))
-                .min(width.saturating_sub(1))
+            terminal_text_width(AGENT_PROMPT_TEXT_PREFIX).min(width.saturating_sub(1))
         } else {
             0
         };
@@ -771,7 +785,11 @@ pub(super) fn render_agent_prompt_block(
             live_footer
                 .map(|footer| {
                     vec![Some(AgentPromptStatusSource {
-                        start: terminal_text_width(&format!("{MEZ_UI_PREFIX}{}", prompt.render())),
+                        start: terminal_text_width(&format!(
+                            "{}{}",
+                            prompt_ui_prefix(&prompt),
+                            prompt.render()
+                        )),
                         text: footer.to_string(),
                         label_width: status_label_width,
                         header: false,
@@ -951,9 +969,11 @@ fn render_agent_live_footer_prompt_layout(
     footer: &str,
     width: usize,
 ) -> WrappedPromptLayout {
-    let prompt_prefix = format!("{MEZ_UI_PREFIX}{}", prompt.render());
+    let prompt_prefix = format!("{}{}", prompt_ui_prefix(prompt), prompt.render());
     let line = format!("{prompt_prefix}{footer}");
-    let cursor_column = prompt.rendered_cursor_column().saturating_add(2);
+    let cursor_column = prompt
+        .rendered_cursor_column()
+        .saturating_add(terminal_text_width(prompt_ui_prefix(prompt)));
     WrappedPromptLayout {
         lines: vec![fit_width(&line, width)],
         shadow_spans: vec![Vec::new()],

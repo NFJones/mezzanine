@@ -20,8 +20,5 @@ fn agent_prompt_input_rendition_uses_configured_prompt_foreground() {
         rendition.foreground,
         Some(theme.colors.agent_prompt.foreground)
     );
-    assert_eq!(
-        rendition.background,
-        Some(theme.colors.agent_prompt.background)
-    );
+    assert_eq!(rendition.background, None);
 }

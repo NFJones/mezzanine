@@ -56,18 +56,18 @@ fn readline_large_paste_blocks_delete_as_single_character() {
     prompt.buffer.insert_text("a");
     prompt.buffer.insert_pasted_text(&large);
     prompt.buffer.insert_text("c");
-    assert_eq!(prompt.render(), "❱ a[Pasted 1.2 KiB]c");
+    assert_eq!(prompt.render(), "⟩ a[Pasted 1.2 KiB]c");
 
     assert!(prompt.buffer.move_left());
     assert!(prompt.buffer.backspace());
-    assert_eq!(prompt.render(), "❱ ac");
+    assert_eq!(prompt.render(), "⟩ ac");
     assert_eq!(prompt.buffer.expanded_line(), "ac");
 
     prompt.buffer.insert_pasted_text(&large);
-    assert_eq!(prompt.render(), "❱ a[Pasted 1.2 KiB]c");
+    assert_eq!(prompt.render(), "⟩ a[Pasted 1.2 KiB]c");
     assert!(prompt.buffer.move_left());
     assert!(prompt.buffer.delete_forward());
-    assert_eq!(prompt.render(), "❱ ac");
+    assert_eq!(prompt.render(), "⟩ ac");
     assert_eq!(prompt.buffer.expanded_line(), "ac");
 }
 
@@ -128,13 +128,13 @@ fn readline_prompt_cursor_columns_use_display_width() {
 fn readline_agent_prompt_uses_arrow_marker_and_display_cell_cursor() {
     let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
 
-    assert_eq!(prompt.render(), "❱ ");
+    assert_eq!(prompt.render(), "⟩ ");
     assert_eq!(prompt.rendered_cursor_column(), 2);
     assert_eq!(
         prompt_outcome(&mut prompt, "a界".as_bytes()),
         ReadlineOutcome::Edited
     );
-    assert_eq!(prompt.render(), "❱ a界");
+    assert_eq!(prompt.render(), "⟩ a界");
     assert_eq!(prompt.rendered_cursor_column(), 5);
 }
 
@@ -438,7 +438,7 @@ fn readline_agent_prompt_renders_slash_command_shadow_hint() {
     );
 
     assert_eq!(prompt.buffer.line(), "/log");
-    assert_eq!(prompt.render_with_shadow_hint(), "❱ /log-level");
+    assert_eq!(prompt.render_with_shadow_hint(), "⟩ /log-level");
     assert_eq!(prompt.rendered_shadow_hint_columns(), Some((6, 6)));
 }
 
@@ -459,13 +459,13 @@ fn readline_prompt_render_snapshot_reuses_unicode_shadow_hint() {
         ReadlineOutcome::Edited
     );
     assert_eq!(prompt.render_snapshot_misses_for_tests(), 0);
-    assert_eq!(prompt.render_with_shadow_hint(), "❱ ask @é界");
+    assert_eq!(prompt.render_with_shadow_hint(), "⟩ ask @é界");
     assert_eq!(prompt.rendered_shadow_hint_columns(), Some((8, 2)));
     assert_eq!(prompt.rendered_cursor_column(), 8);
     assert_eq!(prompt.render_snapshot_misses_for_tests(), 1);
 
     assert_eq!(prompt_outcome(&mut prompt, b"x"), ReadlineOutcome::Edited);
-    assert_eq!(prompt.render_with_shadow_hint(), "❱ ask @éx");
+    assert_eq!(prompt.render_with_shadow_hint(), "⟩ ask @éx");
     assert_eq!(prompt.render_snapshot_misses_for_tests(), 2);
 }
 
@@ -746,7 +746,7 @@ fn readline_decoder_collapses_split_bracketed_paste_payloads() {
             .unwrap(),
         vec![ReadlineOutcome::Edited]
     );
-    assert_eq!(prompt.render(), "❱ pre ");
+    assert_eq!(prompt.render(), "⟩ pre ");
 
     let second = format!("{}\x1b[201~ post\r", &large[600..]);
     let outcomes = decoder

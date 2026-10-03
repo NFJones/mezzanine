@@ -29,14 +29,13 @@ impl RuntimeSessionService {
     /// Returns display cells available for editable pane-local prompt text.
     ///
     /// This width mirrors the terminal renderer, which draws the editable text
-    /// after both the agent transcript gutter and the editable `❱ ` marker.
+    /// after the gutter-free editable `⟩ ` marker.
     ///
     /// # Parameters
     /// - `pane_id`: Pane whose current presentation width bounds the prompt.
     pub(crate) fn agent_prompt_editable_body_width(&self, pane_id: &str) -> Result<usize> {
         let columns = self.agent_terminal_presentation_columns(pane_id)?;
-        let prompt_prefix_width = UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX)
-            .saturating_add(UnicodeWidthStr::width(AGENT_PROMPT_TEXT_PREFIX));
+        let prompt_prefix_width = UnicodeWidthStr::width(AGENT_PROMPT_TEXT_PREFIX);
         Ok(columns.saturating_sub(prompt_prefix_width).max(1))
     }
 

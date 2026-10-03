@@ -57,6 +57,11 @@ fill. Assistant/user labels retain bold accents; status and thinking text use
 dim shadow styling. Authored body emphasis remains independent. No palette,
 theme slot or configuration field changes are required for these renditions.
 
+Agent input uses a gutter-free `⟩ ` marker and foreground-only styling, including
+completion shadows and row padding. The configured `agent_prompt` foreground
+is retained; its background setting is not painted by the editor. Shadow
+contrast uses the surrounding pane surface rather than that unused input fill.
+
 The comfortable agent composer header retains the active status-label wave.
 Only the status label animates; surrounding labels, duration and help stay
 static. Header and compact-footer wave spans do not paint a background, and
