@@ -143,6 +143,11 @@ The composer remains visible during agent log scroll/copy mode. Only the log
 above it scrolls or receives log-selection highlights. Explicit keyboard copy
 mode retains its cursor and input ownership; a visible draft is not another
 submission or selection surface until that interaction is explicitly entered.
+Entered draft text supports region-local mouse selection and word copying,
+without scrolling the log or submitting text. `copy-mode --draft` supplies the
+explicit keyboard route, and `copy-selection --draft --format source` exports
+exact selected source (including whole intersected collapsed paste blocks).
+Ordinary draft copy keeps hidden paste collapsed and excludes completion shadows.
 The prompt remains in this in-pane entry area by default. Press `Ctrl+A e` (or
 the active key preset's `edit_prompt` binding) to request external editing;
 closing a successful editor returns the text to the same prompt and never

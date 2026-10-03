@@ -61,6 +61,7 @@ pub(crate) fn agent_shell_mcp_display_state_name(
 pub(crate) fn default_runtime_agent_prompt_input() -> RuntimeAgentPromptInput {
     RuntimeAgentPromptInput {
         prompt: ReadlinePrompt::new(ReadlinePromptKind::Agent),
+        draft_selection: None,
         decoder: ReadlineInputDecoder::new(),
         display_lines: Vec::new(),
         pending_ctrl_c_exit_at_unix_ms: None,

@@ -3180,6 +3180,21 @@ editable and help regions, including empty log rectangles in tiny panes.
 External editor takeover retains its existing independent surface. No new keys or configuration fields
 are introduced by this presentation change.
 
+Draft selection MUST use canonical readline source associations and the shared
+editable rectangle, independently of transcript copy. Pointer drags remain in
+their starting domain; draft drags MUST NOT scroll the log. Marker, padding,
+header/help and unaccepted completion text MUST NOT become entered source.
+Rendered draft copy recovers authored newlines and omits visual wrapping;
+collapsed paste remains a visible label. Explicit source copy expands each
+intersected collapsed paste block atomically. Selection MUST be client-local
+and fenced by conversation and exact source/display evidence; changed evidence
+MUST reject stale copy, while resize reprojects unchanged source anchors.
+`copy-mode --draft` explicitly selects the draft for keyboard copying;
+`copy-selection --draft [--format rendered|source]` exports that selection.
+Space copies rendered draft selection and Escape releases draft-copy ownership;
+Enter MUST NOT submit while explicit draft-copy owns input. Log copy state and
+draft bytes MUST remain unchanged by draft selection or export.
+
 When the user submits a non-empty agent prompt, the visible prompt input MUST be
 cleared in the same terminal update that accepts the submission, before any
 provider response or later agent state transition is required. Additional

@@ -6,7 +6,10 @@
 
 mod buffer;
 mod decoder;
+mod projection;
 mod prompt;
+
+pub use projection::{ReadlineSourceProjection, ReadlineSourceSpan};
 
 pub use buffer::{
     DEFAULT_READLINE_HISTORY_LIMIT, MAX_READLINE_HISTORY_BYTES, MAX_READLINE_HISTORY_ENTRY_BYTES,

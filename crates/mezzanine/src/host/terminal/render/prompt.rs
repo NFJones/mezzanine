@@ -330,6 +330,20 @@ fn agent_prompt_max_rows(body_rows: usize) -> usize {
     body_rows.saturating_div(2).max(1)
 }
 
+/// Returns the exact wrapped draft projection used by the editor, excluding
+/// reverse-search results, markers and provisional completion from source.
+pub(crate) fn agent_draft_selection_layout(
+    prompt: &ReadlinePrompt,
+    width: usize,
+    rows: usize,
+) -> Option<(
+    WrappedPromptLayout,
+    std::sync::Arc<mez_mux::readline::ReadlineSourceProjection>,
+)> {
+    let source = prompt.render_snapshot().source?;
+    Some((render_wrapped_prompt_layout(prompt, width, rows), source))
+}
+
 /// Runs the prompt region rendition operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -1027,6 +1041,7 @@ fn render_agent_live_footer_prompt_layout(
     WrappedPromptLayout {
         lines: vec![fit_width(&line, width)],
         shadow_spans: vec![Vec::new()],
+        source_spans: vec![Vec::new()],
         cursor_row: 0,
         cursor_column: cursor_column.min(width.saturating_sub(1)),
         cursor_visible: cursor_column < width,

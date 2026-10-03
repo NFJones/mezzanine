@@ -28,6 +28,8 @@ pub(crate) struct ReadlinePromptRenderSnapshot {
     pub(crate) cursor_column: usize,
     /// Shadow hint start and width in terminal display cells.
     pub(crate) shadow_hint_columns: Option<(usize, usize)>,
+    /// Entered-source associations for this exact display, absent during search.
+    pub(crate) source: Option<Arc<mez_mux::readline::ReadlineSourceProjection>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +38,7 @@ struct ReadlinePromptRenderSnapshotKey {
     rendered_reverse_search: Option<String>,
     rendered_line: String,
     line: String,
+    draft: mez_mux::readline::ReadlineDraft,
     cursor: usize,
     selector_revision: u64,
     filesystem_completion_generation: Option<u64>,
@@ -130,6 +133,7 @@ impl ReadlinePrompt {
             rendered_reverse_search: self.state.rendered_reverse_search(),
             rendered_line: self.state.buffer.rendered_line(),
             line: self.state.buffer.line().to_string(),
+            draft: self.state.buffer.draft_snapshot(),
             cursor: self.state.buffer.cursor(),
             selector_revision: self.selector_revision,
             filesystem_completion_generation: filesystem_snapshot.completion_generation(),
@@ -237,6 +241,7 @@ impl ReadlinePrompt {
                 text: search.clone(),
                 cursor_column: self.state.reverse_search_cursor_column().unwrap_or(0),
                 shadow_hint_columns: None,
+                source: None,
             };
         }
         let line = self.state.buffer.line();
@@ -256,6 +261,22 @@ impl ReadlinePrompt {
                 .saturating_add(self.state.buffer.rendered_columns_before(hint.insert_at));
             (start, UnicodeWidthStr::width(hint.text.as_str()))
         });
+        let source = self
+            .state
+            .buffer
+            .source_projection(
+                hint.as_ref()
+                    .map(|hint| (hint.insert_at, hint.text.as_str())),
+            )
+            .map(|mut projection| {
+                let prefix = self.prefix();
+                for span in &mut projection.spans {
+                    span.display.start += prefix.len();
+                    span.display.end += prefix.len();
+                }
+                projection.display.insert_str(0, prefix);
+                Arc::new(projection)
+            });
         ReadlinePromptRenderSnapshot {
             text: format!("{}{}", self.prefix(), rendered_line),
             cursor_column: UnicodeWidthStr::width(self.prefix()).saturating_add(
@@ -264,6 +285,7 @@ impl ReadlinePrompt {
                     .rendered_columns_before(self.state.buffer.cursor()),
             ),
             shadow_hint_columns,
+            source,
         }
     }
 

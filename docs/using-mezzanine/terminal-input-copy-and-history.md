@@ -70,6 +70,19 @@ log-copy mode owns input. Passive wheel scrollback retains its existing editing
 fallthrough. Draft selection is a separate source-aware interaction, not implied
 by this pinned display. External editors and modal surfaces retain takeover.
 
+Drag across entered draft text to copy it independently of the log, or
+double-click an entered word. Draft drags stay in the draft region and do not
+scroll the log. UI decoration and unaccepted completion shadows are excluded.
+For a keyboard route, run `copy-mode --draft` from the command prompt: it selects
+the draft, Left/Right adjust the endpoint by grapheme, Home/End choose its
+start/end, Space copies rendered text, and Escape releases draft-copy ownership.
+Enter does not submit in this mode. The retained log viewport is unchanged.
+Use `copy-selection --draft -b NAME` to export the current draft selection;
+`--format source` explicitly expands intersected collapsed-paste blocks in full,
+whereas rendered copy keeps their selected visible label text. Authored newlines
+are recovered rather than copying visual wrap indentation. Resize preserves
+source anchors; edits or changed conversation/display evidence invalidate copy.
+
 Default copy-mode controls are:
 
 | Key | Result |

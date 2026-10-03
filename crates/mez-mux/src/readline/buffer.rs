@@ -519,6 +519,66 @@ impl ReadlineBuffer {
         render_line_with_blocks(&self.line, &self.paste_blocks, RenderLineMode::Collapsed)
     }
 
+    /// Projects exact entered bytes and collapsed display ranges, with an
+    /// optional unaccepted insertion at an internal UTF-8 buffer boundary.
+    /// Invalid insertion offsets return None without mutating editable state.
+    pub fn source_projection(
+        &self,
+        insertion: Option<(usize, &str)>,
+    ) -> Option<super::ReadlineSourceProjection> {
+        if insertion.is_some_and(|(at, _)| !self.line.is_char_boundary(at)) {
+            return None;
+        }
+        let mut projection = super::ReadlineSourceProjection {
+            display: String::new(),
+            source: String::new(),
+            spans: Vec::new(),
+        };
+        for (index, ch) in self.line.char_indices() {
+            if let Some((at, text)) = insertion
+                && at == index
+            {
+                let start = projection.display.len();
+                projection.display.push_str(text);
+                projection.spans.push(super::ReadlineSourceSpan {
+                    display: start..projection.display.len(),
+                    source: None,
+                    collapsed: false,
+                });
+            }
+            let display_start = projection.display.len();
+            let source_start = projection.source.len();
+            let collapsed = if let Some(block) = self.paste_block_for_marker(ch) {
+                projection
+                    .display
+                    .push_str(&paste_block_label(block.content.len()));
+                projection.source.push_str(&block.content);
+                true
+            } else {
+                projection.display.push(ch);
+                projection.source.push(ch);
+                false
+            };
+            projection.spans.push(super::ReadlineSourceSpan {
+                display: display_start..projection.display.len(),
+                source: Some(source_start..projection.source.len()),
+                collapsed,
+            });
+        }
+        if let Some((at, text)) = insertion
+            && at == self.line.len()
+        {
+            let start = projection.display.len();
+            projection.display.push_str(text);
+            projection.spans.push(super::ReadlineSourceSpan {
+                display: start..projection.display.len(),
+                source: None,
+                collapsed: false,
+            });
+        }
+        Some(projection)
+    }
+
     /// Returns the line rendered with text inserted at an internal byte offset.
     ///
     /// # Parameters

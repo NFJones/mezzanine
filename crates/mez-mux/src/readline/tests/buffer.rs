@@ -5,6 +5,50 @@ use crate::readline::{
     ReadlineHistoryEntry, ReadlineOutcome, ReadlinePasteRange,
 };
 
+/// Display selection omits provisional completion and expands hidden paste
+/// only through explicit source copy. Unicode byte boundaries fail closed.
+#[test]
+fn readline_source_projection_distinguishes_paste_shadow_and_entered_text() {
+    let mut buffer = ReadlineBuffer::new();
+    buffer.insert_text("雪 prefix ");
+    let insertion = buffer.cursor();
+    let paste = "HIDDEN\n".repeat(200);
+    buffer.insert_pasted_text(&paste);
+    buffer.insert_text(" suffix");
+    let before = buffer.clone();
+    let projection = buffer
+        .source_projection(Some((insertion, "UNACCEPTED")))
+        .unwrap();
+    assert_eq!(projection.source, buffer.expanded_line());
+    assert_eq!(
+        projection
+            .copy_range(0..projection.display.len(), true)
+            .unwrap(),
+        buffer.expanded_line()
+    );
+    let rendered = projection
+        .copy_range(0..projection.display.len(), false)
+        .unwrap();
+    assert_eq!(rendered, buffer.rendered_line());
+    assert!(!rendered.contains("HIDDEN") && !rendered.contains("UNACCEPTED"));
+    let block = projection.spans.iter().find(|span| span.collapsed).unwrap();
+    assert_eq!(
+        projection
+            .copy_range(block.display.start + 1..block.display.start + 2, true)
+            .unwrap(),
+        paste
+    );
+    assert_eq!(
+        projection
+            .copy_range(block.display.start + 1..block.display.start + 2, false)
+            .unwrap(),
+        "P"
+    );
+    assert!(projection.copy_range(1..3, true).is_none());
+    assert!(buffer.source_projection(Some((1, "bad"))).is_none());
+    assert_eq!(buffer, before);
+}
+
 /// Verifies readline insert and cursor movement edit in place.
 ///
 /// This regression scenario documents the behavior being protected so a

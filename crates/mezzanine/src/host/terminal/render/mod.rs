@@ -89,7 +89,7 @@ use prompt::agent_live_footer_style_spans;
 pub(crate) use prompt::agent_prompt_input_rendition;
 #[cfg(test)]
 use prompt::display_overlay_text_rendition;
-pub(crate) use prompt::{AgentComposerLayout, agent_composer_layout};
+pub(crate) use prompt::{AgentComposerLayout, agent_composer_layout, agent_draft_selection_layout};
 use prompt::{AgentPromptBlock, render_agent_prompt_block};
 pub use prompt::{
     agent_prompt_reserved_line_count, compose_prompt_overlay_presentation_with_styles,

@@ -105,7 +105,7 @@ pub use pane_status::{
 };
 pub(crate) use render::{
     AgentComposerLayout, PaneStatusDiagnosticProjection, agent_composer_layout,
-    pane_frame_row_layout, pane_frame_status_diagnostic_projection,
+    agent_draft_selection_layout, pane_frame_row_layout, pane_frame_status_diagnostic_projection,
 };
 pub use render::{
     DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_PANE_FRAME_VISIBLE_FIELDS,

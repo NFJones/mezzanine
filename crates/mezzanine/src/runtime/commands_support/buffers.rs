@@ -63,6 +63,18 @@ pub(super) fn runtime_copy_mode_command(
 ) -> Result<()> {
     let descriptor = service.active_window_pane_descriptor(invocation.target_arg())?;
     let pane_id = descriptor.pane_id.to_string();
+    if invocation.args.iter().any(|arg| arg == "--draft") {
+        if invocation
+            .args
+            .iter()
+            .any(|arg| arg == "--cancel" || arg == "-q")
+        {
+            service.clear_draft_selection(&pane_id);
+        } else {
+            service.begin_draft_selection(&pane_id)?;
+        }
+        return Ok(());
+    }
     if invocation
         .args
         .iter()
@@ -140,6 +152,26 @@ pub(super) fn runtime_copy_selection_command(
     let descriptor = service.active_window_pane_descriptor(invocation.target_arg())?;
     let pane_id = descriptor.pane_id.to_string();
     let buffer_name = runtime_copy_target_buffer_name(service, invocation);
+    if invocation.args.iter().any(|arg| arg == "--draft") {
+        let format = runtime_copy_selection_format(invocation)?;
+        let copied = service
+            .copy_draft_selection(&pane_id, format == CopySelectionFormat::Source)
+            .ok_or_else(|| MezError::invalid_state("draft selection is absent or stale"))?;
+        let bytes = copied.len();
+        service.copy_text_to_buffer_and_host_clipboard(
+            &buffer_name,
+            copied,
+            format!("pane:{pane_id}:draft"),
+            false,
+        )?;
+        if invocation.has_flag("-x", "--exit") {
+            service.clear_draft_selection(&pane_id);
+        }
+        return Ok(format!(
+            "target={pane_id}:copy=copied:domain=draft:format={}:buffer={buffer_name}:bytes={bytes}",
+            runtime_copy_selection_format_name(format)
+        ));
+    }
     let Some(copy_mode) = service.active_copy_mode_for_presented_surface(pane_id.as_str()) else {
         return Ok(format!(
             "target={pane_id}:copy=not-copied:reason=copy-mode-inactive"

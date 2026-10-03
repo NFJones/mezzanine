@@ -319,6 +319,11 @@ impl RuntimeSessionService {
         queue_for_adapter: bool,
         suppress_host_clipboard_copy: bool,
     ) -> Result<(bool, Option<String>)> {
+        if let Some(result) =
+            self.apply_draft_mouse_action(primary_client_id, &action, suppress_host_clipboard_copy)?
+        {
+            return Ok(result);
+        }
         match action {
             MouseAction::Ignore => Ok((true, None)),
             MouseAction::ForwardToPane => Ok((false, None)),

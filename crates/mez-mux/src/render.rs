@@ -35,8 +35,8 @@ pub use overlay::{
     normalize_overlay_style_spans, overlay_text_style_width,
 };
 pub use prompt::{
-    PromptRegionPresentation, PromptRegionRenderOptions, PromptShadowSpan, WrappedPromptLayout,
-    clipped_prompt_region, compose_prompt_region, layout_wrapped_prompt,
+    PromptRegionPresentation, PromptRegionRenderOptions, PromptShadowSpan, PromptSourceSpan,
+    WrappedPromptLayout, clipped_prompt_region, compose_prompt_region, layout_wrapped_prompt,
     wrap_prompt_line_with_cursor_and_shadow, write_line_segment,
 };
 pub use rich_text::{

@@ -30,12 +30,26 @@ pub struct WrappedPromptLayout {
     pub lines: Vec<String>,
     /// Shadow-text ranges corresponding to each visible row.
     pub shadow_spans: Vec<Vec<PromptShadowSpan>>,
+    /// Original rendered-input byte ranges at visible terminal cells. Padding
+    /// and synthetic continuation indentation have no input association.
+    pub source_spans: Vec<Vec<PromptSourceSpan>>,
     /// Cursor row relative to the visible prompt rows.
     pub cursor_row: usize,
     /// Cursor column relative to its visible row.
     pub cursor_column: usize,
     /// Whether the cursor falls inside the visible row window.
     pub cursor_visible: bool,
+}
+
+/// One visible terminal-cell range associated with original rendered input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptSourceSpan {
+    /// Start column relative to the wrapped row.
+    pub start: usize,
+    /// Display cells occupied by this input character.
+    pub length: usize,
+    /// Exact UTF-8 byte range in the original input to the layout operation.
+    pub input: std::ops::Range<usize>,
 }
 
 /// Neutral result of composing a wrapped prompt into a client region.
@@ -164,13 +178,14 @@ pub fn layout_wrapped_prompt(
         return WrappedPromptLayout {
             lines: Vec::new(),
             shadow_spans: Vec::new(),
+            source_spans: Vec::new(),
             cursor_row: 0,
             cursor_column: 0,
             cursor_visible: false,
         };
     }
-    let (chunks, chunk_shadow_spans, cursor_row, cursor_column) =
-        wrap_prompt_line_with_cursor_and_shadow(
+    let (chunks, chunk_shadow_spans, chunk_sources, cursor_row, cursor_column) =
+        wrap_prompt_line_with_sources(
             value,
             cursor_index,
             shadow_range,
@@ -196,6 +211,11 @@ pub fn layout_wrapped_prompt(
         .collect::<Vec<_>>();
     let cursor_visible = cursor_row >= first_visible_chunk
         && cursor_row < first_visible_chunk.saturating_add(lines.len());
+    let mut source_spans = chunk_sources
+        .into_iter()
+        .skip(first_visible_chunk)
+        .take(max_rows)
+        .collect::<Vec<_>>();
     let mut cursor_column = cursor_column;
     if let Some(replacement) = replacement_first_line
         && let Some(first) = lines.first_mut()
@@ -204,11 +224,15 @@ pub fn layout_wrapped_prompt(
         if let Some(first_spans) = shadow_spans.first_mut() {
             first_spans.clear();
         }
+        if let Some(first_sources) = source_spans.first_mut() {
+            first_sources.clear();
+        }
         cursor_column = width;
     }
     WrappedPromptLayout {
         lines,
         shadow_spans,
+        source_spans,
         cursor_row: cursor_row.saturating_sub(first_visible_chunk),
         cursor_column: clamp_visible_cursor_column(cursor_column, width),
         cursor_visible,
@@ -223,28 +247,69 @@ pub fn wrap_prompt_line_with_cursor_and_shadow(
     width: usize,
     continuation_indent: usize,
 ) -> (Vec<String>, Vec<Vec<PromptShadowSpan>>, usize, usize) {
+    let (lines, shadows, _, row, column) = wrap_prompt_line_with_sources(
+        value,
+        cursor_index,
+        shadow_range,
+        width,
+        continuation_indent,
+    );
+    (lines, shadows, row, column)
+}
+
+/// Wraps through the same layout algorithm while retaining original input
+/// ranges. Word-boundary whitespace remains recoverable between endpoints.
+#[allow(clippy::type_complexity)]
+fn wrap_prompt_line_with_sources(
+    value: &str,
+    cursor_index: usize,
+    shadow_range: Option<(usize, usize)>,
+    width: usize,
+    continuation_indent: usize,
+) -> (
+    Vec<String>,
+    Vec<Vec<PromptShadowSpan>>,
+    Vec<Vec<PromptSourceSpan>>,
+    usize,
+    usize,
+) {
     let mut chunks = Vec::new();
     let mut chunk_shadow_spans = Vec::new();
+    let mut chunk_sources = Vec::new();
+    let mut current_sources = Vec::<PromptSourceSpan>::new();
     let mut current = String::new();
     let mut current_shadow_spans = Vec::new();
     let mut used = 0usize;
     let mut cursor = None;
     let mut last_space_break: Option<(usize, usize, Vec<PromptShadowSpan>)> = None;
     let continuation_prefix = " ".repeat(continuation_indent);
-    for (index, ch) in value.chars().enumerate() {
-        if ch == '\n' {
+    let mut byte = 0usize;
+    let mut index = 0usize;
+    for grapheme in terminal_graphemes(value) {
+        let input_start = byte;
+        byte += grapheme.len();
+        if grapheme == "\n" {
             if cursor.is_none() && index == cursor_index {
                 cursor = Some((chunks.len(), used));
             }
+            index += 1;
             chunks.push(current);
             chunk_shadow_spans.push(current_shadow_spans);
+            chunk_sources.push(std::mem::take(&mut current_sources));
             current = continuation_prefix.clone();
             current_shadow_spans = Vec::new();
+            // Explicit authored row boundary, including a trailing empty row.
+            // Zero cells are not selectable glyphs but retain endpoint bytes.
+            current_sources.push(PromptSourceSpan {
+                start: continuation_indent,
+                length: 0,
+                input: byte..byte,
+            });
             used = continuation_indent;
             last_space_break = None;
             continue;
         }
-        let ch_width = terminal_text_width(&ch.to_string(), terminal_emoji_width()).max(1);
+        let ch_width = terminal_grapheme_width(grapheme, terminal_emoji_width()).max(1);
         if used > 0 && used.saturating_add(ch_width) > width {
             if let Some((text_break, consumed_break, spans_at_break)) = last_space_break.take() {
                 let consumed_columns =
@@ -260,6 +325,21 @@ pub fn wrap_prompt_line_with_cursor_and_shadow(
                     }
                     chunks.push(current[..text_break].to_string());
                     chunk_shadow_spans.push(spans_at_break);
+                    chunk_sources.push(
+                        current_sources
+                            .iter()
+                            .filter(|span| span.start < consumed_columns)
+                            .cloned()
+                            .collect(),
+                    );
+                    current_sources = current_sources
+                        .into_iter()
+                        .filter(|span| span.start >= consumed_columns)
+                        .map(|mut span| {
+                            span.start = continuation_indent + span.start - consumed_columns;
+                            span
+                        })
+                        .collect();
                     current = format!("{continuation_prefix}{}", &current[consumed_break..]);
                     current_shadow_spans = prompt_shadow_spans_after_consumed(
                         &current_shadow_spans,
@@ -270,6 +350,7 @@ pub fn wrap_prompt_line_with_cursor_and_shadow(
                 } else {
                     chunks.push(current);
                     chunk_shadow_spans.push(current_shadow_spans);
+                    chunk_sources.push(std::mem::take(&mut current_sources));
                     current = continuation_prefix.clone();
                     current_shadow_spans = Vec::new();
                     used = continuation_indent;
@@ -277,6 +358,7 @@ pub fn wrap_prompt_line_with_cursor_and_shadow(
             } else {
                 chunks.push(current);
                 chunk_shadow_spans.push(current_shadow_spans);
+                chunk_sources.push(std::mem::take(&mut current_sources));
                 current = continuation_prefix.clone();
                 current_shadow_spans = Vec::new();
                 used = continuation_indent;
@@ -286,12 +368,18 @@ pub fn wrap_prompt_line_with_cursor_and_shadow(
             cursor = Some((chunks.len(), used));
         }
         let current_byte_len = current.len();
-        current.push(ch);
+        current.push_str(grapheme);
+        current_sources.push(PromptSourceSpan {
+            start: used,
+            length: ch_width,
+            input: input_start..byte,
+        });
         if shadow_range.is_some_and(|(start, end)| index >= start && index < end) {
             push_prompt_shadow_cell(&mut current_shadow_spans, used, ch_width);
         }
         used = used.saturating_add(ch_width);
-        if ch.is_whitespace() && used > 0 {
+        index += ch_width;
+        if grapheme.chars().all(char::is_whitespace) && used > 0 {
             last_space_break = Some((
                 current_byte_len,
                 current.len(),
@@ -299,13 +387,20 @@ pub fn wrap_prompt_line_with_cursor_and_shadow(
             ));
         }
     }
-    if cursor.is_none() && value.chars().count() == cursor_index {
+    if cursor.is_none() && index == cursor_index {
         cursor = Some((chunks.len(), used));
     }
     chunks.push(current);
     chunk_shadow_spans.push(current_shadow_spans);
+    chunk_sources.push(current_sources);
     let (cursor_row, cursor_column) = cursor.unwrap_or((chunks.len().saturating_sub(1), 0));
-    (chunks, chunk_shadow_spans, cursor_row, cursor_column)
+    (
+        chunks,
+        chunk_shadow_spans,
+        chunk_sources,
+        cursor_row,
+        cursor_column,
+    )
 }
 
 /// Clips a prompt region to the available client cells.
@@ -398,6 +493,7 @@ mod composition_tests {
     fn prompt_region_composition_places_rows_styles_and_cursor() {
         let layout = WrappedPromptLayout {
             lines: vec!["one ".to_string(), "two ".to_string()],
+            source_spans: vec![Vec::new(), Vec::new()],
             shadow_spans: vec![
                 Vec::new(),
                 vec![PromptShadowSpan {
@@ -455,6 +551,28 @@ fn push_prompt_shadow_cell(spans: &mut Vec<PromptShadowSpan>, start: usize, leng
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wrapped provenance follows whole graphemes and exact input bytes, and
+    /// synthetic indentation/padding never acquires source ownership.
+    #[test]
+    fn wrapped_prompt_source_spans_preserve_unicode_and_clipping() {
+        let text = "⟩ e\u{301}👨‍💻 雪\nend";
+        let layout = layout_wrapped_prompt(text, 14, None, 8, 8, 2, None);
+        let inputs = layout
+            .source_spans
+            .iter()
+            .flatten()
+            .map(|span| &text[span.input.clone()])
+            .collect::<Vec<_>>();
+        assert!(inputs.contains(&"e\u{301}"));
+        assert!(inputs.contains(&"👨‍💻"));
+        for (row, spans) in layout.lines.iter().zip(&layout.source_spans) {
+            let cells = terminal_text_width(row, terminal_emoji_width());
+            assert!(spans.iter().all(|span| span.start + span.length <= cells));
+        }
+        let replaced = layout_wrapped_prompt(text, 14, None, 8, 1, 2, Some("summary"));
+        assert!(replaced.source_spans[0].is_empty());
+    }
 
     /// Verifies wrapping preserves cursor and shadow metadata without product prompt policy.
     #[test]

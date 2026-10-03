@@ -306,6 +306,7 @@ impl RuntimeSessionService {
         if input.is_empty() {
             return Ok(false);
         }
+        self.clear_draft_selection(pane_id);
         if self.agent_command_is_active(pane_id) {
             self.show_primary_error_overlay(vec![
                 "command is still running in this pane".to_string(),

@@ -5,6 +5,7 @@ use super::*;
 mod command_prompt;
 mod control_integrations;
 mod copy_mode;
+mod draft_selection;
 mod input;
 mod overlays;
 mod rendering;

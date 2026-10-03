@@ -20,6 +20,13 @@ impl RuntimeSessionService {
         suppress_host_clipboard_copy: bool,
     ) -> Result<(bool, Option<String>)> {
         let pane_id = self.active_pane_id()?;
+        if self.draft_keyboard_selection_active(pane_id.as_str()) {
+            return self.apply_draft_copy_key(
+                pane_id.as_str(),
+                action,
+                suppress_host_clipboard_copy,
+            );
+        }
         if self.remove_presented_surface_scrollback_copy_mode(pane_id.as_str()) {
             self.remove_active_copy_mode_for_presented_surface(pane_id.as_str());
             return Ok((true, None));

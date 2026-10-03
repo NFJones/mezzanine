@@ -3534,6 +3534,7 @@ use mez_terminal::{
 mod attached_step;
 mod client_view;
 mod copy_mode;
+pub(crate) mod draft_selection;
 mod external_prompt;
 mod focus_labels;
 pub(in crate::runtime) use external_prompt::{

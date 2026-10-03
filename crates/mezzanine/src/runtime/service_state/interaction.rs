@@ -443,6 +443,8 @@ pub(crate) struct RuntimeAgentPromptInput {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(crate) prompt: ReadlinePrompt,
+    /// Client-local draft selection, fenced by conversation and exact projection.
+    pub(crate) draft_selection: Option<crate::runtime::render::draft_selection::DraftSelection>,
     /// Stores the decoder value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

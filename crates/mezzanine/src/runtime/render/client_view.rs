@@ -490,6 +490,7 @@ impl RuntimeSessionService {
             && let Some(view) = view.as_mut()
         {
             self.overlay_copy_modes_on_view(window, view)?;
+            self.overlay_draft_selections(view);
         }
         let presentation_ids = view
             .as_mut()
@@ -1031,7 +1032,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the mux-planned absolute content region for a runtime pane.
-    fn pane_content_mouse_region(
+    pub(super) fn pane_content_mouse_region(
         &self,
         window: &mez_mux::layout::Window,
         pane_index: usize,
@@ -1343,7 +1344,8 @@ impl RuntimeSessionService {
                 .as_ref()
                 .filter(|state| state.pane_id.as_str() == pane_id && state.surface == surface)
         });
-        config.mouse_selection_active = active_mouse_selection_state.is_some();
+        config.mouse_selection_active =
+            active_mouse_selection_state.is_some() || self.draft_mouse_drag_active();
         config.mouse_selection_autoscroll_position =
             active_mouse_selection_state.and_then(|state| state.autoscroll_position);
         if let Some(pane_id) = active_pane_id {
@@ -1354,9 +1356,11 @@ impl RuntimeSessionService {
             config.mouse_policy.copy_mode_active = self
                 .active_copy_mode_for_presented_surface(pane_id.as_str())
                 .is_some()
-                || active_mouse_selection_state.is_some();
-            config.scrollback_copy_mode_active =
-                self.presented_surface_uses_scrollback_copy_mode(pane_id.as_str());
+                || active_mouse_selection_state.is_some()
+                || self.draft_keyboard_selection_active(&pane_id);
+            config.scrollback_copy_mode_active = self
+                .presented_surface_uses_scrollback_copy_mode(pane_id.as_str())
+                && !self.draft_keyboard_selection_active(&pane_id);
             config.mouse_policy.pane_application_mouse_mode = process_surface_presented
                 && self
                     .process_pane_screen(pane_id.as_str())
