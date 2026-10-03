@@ -4,12 +4,17 @@ use super::*;
 use crate::runtime::current_unix_seconds;
 use mez_agent::messaging::{Envelope, MessageScope};
 
-/// Diagnostic reproduction for a durable first range followed by a valid
-/// legacy execution block without durable group metadata. Such history is
-/// eligible for turn-local compaction, but the staged durability probe currently
-/// raises the reported mapping error before it can choose a safe fallback.
+/// Valid legacy history after a durable range must continue as private
+/// turn-local recovery, preserving raw history and both model summaries.
 #[test]
-fn diagnostic_staged_compaction_legacy_range_mapping_failure() {
+fn runtime_staged_compaction_legacy_range_recovers_turn_locally() {
+    staged_compaction_legacy_fallback_case(false);
+    staged_compaction_legacy_fallback_case(true);
+}
+
+/// Exercises the same transition with or without an existing authoritative
+/// epoch and checks that exact late arrivals survive the private recovery.
+fn staged_compaction_legacy_fallback_case(prior_epoch: bool) {
     let second = mez_agent::TranscriptContextEvent::execution_block(
         ContextSourceKind::TranscriptAssistant,
         "second answer",
@@ -31,6 +36,18 @@ fn diagnostic_staged_compaction_legacy_range_mapping_failure() {
         .insert("max_input_tokens".to_string(), "17000".to_string());
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
     let task = service.take_pending_agent_compaction_task("%1").unwrap();
+    if prior_epoch {
+        store
+            .save_compaction_ranges(
+                &conversation_id,
+                0,
+                "prior authoritative summary",
+                Vec::new(),
+            )
+            .unwrap();
+    }
+    let original_epoch = store.compaction_epoch(&conversation_id).unwrap();
+    let original_rows = store.inspect(&conversation_id).unwrap();
     service.claim_agent_compaction_task_state("%1", task);
     assert!(
         service
@@ -40,25 +57,137 @@ fn diagnostic_staged_compaction_legacy_range_mapping_failure() {
             )
             .unwrap()
     );
-    let pane_text = service
-        .pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    let failure = normalized_pane_log_text(&pane_text);
     assert!(
-        failure.contains("staged compaction range cannot be mapped to durable transcript rows"),
-        "{pane_text}"
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
     );
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert_eq!(
+        store.compaction_epoch(&conversation_id).unwrap(),
+        original_epoch
+    );
     assert!(!service.agent_provider_task_is_pending(&turn_id));
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn_id)
+        .unwrap()
+        .append_user_event("late steering", "EXACT_MIXED_LATE_STEERING")
+        .unwrap();
+    let sequence = store.next_sequence(&conversation_id).unwrap();
+    store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence,
+            created_at_unix_seconds: 2,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "external-late-turn".into(),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            content: "EXACT_EXTERNAL_LATE_USER".into(),
+        })
+        .unwrap();
+    complete_runtime_test_compaction(&mut service, "%1", "second summary");
+    assert!(service.agent_provider_task_is_pending(&turn_id));
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+    assert_eq!(
+        store.compaction_epoch(&conversation_id).unwrap(),
+        original_epoch
+    );
+    assert!(
+        store
+            .inspect(&conversation_id)
+            .unwrap()
+            .starts_with(&original_rows)
+    );
+    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
+    for summary in [
+        "first summary",
+        "second summary",
+        "EXACT_MIXED_LATE_STEERING",
+        "EXACT_EXTERNAL_LATE_USER",
+    ] {
+        assert_eq!(
+            context
+                .blocks()
+                .iter()
+                .filter(|block| block.content == summary)
+                .count(),
+            1
+        );
+    }
+    let sources = context
+        .chronology()
+        .iter()
+        .map(|event| event.block().content.as_str())
+        .collect::<Vec<_>>();
+    let position = |source| {
+        sources
+            .iter()
+            .position(|candidate| *candidate == source)
+            .unwrap()
+    };
+    assert!(position("first summary") < position("second summary"));
+    assert!(position("EXACT_MIXED_LATE_STEERING") < position("EXACT_EXTERNAL_LATE_USER"));
 }
 
-/// Reproduces the same staged mapping failure with typed, closed live work.
-/// The running turn owns these events, but no durable row exists yet; selecting
-/// them is valid for turn-local compaction and is not transcript corruption.
+/// Losing selective publication authority must not lose the epoch witness.
+/// An external epoch change after private staging rejects the completion and
+/// cannot install stale summaries or queue a provider continuation.
 #[test]
-fn diagnostic_staged_compaction_live_range_mapping_failure() {
+fn runtime_staged_turn_local_compaction_rejects_changed_epoch() {
+    let second = mez_agent::TranscriptContextEvent::execution_block(
+        ContextSourceKind::TranscriptAssistant,
+        "second answer",
+        "SECOND_RANGE_SOURCE ".repeat(1_200),
+    )
+    .unwrap()
+    .to_transcript_content();
+    let (mut service, store, turn_id) =
+        queue_observed_input_compaction_with_second_group(Some(second));
+    let conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let original = service.agent_turn_contexts().get(&turn_id).unwrap().clone();
+    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".into(), "17000".into());
+    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    complete_runtime_test_compaction(&mut service, "%1", "first summary");
+    let retry = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        staged: Some(staged),
+        ..
+    } = &retry.target
+    else {
+        panic!("private recovery expected");
+    };
+    assert!(staged.projection.is_none());
+    assert_eq!(service.agent_turn_contexts().get(&turn_id), Some(&original));
+    store
+        .save_compaction_ranges(&conversation, 0, "externally changed epoch", Vec::new())
+        .unwrap();
+    let changed = store.compaction_epoch(&conversation).unwrap();
+    complete_runtime_test_compaction(&mut service, "%1", "second summary");
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turn(&turn_id)
+            .is_some_and(|turn| turn.state == AgentTurnState::Failed)
+    );
+    assert_eq!(store.compaction_epoch(&conversation).unwrap(), changed);
+}
+
+/// Typed closed live work has no durable row yet. Recovery retains exact
+/// steering and earlier summaries without treating that absence as corruption.
+#[test]
+fn runtime_staged_compaction_live_range_recovers_turn_locally() {
     let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
     let conversation_id = service
         .agent_shell_store()
@@ -126,18 +255,60 @@ fn diagnostic_staged_compaction_live_range_mapping_failure() {
         .insert("max_input_tokens".to_string(), "17000".to_string());
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
     complete_runtime_test_compaction(&mut service, "%1", "first summary");
-    let pane_text = service
-        .pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    let failure = normalized_pane_log_text(&pane_text);
     assert!(
-        failure.contains("staged compaction range cannot be mapped to durable transcript rows"),
-        "{pane_text}"
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
     );
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
     assert!(!service.agent_provider_task_is_pending(&turn_id));
+    complete_runtime_test_compaction(&mut service, "%1", "second summary");
+    let mut last_selection = None;
+    let mut summarized_live = false;
+    for index in 0..8 {
+        let Some(retry) = service.pending_agent_compaction_task_for_tests("%1") else {
+            break;
+        };
+        let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+            staged: Some(staged),
+            plan,
+            ..
+        } = &retry.target
+        else {
+            panic!("expected private recovery stage");
+        };
+        assert!(staged.projection.is_none());
+        let first = *plan.replacement_event_sequences().first().unwrap();
+        assert!(last_selection.is_none_or(|previous| first > previous));
+        last_selection = Some(*plan.replacement_event_sequences().last().unwrap());
+        let is_live = plan
+            .replacement_blocks()
+            .iter()
+            .any(|block| block.content.contains("LIVE_RANGE_SOURCE"));
+        summarized_live |= is_live;
+        assert!(!service.agent_provider_task_is_pending(&turn_id));
+        complete_runtime_test_compaction(
+            &mut service,
+            "%1",
+            &if is_live {
+                "live summary".to_string()
+            } else {
+                format!("older summary {index}")
+            },
+        );
+    }
+    assert!(summarized_live);
+    assert!(service.agent_provider_task_is_pending(&turn_id));
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
+    for source in [
+        "first summary",
+        "second summary",
+        "live summary",
+        "Keep this instruction exact",
+    ] {
+        assert!(context.blocks().iter().any(|block| block.content == source));
+    }
 }
 
 /// Verifies the runtime applies raw-retention config for compaction recovery.
@@ -2775,6 +2946,32 @@ fn runtime_observed_input_limit_rejects_late_oversized_transcript_without_commit
         .unwrap();
 
     complete_runtime_test_compaction(&mut service, "%1", "small observed input summary");
+    // Earlier consumed ranges may still be summarized privately. The late
+    // arrival must never become eligible or allow an oversized continuation.
+    for _ in 0..8 {
+        let Some(task) = service.pending_agent_compaction_task_for_tests("%1") else {
+            break;
+        };
+        let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } =
+            &task.target
+        else {
+            panic!("expected active recovery");
+        };
+        assert!(
+            !plan
+                .replacement_blocks()
+                .iter()
+                .any(|block| block.content.contains("late-oversized-transcript-token"))
+        );
+        assert!(!service.agent_provider_task_is_pending(&turn_id));
+        assert!(
+            transcript_store
+                .compaction_epoch(&conversation_id)
+                .unwrap()
+                .is_none()
+        );
+        complete_runtime_test_compaction(&mut service, "%1", "another short summary");
+    }
 
     assert_eq!(
         transcript_store.compaction_epoch(&conversation_id).unwrap(),

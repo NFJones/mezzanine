@@ -826,6 +826,48 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Adds only externally owned transcript arrivals after a compaction's
+    /// captured logical boundary. Same-turn records already belong to canonical
+    /// live chronology. This temporary request candidate never restores the
+    /// summarized prefix or makes late source eligible for the frozen plan.
+    pub(crate) fn preview_turn_local_compaction_history(
+        &self,
+        task: &crate::runtime::RuntimeAgentCompactionTask,
+        turn_id: &str,
+        mut candidate: AgentContext,
+    ) -> Result<AgentContext> {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
+            return Ok(candidate);
+        };
+        let pending = self
+            .persistence
+            .pending_transcript_entries(&task.conversation_id);
+        let view = store.conversation_transcript_view(
+            &task.conversation_id,
+            crate::storage::transcript::ConversationTranscriptRead::All,
+            task.transcript_entries > pending.len() as u64,
+            &pending,
+        )?;
+        let arrivals = view
+            .logical
+            .into_iter()
+            .filter(|row| row.sequence > task.transcript_entries && row.turn_id != turn_id)
+            .collect::<Vec<_>>();
+        let history = context::runtime_agent_transcript_context(&task.pane_id, &arrivals);
+        if history.blocks.is_empty() {
+            return Ok(candidate);
+        }
+        let mut imported = AgentContext::import_durable_blocks(history.blocks)
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+        imported
+            .restore_imported_execution_events(&history.execution_events)
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+        candidate
+            .append_imported_history(&imported)
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+        Ok(candidate)
+    }
+
     /// Builds, without committing, the running-turn context that a conversation
     /// compaction refresh will expose after its summary and MCP epoch are stored.
     pub(crate) fn preview_running_turn_context_after_conversation_compaction(

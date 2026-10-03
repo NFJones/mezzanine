@@ -698,6 +698,9 @@ pub struct RuntimeStagedCompaction {
     pub context: super::AgentContext,
     /// Prospective durable replay projection, absent for turn-local recovery.
     pub projection: Option<crate::storage::transcript::AgentCompactionEpoch>,
+    /// Authoritative epoch captured before private staging; retained even when
+    /// selective publication becomes ineligible. None witnesses no prior epoch.
+    pub baseline_epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
     /// Number of additional closed ranges attempted.
     pub attempts: u32,
     /// Frozen authoritative chronology for append-only arrival validation.

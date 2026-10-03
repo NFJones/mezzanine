@@ -62,6 +62,109 @@ fn runtime_compaction_candidate_size_diagnostic(
     )
 }
 
+/// Durability admission for a validated closed selection. Turn-local source
+/// may be summarized but cannot publish a selective transcript epoch.
+enum CompactionSelectionDurability {
+    /// Every selected source maps exactly to contiguous committed rows.
+    Durable(AgentCompactionRange),
+    /// Valid live, pending, or legacy source lacks committed typed ownership.
+    TurnLocal,
+}
+
+/// Distinguishes absent durable ownership from conflicting committed evidence.
+/// Exact selected event identities and any existing group rows must agree;
+/// partially committed groups require a complete matching logical snapshot.
+fn classify_compaction_selection(
+    plan: &mez_agent::ModelContextCompactionPlan,
+    context: &AgentContext,
+    committed: &[TranscriptEntry],
+    logical: &[TranscriptEntry],
+    summary: &str,
+) -> Result<CompactionSelectionDurability> {
+    let mut groups = std::collections::BTreeMap::new();
+    let mut turn_local = false;
+    if plan.replacement_blocks().is_empty()
+        || plan.replacement_blocks().len() != plan.replacement_event_sequences().len()
+    {
+        return Err(MezError::conflict(
+            "compaction selected source identity changed",
+        ));
+    }
+    for (sequence, block) in plan
+        .replacement_event_sequences()
+        .iter()
+        .zip(plan.replacement_blocks())
+    {
+        let event = context
+            .chronology()
+            .iter()
+            .find(|event| event.sequence() == *sequence && event.block() == block)
+            .ok_or_else(|| MezError::conflict("compaction selected source identity changed"))?;
+        if let Some(group) = event.execution_group_id() {
+            groups
+                .entry(group.clone())
+                .or_insert_with(Vec::new)
+                .push(block);
+        } else {
+            turn_local = true;
+        }
+    }
+    for (group, blocks) in groups {
+        let group_rows = |rows: &[TranscriptEntry]| {
+            rows.iter()
+                .filter_map(
+                    |entry| match mez_agent::TranscriptContextEvent::from_transcript_content(
+                        &entry.content,
+                    ) {
+                        Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
+                            source,
+                            label,
+                            content,
+                            execution_group_id: Some(candidate),
+                            ordinal,
+                            ..
+                        }) if candidate == group => Some((source, label, content, ordinal)),
+                        _ => None,
+                    },
+                )
+                .collect::<Vec<_>>()
+        };
+        let rows = group_rows(committed);
+        if rows.is_empty() {
+            turn_local = true;
+            continue;
+        }
+        let matches = |rows: &[(ContextSourceKind, String, String, Option<u64>)]| {
+            rows.len() == blocks.len()
+                && rows.iter().zip(&blocks).enumerate().all(
+                    |(index, ((source, label, content, ordinal), block))| {
+                        *source == block.source
+                            && *label == block.label
+                            && *content == block.content
+                            && *ordinal == Some(index as u64 + 1)
+                    },
+                )
+        };
+        if !matches(&rows) {
+            if rows.len() < blocks.len() && matches(&group_rows(logical)) {
+                turn_local = true;
+            } else {
+                return Err(MezError::conflict(
+                    "compaction committed group source changed",
+                ));
+            }
+        }
+    }
+    if turn_local {
+        return Ok(CompactionSelectionDurability::TurnLocal);
+    }
+    selected_durable_compaction_range(plan, context, committed, summary)
+        .map(CompactionSelectionDurability::Durable)
+        .ok_or_else(|| {
+            MezError::conflict("compaction committed selection is ambiguous or incomplete")
+        })
+}
+
 /// Maps only an exact, contiguous frozen selection to durable execution rows.
 /// Unmatched or ambiguous selections retain the existing full raw replay window.
 fn selected_durable_compaction_range(
@@ -168,6 +271,26 @@ fn selected_durable_compaction_range(
 }
 
 impl RuntimeSessionService {
+    /// Captures the authoritative epoch once for private recovery. A missing
+    /// epoch is a witness too; later stages must not refresh this baseline.
+    fn private_compaction_epoch_baseline(
+        &self,
+        task: &RuntimeAgentCompactionTask,
+    ) -> Result<Option<AgentCompactionEpoch>> {
+        if let RuntimeAgentCompactionTarget::ActiveTurn {
+            staged: Some(state),
+            ..
+        } = &task.target
+        {
+            return Ok(state.baseline_epoch.clone());
+        }
+        self.persistence
+            .cloned_transcript_store()
+            .map(|store| store.compaction_epoch(&task.conversation_id))
+            .transpose()
+            .map(Option::flatten)
+    }
+
     /// Checks whether excluding a complete group could still yield a fitting
     /// provider request, without changing the running turn or durable epoch.
     fn compaction_walkback_candidate_fits(
@@ -289,6 +412,14 @@ impl RuntimeSessionService {
         };
         let previous = store.compaction_epoch(&task.conversation_id)?;
         let boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
+        if matches!(&task.target, RuntimeAgentCompactionTarget::ActiveTurn {
+            staged: Some(state), ..
+        } if state.baseline_epoch != previous)
+        {
+            return Err(MezError::conflict(
+                "staged compaction epoch baseline changed",
+            ));
+        }
         let staged = match &task.target {
             RuntimeAgentCompactionTarget::ActiveTurn { staged, .. } => {
                 staged.as_ref().and_then(|state| state.projection.as_ref())
@@ -316,6 +447,15 @@ impl RuntimeSessionService {
             boundary > 0 || task.transcript_entries > pending.len() as u64,
             &pending,
         )?;
+        if task
+            .frozen_compaction_rows
+            .iter()
+            .any(|frozen| !view.committed.iter().any(|row| row == frozen))
+        {
+            return Err(MezError::conflict(
+                "staged compaction frozen source changed",
+            ));
+        }
         // A preceding provisional summary without a durable mapping cannot
         // become an epoch merely because later rows committed. Still read the
         // archive above: an absent required prefix is an integrity failure.
@@ -323,17 +463,20 @@ impl RuntimeSessionService {
             staged: Some(state), ..
         } if state.projection.is_none())
         {
+            // Losing publication authority does not authorize accepting
+            // conflicting committed evidence for a subsequent selection.
+            classify_compaction_selection(plan, context, &view.committed, &view.logical, summary)?;
             return Ok(None);
         }
-        let Some(range) =
-            selected_durable_compaction_range(plan, context, &view.committed, summary)
-        else {
-            if staged.is_some() {
-                return Err(MezError::invalid_state(
-                    "staged compaction range cannot be mapped to durable transcript rows",
-                ));
-            }
-            return Ok(None);
+        let range = match classify_compaction_selection(
+            plan,
+            context,
+            &view.committed,
+            &view.logical,
+            summary,
+        )? {
+            CompactionSelectionDurability::Durable(range) => range,
+            CompactionSelectionDurability::TurnLocal => return Ok(None),
         };
         if range.first_sequence <= boundary
             || pending
@@ -1303,9 +1446,17 @@ impl RuntimeSessionService {
                         )
                     })?;
                 let mcp_summary = self.mcp_registry().prompt_summary();
+                let request_candidate = if matches!(
+                    trigger,
+                    RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. }
+                ) {
+                    self.preview_turn_local_compaction_history(&task, &turn_id, compacted.clone())?
+                } else {
+                    compacted.clone()
+                };
                 let (prepared, available_mcp_tools) = self.prepare_agent_turn_model_context(
                     &turn,
-                    compacted.clone(),
+                    request_candidate.clone(),
                     &mcp_summary,
                     &model_profile,
                 )?;
@@ -1527,6 +1678,7 @@ impl RuntimeSessionService {
                             projection,
                         )?;
                     }
+                    let baseline_epoch = self.private_compaction_epoch_baseline(&task)?;
                     if let RuntimeAgentCompactionTarget::ActiveTurn {
                         plan,
                         staged,
@@ -1542,6 +1694,7 @@ impl RuntimeSessionService {
                             crate::runtime::agent_state::RuntimeStagedCompaction {
                                 context: compacted,
                                 projection,
+                                baseline_epoch,
                                 attempts: attempts.saturating_add(1),
                                 source_chronology,
                             },
@@ -1713,7 +1866,7 @@ impl RuntimeSessionService {
                         // search the next closed segment in the unpublished context.
                         // Neither the live context nor its epoch changes until the
                         // combined projection has passed the complete request check.
-                        if next_budget == 0 && projection.is_some() {
+                        if next_budget == 0 {
                             let budget = model_profile
                                 .max_input_tokens()
                                 .or_else(|| model_profile.context_window_tokens())
@@ -1738,22 +1891,25 @@ impl RuntimeSessionService {
                                 .ok_or_else(|| {
                                     MezError::invalid_state("staged compaction source disappeared")
                                 })?;
+                            let baseline_epoch = self.private_compaction_epoch_baseline(&task)?;
                             let mut staged_task = task.clone();
                             if let RuntimeAgentCompactionTarget::ActiveTurn { staged, .. } =
                                 &mut staged_task.target
                             {
-                                *staged = projection.clone().map(|projection| {
-                                    Box::new(crate::runtime::agent_state::RuntimeStagedCompaction {
+                                *staged = Some(Box::new(
+                                    crate::runtime::agent_state::RuntimeStagedCompaction {
                                         context: compacted.clone(),
-                                        projection: Some(projection),
+                                        projection: projection.clone(),
+                                        baseline_epoch: baseline_epoch.clone(),
                                         attempts: 0,
                                         source_chronology: source_chronology.clone(),
-                                    })
-                                });
+                                    },
+                                ));
                             }
-                            let next_range_is_durable = next_plan.changes_context()
+                            let next_range_advances = next_plan.changes_context()
                                 && next_plan.replacement_event_sequences().first()
-                                    > plan.replacement_event_sequences().last()
+                                    > plan.replacement_event_sequences().last();
+                            let next_range_is_durable = next_range_advances
                                 && self
                                     .prospective_observed_compaction_epoch(
                                         &staged_task,
@@ -1762,20 +1918,17 @@ impl RuntimeSessionService {
                                         "x",
                                     )?
                                     .is_some();
-                            if next_range_is_durable {
-                                let projection_ref = projection.as_ref().ok_or_else(|| {
-                                    MezError::invalid_state(
-                                        "durable compaction range projection is unavailable",
-                                    )
-                                })?;
-                                task.frozen_compaction_rows = self
-                                    .frozen_observed_compaction_rows(
-                                        &task,
-                                        &context,
-                                        plan.as_ref(),
-                                        &final_summary,
-                                        projection_ref,
-                                    )?;
+                            if next_range_advances {
+                                if let Some(projection_ref) = projection.as_ref() {
+                                    task.frozen_compaction_rows = self
+                                        .frozen_observed_compaction_rows(
+                                            &task,
+                                            &context,
+                                            plan.as_ref(),
+                                            &final_summary,
+                                            projection_ref,
+                                        )?;
+                                }
                                 let RuntimeAgentCompactionTarget::ActiveTurn {
                                     plan,
                                     staged,
@@ -1790,14 +1943,19 @@ impl RuntimeSessionService {
                                 };
                                 **plan = next_plan;
                                 let attempts = staged.as_ref().map_or(0, |state| state.attempts);
-                                *staged = projection.clone().map(|projection| {
-                                    Box::new(crate::runtime::agent_state::RuntimeStagedCompaction {
+                                *staged = Some(Box::new(
+                                    crate::runtime::agent_state::RuntimeStagedCompaction {
                                         context: compacted.clone(),
-                                        projection: Some(projection),
+                                        projection: if next_range_is_durable {
+                                            projection.clone()
+                                        } else {
+                                            None
+                                        },
+                                        baseline_epoch,
                                         attempts: attempts.saturating_add(1),
                                         source_chronology: source_chronology.clone(),
-                                    })
-                                });
+                                    },
+                                ));
                                 final_request_retry.last_input_tokens = Some(candidate_tokens);
                                 final_request_retry.attempts = 0;
                                 final_request_retry.summary_ceiling = None;
@@ -1844,7 +2002,7 @@ impl RuntimeSessionService {
                         // committed rows an epoch may reference. The complete
                         // retry request was checked above before this mutation.
                         self.agent_turn_contexts_mut()
-                            .insert(turn_id.clone(), compacted);
+                            .insert(turn_id.clone(), request_candidate);
                         self.clear_agent_turn_provider_request_chain(&turn_id);
                         self.queue_agent_provider_recovery_task_after_compaction(
                             &turn_id,
@@ -3659,16 +3817,37 @@ mod size_diagnostic_tests {
             })
             .collect::<Vec<_>>();
         assert!(selected_durable_compaction_range(&plan, &context, &rows, "summary").is_some());
+        assert!(matches!(
+            classify_compaction_selection(&plan, &context, &rows, &rows, "summary").unwrap(),
+            CompactionSelectionDurability::Durable(_)
+        ));
+        assert!(matches!(
+            classify_compaction_selection(&plan, &context, &[], &[], "summary").unwrap(),
+            CompactionSelectionDurability::TurnLocal
+        ));
+        assert!(matches!(
+            classify_compaction_selection(&plan, &context, &rows[..1], &rows, "summary").unwrap(),
+            CompactionSelectionDurability::TurnLocal
+        ));
+        assert!(
+            classify_compaction_selection(&plan, &context, &rows[..1], &rows[..1], "summary")
+                .is_err()
+        );
         assert!(
             selected_durable_compaction_range(&plan, &context, &rows[..1], "summary").is_none()
         );
         let mut duplicate = rows.clone();
         duplicate.push(rows[0].clone());
         assert!(
+            classify_compaction_selection(&plan, &context, &duplicate, &duplicate, "summary")
+                .is_err()
+        );
+        assert!(
             selected_durable_compaction_range(&plan, &context, &duplicate, "summary").is_none()
         );
         let mut gap = rows.clone();
         gap[1].sequence = 3;
+        assert!(classify_compaction_selection(&plan, &context, &gap, &gap, "summary").is_err());
         assert!(selected_durable_compaction_range(&plan, &context, &gap, "summary").is_none());
         let mut incomplete = rows.clone();
         let mut extra = rows[1].clone();

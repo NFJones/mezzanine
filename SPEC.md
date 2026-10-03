@@ -7105,6 +7105,15 @@ reference uncommitted rows, and the raw replay window remains authoritative.
 Provisional summaries across exact barriers MUST remain unpublished until the
 combined turn-local request fits. Legacy transcript user rows are exact
 barriers even when their imported block retention metadata is summarizable.
+An earlier durable selection MUST NOT make a later valid live, pending or
+legacy selection a mapping error. Such a transition MUST retain earlier private
+summaries, abandon selective publication for the combined operation, and keep
+the prior epoch authoritative even if selected rows subsequently commit.
+Missing required archives, changed frozen rows, conflicting typed ownership,
+overlap and stale epochs remain integrity failures, not fallback admission.
+Turn-local request validation MUST include exact externally owned transcript
+arrivals after the captured history boundary without restoring summarized
+prefixes or admitting those arrivals to the frozen compaction selection.
 If the complete candidate after a model-authored summary exceeds the safe input
 allowance, compaction MAY request a shorter model-authored summary of the same
 frozen source while the complete candidate estimate and enforceable output

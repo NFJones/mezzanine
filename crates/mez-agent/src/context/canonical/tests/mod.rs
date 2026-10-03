@@ -11,6 +11,54 @@ mod storage;
 mod chronology {
     use super::*;
 
+    /// Imported suffixes preserve trust and execution metadata while receiving
+    /// fresh local identities. Stable instructions are not history arrivals;
+    /// rejecting such an import leaves the destination unchanged.
+    #[test]
+    fn imported_history_append_preserves_ownership_and_rejects_stable_slots() {
+        let mut candidate = AgentContext::empty();
+        candidate
+            .append_user_event("active", "exact active prompt")
+            .unwrap();
+        let mut history = AgentContext::empty();
+        history
+            .append_peer_message_event("peer", "untrusted source")
+            .unwrap();
+        let group = ContextExecutionGroupId::new("imported-group").unwrap();
+        history
+            .append_assistant_event("decision", "answer", group.clone())
+            .unwrap();
+        history
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "result",
+                "evidence",
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+        assert_eq!(candidate.append_imported_history(&history).unwrap(), 3);
+        for (actual, original) in candidate.chronology()[1..].iter().zip(history.chronology()) {
+            assert_eq!(actual.block(), original.block());
+            assert_eq!(actual.retention(), original.retention());
+            assert_eq!(actual.semantic_kind(), original.semantic_kind());
+            assert_eq!(actual.execution_group_id(), original.execution_group_id());
+            assert_eq!(actual.provider_owner(), original.provider_owner());
+            assert!(actual.sequence() > original.sequence());
+        }
+        let before = candidate.clone();
+        let stable = AgentContext::new_durable(vec![ContextBlock {
+            source: ContextSourceKind::Policy,
+            placement: ContextPlacement::StablePrefix,
+            label: "policy".into(),
+            content: "not history".into(),
+        }])
+        .unwrap();
+        assert!(candidate.append_imported_history(&stable).is_err());
+        assert_eq!(candidate, before);
+    }
+
     /// Rebasing preserves occurrence identities and metadata without promoting
     /// peer authority. A frozen-source rewrite must fail atomically.
     #[test]

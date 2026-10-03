@@ -213,6 +213,13 @@ durable range or discard exact history; staged first-turn summaries remain
 provisional until all required segments fit. On restart, the original raw
 transcript remains authoritative;
 that fallback does not reduce replayed transcript size.
+This also applies when an earlier staged range was durable but a later range
+is valid live, pending or legacy history: earlier model summaries remain private
+and the combined recovery cannot regain selective publication merely because
+rows later commit. Changed frozen rows, conflicting committed group evidence,
+stale epochs and missing required archives still fail closed. The complete
+turn-local request includes exact late external transcript arrivals without
+restoring already summarized prefixes or summarizing unconsumed arrivals.
 
 Use `/status` for current-pane context and token information. Cache reuse is a
 provider observation, not proof that context is correct: provider/model changes

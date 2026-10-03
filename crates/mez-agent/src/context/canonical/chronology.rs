@@ -218,6 +218,29 @@ impl AgentContext {
         Ok(sequences)
     }
 
+    /// Appends an already validated imported history suffix with fresh local
+    /// sequence identities. Roles, retention, execution and provider ownership
+    /// are preserved verbatim; stable slots are rejected. Failure is atomic.
+    /// Callers must establish the exact durable suffix boundary before import.
+    pub fn append_imported_history(&mut self, history: &Self) -> AgentContextResult<usize> {
+        history.validate_durable()?;
+        if !history.stable_slots.is_empty() {
+            return Err(AgentContextError::new(
+                "imported history suffix cannot contain stable slots",
+            ));
+        }
+        let mut candidate = self.clone();
+        for event in &history.chronology {
+            let mut event = event.clone();
+            event.sequence = candidate.allocate_event_sequence()?;
+            candidate.chronology.push(event);
+        }
+        candidate.rebuild_projections();
+        candidate.validate_durable()?;
+        *self = candidate;
+        Ok(history.chronology.len())
+    }
+
     /// Allocates the next non-zero chronological sequence.
     pub(super) fn allocate_event_sequence(&mut self) -> AgentContextResult<ContextEventSequence> {
         let sequence = ContextEventSequence::new(self.next_event_sequence)?;
