@@ -167,6 +167,7 @@ impl RuntimeSessionService {
         };
         let report = ExternalUsageReport {
             owner: binding.accounting_owner.clone(),
+            project: binding.accounting_origin.project_id().cloned(),
             harness: binding.harness.clone(),
             epoch: super::external_agents::text(&params, "epoch", 128)?,
             event_id: super::external_agents::text(&params, "event_id", 128)?,

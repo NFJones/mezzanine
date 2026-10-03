@@ -18,6 +18,7 @@ fn external_usage_is_isolated_from_legacy_status_history_reader() {
     assert_eq!(store.oldest_observed_at(100).unwrap(), None);
     let native = TokenUsageEvent {
         id: "native".to_string(),
+        project: None,
         observed_at_unix_seconds: 100,
         model: report.model.clone(),
         usage: mez_agent::ModelTokenUsage {
@@ -176,6 +177,7 @@ fn fixture() -> (TokenUsageStore, ExternalUsageReport) {
     );
     let report = ExternalUsageReport {
         owner: "server-owner".to_string(),
+        project: None,
         harness: "codex".to_string(),
         epoch: "epoch-one".to_string(),
         event_id: "event-one".to_string(),

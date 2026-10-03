@@ -618,6 +618,7 @@ async fn async_persistence_side_effect_service_appends_token_usage() {
     store.initialize(100).unwrap();
     let event = crate::storage::token_usage::TokenUsageEvent {
         id: "provider-settlement-usage".to_string(),
+        project: None,
         observed_at_unix_seconds: 100,
         model: mez_agent::ModelTokenUsageKey::new("openai", "gpt-test"),
         usage: mez_agent::ModelTokenUsage {
@@ -690,6 +691,7 @@ async fn async_token_usage_lock_contention_does_not_block_actor_heartbeats() {
     lock.execute_batch("BEGIN IMMEDIATE").unwrap();
     let event = crate::storage::token_usage::TokenUsageEvent {
         id: "provider-settlement-lock".to_string(),
+        project: None,
         observed_at_unix_seconds: 100,
         model: mez_agent::ModelTokenUsageKey::new("openai", "gpt-test"),
         usage: mez_agent::ModelTokenUsage {

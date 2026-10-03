@@ -23,6 +23,7 @@ fn temp_store(name: &str) -> TokenUsageStore {
 fn event(id: &str, observed_at: u64, input: u64, cached: Option<u64>) -> TokenUsageEvent {
     TokenUsageEvent {
         id: id.to_string(),
+        project: None,
         observed_at_unix_seconds: observed_at,
         model: ModelTokenUsageKey::new("openai", "gpt-test"),
         usage: ModelTokenUsage {
@@ -149,7 +150,7 @@ fn initialize_rejects_future_schema_versions() {
     let store = temp_store("future-schema");
     fs::create_dir_all(store.path().parent().unwrap()).unwrap();
     let connection = Connection::open(store.path()).unwrap();
-    connection.pragma_update(None, "user_version", 4).unwrap();
+    connection.pragma_update(None, "user_version", 5).unwrap();
     drop(connection);
 
     let error = store.initialize(1).unwrap_err();

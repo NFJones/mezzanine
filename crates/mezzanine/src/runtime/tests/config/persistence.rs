@@ -3,6 +3,37 @@
 use super::*;
 use mez_mux::input::{TerminalInputClassification, classify_terminal_input};
 
+/// A later successful accounting append and query recovery cannot prove that
+/// an earlier failed write was recovered. Keep its bounded gap diagnostic even
+/// if another diagnostic or repository attachment occurs in between.
+#[test]
+fn runtime_token_usage_write_gap_survives_later_success() {
+    let mut service = test_runtime_service();
+    service.persistence.record_token_usage_write_gap();
+    service
+        .persistence
+        .set_token_usage_health_error("storage query failure");
+    service.persistence.clear_token_usage_health_error();
+    let store = crate::storage::token_usage::TokenUsageStore::new(
+        temp_root("usage-gap").join("usage.sqlite"),
+    );
+    service.set_token_usage_store(store);
+    service.record_agent_provider_token_usage(
+        "%1",
+        mez_agent::ModelTokenUsage {
+            input_tokens: 7,
+            ..Default::default()
+        },
+    );
+    assert!(
+        service
+            .persistence
+            .token_usage_health_error()
+            .unwrap()
+            .contains("storage write failure")
+    );
+}
+
 /// Verifies a persisted mutation restores exact existing file contents when
 /// the candidate configuration cannot be applied to the live runtime.
 ///

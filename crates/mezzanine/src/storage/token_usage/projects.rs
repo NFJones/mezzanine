@@ -23,6 +23,37 @@ const MAX_REGISTERED_PROJECTS: usize = 4096;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct AccountingProjectId(String);
 
+impl AccountingProjectId {
+    /// Returns opaque storage identity without granting project authority.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Validates a stored opaque identity; resolution and trust remain separate.
+    pub(crate) fn from_stored(value: String) -> Result<Self> {
+        if value.len() != 36
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+        {
+            return Err(MezError::invalid_state(
+                "stored accounting project identity is invalid",
+            ));
+        }
+        Ok(Self(value))
+    }
+}
+
+impl AccountingOrigin {
+    /// Returns the frozen project ID, or absence for unattributed expense.
+    pub(crate) fn project_id(&self) -> Option<&AccountingProjectId> {
+        match self {
+            Self::Unattributed => None,
+            Self::Project(id) => Some(id),
+        }
+    }
+}
+
 /// Frozen attribution attached to one request independently of its execution owner.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) enum AccountingOrigin {

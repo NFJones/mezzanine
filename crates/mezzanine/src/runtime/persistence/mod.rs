@@ -41,6 +41,8 @@ pub(crate) struct RuntimePersistenceComponent {
     #[cfg(test)]
     token_usage_time_for_tests: Option<u64>,
     token_usage_health_error: RefCell<Option<String>>,
+    /// Missing write evidence remains a gap until explicit recovery is proven.
+    token_usage_write_gap: std::cell::Cell<bool>,
     session_registry: Option<SessionRegistry>,
     audit_log: Option<AuditLog>,
     queued_pane_input_effects: Vec<RuntimeSideEffect>,

@@ -206,9 +206,7 @@ impl RuntimeSessionService {
                         self.stop_file_pane_pipes_for_path(path.as_path(), "persistence-failed")?;
                 }
                 if target == crate::runtime::PersistenceTarget::TokenUsage {
-                    self.persistence.set_token_usage_health_error(
-                        "persistent token accounting is degraded after a storage write failure",
-                    );
+                    self.persistence.record_token_usage_write_gap();
                 }
                 serde_json::json!({
                     "worker": "async-persistence",

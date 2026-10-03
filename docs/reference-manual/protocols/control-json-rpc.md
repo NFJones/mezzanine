@@ -612,9 +612,17 @@ Canonical aliases share a mapping. A detected directory-object replacement at
 the same path creates a new ID and leaves historical mappings intact; relocation
 is not guessed from Git metadata or titles. Directory-object evidence is not an
 execution permission or a portable guarantee against filesystem inode reuse.
-Producer accounting partitions, project-attributed events and scoped `/status`
-reporting are separate integration tasks; legacy expense is never backfilled
-from current cwd or transcript totals.
+Telemetry schema v4 adds nullable project attribution to events and external
+checkpoints, preserving legacy rows as unattributed. External launches freeze
+server-resolved project origins; later cwd changes cannot repartition the stream.
+Identical event replay compares project identity too. Grouped history retains
+project/harness/model identity and category coverage in one read snapshot with
+one UTC time and oldest-event boundary. Scans are bounded and fail rather than
+return partial totals. Legacy status still selects native events only, now using
+the consistent snapshot reader. An earlier write-gap diagnostic survives later
+successful writes because they do not establish recovery of missing expense.
+Producer accounting partitions and scoped `/status` reporting remain separate
+integration tasks; legacy expense is never backfilled from cwd or transcript totals.
 
 An alternative interactive frontend is a primary client. Obtain the initial
 render with `terminal/view`:

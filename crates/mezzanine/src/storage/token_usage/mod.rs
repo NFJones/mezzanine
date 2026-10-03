@@ -13,10 +13,15 @@ use std::path::{Path, PathBuf};
 use crate::error::{MezError, Result};
 
 mod external;
+mod history;
 mod projects;
 mod store;
 
-pub(crate) use projects::{AccountingOrigin, AccountingProjectRecord, accounting_origin_for_root};
+pub(crate) use history::TokenHistoryScope;
+
+pub(crate) use projects::{
+    AccountingOrigin, AccountingProjectId, AccountingProjectRecord, accounting_origin_for_root,
+};
 
 pub(crate) use external::external_usage_stream_id;
 pub(crate) use external::{ExternalCounters, ExternalUsageCommit, ExternalUsageReport};
@@ -94,6 +99,8 @@ fn sqlite_i64(value: u64, field: &str) -> Result<i64> {
 
 #[cfg(test)]
 mod external_tests;
+#[cfg(test)]
+mod history_tests;
 #[cfg(test)]
 mod project_tests;
 #[cfg(test)]

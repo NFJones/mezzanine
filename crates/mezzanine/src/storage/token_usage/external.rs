@@ -144,6 +144,8 @@ impl ExternalCounters {
 pub(crate) struct ExternalUsageReport {
     /// Opaque server-issued accounting namespace, not client-selected identity.
     pub owner: String,
+    /// Server-frozen project origin; never a hook-supplied label.
+    pub project: Option<super::AccountingProjectId>,
     /// Harness fixed by launch authority.
     pub harness: String,
     /// Disjoint source epoch within the registered owner.
@@ -240,10 +242,15 @@ impl TokenUsageStore {
             ));
         }
         let stream_id = external_usage_stream_id(&report.owner, &report.epoch)?;
-        let payload = serde_json::json!({"harness":report.harness,"provider":report.model.provider,
+        let mut payload = serde_json::json!({"harness":report.harness,"provider":report.model.provider,
             "model":report.model.model,"sequence":report.sequence,"mode":report.mode,
-            "baseline":report.baseline,"observed_at":report.observed_at,"counters":report.counters})
-        .to_string();
+            "baseline":report.baseline,"observed_at":report.observed_at,"counters":report.counters});
+        // Preserve pre-v4 fingerprints for unattributed streams. A qualified
+        // project is additional immutable provenance, not migration-time backfill.
+        if let Some(project) = &report.project {
+            payload["project"] = serde_json::json!(project.as_str());
+        }
+        let payload = payload.to_string();
         let fingerprint = Sha256::digest(payload.as_bytes())
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -261,9 +268,9 @@ impl TokenUsageStore {
             "DELETE FROM token_usage_events WHERE event_source='external' AND observed_at < ?1",
             [cutoff],
         )?;
-        let state = tx.query_row("SELECT harness, provider, model, mode, revision, sample, totals FROM external_usage_streams WHERE id=?1",
+        let state = tx.query_row("SELECT harness, provider, model, mode, revision, sample, totals, project_id FROM external_usage_streams WHERE id=?1",
             [&stream_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?, super::store::row_u64(row, 4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?))).optional()?;
+                row.get::<_, String>(3)?, super::store::row_u64(row, 4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, Option<String>>(7)?))).optional()?;
         let receipt = tx.query_row("SELECT fingerprint FROM external_usage_receipts WHERE stream_id=?1 AND event_id=?2",
             params![stream_id, report.event_id], |row| row.get::<_, String>(0)).optional()?;
         if let Some(receipt) = receipt {
@@ -272,7 +279,7 @@ impl TokenUsageStore {
                     "external usage event id has conflicting payload",
                 ));
             }
-            let (_, _, _, _, revision, _, totals) = state
+            let (_, _, _, _, revision, _, totals, _) = state
                 .ok_or_else(|| MezError::invalid_state("external receipt lost its checkpoint"))?;
             return Ok(ExternalUsageCommit {
                 stream_id,
@@ -282,8 +289,13 @@ impl TokenUsageStore {
             });
         }
         let (old_revision, old_sample, old_totals) = match state {
-            Some((harness, provider, model, mode, revision, sample, totals)) => {
+            Some((harness, provider, model, mode, revision, sample, totals, project)) => {
                 if harness != report.harness
+                    || project.as_deref()
+                        != report
+                            .project
+                            .as_ref()
+                            .map(super::AccountingProjectId::as_str)
                     || provider != report.model.provider
                     || model != report.model.model
                     || mode != report.mode
@@ -338,22 +350,22 @@ impl TokenUsageStore {
         }
         delta.validate()?;
         let totals = old_totals.add(delta)?;
-        tx.execute("INSERT INTO external_usage_streams(id,harness,provider,model,mode,revision,sample,totals) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+        tx.execute("INSERT INTO external_usage_streams(id,harness,provider,model,mode,revision,sample,totals,project_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
             ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,sample=excluded.sample,totals=excluded.totals",
             params![stream_id, report.harness, report.model.provider, report.model.model, report.mode,
-                sqlite_i64(report.sequence, "external sequence")?, encode(report.counters)?, encode(totals)?])?;
+                sqlite_i64(report.sequence, "external sequence")?, encode(report.counters)?, encode(totals)?, report.project.as_ref().map(super::AccountingProjectId::as_str)])?;
         tx.execute("INSERT INTO external_usage_receipts(stream_id,event_id,fingerprint,observed_at) VALUES(?1,?2,?3,?4)",
             params![stream_id, report.event_id, fingerprint, sqlite_i64(report.observed_at, "external timestamp")?])?;
         let normalized = delta.normalized();
         if !normalized.is_zero() {
             let id = format!("external:{stream_id}:{}", report.sequence);
-            tx.execute("INSERT INTO token_usage_events(id,observed_at,provider,model,input_tokens,output_tokens,reasoning_tokens,cached_input_tokens,cache_write_input_tokens,harness,reasoning_known,event_source)
-                VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'external')", params![id, sqlite_i64(report.observed_at, "external timestamp")?,
+            tx.execute("INSERT INTO token_usage_events(id,observed_at,provider,model,input_tokens,output_tokens,reasoning_tokens,cached_input_tokens,cache_write_input_tokens,harness,reasoning_known,event_source,project_id)
+                VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'external',?12)", params![id, sqlite_i64(report.observed_at, "external timestamp")?,
                     report.model.provider, report.model.model, sqlite_i64(normalized.input_tokens,"input")?,
                     sqlite_i64(normalized.output_tokens,"output")?, sqlite_i64(normalized.reasoning_tokens,"reasoning")?,
                     normalized.cached_input_tokens.map(|n| sqlite_i64(n,"cache")).transpose()?,
                     normalized.cache_write_input_tokens.map(|n| sqlite_i64(n,"cache write")).transpose()?, report.harness,
-                    i64::from(delta.reasoning_tokens.is_some())])?;
+                    i64::from(delta.reasoning_tokens.is_some()), report.project.as_ref().map(super::AccountingProjectId::as_str)])?;
         }
         tx.commit()?;
         Ok(ExternalUsageCommit {

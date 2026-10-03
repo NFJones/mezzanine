@@ -273,7 +273,15 @@ object-qualified opaque mappings separately from events. Canonical aliases share
 a mapping; detected path replacement creates another ID and preserves historical
 mappings. Relocation is not inferred from Git remotes or titles. Mapping does not
 grant execution authority or backfill legacy expense. Producer partitions,
-project-attributed event storage and scoped status are separate integration work.
+and scoped status are separate integration work. Telemetry schema 4 adds nullable
+project IDs to immutable deltas and external checkpoints; legacy rows remain
+unattributed. Replay comparison MUST include project attribution. External stream
+origins are server-bound at launch and MUST NOT change within an epoch. Grouped
+history MUST retain harness/project/model partitions and unknown reasoning/cache
+coverage. Oldest-event metadata and all requested windows MUST share one read
+snapshot and UTC time, with inclusive lower cutoffs and future events excluded.
+Oversized scans MUST fail explicitly rather than truncate totals. A successful
+later write MUST NOT clear evidence of an earlier accounting write gap.
 Pane creation commands MAY specify an explicit command to run in the new pane.
 When a pane creation command specifies an explicit command, Mezzanine MUST start
 the resolved shell path and run the explicit command from within that shell by

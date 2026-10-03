@@ -615,6 +615,7 @@ fn runtime_agent_shell_extended_status_limits_tables_to_history_age() {
     store
         .append(&crate::storage::token_usage::TokenUsageEvent {
             id: "two-day-old-usage".to_string(),
+            project: None,
             observed_at_unix_seconds: now.saturating_sub(2 * 86_400),
             model: mez_agent::ModelTokenUsageKey::new("openai", "gpt-history"),
             usage: mez_agent::ModelTokenUsage {

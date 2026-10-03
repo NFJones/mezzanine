@@ -119,13 +119,28 @@ impl RuntimePersistenceComponent {
         *self.token_usage_health_error.borrow_mut() = Some(message.into());
     }
 
+    /// Records a lost accounting write without implying later writes recover it.
+    pub(crate) fn record_token_usage_write_gap(&self) {
+        self.token_usage_write_gap.set(true);
+        self.set_token_usage_health_error(
+            "persistent token accounting is degraded after a storage write failure",
+        );
+    }
+
     /// Clears the persistent-accounting degradation diagnostic.
     pub(crate) fn clear_token_usage_health_error(&self) {
-        self.token_usage_health_error.borrow_mut().take();
+        if !self.token_usage_write_gap.get() {
+            self.token_usage_health_error.borrow_mut().take();
+        }
     }
 
     /// Returns the current persistent-accounting degradation diagnostic.
     pub(crate) fn token_usage_health_error(&self) -> Option<String> {
+        if self.token_usage_write_gap.get() {
+            return Some(
+                "persistent token accounting is degraded after a storage write failure".to_string(),
+            );
+        }
         self.token_usage_health_error.borrow().clone()
     }
 

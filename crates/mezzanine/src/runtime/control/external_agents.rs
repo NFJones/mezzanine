@@ -47,6 +47,8 @@ pub(super) struct LaunchBinding {
     pub(super) registration: Option<Registration>,
     pub(super) retired: bool,
     pub(super) accounting_owner: String,
+    /// Project attribution frozen at explicit launch, separate from MMP scope.
+    pub(super) accounting_origin: crate::storage::token_usage::AccountingOrigin,
 }
 
 /// Immutable registration metadata, bound to a single server-issued launch.
@@ -118,6 +120,7 @@ impl RuntimeSessionService {
             ));
         }
         let version = text(&params, "version", 128)?;
+        self.refresh_project_trust_store_from_disk_if_changed()?;
         self.reconcile_external_agent_registrations();
         let process = self
             .pane_process_identity(&pane_id)
@@ -129,6 +132,7 @@ impl RuntimeSessionService {
             .trusted_project_root_for_pane(&pane_id)
             .map(mez_agent::messaging::ProjectMembership::from_canonical_root)
             .map(|membership| membership.scope_id());
+        let accounting_origin = self.capture_accounting_origin_for_pane(&pane_id);
         let registry = self.control.external_agents_mut();
         if registry.bindings.len() >= MAX_BINDINGS {
             return Err(MezError::new(
@@ -160,6 +164,7 @@ impl RuntimeSessionService {
                 registration: None,
                 retired: false,
                 accounting_owner: crate::storage::token_usage::new_token_usage_event_id(),
+                accounting_origin,
             },
         );
         Ok(

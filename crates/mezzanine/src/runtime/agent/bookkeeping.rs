@@ -1486,6 +1486,7 @@ impl RuntimeSessionService {
         };
         let event = TokenUsageEvent {
             id: new_token_usage_event_id(),
+            project: None,
             observed_at_unix_seconds,
             model: model.clone(),
             usage,
@@ -1497,9 +1498,7 @@ impl RuntimeSessionService {
         }
         match store.append(&event) {
             Ok(_) => self.persistence.clear_token_usage_health_error(),
-            Err(_) => self.persistence.set_token_usage_health_error(
-                "persistent token accounting is degraded after a storage write failure",
-            ),
+            Err(_) => self.persistence.record_token_usage_write_gap(),
         }
     }
 

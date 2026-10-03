@@ -602,8 +602,15 @@ impl RuntimeSessionService {
             return;
         };
         let now = self.persistence.token_usage_time();
-        let oldest_observed_at = match store.oldest_observed_at(now) {
-            Ok(oldest_observed_at) => oldest_observed_at,
+        let snapshot = match store.history_snapshot(
+            now,
+            &TOKEN_USAGE_WINDOWS_DAYS,
+            &crate::storage::token_usage::TokenHistoryScope {
+                native_only: true,
+                ..Default::default()
+            },
+        ) {
+            Ok(snapshot) => snapshot,
             Err(_) => {
                 let message =
                     "persistent token accounting is degraded after a storage query failure";
@@ -615,7 +622,8 @@ impl RuntimeSessionService {
                 return;
             }
         };
-        let Some(oldest_observed_at) = oldest_observed_at else {
+        let now = snapshot.now;
+        let Some(oldest_observed_at) = snapshot.oldest_observed_at else {
             return;
         };
         let visible_windows = TOKEN_USAGE_WINDOWS_DAYS
@@ -626,11 +634,11 @@ impl RuntimeSessionService {
             })
             .map(|index| TOKEN_USAGE_WINDOWS_DAYS[..=index].to_vec())
             .unwrap_or_else(|| TOKEN_USAGE_WINDOWS_DAYS.to_vec());
-        let windows = match store.aggregate_windows(now, &visible_windows) {
+        let windows = match snapshot.native_model_windows() {
             Ok(windows) => windows,
             Err(_) => {
                 let message =
-                    "persistent token accounting is degraded after a storage query failure";
+                    "persistent token accounting is unavailable after a history aggregate overflow";
                 self.persistence.set_token_usage_health_error(message);
                 lines.push(String::new());
                 lines.push("### Rolling Token Usage Unavailable".to_string());
