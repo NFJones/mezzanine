@@ -3145,7 +3145,11 @@ source content.
 
 At pane-body widths of at least 64 cells and heights of at least 14 rows, the
 editable agent composer MUST include a lightweight separator/context row and
-a display-only help row around the existing input surface. The context MUST
+a display-only help row around the existing input surface. The header rule MUST
+fill the allocated pane width, independent of the prose wrapping cap, without
+crossing split dividers. Static decoration MUST use foreground-only dim
+thinking-log styling; the active status label retains its wave overlay.
+The context MUST
 distinguish idle `Ask Mez`, a running turn accepting steering (`Guide this task`),
 slash-command drafts, pending approval review, history search and discarded
 paste ownership. Live state and elapsed time MUST remain visible while drafting

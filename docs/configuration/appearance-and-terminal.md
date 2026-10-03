@@ -64,7 +64,9 @@ contrast uses the surrounding pane surface rather than that unused input fill.
 
 The comfortable agent composer header retains the active status-label wave.
 Only the status label animates; surrounding labels, duration and help stay
-static. Header and compact-footer wave spans do not paint a background, and
+static with the dim thinking-log foreground. Its horizontal rule fills the
+allocated pane width rather than the prose wrapping cap. Header and
+compact-footer wave spans do not paint a background, and
 the existing reduced-motion and refresh settings control their scheduling.
 
 `terminal.shell_output_preview_lines` bounds the live command-output tail after

@@ -381,6 +381,24 @@ pub(super) fn display_overlay_text_rendition(ui_theme: &UiTheme) -> GraphicRendi
     text_foreground_rendition(ui_theme.colors.display_overlay)
 }
 
+/// Uses the restored thinking-log foreground and shadow attributes only for
+/// composer decoration. Other overlays retain their own semantic theme role.
+fn agent_composer_decoration_rendition(ui_theme: &UiTheme) -> GraphicRendition {
+    GraphicRendition {
+        dim: true,
+        ..text_foreground_rendition(ui_theme.colors.agent_transcript_status)
+    }
+}
+
+/// Clips header text with the shared display-width owner, then fills remaining
+/// allocated pane cells with a rule. Prose wrapping caps do not bound this row.
+fn agent_composer_header_rule(header: &str, width: usize) -> String {
+    let clipped = fit_width(header, width);
+    let text = clipped.trim_end();
+    let remaining = width.saturating_sub(terminal_text_width(text));
+    format!("{text}{}", "─".repeat(remaining))
+}
+
 /// Runs the prompt shadow hint style span operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -636,7 +654,7 @@ impl AgentPromptBlock {
                 themed_full_width_line(line, width, agent_prompt_input_rendition(ui_theme));
             if self.decoration_rows.contains(&line_index) {
                 styled_line =
-                    themed_text_line(line, width, display_overlay_text_rendition(ui_theme));
+                    themed_text_line(line, width, agent_composer_decoration_rendition(ui_theme));
             }
             for shadow_span in self
                 .prompt_shadow_spans
@@ -806,7 +824,9 @@ pub(super) fn render_agent_prompt_block(
             || format!("── {label} ──"),
             |status| format!("── {label} · {status}"),
         );
-        prompt_layout.lines.insert(0, fit_width(&header, width));
+        prompt_layout
+            .lines
+            .insert(0, agent_composer_header_rule(&header, width));
         prompt_layout.shadow_spans.insert(0, Vec::new());
         prompt_live_footer_suffixes.insert(
             0,

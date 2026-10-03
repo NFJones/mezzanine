@@ -59,6 +59,41 @@ fn view_at_tick(
         .unwrap()
 }
 
+/// Composer decorations use the restored thinking rendition and fill the pane
+/// width with a rule, without changing input geometry or active-label motion.
+#[test]
+fn composer_header_rule_fills_width_with_static_shadow_style() {
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
+    prompt.buffer.insert_text("draft");
+    for size in [Size::new(80, 24).unwrap(), Size::new(160, 40).unwrap()] {
+        let shown = view(
+            size,
+            &prompt,
+            AgentComposerContext::default(),
+            ClientViewRole::Primary,
+        );
+        let row = shown
+            .lines
+            .iter()
+            .position(|line| line.contains("Ask Mez"))
+            .unwrap();
+        assert!(shown.lines[row].ends_with('─'), "{}", shown.lines[row]);
+        assert_eq!(
+            unicode_width::UnicodeWidthStr::width(shown.lines[row].as_str()),
+            usize::from(size.columns)
+        );
+        for target in [row, shown.cursor_row + 1] {
+            let span = shown.line_style_spans[target].first().unwrap();
+            assert_eq!(
+                span.rendition.foreground,
+                Some(shown.ui_theme.colors.agent_transcript_status.foreground)
+            );
+            assert!(span.rendition.dim && !span.rendition.bold);
+            assert!(span.rendition.background.is_none());
+        }
+    }
+}
+
 /// Agent editing has its own gutter-free marker and never paints a background,
 /// including empty compact status, multiline draft and unused row padding.
 /// Rendering must not mutate submitted input or transcript ownership.

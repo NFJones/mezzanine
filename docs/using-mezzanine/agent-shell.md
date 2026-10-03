@@ -124,7 +124,9 @@ input continues under the marker's body column without adding a gutter.
 This display-only marker does not change submitted text or assistant transcript
 rows, which continue to use `mez> `.
 In roomy panes (at least 64 columns and 14 body rows), a lightweight context row
-and help row surround the input. `Ask Mez` indicates ordinary submission;
+and help row surround the input. The header rule fills the pane width; static
+decoration uses dim thinking-log styling while the active status label keeps
+its wave. `Ask Mez` indicates ordinary submission;
 `Guide this task` indicates prose will steer the running turn. Status and elapsed
 time remain visible while drafting. Search, slash commands, pending approvals
 and discarded paste show their own context; prose does not approve a request.
