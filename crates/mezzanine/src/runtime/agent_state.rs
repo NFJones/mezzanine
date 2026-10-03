@@ -814,6 +814,12 @@ pub struct RuntimeAgentRememberDispatch {
 /// entry, so generating a title cannot create or mutate turn machinery.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentSessionTitleTask {
+    /// Unique issued attempt; assigned only when a worker claims this request.
+    pub attempt_id: String,
+    /// Immutable origin captured with the frozen title request.
+    pub(crate) accounting_origin: crate::storage::token_usage::AccountingOrigin,
+    /// Original pane-root identity, preventing late expense from reaching a replacement.
+    pub(crate) pane_process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
     /// Conversation whose display title is being generated.
     pub conversation_id: String,
     /// Pane that owns the conversation, retained for status and trace output.

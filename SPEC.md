@@ -9979,6 +9979,13 @@ The baseline command capabilities are:
   totals, including attempts that precede a successful retry or terminal failure.
   A cutoff sample MUST NOT replace the latest successful ordinary-execution
   input/cache sample or independently trigger observed-input compaction.
+  Generated session-title responses MUST account reported usage independently
+  of sanitizer acceptance, including reported output-cutoff usage. Exact issued
+  attempt identity MUST prevent duplicate charging and stale title publication.
+  Cancelled title content MAY still settle observed expense against its original
+  conversation and immutable project origin; pane totals require the original
+  root incarnation. Auxiliary title usage MUST NOT replace ordinary context/cache
+  samples, and accounting failure MUST NOT replay a provider request.
   `/status` MUST accept the optional `--extended`
   argument and MUST reject other arguments. Only `/status --extended` may query
   durable token-accounting storage or render rolling-history sections. It MUST

@@ -546,6 +546,11 @@ pub(crate) struct RuntimeAgentComponent {
     pending_agent_session_title_tasks: BTreeMap<String, RuntimeAgentSessionTitleTask>,
     /// Turn-less generated-title tasks claimed by provider workers.
     claimed_agent_session_title_tasks: BTreeMap<String, RuntimeAgentSessionTitleClaim>,
+    /// Bounded issued-attempt accounting owners retained after content cancellation.
+    session_title_accounting_owners: BTreeMap<String, RuntimeAgentSessionTitleTask>,
+    /// Small injected boundary for deterministic issued-owner admission tests.
+    #[cfg(test)]
+    session_title_accounting_limit: Option<usize>,
     /// Bounded per-conversation title attempts, in-flight marker, and retirement.
     session_title_tasks: session_titles::RuntimeSessionTitleTasks,
     /// Cumulative provider token usage keyed by conversation and model.

@@ -638,6 +638,8 @@ impl RuntimeSessionService {
         let allowed_actions = self
             .capture_agent_session_allowed_actions_for_pane(pane_id)
             .map_err(|_| SessionTitleDenial::StorageUnavailable)?;
+        self.refresh_project_trust_store_from_disk_if_changed()
+            .map_err(|_| SessionTitleDenial::StorageUnavailable)?;
         let request = session_title_request(&model_profile, &agent_id, &inputs, allowed_actions);
         self.agent.session_title_tasks.begin(conversation_id);
         // A queued task resets the denial marker so a later refusal traces again.
@@ -645,6 +647,9 @@ impl RuntimeSessionService {
         self.agent.pending_agent_session_title_tasks.insert(
             conversation_id.to_string(),
             RuntimeAgentSessionTitleTask {
+                attempt_id: String::new(),
+                accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
+                pane_process: self.pane_process_identity(pane_id).ok(),
                 conversation_id: conversation_id.to_string(),
                 pane_id: pane_id.to_string(),
                 agent_id,
@@ -807,7 +812,7 @@ impl RuntimeSessionService {
         &mut self,
         conversation_id: &str,
     ) -> MezResult<Option<RuntimeAgentSessionTitleDispatch>> {
-        let Some(task) = self
+        let Some(mut task) = self
             .agent
             .pending_agent_session_title_tasks
             .remove(conversation_id)
@@ -847,6 +852,19 @@ impl RuntimeSessionService {
             return Err(error);
         }
         let claimed_at_unix_ms = current_unix_millis();
+        // Never evict unsettled accounting ownership to admit optional work.
+        #[cfg(test)]
+        let accounting_limit = self.agent.session_title_accounting_limit.unwrap_or(256);
+        #[cfg(not(test))]
+        let accounting_limit = 256;
+        if self.agent.session_title_accounting_owners.len() >= accounting_limit {
+            self.restore_pending_agent_session_title_task(task);
+            return Ok(None);
+        }
+        task.attempt_id = crate::storage::token_usage::new_token_usage_event_id();
+        self.agent
+            .session_title_accounting_owners
+            .insert(task.attempt_id.clone(), task.clone());
         self.agent
             .session_title_tasks
             .note_claim(conversation_id, claimed_at_unix_ms);
@@ -861,14 +879,25 @@ impl RuntimeSessionService {
         Ok(Some(RuntimeAgentSessionTitleDispatch { task, provider }))
     }
 
+    /// Sets a small issued-owner limit for deterministic admission regressions.
+    #[cfg(test)]
+    pub(crate) fn set_title_accounting_limit_for_tests(&mut self, limit: usize) {
+        self.agent.session_title_accounting_limit = Some(limit);
+    }
+
     /// Returns one claimed task to the pending queue after a failed claim step.
     ///
     /// The conversation keeps its in-flight marker, so the next provider poll can
     /// claim the same task again instead of losing it or holding a slot.
     pub(crate) fn restore_pending_agent_session_title_task(
         &mut self,
-        task: RuntimeAgentSessionTitleTask,
+        mut task: RuntimeAgentSessionTitleTask,
     ) {
+        // This rollback is only for a dispatch that never started provider I/O.
+        self.agent
+            .session_title_accounting_owners
+            .remove(&task.attempt_id);
+        task.attempt_id.clear();
         self.agent
             .claimed_agent_session_title_tasks
             .remove(task.conversation_id.as_str());
@@ -882,9 +911,9 @@ impl RuntimeSessionService {
 
     /// Cancels every generated-title task retained for one conversation.
     ///
-    /// Closing a session or conversation must leave no pending task and no
-    /// orphaned claim, so the queued task, the worker claim, and the retained
-    /// attempt state are all dropped together.
+    /// Closing a session retires pending work and title-publication claims.
+    /// Issued accounting owners remain bounded and may consume a late response
+    /// without publishing stale content or redirecting its expense.
     pub(crate) fn cancel_agent_session_title_task(&mut self, conversation_id: &str) -> bool {
         let pending = self
             .agent
@@ -910,6 +939,63 @@ impl RuntimeSessionService {
         event: AgentSessionTitleEvent,
     ) -> MezResult<RuntimeTransition> {
         match event {
+            AgentSessionTitleEvent::WorkerSettled {
+                conversation_id,
+                attempt_id,
+                usage,
+                outcome,
+            } => {
+                let Some(task) = self.agent.session_title_accounting_owners.get(&attempt_id) else {
+                    return Ok(RuntimeTransition::default());
+                };
+                if task.conversation_id != conversation_id {
+                    return Ok(RuntimeTransition::default());
+                }
+                // Matching owner is present above; consumption precedes all fallible display work.
+                let task = self
+                    .agent
+                    .session_title_accounting_owners
+                    .remove(&attempt_id)
+                    .ok_or_else(|| {
+                        crate::error::MezError::invalid_state("title accounting owner disappeared")
+                    })?;
+                self.record_session_title_usage(&task, usage);
+                let current = self
+                    .agent
+                    .claimed_agent_session_title_tasks
+                    .get(&conversation_id)
+                    .is_some_and(|claim| claim.task.attempt_id == attempt_id);
+                let bound = self
+                    .agent_shell_store()
+                    .get(&task.pane_id)
+                    .is_some_and(|session| session.session_id == conversation_id)
+                    && task.pane_process.as_ref().is_some_and(|identity| {
+                        self.pane_process_identity(&task.pane_id)
+                            .ok()
+                            .is_some_and(|current| identity.same_incarnation(&current))
+                    });
+                if !current {
+                    return Ok(RuntimeTransition::default());
+                }
+                if !bound {
+                    self.agent
+                        .claimed_agent_session_title_tasks
+                        .remove(&conversation_id);
+                    self.agent.session_title_tasks.retire(&conversation_id);
+                    return Ok(RuntimeTransition::default());
+                }
+                match outcome {
+                    AgentSessionTitleOutcome::Generated(title) => {
+                        self.settle_agent_session_title_success(&conversation_id, &title)
+                    }
+                    AgentSessionTitleOutcome::Rejected(reason) => self
+                        .settle_agent_session_title_failure(
+                            &conversation_id,
+                            bounded_session_title_reason(&reason),
+                        ),
+                }
+            }
+            #[cfg(test)]
             AgentSessionTitleEvent::Settled {
                 conversation_id,
                 outcome,
@@ -923,14 +1009,6 @@ impl RuntimeSessionService {
                         bounded_session_title_reason(&reason),
                     ),
             },
-            AgentSessionTitleEvent::Failed {
-                conversation_id,
-                kind,
-                message: _,
-            } => self.settle_agent_session_title_failure(
-                &conversation_id,
-                bounded_session_title_reason(&kind),
-            ),
         }
     }
 
@@ -1032,6 +1110,11 @@ impl RuntimeSessionService {
                 &task_id,
                 &format!("session_title retry_scheduled reason={reason}"),
             )?;
+            // The retry is unissued. Its predecessor may still settle incurred
+            // usage after lease expiry, so retain that owner's identity only in
+            // the accounting ledger, never on the pending retry/rollback path.
+            let mut task = task;
+            task.attempt_id.clear();
             self.agent
                 .pending_agent_session_title_tasks
                 .insert(conversation_id.to_string(), task);

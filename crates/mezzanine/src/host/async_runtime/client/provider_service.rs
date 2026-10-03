@@ -1372,6 +1372,7 @@ async fn monitor_runtime_agent_session_title_dispatch(
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let conversation_id = dispatch.task.conversation_id.clone();
     let pane_id = dispatch.task.pane_id.clone();
+    let attempt_id = dispatch.task.attempt_id.clone();
     let (observation_sender, mut observation_receiver) =
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let observer =
@@ -1384,7 +1385,7 @@ async fn monitor_runtime_agent_session_title_dispatch(
                 while let Ok(observation) = observation_receiver.try_recv() {
                     submit_provider_wire_request_observation(&handle, observation).await?;
                 }
-                return Ok(Some(session_title_worker_event(conversation_id, Ok(outcome))));
+                return Ok(Some(session_title_worker_event(conversation_id, attempt_id, outcome)));
             }
             Some(observation) = observation_receiver.recv() => {
                 submit_provider_wire_request_observation(&handle, observation).await?;
@@ -1561,25 +1562,19 @@ fn remember_worker_event(
 /// Converts a generated session-title worker result into a runtime event.
 fn session_title_worker_event(
     conversation_id: String,
-    result: std::result::Result<AgentSessionTitleOutcome, tokio::task::JoinError>,
+    attempt_id: String,
+    result: (AgentSessionTitleOutcome, mez_agent::ModelTokenUsage),
 ) -> (RuntimeEvent, bool) {
-    match result {
-        Ok(outcome) => (
-            RuntimeEvent::AgentSessionTitle(AgentSessionTitleEvent::Settled {
-                conversation_id,
-                outcome,
-            }),
-            false,
-        ),
-        Err(error) => (
-            RuntimeEvent::AgentSessionTitle(AgentSessionTitleEvent::Failed {
-                conversation_id,
-                kind: "invalid_state".to_string(),
-                message: format!("session title provider worker join failed: {error}"),
-            }),
-            false,
-        ),
-    }
+    let (outcome, usage) = result;
+    (
+        RuntimeEvent::AgentSessionTitle(AgentSessionTitleEvent::WorkerSettled {
+            conversation_id,
+            attempt_id,
+            usage,
+            outcome,
+        }),
+        false,
+    )
 }
 
 /// Inputs shared by the four concrete observed provider turn adapters. Provider
@@ -1907,28 +1902,47 @@ async fn execute_runtime_agent_remember_dispatch(
 async fn execute_runtime_agent_session_title_dispatch(
     dispatch: RuntimeAgentSessionTitleDispatch,
     observer: &ProviderWireRequestObserver,
-) -> AgentSessionTitleOutcome {
+) -> (AgentSessionTitleOutcome, mez_agent::ModelTokenUsage) {
     let RuntimeAgentSessionTitleDispatch { task, provider } = dispatch;
-    match observed_dispatch_provider_request(
-        &provider,
-        observer,
-        ProviderRequestPurpose::Auxiliary,
-        &task.request,
+    session_title_response_outcome(
+        observed_dispatch_provider_request(
+            &provider,
+            observer,
+            ProviderRequestPurpose::Auxiliary,
+            &task.request,
+        )
+        .await,
     )
-    .await
-    {
+}
+
+/// Preserves incurred usage independently of bounded title sanitization.
+fn session_title_response_outcome(
+    result: Result<ModelResponse>,
+) -> (AgentSessionTitleOutcome, mez_agent::ModelTokenUsage) {
+    match result {
         Ok(response) => {
-            match crate::session_title::sanitize_generated_session_title(&response.raw_text) {
-                Ok(title) => AgentSessionTitleOutcome::Generated(title),
-                Err(rejection) => AgentSessionTitleOutcome::Rejected(
-                    crate::session_title::SessionTitleFailureReason::from_rejection(rejection)
-                        .as_str()
-                        .to_string(),
-                ),
-            }
+            let outcome =
+                match crate::session_title::sanitize_generated_session_title(&response.raw_text) {
+                    Ok(title) => AgentSessionTitleOutcome::Generated(title),
+                    Err(rejection) => AgentSessionTitleOutcome::Rejected(
+                        crate::session_title::SessionTitleFailureReason::from_rejection(rejection)
+                            .as_str()
+                            .to_string(),
+                    ),
+                };
+            (outcome, response.usage)
         }
         Err(error) => {
-            AgentSessionTitleOutcome::Rejected(session_title_failure_reason(&error).to_string())
+            let usage = error
+                .provider_output_limit_state()
+                .map(|state| state.usage)
+                .unwrap_or_default();
+            (
+                AgentSessionTitleOutcome::Rejected(
+                    session_title_failure_reason(&error).to_string(),
+                ),
+                usage,
+            )
         }
     }
 }
@@ -2152,6 +2166,100 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The observed title worker preserves normalized incurred usage even when
+    /// sanitization rejects the response. Neither branch exposes rejected text,
+    /// and provider errors without reported usage cannot invent token expense.
+    #[tokio::test]
+    async fn title_worker_preserves_usage_independently_of_sanitization() {
+        struct TitleProvider(&'static str);
+        impl AsyncModelProvider for TitleProvider {
+            fn provider_id(&self) -> &str {
+                "test"
+            }
+            fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+                mez_agent::ProviderApiCompatibility::OpenAiResponses
+            }
+            fn send_request_async<'a>(
+                &'a self,
+                _request: &'a ModelRequest,
+            ) -> std::pin::Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>
+            {
+                Box::pin(async move {
+                    Ok(ModelResponse {
+                        provider: "test".into(),
+                        model: "test".into(),
+                        raw_text: self.0.into(),
+                        usage: mez_agent::ModelTokenUsage {
+                            input_tokens: 17,
+                            output_tokens: 3,
+                            ..Default::default()
+                        },
+                        latest_request_usage: None,
+                        quota_usage: Vec::new(),
+                        action_batch: None,
+                        provider_transcript_events: Vec::new(),
+                    })
+                })
+            }
+        }
+        let profile = ModelProfile {
+            provider: "test".into(),
+            model: "test".into(),
+            ..Default::default()
+        };
+        let request = mez_agent::session_title::session_title_request(
+            &profile,
+            "agent-test",
+            &mez_agent::session_title::SessionTitleGenerationInputs {
+                objective: Some("inspect accounting"),
+                ..Default::default()
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        );
+        for (text, accepted) in [("Inspect the accounting ledger", true), ("", false)] {
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+            let observer = ProviderWireRequestObserver::new("conversation-test", "%1", sender);
+            let response = observed_provider_request(
+                &TitleProvider(text),
+                &observer,
+                ProviderRequestPurpose::Auxiliary,
+                &request,
+            )
+            .await;
+            let (outcome, usage) = session_title_response_outcome(response);
+            assert_eq!(usage.input_tokens, 17);
+            assert_eq!(usage.output_tokens, 3);
+            assert_eq!(
+                matches!(outcome, AgentSessionTitleOutcome::Generated(_)),
+                accepted
+            );
+            assert!(receiver.recv().await.unwrap().succeeded);
+        }
+        let (outcome, usage) =
+            session_title_response_outcome(Err(MezError::invalid_state("fixture failure")));
+        assert!(matches!(outcome, AgentSessionTitleOutcome::Rejected(_)));
+        assert!(usage.is_zero());
+        let reported = mez_agent::ModelTokenUsage {
+            input_tokens: 13,
+            output_tokens: 24,
+            ..Default::default()
+        };
+        let error = MezError::invalid_state("output limit").with_provider_output_limit_state(
+            mez_agent::ProviderOutputLimitState::new(
+                "test",
+                "openai-responses",
+                "max_output_tokens",
+                None,
+                "",
+                0,
+                0,
+                reported,
+                mez_agent::ProviderOutputLimitContinuationDisposition::ContinueVisibleText,
+            ),
+        );
+        assert_eq!(session_title_response_outcome(Err(error)).1, reported);
+    }
 
     /// The shared observed runner forwards a prior request only when selected
     /// by the concrete dispatch branch, and preserves request observation.

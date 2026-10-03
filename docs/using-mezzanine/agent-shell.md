@@ -86,6 +86,11 @@ does not make the conversation eligible for deletion.
 
 Use `/help` for available commands, `/status` for the pane's active model,
 policy, context, and token state, and `/approval` for approval controls.
+Generated session-title requests contribute reported token usage even when their
+reply is rejected as a title. Their usage is auxiliary: it does not replace the
+latest ordinary request's context/cache sample. Late issued responses settle
+once against the original conversation; they cannot rename a replacement or
+charge its pane. Storage failures do not rerun paid title requests.
 `/model` shows the active and configured profiles; `/model <profile-name>`
 selects one. `/model --list` lists the active provider's model catalog.
 

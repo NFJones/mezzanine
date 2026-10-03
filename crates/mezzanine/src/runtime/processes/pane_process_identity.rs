@@ -54,6 +54,18 @@ pub(crate) struct RuntimePaneProcessIdentity {
     pub(crate) executable_path: PathBuf,
 }
 
+impl RuntimePaneProcessIdentity {
+    /// Compares the kernel-backed process incarnation independently of exec.
+    /// A shell may replace its executable without replacing its pane root;
+    /// foreground fallback, generation changes and PID reuse remain distinct.
+    pub(crate) fn same_incarnation(&self, other: &Self) -> bool {
+        self.role == other.role
+            && self.generation == other.generation
+            && self.process_id == other.process_id
+            && self.start_token == other.start_token
+    }
+}
+
 /// Precise reason a pane has no usable OS process identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimePaneProcessIdentityUnavailable {

@@ -5,7 +5,216 @@ use crate::runtime::{
     AgentSessionTitleEvent, AgentSessionTitleOutcome, RuntimeSideEffect, SessionTitleDenial,
 };
 use crate::session_title::SessionTitlePolicy;
+use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use mez_core::ids::ClientId;
+
+/// Expiring an issued request may queue a retry, but deferring that unissued
+/// retry at capacity must preserve the original owner's late accounting evidence.
+#[test]
+fn runtime_title_usage_expiry_retry_deferral_preserves_issued_owner() {
+    let (mut service, transcript, primary, conversation) =
+        title_ready_service("runtime-title-usage-expiry-deferral");
+    let store = crate::storage::token_usage::TokenUsageStore::new(
+        temp_root("runtime-title-expiry-ledger").join("usage.sqlite"),
+    );
+    service.set_token_usage_store(store.clone());
+    service
+        .execute_agent_shell_command(&primary, "inspect late title expense")
+        .unwrap();
+    let first = service
+        .claim_agent_session_title_task(&conversation)
+        .unwrap()
+        .unwrap();
+    service
+        .reap_expired_agent_session_title_claims(u64::MAX)
+        .unwrap();
+    service.set_title_accounting_limit_for_tests(1);
+    assert!(
+        service
+            .claim_agent_session_title_task(&conversation)
+            .unwrap()
+            .is_none()
+    );
+    let event = AgentSessionTitleEvent::WorkerSettled {
+        conversation_id: conversation.clone(),
+        attempt_id: first.task.attempt_id,
+        usage: ModelTokenUsage {
+            input_tokens: 19,
+            output_tokens: 2,
+            ..Default::default()
+        },
+        outcome: AgentSessionTitleOutcome::Generated("Late expired title".to_string()),
+    };
+    assert!(
+        !service
+            .apply_agent_session_title_transition(event.clone())
+            .unwrap()
+            .applied
+    );
+    assert!(
+        !service
+            .apply_agent_session_title_transition(event)
+            .unwrap()
+            .applied
+    );
+    let key = ModelTokenUsageKey::new(
+        &first.task.model_profile.provider,
+        &first.task.model_profile.model,
+    );
+    assert_eq!(
+        service.agent_token_usage_for_conversation(&conversation)[&key].input_tokens,
+        19
+    );
+    assert!(
+        transcript
+            .session_generated_title(&conversation)
+            .unwrap()
+            .is_none()
+    );
+    let history = store
+        .history_snapshot(
+            crate::runtime::current_unix_seconds(),
+            &[1],
+            &crate::storage::token_usage::TokenHistoryScope::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        history.windows[&1]
+            .values()
+            .next()
+            .unwrap()
+            .usage
+            .input_tokens,
+        19
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Rejected paid responses charge the issued attempt once without replacing the
+/// ordinary context sample. A cancelled old attempt still settles incurred usage
+/// but cannot publish a title or redirect expense to a replacement conversation.
+#[test]
+fn runtime_title_usage_settles_rejected_and_late_attempts_once() {
+    let (mut service, transcript, primary, conversation) =
+        title_ready_service("runtime-title-usage-settlement");
+    let usage_store = crate::storage::token_usage::TokenUsageStore::new(
+        temp_root("runtime-title-usage-ledger").join("usage.sqlite"),
+    );
+    service.set_token_usage_store(usage_store.clone());
+    service
+        .execute_agent_shell_command(&primary, "inspect title accounting")
+        .unwrap();
+    let first = service
+        .claim_agent_session_title_task(&conversation)
+        .unwrap()
+        .unwrap();
+    let key = ModelTokenUsageKey::new(
+        &first.task.model_profile.provider,
+        &first.task.model_profile.model,
+    );
+    let sample = mez_agent::LatestModelRequestUsage {
+        model: key.clone(),
+        usage: ModelTokenUsage {
+            input_tokens: 99,
+            ..Default::default()
+        },
+    };
+    service.restore_agent_latest_request_usage(&conversation, Some(sample.clone()));
+    let event = AgentSessionTitleEvent::WorkerSettled {
+        conversation_id: conversation.clone(),
+        attempt_id: first.task.attempt_id.clone(),
+        usage: ModelTokenUsage {
+            input_tokens: 7,
+            output_tokens: 3,
+            ..Default::default()
+        },
+        outcome: AgentSessionTitleOutcome::Rejected("malformed".to_string()),
+    };
+    service
+        .apply_agent_session_title_transition(event.clone())
+        .unwrap();
+    let second = service
+        .claim_agent_session_title_task(&conversation)
+        .unwrap()
+        .unwrap();
+    assert_ne!(first.task.attempt_id, second.task.attempt_id);
+    assert!(
+        !service
+            .apply_agent_session_title_transition(event)
+            .unwrap()
+            .applied
+    );
+    assert_eq!(
+        service.agent_token_usage_for_conversation(&conversation)[&key].input_tokens,
+        7
+    );
+    assert_eq!(
+        service.agent_latest_request_usage(&conversation),
+        Some(&sample)
+    );
+    service.cancel_agent_session_title_task(&conversation);
+    complete_running_prompt_turn(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "replacement-title-owner", 1)
+        .unwrap();
+    let pane_before = service.agent_token_usage_for_pane("%1");
+    let late = AgentSessionTitleEvent::WorkerSettled {
+        conversation_id: conversation.clone(),
+        attempt_id: second.task.attempt_id,
+        usage: ModelTokenUsage {
+            input_tokens: 11,
+            output_tokens: 2,
+            ..Default::default()
+        },
+        outcome: AgentSessionTitleOutcome::Generated("Stale display title".to_string()),
+    };
+    assert!(
+        !service
+            .apply_agent_session_title_transition(late.clone())
+            .unwrap()
+            .applied
+    );
+    assert!(
+        !service
+            .apply_agent_session_title_transition(late)
+            .unwrap()
+            .applied
+    );
+    assert_eq!(
+        service.agent_token_usage_for_conversation(&conversation)[&key].input_tokens,
+        18
+    );
+    assert_eq!(service.agent_token_usage_for_pane("%1"), pane_before);
+    assert!(
+        service
+            .agent_token_usage_for_conversation("replacement-title-owner")
+            .is_empty()
+    );
+    assert!(
+        transcript
+            .session_generated_title(&conversation)
+            .unwrap()
+            .is_none()
+    );
+    let history = usage_store
+        .history_snapshot(
+            crate::runtime::current_unix_seconds(),
+            &[1],
+            &crate::storage::token_usage::TokenHistoryScope::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        history.windows[&1]
+            .values()
+            .next()
+            .unwrap()
+            .usage
+            .input_tokens,
+        18
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
 
 /// Appends one user prompt so a conversation enters the saved-session catalog.
 fn append_user_prompt(store: &AgentTranscriptStore, conversation_id: &str, content: &str) {

@@ -1473,6 +1473,69 @@ impl RuntimeSessionService {
         );
     }
 
+    /// Settles exact issued title expense without touching latest request samples.
+    /// Conversation/session totals survive cancellation; pane totals require the
+    /// original conversation and root incarnation. Storage uses the attempt ID.
+    pub(super) fn record_session_title_usage(
+        &mut self,
+        task: &super::RuntimeAgentSessionTitleTask,
+        usage: ModelTokenUsage,
+    ) {
+        if usage.is_zero() {
+            return;
+        }
+        let key = ModelTokenUsageKey::new(&task.model_profile.provider, &task.model_profile.model);
+        self.integration
+            .runtime_metrics_mut()
+            .record_provider_cumulative_token_usage(usage, &key);
+        self.agent
+            .agent_token_usage_by_conversation
+            .entry(task.conversation_id.clone())
+            .or_default()
+            .entry(key.clone())
+            .or_default()
+            .add_assign(usage);
+        self.agent
+            .agent_instance_token_usage_by_model
+            .entry(key.clone())
+            .or_default()
+            .add_assign(usage);
+        let same_pane = self
+            .agent_shell_store()
+            .get(&task.pane_id)
+            .is_some_and(|session| session.session_id == task.conversation_id)
+            && task.pane_process.as_ref().is_some_and(|identity| {
+                self.pane_process_identity(&task.pane_id)
+                    .ok()
+                    .is_some_and(|current| identity.same_incarnation(&current))
+            });
+        if same_pane {
+            self.agent
+                .agent_token_usage_by_pane
+                .entry(task.pane_id.clone())
+                .or_default()
+                .entry(key.clone())
+                .or_default()
+                .add_assign(usage);
+        }
+        if let Some(store) = self.persistence.cloned_token_usage_store() {
+            let event = TokenUsageEvent {
+                id: format!("title:{}", task.attempt_id),
+                project: task.accounting_origin.project_id().cloned(),
+                observed_at_unix_seconds: self.persistence.token_usage_time(),
+                model: key,
+                usage,
+            };
+            if self.persistence.token_usage_uses_adapter() {
+                self.persistence
+                    .queue_token_usage(RuntimeSideEffect::PersistTokenUsage { store, event });
+            } else if store.append(&event).is_err() {
+                self.persistence.record_token_usage_write_gap();
+            }
+        }
+        let _ = self.checkpoint_agent_session_metadata();
+    }
+
     /// Best-effort records one settled provider usage delta without affecting
     /// provider response settlement or retry behavior.
     fn record_durable_token_usage(

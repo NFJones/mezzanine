@@ -516,21 +516,24 @@ pub enum AgentSessionTitleOutcome {
 /// turn, and it never appends to the live transcript.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSessionTitleEvent {
+    /// Exact issued attempt returned bounded usage independently of title acceptance.
+    WorkerSettled {
+        /// Original conversation identity, never inferred from current pane focus.
+        conversation_id: String,
+        /// Actor-assigned attempt identity consumed once for accounting.
+        attempt_id: String,
+        /// Normalized incurred usage, including sanitizer-rejected responses.
+        usage: mez_agent::ModelTokenUsage,
+        /// Sanitized title or stable bounded rejection reason.
+        outcome: AgentSessionTitleOutcome,
+    },
     /// The worker produced a bounded sanitized outcome for one conversation.
+    #[cfg(test)]
     Settled {
         /// Conversation whose display title was requested.
         conversation_id: String,
         /// Sanitized bounded title or the bounded failure reason name.
         outcome: AgentSessionTitleOutcome,
-    },
-    /// The worker failed before producing a bounded outcome.
-    Failed {
-        /// Conversation whose display title was requested.
-        conversation_id: String,
-        /// Stable failure kind for diagnostics.
-        kind: String,
-        /// Bounded human-readable failure.
-        message: String,
     },
 }
 
