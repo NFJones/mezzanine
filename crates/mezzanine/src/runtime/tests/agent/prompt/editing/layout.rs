@@ -29,10 +29,42 @@ fn runtime_composer_help_respects_effective_binding_overrides() {
         .agent_composer
         .as_ref()
         .unwrap();
-    assert_eq!(context.editor_binding.as_deref(), Some("C-j e"));
-    assert!(!context.editing_help.as_deref().unwrap().contains("Ctrl+J"));
-    assert!(context.editing_help.as_deref().unwrap().contains("Ctrl+R"));
+    assert_eq!(context.editor_binding.as_deref(), Some("c-j e"));
+    assert!(!context.editing_help.as_deref().unwrap().contains("ctrl+j"));
+    assert!(context.editing_help.as_deref().unwrap().contains("ctrl+r"));
     assert!(!context.guides_active_task);
+}
+
+/// Lowercase editor hints retain the shift needed for an uppercase binding,
+/// without rewriting the effective key chord or shared command notation.
+#[test]
+fn runtime_composer_lowercase_editor_hint_preserves_shifted_binding() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "composer-shifted-editor".into(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[keys]\nedit_prompt = \"E\"\n".into(),
+        }])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let chord = service.key_bindings().edit_prompt.unwrap();
+    assert_eq!(crate::ui::command::key_chord_notation(chord), "E");
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let composer = config.frame_context.panes["%1"]
+        .agent_composer
+        .as_ref()
+        .unwrap();
+    assert_eq!(composer.editor_binding.as_deref(), Some("c-a s-e"));
+    assert_eq!(service.key_bindings().edit_prompt, Some(chord));
 }
 
 /// Verifies that the initial primary attach applies the attached terminal size
@@ -74,7 +106,7 @@ fn runtime_primary_attach_resizes_initial_window_for_agent_prompt() {
     assert_eq!(region.rows, 38);
     assert_eq!(view.cursor_row, 37);
     assert!(view.lines[view.cursor_row].contains("⟩"));
-    assert!(view.lines[view.cursor_row + 1].contains("Enter send"));
+    assert!(view.lines[view.cursor_row + 1].contains("enter send"));
 }
 
 /// Verifies wrapped agent input grows beyond the former six-row limit, remains

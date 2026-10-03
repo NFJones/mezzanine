@@ -63,12 +63,12 @@ fn composer_selector_help_matches_intercepted_production_routes() {
         !view
             .lines
             .iter()
-            .any(|line| line.contains("Tab next") || line.contains("Enter send"))
+            .any(|line| line.contains("tab next") || line.contains("enter send"))
     );
     assert!(
         view.lines
             .iter()
-            .any(|line| line.contains("Shift+Tab previous"))
+            .any(|line| line.contains("shift+tab previous"))
     );
     service
         .apply_attached_terminal_step_plan(
@@ -102,7 +102,7 @@ fn composer_selector_help_matches_intercepted_production_routes() {
         !view
             .lines
             .iter()
-            .any(|line| line.contains("Esc stop") || line.contains("esc to interrupt"))
+            .any(|line| line.contains("esc stop") || line.contains("esc to interrupt"))
     );
 }
 
@@ -164,9 +164,9 @@ fn composer_search_help_matches_intercepted_production_routes() {
     assert!(
         view.lines
             .iter()
-            .any(|line| line.contains("Search history"))
+            .any(|line| line.contains("search history"))
     );
-    for hint in ["Enter accept", "Ctrl+R search", "Ctrl+C cancel"] {
+    for hint in ["enter accept", "ctrl+r search", "ctrl+c cancel"] {
         assert!(!view.lines.iter().any(|line| line.contains(hint)));
     }
     service

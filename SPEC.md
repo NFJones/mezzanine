@@ -3151,9 +3151,11 @@ fill the allocated pane width, independent of the prose wrapping cap, without
 crossing split dividers. Static decoration MUST use foreground-only dim
 thinking-log styling; the active status label retains its wave overlay.
 The context MUST
-distinguish idle `Ask Mez`, a running turn accepting steering (`Guide this task`),
+distinguish idle `ask mez`, a running turn accepting steering (`guide this task`),
 slash-command drafts, pending approval review, history search and discarded
-paste ownership. Live state and elapsed time MUST remain visible while drafting
+paste ownership. Product-owned composer guidance and key hints MUST be lowercase;
+shifted key identity MUST remain explicit, without changing canonical bindings,
+drafts, authored content or status sources. Live state and elapsed time MUST remain visible while drafting
 at this geometry. The active header status label MUST retain the existing shared
 status wave, confined to its visible label cells with foreground-only spans.
 Composer labels, duration, borders and help remain static; removing unavailable

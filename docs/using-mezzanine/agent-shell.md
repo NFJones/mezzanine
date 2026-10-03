@@ -127,8 +127,10 @@ rows, which continue to use `mez> `.
 In roomy panes (at least 64 columns and 14 body rows), a lightweight context row
 and help row surround the input. The header rule fills the pane width; static
 decoration uses dim thinking-log styling while the active status label keeps
-its wave. `Ask Mez` indicates ordinary submission;
-`Guide this task` indicates prose will steer the running turn. Status and elapsed
+its wave. `ask mez` indicates ordinary submission;
+`guide this task` indicates prose will steer the running turn. Guidance and key
+hints are lowercase display text; shifted editor keys retain an explicit `s-`
+modifier, and drafts and canonical bindings are unchanged. Status and elapsed
 time remain visible while drafting. Search, slash commands, pending approvals
 and discarded paste show their own context; prose does not approve a request.
 Tab cycles completion and Enter still submits, while Enter in reverse search

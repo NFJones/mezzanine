@@ -876,8 +876,8 @@ fn agent_composer_help(
 ) -> (&'static str, String) {
     if context.read_only {
         return (
-            "Agent draft",
-            "Read-only view · focus the owning primary pane to edit".to_string(),
+            "agent draft",
+            "read-only view · focus the owning primary pane to edit".to_string(),
         );
     }
     let defaults = mez_mux::presentation::AgentComposerKeys::default();
@@ -885,32 +885,32 @@ fn agent_composer_help(
     let stop = keys.escape && (context.interruptible || context.guides_active_task);
     if context.paste_discard_pending {
         return (
-            "Paste discarded",
+            "paste discarded",
             if keys.escape {
                 format!(
-                    "Discarding payload · Esc {}",
+                    "discarding payload · esc {}",
                     if stop { "stop first" } else { "reset input" }
                 )
             } else {
-                "Discarding payload · finish mux prefix before resetting input".to_string()
+                "discarding payload · finish mux prefix before resetting input".to_string()
             },
         );
     }
     if prompt.reverse_search_active() {
         let mut hints = Vec::new();
         if keys.enter {
-            hints.push("Enter accept");
+            hints.push("enter accept");
         }
         if keys.search {
-            hints.push("Ctrl+R search");
+            hints.push("ctrl+r search");
         }
         if keys.cancel_search {
-            hints.push("Ctrl+C cancel");
+            hints.push("ctrl+c cancel");
         }
         if stop {
-            hints.push("Esc stop");
+            hints.push("esc stop");
         }
-        return ("Search history", hints.join(" · "));
+        return ("search history", hints.join(" · "));
     }
     let send = if prompt.buffer.line().trim_start().starts_with('/') {
         "command"
@@ -920,13 +920,13 @@ fn agent_composer_help(
         "send"
     };
     let label = if context.approval_pending {
-        "Approval required"
+        "approval required"
     } else if send == "command" {
-        "Agent command"
+        "agent command"
     } else if context.guides_active_task {
-        "Guide this task"
+        "guide this task"
     } else {
-        "Ask Mez"
+        "ask mez"
     };
     let mut hints = Vec::new();
     if context.approval_pending {
@@ -934,32 +934,32 @@ fn agent_composer_help(
     }
     if prompt.selector.is_some() {
         if keys.tab {
-            hints.push("Tab next".to_string());
+            hints.push("tab next".to_string());
         }
         if keys.backtab {
-            hints.push("Shift+Tab previous".to_string());
+            hints.push("shift+tab previous".to_string());
         }
     }
     if keys.enter {
-        hints.push(format!("Enter {send}"));
+        hints.push(format!("enter {send}"));
     }
     if !context.approval_pending && prompt.selector.is_none() {
         let editing = context
             .editing_help
             .as_deref()
-            .unwrap_or("Ctrl+J newline · Ctrl+R history");
+            .unwrap_or("ctrl+j newline · ctrl+r history");
         if !editing.is_empty() {
             hints.push(editing.to_string());
         }
     }
     if stop {
-        hints.push("Esc stop".to_string());
+        hints.push("esc stop".to_string());
     }
     if let Some(binding) = context.editor_binding.as_deref() {
         hints.push(format!("{binding} editor"));
     }
     let help = if hints.is_empty() {
-        "Controls intercepted by effective mux bindings".to_string()
+        "controls intercepted by effective mux bindings".to_string()
     } else {
         hints.join(" · ")
     };

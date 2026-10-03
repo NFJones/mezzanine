@@ -1310,7 +1310,7 @@ async fn async_attached_terminal_loop_clears_agent_prompt_on_submit() {
         assert!(
             refreshed
                 .iter()
-                .any(|line| line.contains("Guide this task") && line.contains("thinking")),
+                .any(|line| line.contains("guide this task") && line.contains("thinking")),
             "{refreshed:?}"
         );
         assert!(refreshed.iter().any(|line| line.trim_end() == "⟩"));

@@ -28,6 +28,21 @@ use super::{
 };
 use crate::host::terminal::project_provisional_pane_resize;
 
+/// Formats composer-only key hints in lowercase. An uppercase ASCII character
+/// retains an explicit shift marker; canonical bindings and shared notation
+/// remain unchanged.
+fn composer_key_chord_notation(mut chord: mez_mux::input::KeyChord) -> String {
+    if let mez_mux::input::KeyCode::Char(character) = chord.code
+        && character.is_ascii_uppercase()
+    {
+        chord.code = mez_mux::input::KeyCode::Char(character.to_ascii_lowercase());
+        if !chord.modifiers.ctrl {
+            chord.modifiers.shift = true;
+        }
+    }
+    crate::ui::command::key_chord_notation(chord).to_lowercase()
+}
+
 /// Immutable inputs required to compose the base window view for one client.
 ///
 /// The actor captures this value after selecting the exact client state. Frame
@@ -1112,8 +1127,8 @@ impl RuntimeSessionService {
             .map(|chord| {
                 format!(
                     "{} {}",
-                    crate::ui::command::key_chord_notation(bindings.escape),
-                    crate::ui::command::key_chord_notation(chord)
+                    composer_key_chord_notation(bindings.escape),
+                    composer_key_chord_notation(chord)
                 )
             });
         mez_mux::presentation::AgentComposerContext {
@@ -1146,8 +1161,8 @@ impl RuntimeSessionService {
             }),
             editing_help: Some(
                 [
-                    (b"\x0a".as_slice(), "Ctrl+J newline"),
-                    (b"\x12".as_slice(), "Ctrl+R history"),
+                    (b"\x0a".as_slice(), "ctrl+j newline"),
+                    (b"\x12".as_slice(), "ctrl+r history"),
                 ]
                 .into_iter()
                 .filter_map(|(bytes, hint)| reaches_prompt(bytes).then_some(hint))

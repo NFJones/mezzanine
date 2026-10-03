@@ -59,6 +59,29 @@ fn view_at_tick(
         .unwrap()
 }
 
+/// Product guidance is lowercase while case-sensitive draft bytes remain exact.
+#[test]
+fn composer_lowercase_guidance_preserves_draft_case() {
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
+    prompt.buffer.insert_text("Keep PATH and Snow 雪 Exact");
+    let before = prompt.clone();
+    let shown = view(
+        Size::new(120, 40).unwrap(),
+        &prompt,
+        AgentComposerContext::default(),
+        ClientViewRole::Primary,
+    );
+    assert!(shown.lines.iter().any(|line| line.contains("ask mez")));
+    assert!(
+        shown
+            .lines
+            .iter()
+            .any(|line| line.contains("enter send · ctrl+j newline · ctrl+r history"))
+    );
+    assert!(shown.lines[shown.cursor_row].contains("Keep PATH and Snow 雪 Exact"));
+    assert_eq!(prompt, before);
+}
+
 /// Composer decorations use the restored thinking rendition and fill the pane
 /// width with a rule, without changing input geometry or active-label motion.
 #[test]
@@ -75,7 +98,7 @@ fn composer_header_rule_fills_width_with_static_shadow_style() {
         let row = shown
             .lines
             .iter()
-            .position(|line| line.contains("Ask Mez"))
+            .position(|line| line.contains("ask mez"))
             .unwrap();
         assert!(shown.lines[row].ends_with('─'), "{}", shown.lines[row]);
         assert_eq!(
@@ -161,7 +184,7 @@ fn composer_header_animates_only_active_status_label() {
                 first
                     .lines
                     .iter()
-                    .any(|line| line.contains("Read-only view"))
+                    .any(|line| line.contains("read-only view"))
             );
             assert!(!first.cursor_visible);
         }
@@ -237,10 +260,10 @@ fn composer_keeps_live_status_and_exact_draft_in_comfortable_geometry() {
             active
                 .lines
                 .iter()
-                .any(|line| line.contains("Guide this task") && line.contains("12s"))
+                .any(|line| line.contains("guide this task") && line.contains("12s"))
         );
-        assert!(active.lines.iter().any(|line| line.contains("Enter guide")));
-        assert!(idle.lines.iter().any(|line| line.contains("Ask Mez")));
+        assert!(active.lines.iter().any(|line| line.contains("enter guide")));
+        assert!(idle.lines.iter().any(|line| line.contains("ask mez")));
         assert_eq!(active.cursor_row, idle.cursor_row);
         assert!(active.lines[active.cursor_row].contains("second line"));
         assert_eq!(prompt, original);
@@ -255,13 +278,13 @@ fn composer_keeps_live_status_and_exact_draft_in_comfortable_geometry() {
             observer
                 .lines
                 .iter()
-                .any(|line| line.contains("Read-only view"))
+                .any(|line| line.contains("read-only view"))
         );
         assert!(
             !observer
                 .lines
                 .iter()
-                .any(|line| line.contains("Enter send"))
+                .any(|line| line.contains("enter send"))
         );
     }
 }
@@ -302,7 +325,7 @@ fn composer_help_tracks_search_commands_approval_and_paste_discard() {
         command
             .lines
             .iter()
-            .any(|line| line.contains("Enter command"))
+            .any(|line| line.contains("enter command"))
     );
     prompt.apply_terminal_input(b"\x12").unwrap();
     let search = view(
@@ -315,9 +338,9 @@ fn composer_help_tracks_search_commands_approval_and_paste_discard() {
         search
             .lines
             .iter()
-            .any(|line| line.contains("Enter accept"))
+            .any(|line| line.contains("enter accept"))
     );
-    assert!(!search.lines.iter().any(|line| line.contains("Enter send")));
+    assert!(!search.lines.iter().any(|line| line.contains("enter send")));
     let approval = view(
         size,
         &ReadlinePrompt::new(ReadlinePromptKind::Agent),
@@ -346,6 +369,6 @@ fn composer_help_tracks_search_commands_approval_and_paste_discard() {
         discard
             .lines
             .iter()
-            .any(|line| line.contains("Esc reset input"))
+            .any(|line| line.contains("esc reset input"))
     );
 }
