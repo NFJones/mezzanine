@@ -38,6 +38,7 @@ impl RuntimeSessionService {
         work: RuntimeAgentProviderPreparationWork,
     ) -> RuntimeAgentProviderPreparationOutcome {
         let RuntimeAgentProviderPreparationWork {
+            accounting_projects,
             mcp_plans,
             allow_stdio,
             environment,
@@ -47,6 +48,19 @@ impl RuntimeSessionService {
             refresh_provider_credential,
             attempted_mcp_servers,
         } = work;
+        let accounting_projects = if let Some((store, records)) = accounting_projects {
+            let worker_store = store.clone();
+            let worker_records = records.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                worker_store.prepare_accounting_projects(&worker_records)
+            })
+            .await
+            .map_err(|_| MezError::invalid_state("accounting project preparation worker failed"))
+            .and_then(|result| result);
+            Some((store, records, result))
+        } else {
+            None
+        };
         let mut mcp = Vec::with_capacity(mcp_plans.len());
         for plan in mcp_plans {
             let server_id = plan.server_id.clone();
@@ -195,6 +209,7 @@ impl RuntimeSessionService {
             None
         };
         RuntimeAgentProviderPreparationOutcome {
+            accounting_projects,
             mcp,
             provider_refresh_error,
             attempted_mcp_servers,
@@ -301,6 +316,11 @@ impl RuntimeSessionService {
                 }
             }
             Ok(RuntimeAgentProviderPreparationWork {
+                accounting_projects: self.persistence.cloned_token_usage_store().zip(
+                    self.integration
+                        .project_trust_store()
+                        .map(|store| store.records().cloned().collect()),
+                ),
                 mcp_plans: plans,
                 allow_stdio,
                 environment,
@@ -324,6 +344,16 @@ impl RuntimeSessionService {
         &mut self,
         outcome: RuntimeAgentProviderPreparationOutcome,
     ) -> Result<()> {
+        if let Some((store, records, result)) = outcome.accounting_projects {
+            let current = self
+                .integration
+                .project_trust_store()
+                .map(|trust| trust.records().cloned().collect::<Vec<_>>());
+            if current.as_ref() == Some(&records) {
+                self.persistence
+                    .install_accounting_projects(&store, result.ok());
+            }
+        }
         let mut registry = std::mem::take(self.integration.mcp_registry_mut());
         let result: Result<()> = (|| {
             for discovery in outcome.mcp {

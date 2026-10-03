@@ -4,6 +4,7 @@ use super::*;
 use crate::integrations::agent::slash::AgentShellCommandOutcome;
 use crate::runtime::commands_support;
 
+mod accounting;
 mod commands;
 mod compaction;
 mod compaction_candidate;

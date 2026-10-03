@@ -149,7 +149,7 @@ fn initialize_rejects_future_schema_versions() {
     let store = temp_store("future-schema");
     fs::create_dir_all(store.path().parent().unwrap()).unwrap();
     let connection = Connection::open(store.path()).unwrap();
-    connection.pragma_update(None, "user_version", 3).unwrap();
+    connection.pragma_update(None, "user_version", 4).unwrap();
     drop(connection);
 
     let error = store.initialize(1).unwrap_err();

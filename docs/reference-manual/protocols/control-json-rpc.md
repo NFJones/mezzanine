@@ -598,6 +598,24 @@ externally reported, not independently verified invoice data. After registration
 expiry or restart, new admission needs a fresh launch; already admitted reports
 can settle without reviving a registration.
 
+### Accounting project identity foundation
+
+Telemetry schema v3 adds a separate private canonical-root mapping. Root bytes
+are lossless and mapped to opaque IDs independently of trust and MMP audiences.
+Worker preparation uses registered trust records, including zero-use and revoked
+projects. Provider dispatch captures the currently eligible deepest trusted root
+against that qualified mapping; unavailable cwd, store or mapping is explicitly
+unattributed. Changing cwd or revoking trust does not rewrite an issued request's
+origin. Stale preparation inventory cannot replace current mapping evidence.
+
+Canonical aliases share a mapping. A detected directory-object replacement at
+the same path creates a new ID and leaves historical mappings intact; relocation
+is not guessed from Git metadata or titles. Directory-object evidence is not an
+execution permission or a portable guarantee against filesystem inode reuse.
+Producer accounting partitions, project-attributed events and scoped `/status`
+reporting are separate integration tasks; legacy expense is never backfilled
+from current cwd or transcript totals.
+
 An alternative interactive frontend is a primary client. Obtain the initial
 render with `terminal/view`:
 

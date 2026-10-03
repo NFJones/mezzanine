@@ -91,8 +91,27 @@ impl RuntimePersistenceComponent {
 
     /// Attaches the durable token-accounting store.
     pub(crate) fn set_token_usage_store(&mut self, store: TokenUsageStore) {
+        self.accounting_projects = None;
         self.token_usage_store = Some(store);
         self.clear_token_usage_health_error();
+    }
+
+    /// Returns the worker-qualified accounting inventory without database I/O.
+    pub(crate) fn accounting_projects(
+        &self,
+    ) -> Option<&[crate::storage::token_usage::AccountingProjectRecord]> {
+        self.accounting_projects.as_deref()
+    }
+
+    /// Installs mapping evidence only for the repository still attached here.
+    pub(crate) fn install_accounting_projects(
+        &mut self,
+        store: &TokenUsageStore,
+        rows: Option<Vec<crate::storage::token_usage::AccountingProjectRecord>>,
+    ) {
+        if self.token_usage_store.as_ref() == Some(store) {
+            self.accounting_projects = rows;
+        }
     }
 
     /// Records a bounded persistent-accounting degradation diagnostic.

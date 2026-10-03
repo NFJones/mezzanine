@@ -3,7 +3,8 @@
 //! This module owns the private SQLite event log used to reconstruct exact
 //! rolling usage windows across daemon and conversation lifetimes. It stores
 //! immutable harness/provider/model deltas and opaque external stream checkpoints.
-//! Pane paths, prompts and transcript identity are excluded; replay tombstones
+//! A separate private project mapping stores canonical root bytes once. Usage
+//! events exclude pane paths, prompts and transcript identity; replay tombstones
 //! retain sequence high-water marks after raw event/receipt retention expires.
 
 use std::fs;
@@ -12,7 +13,10 @@ use std::path::{Path, PathBuf};
 use crate::error::{MezError, Result};
 
 mod external;
+mod projects;
 mod store;
+
+pub(crate) use projects::{AccountingOrigin, AccountingProjectRecord, accounting_origin_for_root};
 
 pub(crate) use external::external_usage_stream_id;
 pub(crate) use external::{ExternalCounters, ExternalUsageCommit, ExternalUsageReport};
@@ -90,5 +94,7 @@ fn sqlite_i64(value: u64, field: &str) -> Result<i64> {
 
 #[cfg(test)]
 mod external_tests;
+#[cfg(test)]
+mod project_tests;
 #[cfg(test)]
 mod tests;

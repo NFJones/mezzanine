@@ -196,6 +196,7 @@ fn runtime_agent_total_token_usage_by_model(
 }
 
 mod accessors;
+mod accounting;
 mod config_apply;
 mod construction;
 mod mcp_helpers;

@@ -12,7 +12,7 @@ use super::{
     set_private_file_permissions, sqlite_i64,
 };
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const SECONDS_PER_DAY: u64 = 86_400;
 
 /// One immutable provider/model usage delta.
@@ -244,7 +244,7 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
                  PRAGMA user_version = 1;",
             )?;
         }
-        1 | SCHEMA_VERSION => {}
+        1 | 2 | SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(MezError::invalid_state(format!(
                 "token usage database schema version {future} is newer than supported version {SCHEMA_VERSION}"
@@ -266,6 +266,13 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
                 observed_at INTEGER NOT NULL CHECK(observed_at>=0),PRIMARY KEY(stream_id,event_id));
             CREATE INDEX external_usage_receipts_time ON external_usage_receipts(observed_at);
             PRAGMA user_version=2;")?;
+    }
+    if version < 3 {
+        transaction.execute_batch(
+            "CREATE TABLE accounting_projects (
+            id TEXT PRIMARY KEY NOT NULL, root BLOB NOT NULL, object TEXT NOT NULL,
+            UNIQUE(root,object)); PRAGMA user_version=3;",
+        )?;
     }
     transaction.commit()?;
     Ok(())

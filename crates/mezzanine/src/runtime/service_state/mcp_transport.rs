@@ -15,6 +15,11 @@ use std::collections::BTreeMap;
 /// worker performs credential refresh and MCP discovery without holding the
 /// actor. The resulting outcome returns every live transport to actor ownership.
 pub(crate) struct RuntimeAgentProviderPreparationWork {
+    /// Registered project snapshot to qualify on the blocking worker, not the actor.
+    pub(crate) accounting_projects: Option<(
+        crate::storage::token_usage::TokenUsageStore,
+        Vec<crate::security::project::ProjectTrustRecord>,
+    )>,
     /// Configured MCP startup plans that still require discovery.
     pub(crate) mcp_plans: Vec<McpStartupPlan>,
     /// Whether this explicit preparation path admits stdio process startup.
@@ -35,6 +40,12 @@ pub(crate) struct RuntimeAgentProviderPreparationWork {
 
 /// External preparation result returned to the serialized runtime actor.
 pub(crate) struct RuntimeAgentProviderPreparationOutcome {
+    /// Mapping result retains exact repository ownership; failure means unavailable.
+    pub(crate) accounting_projects: Option<(
+        crate::storage::token_usage::TokenUsageStore,
+        Vec<crate::security::project::ProjectTrustRecord>,
+        Result<Vec<crate::storage::token_usage::AccountingProjectRecord>>,
+    )>,
     /// Per-server MCP discovery results, including successful live transports.
     pub(crate) mcp: Vec<RuntimeMcpDiscoveryOutcome>,
     /// Provider credential refresh failure, if refresh could not complete.

@@ -194,6 +194,7 @@ impl RuntimeSessionService {
             turn_id.to_string(),
             RuntimeAgentProviderClaim {
                 turn_id: turn_id.to_string(),
+                accounting_origin: self.capture_accounting_origin_for_pane(&turn.pane_id),
                 conversation_id: turn.conversation_id,
                 agent_id: turn.agent_id,
                 provider_owner: None,
@@ -787,6 +788,10 @@ impl RuntimeSessionService {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(None);
         }
+        // Every transport captures authority and accounting from current trust.
+        // Native filesystem preflight is not a freshness boundary for managed
+        // providers. Refresh failure contracts authority and prevents dispatch.
+        self.refresh_project_trust_store_from_disk_if_changed()?;
         let model_profile = self
             .agent
             .agent_turn_model_profiles
@@ -1211,6 +1216,7 @@ impl RuntimeSessionService {
             "provider_task claimed reason=async_provider_worker",
         )?;
         Ok(Some(RuntimeAgentProviderDispatch {
+            accounting_origin: self.capture_accounting_origin_for_pane(&turn.pane_id),
             macro_bridge_recipients: self.macro_bridge_message_recipient_ids(&turn.turn_id),
             claim_generation: 0,
             turn,
@@ -1872,6 +1878,7 @@ impl RuntimeSessionService {
             turn.turn_id.clone(),
             RuntimeAgentProviderClaim {
                 turn_id: turn.turn_id.clone(),
+                accounting_origin: dispatch.accounting_origin.clone(),
                 conversation_id: turn.conversation_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 provider_owner: mez_agent::ProviderContinuityOwner::new(
@@ -1912,6 +1919,18 @@ impl RuntimeSessionService {
     /// Clears the provider-worker claim lease for a settled turn.
     pub(crate) fn clear_claimed_agent_provider_task(&mut self, turn_id: &str) {
         self.agent.claimed_agent_provider_tasks.remove(turn_id);
+    }
+
+    /// Returns frozen claim attribution without exposing mutable claim storage.
+    #[cfg(test)]
+    pub(crate) fn claimed_accounting_origin_for_tests(
+        &self,
+        turn_id: &str,
+    ) -> Option<&crate::storage::token_usage::AccountingOrigin> {
+        self.agent
+            .claimed_agent_provider_tasks
+            .get(turn_id)
+            .map(|claim| &claim.accounting_origin)
     }
 
     /// Reports whether an event belongs to the exact active provider claim.

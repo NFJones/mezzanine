@@ -1646,6 +1646,7 @@ async fn execute_runtime_agent_provider_dispatch(
 ) -> Result<RuntimeAgentProviderWorkerOutcome> {
     let RuntimeAgentProviderDispatch {
         claim_generation: _,
+        accounting_origin: _,
         turn,
         context,
         allowed_actions,

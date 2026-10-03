@@ -200,6 +200,8 @@ pub(crate) struct RuntimeNativeShellOutcome {
 pub(crate) struct RuntimeAgentProviderClaim {
     /// Runtime turn owned by the claimed provider worker.
     pub turn_id: String,
+    /// Frozen request attribution independent of subsequent pane state.
+    pub accounting_origin: crate::storage::token_usage::AccountingOrigin,
     /// Immutable conversation that owns the claimed provider request.
     pub conversation_id: String,
     /// Agent identity that owns the turn.
@@ -296,6 +298,8 @@ impl RuntimeAgentProviderDispatchProvider {
 pub struct RuntimeAgentProviderDispatch {
     /// Exact actor-assigned generation of the provider claim owning this dispatch.
     pub claim_generation: u64,
+    /// Immutable accounting attribution; never resampled on response settlement.
+    pub(crate) accounting_origin: crate::storage::token_usage::AccountingOrigin,
     /// Stores the turn value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

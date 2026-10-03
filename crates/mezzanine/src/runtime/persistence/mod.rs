@@ -35,6 +35,8 @@ pub(crate) struct RuntimePersistenceComponent {
     snapshot_repository: Option<SnapshotRepository>,
     agent_transcript_store: Option<AgentTranscriptStore>,
     token_usage_store: Option<TokenUsageStore>,
+    /// Qualified mapping cache; missing means unavailable, not an empty inventory.
+    accounting_projects: Option<Vec<crate::storage::token_usage::AccountingProjectRecord>>,
     /// Runtime-local clock override for deterministic accounting fixtures.
     #[cfg(test)]
     token_usage_time_for_tests: Option<u64>,

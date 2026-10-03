@@ -262,6 +262,18 @@ Reports admitted before registration retirement MAY finish without reviving the
 registration. Storage failure MUST NOT replay a provider request. Telemetry is
 externally reported, not independently verified billing. Project attribution and
 harness-aware status presentation remain separate integration surfaces.
+Accounting project identity MUST remain separate from trust and MMP audience
+identity. Provider dispatch MUST freeze an opaque project origin or explicit
+unattributed state before request execution; settlement MUST NOT resample cwd or
+focus. Mapping preparation uses registered trust inventory, including zero-use
+and revoked records, on a worker. New capture uses current deepest eligible trust;
+missing mappings, cwd or store remain unattributed without ancestor fallback.
+SQLite telemetry schema 3 stores lossless canonical root bytes and directory
+object-qualified opaque mappings separately from events. Canonical aliases share
+a mapping; detected path replacement creates another ID and preserves historical
+mappings. Relocation is not inferred from Git remotes or titles. Mapping does not
+grant execution authority or backfill legacy expense. Producer partitions,
+project-attributed event storage and scoped status are separate integration work.
 Pane creation commands MAY specify an explicit command to run in the new pane.
 When a pane creation command specifies an explicit command, Mezzanine MUST start
 the resolved shell path and run the explicit command from within that shell by
