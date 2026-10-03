@@ -25,7 +25,7 @@ use crate::runtime::{
 };
 
 /// Version of the code-owned Seatbelt profile emitted by this compiler.
-pub(crate) const SEATBELT_RUNTIME_PROFILE_VERSION: &str = "seatbelt-v3";
+pub(crate) const SEATBELT_RUNTIME_PROFILE_VERSION: &str = "seatbelt-v4";
 
 const PROFILE_ARTIFACT_ID: &str = "seatbelt-profile";
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
@@ -46,6 +46,27 @@ const FIXED_READ_SUBPATHS: &[&str] = &[
     "/private/var/db/timezone",
 ];
 const FIXED_READ_LITERALS: &[&str] = &["/dev/null", "/dev/random", "/dev/urandom"];
+
+/// Optional code-owned macOS toolchain reads; never user filesystem authority.
+const OPTIONAL_TOOLCHAIN_READ_SUBPATHS: &[&str] =
+    &["/Library/Developer/CommandLineTools", "/opt/homebrew"];
+
+/// Retains only existing real directories so absent toolchains add no grant.
+pub(super) fn existing_toolchain_read_subpaths<'a>(roots: &'a [&'a str]) -> Vec<&'a str> {
+    roots
+        .iter()
+        .copied()
+        .filter(|root| {
+            fs::symlink_metadata(root)
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        })
+        .collect()
+}
+
+/// Returns optional macOS toolchain roots present on this host.
+pub(crate) fn macos_toolchain_read_subpaths() -> Vec<&'static str> {
+    existing_toolchain_read_subpaths(OPTIONAL_TOOLCHAIN_READ_SUBPATHS)
+}
 
 // macOS client networking depends on more than BSD socket operations. The
 // system resolver, reachability, proxy, and CFNetwork services use Mach and
@@ -223,6 +244,7 @@ fn validate_grant(grant: &SandboxPathGrant) -> Result<(), SandboxCompileError> {
         && FIXED_READ_SUBPATHS
             .iter()
             .chain(FIXED_READ_LITERALS)
+            .chain(OPTIONAL_TOOLCHAIN_READ_SUBPATHS)
             .any(|protected| paths_overlap(&enforcement, protected))
     {
         return Err(SandboxCompileError::new(
@@ -246,6 +268,12 @@ fn seatbelt_profile(request: &SeatbeltCompileRequest<'_>) -> Result<String, Sand
         "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow sysctl-read)\n(allow file-read-data (literal \"/\"))\n(allow file-write* (literal \"/dev/null\"))\n",
     );
     append_filter_rule(&mut profile, "file-read*", "subpath", FIXED_READ_SUBPATHS)?;
+    append_filter_rule(
+        &mut profile,
+        "file-read*",
+        "subpath",
+        &macos_toolchain_read_subpaths(),
+    )?;
     append_filter_rule(&mut profile, "file-read*", "literal", FIXED_READ_LITERALS)?;
 
     let working_directory_ancestors = path_metadata_ancestors(&request.policy.working_directory);
@@ -667,6 +695,64 @@ mod tests {
 
     fn profile(plan: &SeatbeltLaunchPlan) -> String {
         String::from_utf8(plan.child_launch.artifacts[0].content.clone()).unwrap()
+    }
+
+    /// Existing directories are eligible for read-only runtime projection;
+    /// absent paths, files and symlinks must not become blanket grants.
+    #[test]
+    fn optional_toolchain_roots_require_real_existing_directories() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-seatbelt-optional-roots-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::create_dir_all(root.join("directory")).unwrap();
+        fs::write(root.join("file"), b"file").unwrap();
+        symlink(root.join("directory"), root.join("link")).unwrap();
+        let paths = [
+            root.join("missing"),
+            root.join("file"),
+            root.join("link"),
+            root.join("directory"),
+        ];
+        let names = paths
+            .iter()
+            .map(|path| path.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(existing_toolchain_read_subpaths(&names), vec![names[3]]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The code-owned toolchain roots appear only as reads, not writes or
+    /// user-configured grants, and cannot be overridden by a write grant.
+    #[test]
+    fn optional_macos_toolchain_roots_are_read_only() {
+        let config = config();
+        let mut policy = policy(SandboxNetworkMode::Isolated);
+        let evidence = evidence();
+        let compiled = compile_seatbelt_launch_plan(request(&config, &policy, &evidence)).unwrap();
+        let profile = profile(&compiled);
+        assert_eq!(compiled.audit_summary.read_only_grant_count, 1);
+        for path in OPTIONAL_TOOLCHAIN_READ_SUBPATHS {
+            let read_rule = format!("(subpath \"{path}\")");
+            assert_eq!(profile.contains(&read_rule), Path::new(path).is_dir());
+            assert!(!profile.contains(&format!("file-read* file-write* (subpath \"{path}\")")));
+            policy.grants.push(SandboxPathGrant {
+                canonical_path: (*path).to_string(),
+                enforcement_path: (*path).to_string(),
+                kind: SandboxPathKind::Directory,
+                access: SandboxPathAccess::ReadWrite,
+            });
+            assert_eq!(
+                compile_seatbelt_launch_plan(request(&config, &policy, &evidence))
+                    .unwrap_err()
+                    .kind(),
+                SandboxCompileErrorKind::ForbiddenHostPath
+            );
+            policy.grants.pop();
+        }
     }
 
     #[test]

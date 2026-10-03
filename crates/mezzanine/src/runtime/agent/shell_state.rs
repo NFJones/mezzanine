@@ -1359,6 +1359,41 @@ impl RuntimeSessionService {
         .map_err(|error| MezError::invalid_args(error.message()))
     }
 
+    /// Returns existing toolchain roots only while Seatbelt confines this pane.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn seatbelt_toolchain_read_scopes_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Vec<&'static str> {
+        let sandbox = self.sandbox_config_for_pane(pane_id);
+        if !matches!(sandbox, SandboxConfig::Seatbelt(_))
+            || !crate::runtime::config::sandbox_applies_to_policy(
+                &sandbox,
+                &self.permission_policy_for_pane(pane_id),
+            )
+        {
+            return Vec::new();
+        }
+        crate::security::sandbox::seatbelt::macos_toolchain_read_subpaths()
+    }
+
+    /// Adds Seatbelt runtime reads after selecting explicit or trusted authority.
+    fn with_seatbelt_toolchain_reads(
+        &self,
+        pane_id: &str,
+        mut status: RuntimePrimaryPathScopeStatus,
+    ) -> RuntimePrimaryPathScopeStatus {
+        #[cfg(target_os = "macos")]
+        for root in self.seatbelt_toolchain_read_scopes_for_pane(pane_id) {
+            if !status.read_scopes.iter().any(|scope| scope == root) {
+                status.read_scopes.push(root.to_string());
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = pane_id;
+        status
+    }
+
     /// Returns effective primary authority together with its stable provenance.
     ///
     /// Explicit configured scopes are an independent grant and are reported
@@ -1366,30 +1401,33 @@ impl RuntimeSessionService {
     /// configured scope lists, the deepest stored project-trust decision for the
     /// pane directory decides implicit authority: only a trusted root grants it,
     /// while a rejected or revoked nested decision withholds it and is reported
-    /// distinctly from a mere absence of any decision.
+    /// distinctly from a mere absence of any decision. Active macOS Seatbelt
+    /// reads are appended after that selection, never replacing project trust.
     pub(crate) fn primary_path_scope_status(&self, pane_id: &str) -> RuntimePrimaryPathScopeStatus {
         let resources = &self.configured_permissions().resources;
         if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
-            return RuntimePrimaryPathScopeStatus {
+            let status = RuntimePrimaryPathScopeStatus {
                 read_scopes: resources.read_scopes.clone(),
                 write_scopes: resources.write_scopes.clone(),
                 provenance: "explicit",
                 trusted_project_root: None,
                 denied_project_root: None,
             };
+            return self.with_seatbelt_toolchain_reads(pane_id, status);
         }
         let Some(provenance) = self.project_trust_provenance_for_pane(pane_id) else {
             return RuntimePrimaryPathScopeStatus::none();
         };
         if let ProjectTrustProvenance::TrustedRoot(project_root) = &provenance {
             let project_root = project_root.to_string_lossy().into_owned();
-            return RuntimePrimaryPathScopeStatus {
+            let status = RuntimePrimaryPathScopeStatus {
                 read_scopes: vec![project_root.clone()],
                 write_scopes: vec![project_root.clone()],
                 provenance: "trusted-project",
                 trusted_project_root: Some(project_root),
                 denied_project_root: None,
             };
+            return self.with_seatbelt_toolchain_reads(pane_id, status);
         }
         let Some(withheld_provenance) = provenance.withheld_provenance() else {
             return RuntimePrimaryPathScopeStatus::none();

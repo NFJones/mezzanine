@@ -13,7 +13,6 @@ pub(crate) mod capability;
 mod resolution;
 
 pub(crate) use resolution::host_resolved_path_scopes;
-#[cfg(test)]
 pub(crate) use resolution::resolve_host_path;
 
 #[cfg(test)]

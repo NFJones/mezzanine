@@ -5058,13 +5058,17 @@ authoring workflows can manage user-scoped artifacts. These code-owned scopes
 MUST be additive and MUST NOT replace explicitly configured scopes. When both
 configured scope arrays are empty, a pane
 within an explicitly trusted project MUST receive that project root as its
-default read-write authority. One resolver MUST select the deepest stored
-project-trust decision governing the pane working directory across trusted,
-rejected, and revoked records. Only a trusted root grants implicit
-trusted-project authority. A deeper rejected or revoked decision withholds that
-implicit authority even when a broader ancestor is trusted, and Mezzanine MUST
-NOT substitute the parent root, add a trust record, widen scope, or fall back to
-the host. The resolver MUST filter candidate decisions on the same trust-policy
+default read-write authority. On macOS, the code-owned Seatbelt runtime profile
+MUST grant read-only access to `/Library/Developer/CommandLineTools` and
+`/opt/homebrew` only when each is an existing real directory. These runtime
+reads MUST NOT enter configured scope arrays, grant writes, or replace the
+trusted-project fallback; absent roots MUST add no rule. One resolver MUST
+select the deepest stored project-trust decision governing the pane working
+directory across trusted, rejected, and revoked records. Only a trusted root
+grants implicit trusted-project authority. A deeper rejected or revoked decision
+withholds that implicit authority even when a broader ancestor is trusted, and
+Mezzanine MUST NOT substitute the parent root, add a trust record, widen scope,
+or fall back to the host. The resolver MUST filter candidate decisions on the same trust-policy
 and configuration-schema versions as the stricter project record lookup, and
 MUST rank them by canonical depth even when a stored record holds a
 non-canonical root, while reporting the pristine stored root as the governing

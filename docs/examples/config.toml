@@ -588,8 +588,10 @@ sandbox = "bubblewrap"
 # Scope paths may name files or directories. A Unix-domain socket may also be
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only
 # mount does not make requests sent through that socket read-only.
-# Installed SDKs use the same generic authority. Every required loader or
-# library root must be listed explicitly; read scopes never grant write access.
+# On macOS, Seatbelt grants read-only runtime access to existing real
+# /Library/Developer/CommandLineTools and /opt/homebrew directories. Other
+# required loader or library roots must be listed explicitly; read scopes
+# never grant write access.
 #? read_scopes = ["/var/run/docker.sock", "/opt/acme-sdk"]
 # Writable host paths projected into Bubblewrap; omitted by default.
 #? write_scopes = ["."]

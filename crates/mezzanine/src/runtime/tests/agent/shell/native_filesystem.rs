@@ -137,3 +137,71 @@ fn native_filesystem_authority_intersects_child_scopes_without_shell_context() {
     assert!(scopes.write_scopes.is_empty());
     fs::remove_dir_all(root).unwrap();
 }
+
+/// Active Seatbelt adds installed toolchain reads to native authority without
+/// replacing trusted-project writes or escaping a narrowed child scope.
+#[cfg(target_os = "macos")]
+#[test]
+fn native_seatbelt_toolchain_reads_preserve_trust_and_child_intersection() {
+    let root = std::env::current_dir().unwrap().join(format!(
+        "target/mez-native-toolchain-trust-{}",
+        rand::random::<u64>()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let root = fs::canonicalize(root).unwrap();
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new()
+        .control_socket(root.join("control.sock"))
+        .build();
+    let configured = crate::runtime::config::runtime_configured_permissions_from_config(
+        &serde_json::json!({"permissions": {"sandbox": "seatbelt"}}),
+    )
+    .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+    let mut trust = ProjectTrustStore::default();
+    trust
+        .decide_at(root.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    service.set_project_trust_store(trust, None);
+
+    let scopes = service
+        .native_filesystem_scopes_for_turn(&turn(), &root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(scopes.write_scopes, vec![root.to_str().unwrap()]);
+    for path in crate::security::sandbox::seatbelt::macos_toolchain_read_subpaths() {
+        let traversable =
+            crate::security::filesystem::resolve_host_path(&root, path).is_ok_and(|evidence| {
+                evidence.kind == mez_agent::permissions::ResolvedPathKind::Existing
+                    && evidence.object_kind
+                        == mez_agent::permissions::ResolvedPathObjectKind::Directory
+                    && evidence.canonical_path == path
+            });
+        assert_eq!(
+            scopes.read_scopes.iter().any(|scope| scope == path),
+            traversable,
+            "optional native scope must match accessible physical root: {path}"
+        );
+        assert!(!scopes.write_scopes.iter().any(|scope| scope == path));
+    }
+
+    service.set_subagent_scope_declaration(
+        "agent-%1",
+        mez_agent::SubagentScopeDeclaration {
+            cooperation_mode: CooperationMode::ExploreOnly,
+            approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
+            current_directory: root.to_str().unwrap().into(),
+            read_scopes: vec![root.to_str().unwrap().into()],
+            write_scopes: Vec::new(),
+            permission_preset: Some(mez_agent::PermissionPreset::ReadOnly),
+        },
+    );
+    let narrowed = service
+        .native_filesystem_scopes_for_turn(&turn(), &root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(narrowed.read_scopes, vec![root.to_str().unwrap()]);
+    assert!(narrowed.write_scopes.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}

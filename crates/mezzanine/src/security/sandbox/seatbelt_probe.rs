@@ -23,7 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use mez_agent::EnvironmentSignature;
 use sha2::{Digest, Sha256};
 
-use super::seatbelt::SEATBELT_RUNTIME_PROFILE_VERSION;
+use super::seatbelt::{SEATBELT_RUNTIME_PROFILE_VERSION, macos_toolchain_read_subpaths};
 use super::{SandboxCompileError, SandboxCompileErrorKind};
 use crate::runtime::{SandboxBackend, SeatbeltConfig};
 
@@ -97,7 +97,18 @@ pub(crate) fn orchestrator_arguments(sandbox_executable: &Path) -> Vec<String> {
 
 /// Returns the stable digest input describing the generated probe profile.
 pub(crate) fn profile_identity_bytes() -> &'static [u8] {
-    b"mez-seatbelt-capability-profile-v2\0deny-default\0sysctl-read\0fixed-runtime-reads\0private-probe-write\0isolated-network\0"
+    b"mez-seatbelt-capability-profile-v3\0deny-default\0sysctl-read\0optional-macos-toolchain-reads\0private-probe-write\0isolated-network\0"
+}
+
+/// Binds the exact optional runtime read roots present at probe planning.
+fn profile_identity_sha256(roots: &[&str]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(profile_identity_bytes());
+    for root in roots {
+        digest.update(root.as_bytes());
+        digest.update(b"\0");
+    }
+    hex_digest(digest.finalize())
 }
 
 /// Deterministic product-binary launch used to prove Seatbelt capability in
@@ -271,7 +282,7 @@ fn seatbelt_capability_probe_plan_for_executable(
         ));
     }
     let host_identity_sha256 = seatbelt_host_identity_sha256(environment_signature)?;
-    let profile_sha256 = sha256_hex(profile_identity_bytes());
+    let profile_sha256 = profile_identity_sha256(&macos_toolchain_read_subpaths());
     let arguments = orchestrator_arguments(Path::new(&sandbox_executable.path));
     let mut digest = Sha256::new();
     digest.update(b"mez-seatbelt-capability-probe-plan-v1\0");
@@ -782,6 +793,12 @@ fn render_profile(
             sbpl_string(Path::new(path))?
         ));
     }
+    for path in macos_toolchain_read_subpaths() {
+        profile.push_str(&format!(
+            "(allow file-read* (subpath {}))\n",
+            sbpl_string(Path::new(path))?
+        ));
+    }
     for path in FIXED_READ_LITERALS {
         profile.push_str(&format!(
             "(allow file-read* (literal {}))\n",
@@ -837,7 +854,24 @@ mod tests {
         assert!(profile.starts_with("(version 1)\n(deny default)\n"));
         assert!(profile.contains("quoted\\\"binary"));
         assert!(profile.contains("(subpath \"/private/tmp/mez probe/allowed\")"));
+        for root in macos_toolchain_read_subpaths() {
+            assert!(profile.contains(&format!("(allow file-read* (subpath \"{root}\"))")));
+            assert!(!profile.contains(&format!("file-read* file-write* (subpath \"{root}\")")));
+        }
         assert!(!profile.contains("(allow network"));
+    }
+
+    /// Changing which optional runtime roots exist invalidates probe identity.
+    #[test]
+    fn optional_toolchain_roots_bind_probe_identity() {
+        assert_ne!(
+            profile_identity_sha256(&[]),
+            profile_identity_sha256(&["/opt/homebrew"])
+        );
+        assert_ne!(
+            profile_identity_sha256(&["/opt/homebrew"]),
+            profile_identity_sha256(&["/Library/Developer/CommandLineTools"])
+        );
     }
 
     /// Verifies the Rust payload cannot falsely pass without Seatbelt because

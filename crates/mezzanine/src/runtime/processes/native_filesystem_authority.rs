@@ -39,6 +39,21 @@ impl RuntimeSessionService {
             } else {
                 return Ok(None);
             };
+        #[cfg(target_os = "macos")]
+        for root in self.seatbelt_toolchain_read_scopes_for_pane(&turn.pane_id) {
+            // Optional loader reads must not invalidate otherwise authorized
+            // project access when this process cannot traverse the host root.
+            let accessible =
+                crate::security::filesystem::resolve_host_path(cwd, root).is_ok_and(|evidence| {
+                    evidence.kind == mez_agent::permissions::ResolvedPathKind::Existing
+                        && evidence.object_kind
+                            == mez_agent::permissions::ResolvedPathObjectKind::Directory
+                        && evidence.canonical_path == root
+                });
+            if accessible && !reads.iter().any(|scope| scope == root) {
+                reads.push(root.to_string());
+            }
+        }
         // Existing PathScopes grants snapshot reads for writable paths. Preserve
         // those reads while planning strips every publication grant.
         let planning = self.agent_planning_enabled(&turn.pane_id);

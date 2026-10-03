@@ -307,6 +307,95 @@ fn runtime_adds_user_authoring_directories_to_sandbox_scopes() {
     );
 }
 
+/// Existing macOS toolchain roots extend active Seatbelt reads only. They
+/// never replace explicit filesystem authority or become write scopes, and
+/// switching to policy-only removes the backend-owned reads.
+#[cfg(target_os = "macos")]
+#[test]
+fn runtime_seatbelt_toolchain_reads_are_additive_and_backend_scoped() {
+    let socket = std::env::current_dir()
+        .unwrap()
+        .join("target/mez-seatbelt-toolchain-scopes/control.sock");
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new()
+        .control_socket(socket)
+        .build();
+    let seatbelt = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {
+            "sandbox": "seatbelt",
+            "read_scopes": ["src"],
+            "write_scopes": ["target"]
+        }
+    }))
+    .unwrap();
+    service.integration.replace_configured_permissions(seatbelt);
+    let status = service.primary_path_scope_status("%1");
+    let roots = crate::security::sandbox::seatbelt::macos_toolchain_read_subpaths();
+    assert_eq!(status.provenance, "explicit");
+    assert_eq!(status.read_scopes.first().map(String::as_str), Some("src"));
+    for root in roots {
+        assert!(status.read_scopes.iter().any(|scope| scope == root));
+    }
+    assert_eq!(status.write_scopes, vec!["target"]);
+
+    let policy_only = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {
+            "sandbox": "policy-only",
+            "read_scopes": ["src"],
+            "write_scopes": ["target"]
+        }
+    }))
+    .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(policy_only);
+    let status = service.primary_path_scope_status("%1");
+    assert_eq!(status.read_scopes, vec!["src"]);
+    assert_eq!(status.write_scopes, vec!["target"]);
+}
+
+/// Seatbelt toolchain reads do not displace the deepest trusted project root
+/// or grant write authority outside that root.
+#[cfg(target_os = "macos")]
+#[test]
+fn runtime_seatbelt_toolchain_reads_preserve_trusted_project_fallback() {
+    let project = std::env::current_dir().unwrap().join(format!(
+        "target/mez-toolchain-trust-{}",
+        rand::random::<u64>()
+    ));
+    fs::create_dir_all(&project).unwrap();
+    let project = fs::canonicalize(&project).unwrap();
+    let socket = project.join("control.sock");
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new()
+        .control_socket(socket)
+        .build();
+    let seatbelt = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {"sandbox": "seatbelt"}
+    }))
+    .unwrap();
+    service.integration.replace_configured_permissions(seatbelt);
+    let mut trust = ProjectTrustStore::default();
+    trust
+        .decide_at(project.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    service.set_project_trust_store(trust, None);
+    service.set_pane_current_working_directory("%1".to_string(), project.clone());
+
+    let status = service.primary_path_scope_status("%1");
+    let expected = project.to_string_lossy().into_owned();
+    assert_eq!(status.provenance, "trusted-project");
+    assert_eq!(
+        status.trusted_project_root.as_deref(),
+        Some(expected.as_str())
+    );
+    assert_eq!(status.write_scopes, vec![expected.clone()]);
+    assert_eq!(status.read_scopes.first(), Some(&expected));
+    for root in crate::security::sandbox::seatbelt::macos_toolchain_read_subpaths() {
+        assert!(status.read_scopes.iter().any(|scope| scope == root));
+        assert!(!status.write_scopes.iter().any(|scope| scope == root));
+    }
+    fs::remove_dir_all(project).unwrap();
+}
+
 /// Verifies configured absolute read scopes accept ordinary files and Unix
 /// sockets while write scopes continue to reject socket endpoints.
 #[cfg(unix)]

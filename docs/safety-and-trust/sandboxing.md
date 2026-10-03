@@ -134,6 +134,12 @@ user read or write scope is configured, a pane in a trusted project is intended
 to receive that project's canonical root as read-write authority; a pane with
 neither source has no project filesystem authority.
 
+On macOS, Seatbelt's code-owned runtime profile additionally permits read-only
+access to `/Library/Developer/CommandLineTools` and `/opt/homebrew` when each
+is an existing real directory. These loader and SDK reads do not enter
+configured `permissions.read_scopes`, do not grant write access, and do not
+replace the trusted-project fallback. Missing roots add no profile rule.
+
 Unavailable configured paths are excluded with a warning rather than silently
 broadening authority. The multi-user `/home` root is never usable as an
 authority scope. Effective scopes—not approval or project instructions—define
