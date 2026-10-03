@@ -12,9 +12,10 @@ use crate::host::terminal::{
 use crate::ui::readline::AGENT_PROMPT_TEXT_PREFIX;
 use crate::ui::readline::{ReadlinePrompt, ReadlinePromptKind};
 use mez_mux::layout::Size;
-use mez_mux::presentation::{ClientStatusKind, ClientStatusLine};
+use mez_mux::presentation::ReadlinePromptRegion;
 #[cfg(test)]
-use mez_mux::presentation::{ReadlinePromptRegion, RenderedClientView};
+use mez_mux::presentation::RenderedClientView;
+use mez_mux::presentation::{ClientStatusKind, ClientStatusLine};
 #[cfg(test)]
 use mez_mux::render::{
     PromptRegionRenderOptions, clipped_prompt_region, compose_prompt_region, write_line_segment,
@@ -270,6 +271,58 @@ pub fn agent_prompt_reserved_line_count(
         return 0;
     }
     render_agent_prompt_block(width, body_rows, pane_context).reserved_line_count()
+}
+
+/// Pane-local interaction rectangles derived from the same prompt block used
+/// for rendering. Zero-height log regions remain empty, never overlap input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AgentComposerLayout {
+    /// Log viewport above the pinned composer, relative to the pane body.
+    pub(crate) log: ReadlinePromptRegion,
+    /// Entire reserved composer, absent when the editor is not shown.
+    pub(crate) composer: Option<ReadlinePromptRegion>,
+    /// Optional display-only header.
+    pub(crate) header: Option<ReadlinePromptRegion>,
+    /// Visible editable rows, excluding header and help.
+    pub(crate) editable: Option<ReadlinePromptRegion>,
+    /// Optional display-only key guidance.
+    pub(crate) help: Option<ReadlinePromptRegion>,
+}
+
+/// Projects interaction geometry without another wrapping or reservation owner.
+pub(crate) fn agent_composer_layout(
+    width: usize,
+    body_rows: usize,
+    pane_context: Option<&TerminalPaneFrameContext>,
+) -> AgentComposerLayout {
+    let block = pane_agent_prompt_space_reserved(pane_context)
+        .then(|| render_agent_prompt_block(width, body_rows, pane_context));
+    let reserved = block
+        .as_ref()
+        .map_or(0, AgentPromptBlock::reserved_line_count)
+        .min(body_rows);
+    let start = body_rows.saturating_sub(reserved);
+    let region = |row, rows| ReadlinePromptRegion {
+        row,
+        column: 0,
+        columns: width,
+        rows,
+    };
+    let decorated = block
+        .as_ref()
+        .is_some_and(|block| !block.decoration_rows.is_empty());
+    AgentComposerLayout {
+        log: region(0, start),
+        composer: (reserved > 0).then(|| region(start, reserved)),
+        header: decorated.then(|| region(start, 1)),
+        editable: (reserved > 0).then(|| {
+            region(
+                start + usize::from(decorated),
+                reserved.saturating_sub(if decorated { 2 } else { 0 }),
+            )
+        }),
+        help: decorated.then(|| region(body_rows.saturating_sub(1), 1)),
+    }
 }
 
 /// Returns the maximum pane rows available to wrapped agent prompt input.
@@ -704,17 +757,6 @@ impl AgentPromptBlock {
         lines
     }
 
-    /// Runs the transparent styled lines operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn transparent_prompt_styled_lines(&self, width: usize) -> Vec<TerminalStyledLine> {
-        (0..self.reserved_line_count())
-            .map(|_| TerminalStyledLine::plain(" ".repeat(width)))
-            .collect()
-    }
-
     /// Returns plain transient display lines for the prompt block.
     #[cfg(test)]
     pub(super) fn display_plain_lines(&self) -> Vec<String> {
@@ -725,18 +767,6 @@ impl AgentPromptBlock {
     #[cfg(test)]
     pub(super) fn prompt_plain_lines(&self) -> Vec<String> {
         self.prompt_lines.clone()
-    }
-
-    /// Runs the transparent plain lines operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    #[cfg(test)]
-    pub(super) fn transparent_prompt_plain_lines(&self, width: usize) -> Vec<String> {
-        (0..self.reserved_line_count())
-            .map(|_| " ".repeat(width))
-            .collect()
     }
 }
 

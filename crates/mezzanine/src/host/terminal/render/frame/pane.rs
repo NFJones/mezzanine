@@ -116,16 +116,10 @@ pub(in crate::host::terminal::render) fn render_styled_pane_lines(
             cursor_visible: false,
         }
     };
-    let agent_display_lines = if pane_agent_prompt_transparent(frame_context, pane.id.as_str()) {
-        Vec::new()
-    } else {
-        agent_block.display_styled_lines(width, ui_theme, frame_context.animation_tick_ms)
-    };
-    let agent_prompt_lines = if pane_agent_prompt_transparent(frame_context, pane.id.as_str()) {
-        agent_block.transparent_prompt_styled_lines(width)
-    } else {
-        agent_block.prompt_styled_lines(width, ui_theme, frame_context.animation_tick_ms)
-    };
+    let agent_display_lines =
+        agent_block.display_styled_lines(width, ui_theme, frame_context.animation_tick_ms);
+    let agent_prompt_lines =
+        agent_block.prompt_styled_lines(width, ui_theme, frame_context.animation_tick_ms);
     let content_rows = body_rows.saturating_sub(agent_block.reserved_line_count());
     let mut lines = Vec::with_capacity(height);
 
@@ -215,16 +209,8 @@ pub(in crate::host::terminal::render) fn render_pane_lines(
             cursor_visible: false,
         }
     };
-    let agent_display_lines = if pane_agent_prompt_transparent(frame_context, pane.id.as_str()) {
-        Vec::new()
-    } else {
-        agent_block.display_plain_lines()
-    };
-    let agent_prompt_lines = if pane_agent_prompt_transparent(frame_context, pane.id.as_str()) {
-        agent_block.transparent_prompt_plain_lines(width)
-    } else {
-        agent_block.prompt_plain_lines()
-    };
+    let agent_display_lines = agent_block.display_plain_lines();
+    let agent_prompt_lines = agent_block.prompt_plain_lines();
     let content_rows = body_rows.saturating_sub(agent_block.reserved_line_count());
     let mut lines = Vec::with_capacity(height);
 
@@ -948,22 +934,6 @@ pub(in crate::host::terminal::render) fn pane_agent_prompt_space_reserved(
     pane_context.is_some_and(|context| {
         context.agent_prompt.is_some() || context.mode.as_deref() == Some("agent")
     })
-}
-
-/// Runs the pane agent prompt transparent operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(in crate::host::terminal::render) fn pane_agent_prompt_transparent(
-    frame_context: &TerminalFrameContext,
-    pane_id: &str,
-) -> bool {
-    frame_context
-        .panes
-        .get(pane_id)
-        .and_then(|context| context.mode.as_deref())
-        == Some("copy")
 }
 
 /// Compacts a home-relative or absolute pane working-directory display path to

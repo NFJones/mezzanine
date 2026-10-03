@@ -14,10 +14,10 @@ use super::{
     RuntimeSessionService, Size, TerminalClientLoopConfig, TerminalFrameContext,
     TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
     TerminalWindowFrameContext, TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
-    WindowPresentationOptions, WindowPresentationPlan, agent_prompt_reserved_line_count,
-    compose_modal_display_overlay_lines, compose_prompt_overlay_presentation_with_styles,
-    current_unix_millis, current_unix_seconds, mouse_border_cells_for_geometries, overlay_footer,
-    overlay_render_lines, overlay_rendered_line_style_spans, overlay_styled_lines, overlay_text_at,
+    WindowPresentationOptions, WindowPresentationPlan, compose_modal_display_overlay_lines,
+    compose_prompt_overlay_presentation_with_styles, current_unix_millis, current_unix_seconds,
+    mouse_border_cells_for_geometries, overlay_footer, overlay_render_lines,
+    overlay_rendered_line_style_spans, overlay_styled_lines, overlay_text_at,
     overlay_visible_line_indices, pane_frame_agent_status_pillbox_cells, plan_window_presentation,
     render_attached_client_view_with_screen_and_row_resolvers, runtime_agent_turn_duration_display,
     runtime_agent_turn_state_name, runtime_fit_status_line, runtime_human_system_uptime,
@@ -943,6 +943,12 @@ impl RuntimeSessionService {
             else {
                 continue;
             };
+            // Copy owns the cursor even when the log rectangle is empty or its
+            // retained cursor is outside the visible viewport. Never leave the
+            // underlying screen cursor displayed over the pinned composer.
+            if pane.index == window.active_pane_index() {
+                view.cursor_visible = false;
+            }
             let Some((row, column, size)) = self.copy_mode_overlay_region(window, pane.index)
             else {
                 continue;
@@ -1058,18 +1064,16 @@ impl RuntimeSessionService {
             .panes()
             .iter()
             .find(|pane| pane.index == pane_index)?;
-        let reserved_rows = self.agent_prompt_reserved_rows_for_pane(
+        let layout = self.agent_composer_layout_for_pane(
             pane.id.as_str(),
             usize::from(full_content_size.columns),
             usize::from(full_content_size.rows),
         );
-        let reserved_rows = u16::try_from(reserved_rows)
-            .unwrap_or(u16::MAX)
-            .min(full_content_size.rows.saturating_sub(1));
-        let content_size = Size {
-            columns: full_content_size.columns,
-            rows: full_content_size.rows.saturating_sub(reserved_rows).max(1),
-        };
+        let content_size = Size::new(
+            full_content_size.columns,
+            u16::try_from(layout.log.rows).ok()?,
+        )
+        .ok()?;
         Some((row, column, content_size))
     }
 
@@ -1084,14 +1088,28 @@ impl RuntimeSessionService {
         width: usize,
         body_rows: usize,
     ) -> usize {
+        self.agent_composer_layout_for_pane(pane_id, width, body_rows)
+            .composer
+            .map_or(0, |region| region.rows)
+    }
+
+    /// Uses the host's exact prompt-block layout for log and composer interaction
+    /// boundaries. Hidden/editor-owned surfaces have no composer reservation.
+    pub(crate) fn agent_composer_layout_for_pane(
+        &self,
+        pane_id: &str,
+        width: usize,
+        body_rows: usize,
+    ) -> crate::host::terminal::AgentComposerLayout {
+        let unreserved = || crate::host::terminal::agent_composer_layout(width, body_rows, None);
         if width == 0 || body_rows == 0 || self.external_editor_session_is_active(pane_id) {
-            return 0;
+            return unreserved();
         }
         let Some(agent_session) = self.agent_shell_store().get(pane_id) else {
-            return 0;
+            return unreserved();
         };
         if !matches!(agent_session.visibility, AgentShellVisibility::Visible) {
-            return 0;
+            return unreserved();
         }
         let pane_context = TerminalPaneFrameContext {
             agent_prompt: (!self.agent_command_is_active(pane_id)).then(|| {
@@ -1105,7 +1123,7 @@ impl RuntimeSessionService {
             agent_display_lines: self.runtime_agent_prompt_display_lines_for_pane(pane_id),
             ..TerminalPaneFrameContext::default()
         };
-        agent_prompt_reserved_line_count(width, body_rows, Some(&pane_context))
+        crate::host::terminal::agent_composer_layout(width, body_rows, Some(&pane_context))
     }
 
     /// Captures submission/decoder facts and effective editor dispatch without

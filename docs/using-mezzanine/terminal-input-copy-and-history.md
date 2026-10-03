@@ -63,6 +63,13 @@ Entering or leaving copy mode and moving focus between panes does not change
 the underlying pane text or syntax styling. Only the copy cursor and active
 selection add temporary presentation styling.
 
+In the agent surface, the composer stays visible below the independently
+scrolling log. Copy selection and its cursor remain inside the log viewport;
+the visible draft does not take keyboard focus or submit on Enter while explicit
+log-copy mode owns input. Passive wheel scrollback retains its existing editing
+fallthrough. Draft selection is a separate source-aware interaction, not implied
+by this pinned display. External editors and modal surfaces retain takeover.
+
 Default copy-mode controls are:
 
 | Key | Result |

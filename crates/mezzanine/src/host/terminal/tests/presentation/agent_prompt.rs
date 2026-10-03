@@ -821,12 +821,10 @@ fn render_attached_client_view_preserves_prompt_style_collision_content() {
     assert!(view.lines[3].contains("⟩"), "{:?}", view.lines);
 }
 
-/// Verifies that copy mode keeps the pane-local agent prompt reservation while
-/// making the prompt itself invisible. Mouse selection uses copy mode for text
-/// selection, and retaining the reserved row prevents the terminal buffer from
-/// visually shifting when selection starts inside an agent pane.
+/// Copy mode retains the visible composer at its reserved position while log
+/// navigation owns selection. Entry does not move log content or alter drafts.
 #[test]
-fn render_attached_client_view_keeps_agent_prompt_space_transparent_in_copy_mode() {
+fn render_attached_client_view_keeps_agent_composer_visible_in_copy_mode() {
     let mut ids = IdFactory::default();
     let window = Window::new(&mut ids, 0, "main", Size::new(30, 4).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
@@ -863,7 +861,7 @@ fn render_attached_client_view_keeps_agent_prompt_space_transparent_in_copy_mode
     .unwrap();
 
     assert!(view.lines[2].contains("four"), "{:?}", view.lines);
-    assert_eq!(view.lines[3], " ".repeat(30));
+    assert_eq!(view.lines[3], format!("{:<30}", "⟩ copy this"));
     assert!(
         view.lines.iter().all(|line| !line.contains("mez>")),
         "{:?}",

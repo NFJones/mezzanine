@@ -3,6 +3,208 @@
 use super::*;
 use crate::runtime::PaneSurfaceKind;
 
+/// A retained log viewport scrolls independently of a populated composer.
+/// Explicit copy mode retains keyboard/cursor ownership, resize preserves the
+/// selected history and draft, and live output does not force return to bottom.
+#[test]
+fn runtime_agent_copy_pins_composer_and_preserves_log_viewport() {
+    let mut service = test_runtime_service_with_size(Size::new(80, 24).unwrap());
+    service.set_frame_visibility_for_tests(false, false);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+    service
+        .agent_prompt_inputs_mut_for_tests()
+        .get_mut("%1")
+        .unwrap()
+        .prompt
+        .buffer
+        .set_line("Pinned Draft 雪\nsecond line");
+    let draft = service.agent_prompt_inputs_for_tests()["%1"].prompt.clone();
+    let mut screen = TerminalScreen::new(Size::new(80, 20).unwrap(), 120).unwrap();
+    screen.feed(
+        (0..60)
+            .map(|index| format!("history-{index}\r\n"))
+            .collect::<String>()
+            .as_bytes(),
+    );
+    service.set_agent_pane_screen("%1", &conversation, screen);
+    let before = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(80, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let composer_row = before
+        .lines
+        .iter()
+        .position(|line| line.contains("ask mez"))
+        .unwrap();
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::ScrollHistory {
+                        lines: -3,
+                        position: CopyPosition { line: 2, column: 2 },
+                    },
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(service.presented_surface_uses_scrollback_copy_mode("%1"));
+    let scrolled = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(80, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        &scrolled.lines[composer_row..],
+        &before.lines[composer_row..]
+    );
+    let passive = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert_eq!(
+        crate::host::terminal::route_client_input(b"x", &passive).unwrap(),
+        TerminalClientLoopAction::ForwardToPane(b"x".to_vec())
+    );
+    // Promote the retained snapshot to explicit log-copy ownership without
+    // changing the composer or silently granting editing focus.
+    service.remove_presented_surface_scrollback_copy_mode("%1");
+    let copy = service.ensure_active_copy_mode("%1").unwrap();
+    copy.scroll_to_top();
+    copy.select_range(
+        CopyPosition { line: 0, column: 0 },
+        CopyPosition { line: 0, column: 9 },
+    )
+    .unwrap();
+    let retained = (copy.scroll_top(), copy.selection());
+    let shown = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(80, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(&shown.lines[composer_row..], &before.lines[composer_row..]);
+    assert!(shown.lines[0].contains("history-0"));
+    assert!(shown.cursor_row < composer_row);
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(matches!(
+        crate::host::terminal::route_client_input(b"\r", &config).unwrap(),
+        TerminalClientLoopAction::HandleCopyMode(_)
+    ));
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "new live output")
+        .unwrap();
+    assert_eq!(
+        service
+            .active_copy_mode_for_presented_surface("%1")
+            .map(|copy| (copy.scroll_top(), copy.selection())),
+        Some(retained)
+    );
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(70, 20).unwrap())
+        .unwrap();
+    let log_rows = service.copy_mode_viewport_rows_for_pane("%1");
+    assert_eq!(
+        service
+            .active_copy_mode_for_presented_surface("%1")
+            .unwrap()
+            .visible_lines()
+            .len(),
+        log_rows
+    );
+    let resized = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(70, 20).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let header = resized
+        .lines
+        .iter()
+        .position(|line| line.contains("ask mez"))
+        .unwrap();
+    assert!(resized.lines[header + 1].contains("Pinned Draft 雪"));
+    assert!(resized.lines[header + 2].contains("second line"));
+    assert!(resized.cursor_row < header);
+    assert_eq!(service.agent_prompt_inputs_for_tests()["%1"].prompt, draft);
+    // A one-row body is entirely composer-owned. Explicit log-copy still owns
+    // input, but no log cell exists in which its cursor can be displayed.
+    service.set_frame_visibility_for_tests(false, true);
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(70, 2).unwrap())
+        .unwrap();
+    let tiny = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(70, 2).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(!tiny.cursor_visible, "{tiny:?}");
+    assert_eq!(service.agent_prompt_inputs_for_tests()["%1"].prompt, draft);
+    assert_eq!(
+        service
+            .active_copy_mode_for_presented_surface("%1")
+            .unwrap()
+            .selection(),
+        retained.1
+    );
+    service.set_frame_visibility_for_tests(false, false);
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(70, 20).unwrap())
+        .unwrap();
+    let restored = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(70, 20).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let restored_header = restored
+        .lines
+        .iter()
+        .position(|line| line.contains("ask mez"))
+        .unwrap();
+    assert!(restored.cursor_visible && restored.cursor_row < restored_header);
+    assert_eq!(
+        service
+            .active_copy_mode_for_presented_surface("%1")
+            .unwrap()
+            .selection(),
+        retained.1
+    );
+    assert!(service.pending_agent_provider_tasks().is_empty());
+}
+
 /// Verifies process and agent copy modes retain independent viewport and
 /// selection state when pane visibility switches between retained surfaces.
 #[test]

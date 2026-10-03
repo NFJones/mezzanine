@@ -3171,8 +3171,13 @@ rows. The shared prompt block MUST govern reservation and cursor offsets; total
 reserved rows remain bounded at approximately half the body. State/duration/help
 changes alone MUST NOT change reservation at fixed draft and geometry. These
 rows MUST NOT enter the draft, source copy, transcript, model context or history.
-Copy mode retains transparent prompt reservation and external editor takeover
-retains its existing independent surface. No new keys or configuration fields
+Agent log copy mode MUST keep the composer visible in its existing reserved
+rectangle, with a transparent background. Log scrolling and selection overlays
+MUST stop above the composer; explicit keyboard copy mode retains its navigation
+and single cursor until exited. Visibility MUST NOT grant draft-selection or
+submission authority. Shared prompt-block geometry MUST identify log, header,
+editable and help regions, including empty log rectangles in tiny panes.
+External editor takeover retains its existing independent surface. No new keys or configuration fields
 are introduced by this presentation change.
 
 When the user submits a non-empty agent prompt, the visible prompt input MUST be
