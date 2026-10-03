@@ -15,6 +15,45 @@ use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::host::terminal::AttachedTerminalClientStepPlan;
 
 impl AsyncRuntimeSessionActor {
+    /// Runs bounded durable usage I/O outside serialized actor ownership. The
+    /// task retains settlement after reply loss; a retry reads the same checkpoint.
+    fn dispatch_external_usage_commit(
+        &self,
+        work: crate::runtime::ExternalUsageWork,
+        connection: crate::control::ControlConnectionState,
+        output_prefix: Vec<u8>,
+        consumed: usize,
+        reply: tokio::sync::oneshot::Sender<crate::Result<AsyncControlInputResult>>,
+    ) {
+        let sender = self.sender.clone();
+        tokio::spawn(async move {
+            #[cfg(test)]
+            if let Some((started, release)) = &work.worker_gate {
+                started.notify_one();
+                release.notified().await;
+            }
+            let worker = work.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                worker.store.ingest_external(&worker.report, worker.now)
+            })
+            .await
+            .map_err(|_| MezError::invalid_state("external accounting worker failed"))
+            .and_then(|result| result);
+            let _ = sender
+                .send(AsyncRuntimeRequestEnvelope::new(
+                    AsyncRuntimeRequest::CompleteExternalUsageInput {
+                        work,
+                        result,
+                        connection,
+                        output_prefix,
+                        consumed,
+                        reply,
+                    },
+                ))
+                .await;
+        });
+    }
+
     /// Admits a control continuation without waiting on the actor's own bounded ingress.
     fn dispatch_control_continuation(&self, continuation: Box<AsyncRuntimeRequest>) {
         let sender = self.sender.clone();
@@ -791,6 +830,42 @@ impl AsyncRuntimeSessionActor {
                 retain_connection_cleanup,
                 reply,
             } => {
+                if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
+                    && let Ok(request) = crate::control::parse_json_rpc_request(&body)
+                    && request.method == "agent/external/usage"
+                {
+                    let prepared = if consumed == input.len() {
+                        self.service.prepare_external_usage(&request, &connection)
+                    } else {
+                        Err(MezError::invalid_args(
+                            "external usage requires one control frame per request",
+                        ))
+                    };
+                    match prepared {
+                        Ok(work) => self.dispatch_external_usage_commit(
+                            work,
+                            connection,
+                            Vec::new(),
+                            consumed,
+                            reply,
+                        ),
+                        Err(error) => {
+                            let body = crate::runtime::runtime_json_rpc_error(
+                                &request.id,
+                                error.kind(),
+                                error.message(),
+                            );
+                            let _ = reply.send(Ok(AsyncControlInputResult {
+                                output: encode_control_body(&body),
+                                consumed: input.len(),
+                                connection,
+                                connection_cleanup: None,
+                                terminal_lifecycle_flush: None,
+                            }));
+                        }
+                    }
+                    return false;
+                }
                 self.record_terminal_control_request_metrics(&input, max_content_length);
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let previous_id = self.side_effect_routes.next_transcript_claim_id();
@@ -857,6 +932,43 @@ impl AsyncRuntimeSessionActor {
                 snapshots,
                 reply,
             } => {
+                if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
+                    && let Ok(request) = crate::control::parse_json_rpc_request(&body)
+                    && request.method == "agent/external/usage"
+                {
+                    let prepared = if consumed == input.len() {
+                        self.service.prepare_external_usage(&request, &connection)
+                    } else {
+                        Err(MezError::invalid_args(
+                            "external usage requires one control frame per request",
+                        ))
+                    };
+                    match prepared {
+                        Ok(work) => self.dispatch_external_usage_commit(
+                            work,
+                            connection,
+                            output_prefix,
+                            consumed_prefix.saturating_add(consumed),
+                            reply,
+                        ),
+                        Err(error) => {
+                            let body = crate::runtime::runtime_json_rpc_error(
+                                &request.id,
+                                error.kind(),
+                                error.message(),
+                            );
+                            output_prefix.extend_from_slice(&encode_control_body(&body));
+                            let _ = reply.send(Ok(AsyncControlInputResult {
+                                output: output_prefix,
+                                consumed: consumed_prefix.saturating_add(input.len()),
+                                connection,
+                                connection_cleanup: None,
+                                terminal_lifecycle_flush: None,
+                            }));
+                        }
+                    }
+                    return false;
+                }
                 let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 if record_metrics {
                     self.record_terminal_control_request_metrics(&input, max_content_length);
@@ -1016,6 +1128,26 @@ impl AsyncRuntimeSessionActor {
                 if !terminal_lifecycle_deferred {
                     self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
                 }
+                false
+            }
+            AsyncRuntimeRequest::CompleteExternalUsageInput {
+                work,
+                result,
+                connection,
+                mut output_prefix,
+                consumed,
+                reply,
+            } => {
+                let body = self.service.complete_external_usage(work, result);
+                output_prefix.extend_from_slice(&encode_control_body(&body));
+                let _ = reply.send(Ok(AsyncControlInputResult {
+                    output: output_prefix,
+                    consumed,
+                    connection,
+                    connection_cleanup: None,
+                    terminal_lifecycle_flush: None,
+                }));
+                self.notify_event_delivery();
                 false
             }
             AsyncRuntimeRequest::CompleteSnapshotControlInput {

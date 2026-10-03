@@ -2,16 +2,20 @@
 //!
 //! This module owns the private SQLite event log used to reconstruct exact
 //! rolling usage windows across daemon and conversation lifetimes. It stores
-//! immutable provider/model deltas and deliberately excludes pane or transcript
-//! identity so telemetry retention does not expand into conversation history.
+//! immutable harness/provider/model deltas and opaque external stream checkpoints.
+//! Pane paths, prompts and transcript identity are excluded; replay tombstones
+//! retain sequence high-water marks after raw event/receipt retention expires.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{MezError, Result};
 
+mod external;
 mod store;
 
+pub(crate) use external::external_usage_stream_id;
+pub(crate) use external::{ExternalCounters, ExternalUsageCommit, ExternalUsageReport};
 pub(crate) use store::{TokenUsageEvent, TokenUsageStore};
 
 /// Exact rolling windows displayed by `/status --extended`.
@@ -84,5 +88,7 @@ fn sqlite_i64(value: u64, field: &str) -> Result<i64> {
         .map_err(|_| MezError::invalid_args(format!("token usage {field} exceeded SQLite range")))
 }
 
+#[cfg(test)]
+mod external_tests;
 #[cfg(test)]
 mod tests;

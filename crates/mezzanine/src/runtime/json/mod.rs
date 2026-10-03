@@ -36,14 +36,15 @@ pub(super) use actions::{
 };
 pub(super) use command::{optional_path_json, optional_string_json, runtime_command_outcomes_json};
 pub(crate) use parse::current_unix_millis;
+pub(crate) use parse::runtime_json_rpc_error;
 pub(super) use parse::{
     current_unix_seconds, runtime_agent_turn_duration_display,
     runtime_initialize_requested_observer, runtime_initialize_requested_primary,
     runtime_initialize_terminal_size, runtime_json_bool_field, runtime_json_creation_command,
     runtime_json_input_bytes, runtime_json_optional_client_size, runtime_json_optional_size_field,
-    runtime_json_optional_view_offset, runtime_json_rpc_error, runtime_json_size,
-    runtime_json_start_directory, runtime_json_string_field,
-    runtime_json_terminal_step_render_if_changed, runtime_json_value, runtime_mezzanine_error_code,
+    runtime_json_optional_view_offset, runtime_json_size, runtime_json_start_directory,
+    runtime_json_string_field, runtime_json_terminal_step_render_if_changed, runtime_json_value,
+    runtime_mezzanine_error_code,
 };
 pub(super) use presentation::rendered_client_view_json;
 pub(super) use status::{

@@ -78,6 +78,24 @@ fn append_is_idempotent_and_skips_zero_usage() {
 
 /// Aggregation preserves the semantic difference between an explicitly
 /// reported zero cache count and an unknown cache count.
+/// Reusing an accepted delta ID with different counters must report conflict,
+/// not hide it behind INSERT OR IGNORE and falsely acknowledge changed usage.
+#[test]
+fn append_rejects_conflicting_usage_event_replay() {
+    let store = temp_store("conflicting-replay");
+    let first = event("same-id", 100, 9, Some(4));
+    store.append(&first).unwrap();
+    let mut changed = first.clone();
+    changed.usage.input_tokens += 1;
+    assert!(store.append(&changed).is_err());
+    assert_eq!(
+        store.aggregate_windows(100, &[7]).unwrap()[&7][&first.model].input_tokens,
+        9
+    );
+}
+
+/// Aggregation preserves the semantic difference between an explicitly
+/// reported zero cache count and an unknown cache count.
 #[test]
 fn aggregate_windows_preserve_unknown_cache_reporting() {
     let store = temp_store("cache-unknown");
@@ -131,7 +149,7 @@ fn initialize_rejects_future_schema_versions() {
     let store = temp_store("future-schema");
     fs::create_dir_all(store.path().parent().unwrap()).unwrap();
     let connection = Connection::open(store.path()).unwrap();
-    connection.pragma_update(None, "user_version", 2).unwrap();
+    connection.pragma_update(None, "user_version", 3).unwrap();
     drop(connection);
 
     let error = store.initialize(1).unwrap_err();

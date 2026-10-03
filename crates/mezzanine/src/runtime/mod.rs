@@ -257,6 +257,7 @@ pub(crate) use config::{
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod control;
+pub(crate) use control::ExternalUsageWork;
 pub(crate) use control::RuntimeControlComponent;
 pub(crate) use control::{
     RuntimeAgentTranscriptContext, execute_runtime_agent_prompt_history_work,
@@ -623,6 +624,7 @@ pub(crate) use iroh_compression::{
 };
 pub(crate) use iroh_event_task::{IrohEventTask, merge_event_result as merge_iroh_event_result};
 pub(crate) use json::current_unix_millis;
+pub(crate) use json::runtime_json_rpc_error;
 use json::{
     RuntimeSubagentModelProfiles, agent_shell_visibility_json_name, agent_state_control_method,
     current_unix_seconds, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
@@ -636,12 +638,11 @@ use json::{
     runtime_initialize_requested_observer, runtime_initialize_requested_primary,
     runtime_initialize_terminal_size, runtime_json_bool_field, runtime_json_creation_command,
     runtime_json_input_bytes, runtime_json_optional_client_size, runtime_json_optional_size_field,
-    runtime_json_optional_view_offset, runtime_json_rpc_error, runtime_json_size,
-    runtime_json_start_directory, runtime_json_string_field,
-    runtime_json_terminal_step_render_if_changed, runtime_json_value, runtime_mezzanine_error_code,
-    runtime_mutating_method, runtime_pane_by_id, runtime_pane_readiness_state_name,
-    runtime_split_direction, runtime_subagent_placement_mode, runtime_subagent_spawn_request,
-    runtime_subagent_state_json, runtime_terminal_step_result_json,
+    runtime_json_optional_view_offset, runtime_json_size, runtime_json_start_directory,
+    runtime_json_string_field, runtime_json_terminal_step_render_if_changed, runtime_json_value,
+    runtime_mezzanine_error_code, runtime_mutating_method, runtime_pane_by_id,
+    runtime_pane_readiness_state_name, runtime_split_direction, runtime_subagent_placement_mode,
+    runtime_subagent_spawn_request, runtime_subagent_state_json, runtime_terminal_step_result_json,
 };
 use mez_agent::turn_state_from_action_results as runtime_agent_turn_state_from_action_results;
 use service_state::{

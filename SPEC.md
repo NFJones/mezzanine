@@ -244,6 +244,24 @@ replacement, closure, expiry or runtime restart MUST retire the exact registrati
 without erasing independent settled accounting. Old end events MUST NOT retire a
 new launch. This same-user observational capability does not certify vendor
 telemetry or prove which executable holds the credential.
+`agent/external/usage` MUST use the current restricted registration capability.
+The server MUST freeze harness and pane-root attribution before handing normalized
+content-free counters to an off-actor storage worker. Acknowledgment MUST follow
+the atomic commit of replay receipt, stream checkpoint and immutable delta.
+Identical event replay MUST add nothing; conflicting accepted IDs MUST fail.
+Delta streams MUST use contiguous positive sequences; cumulative streams MUST
+begin with an explicit uncharged attachment baseline and apply only monotonic
+differences. Modes, model identity and optional-counter availability MUST NOT
+change within an epoch. Final cumulative observations reconcile prior expense,
+not add an aggregate on top of it. Inclusive input/cache and output/reasoning
+subsets MUST NOT be counted twice. Unknown categories MUST retain coverage facts.
+Raw events and receipts have a 91-day replay horizon; durable high-water marks
+MUST prevent pruned sequences from becoming fresh expense. Pane reset MUST change
+only its view baseline, not durable checkpoints or runtime-instance totals.
+Reports admitted before registration retirement MAY finish without reviving the
+registration. Storage failure MUST NOT replay a provider request. Telemetry is
+externally reported, not independently verified billing. Project attribution and
+harness-aware status presentation remain separate integration surfaces.
 Pane creation commands MAY specify an explicit command to run in the new pane.
 When a pane creation command specifies an explicit command, Mezzanine MUST start
 the resolved shell path and run the explicit command from within that shell by

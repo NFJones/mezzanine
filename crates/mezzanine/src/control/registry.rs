@@ -553,6 +553,24 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         ]),
     },
     ControlMethodSpec {
+        method: "agent/external/usage",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "launch_token",
+            "generation",
+            "external_session_id",
+            "epoch",
+            "event_id",
+            "sequence",
+            "mode",
+            "baseline",
+            "observed_at",
+            "provider",
+            "model",
+            "counters",
+        ]),
+    },
+    ControlMethodSpec {
         method: "agent/spawn",
         dispatch: ControlDispatchKind::AgentSpawn,
         params_schema: ControlParamsSchema::Allowed(&[

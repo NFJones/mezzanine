@@ -519,7 +519,7 @@ v2 removes those methods and adds `client/set_layout_owner`.
 | Frame | `frame/read` | Read rendered frame fields and text (RO). |
 | Terminal | `terminal/view`, `terminal/presentation/acknowledge`, `terminal/step`, `terminal/resize`, `terminal/command` | Render a client view, acknowledge receipt-bearing local frame commits, submit bytes/primary size, update exact-client observer geometry, or invoke a terminal command. Presentation acknowledgement is available to primary and observer clients; primary-only mutation applies to step and command; resize is observer-only and never changes primary or canonical geometry. Negotiated observer v3–v5 uses the resulting pushed render instead of fetching another view. |
 | Agent | `agent/list`, `agent/task/list`, `agent/spawn`, `agent/shell/show`, `agent/shell/hide`, `agent/shell/command` | Inspect agents/tasks (RO), manage an agent shell, start prompt work, or spawn an agent. |
-| External agent | `agent/external/launch`, `agent/external/register`, `agent/external/renew`, `agent/external/deregister` | Additive `external-agent/1` launch capability and observational identity lease. Launch issuance requires an attached primary; hook lifecycle requests require capability-only authenticated Unix ingress, not an initialized client role. |
+| External agent | `agent/external/launch`, `agent/external/register`, `agent/external/renew`, `agent/external/deregister`, `agent/external/usage` | Additive `external-agent/1` launch capability, observational identity lease and durable usage reports. Launch issuance requires an attached primary; hook requests require capability-only authenticated Unix ingress, not an initialized client role. |
 | Approval | `approval/list`, `approval/decide` | Inspect pending approvals (RO) or make a primary decision. |
 | Configuration | `config/get`, `config/set`, `config/unset`, `config/reload`, `config/validate` | Inspect or validate config (RO), or mutate/reload it. |
 | Project trust | `project/trust/list`, `project/trust/inspect`, `project/trust/decide`, `project/trust/revoke` | Inspect or decide project trust. |
@@ -555,7 +555,48 @@ distinguishes harness/version and marks native controls unsupported (`controls:
 not process death. Root replacement, pane close and runtime restart invalidate
 registrations. Restart requires a fresh launch rather than reviving snapshot
 identities. This is same-OS-user bearer authority, not executable attestation;
-vendor hooks, bootstrap, status/title and token ingestion are separate integrations.
+vendor hooks, bootstrap and status/title are separate integrations.
+
+### Durable external usage reports
+
+`agent/external/usage` takes the current `launch_token`, `generation` and
+`external_session_id`, plus `epoch`, stable `event_id`, positive `sequence`,
+`mode` (`delta` or `cumulative`), UTC `observed_at`, `provider`, `model`, and
+`counters`. Each request must contain one control frame. Counters require
+`input_tokens` and `output_tokens`; optional `reasoning_tokens`,
+`cached_input_tokens` and `cache_write_input_tokens` are unknown when omitted.
+Input includes cache subsets, and output includes reasoning. Invalid subsets,
+negative values, overflow and unknown payload fields are rejected.
+
+Delta sequences start at 1 and are contiguous. Submit missing observations before
+advancing after a gap. Cumulative attachment requires `baseline: true` on its
+first sample; that sample is uncharged. Later samples omit baseline and apply
+only the difference. A final sample uses the same stream, never a second aggregate
+source. A new model, mode, counter-availability pattern or reset requires a new
+epoch. Do not use a fresh epoch to replay already accepted expense.
+
+Receipts, checkpoints and normalized deltas commit atomically on a storage worker.
+The result reports `accepted`, `durable`, `applied`, `revision`, and reasoning
+coverage. Identical retry adds nothing and returns the current absolute checkpoint;
+conflicting accepted event IDs fail. Lost transport replies do not undo admitted
+accounting. Reports must be within the 91-day horizon and not future-dated;
+pruned old sequences cannot become new deltas. High-water checkpoint tombstones
+remain after raw events and receipts are pruned.
+
+SQLite schema v2 migrates legacy rows to harness `mez` without counter backfill.
+The ledger stores harness/model counters and opaque stream identities, not prompt,
+transcript or pane paths. Native latest-request samples remain separate. Pane
+reset changes only the external view baseline; session and durable expense remain.
+`agent/list` exposes separate `external_token_usage` runtime-instance telemetry.
+Until the dedicated harness-aware `/status` reader lands, legacy rolling-history
+queries and their oldest-event boundary include only native events. External
+records retain harness and unknown-reasoning coverage separately, never silently
+merge into native same-model totals. New stream slots are bounded independently
+of workers; updates and retries of existing streams remain eligible at capacity.
+The dedicated harness-aware `/status` view is a separate integration. Usage is
+externally reported, not independently verified invoice data. After registration
+expiry or restart, new admission needs a fresh launch; already admitted reports
+can settle without reviving a registration.
 
 An alternative interactive frontend is a primary client. Obtain the initial
 render with `terminal/view`:

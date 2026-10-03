@@ -414,6 +414,21 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<AsyncControlInputResult>>,
     },
+    /// Completes an actor-admitted external usage commit without replaying work.
+    CompleteExternalUsageInput {
+        /// Immutable credential-free attribution captured before storage work.
+        work: crate::runtime::ExternalUsageWork,
+        /// Durable result, including absolute checkpoint on identical replay.
+        result: Result<crate::storage::token_usage::ExternalUsageCommit>,
+        /// Original hook connection, which acquires no ordinary client role.
+        connection: ControlConnectionState,
+        /// Encoded replies already accepted before this report.
+        output_prefix: Vec<u8>,
+        /// Number of bytes consumed from the admitted input.
+        consumed: usize,
+        /// Original response owner, retained even if the transport disconnects.
+        reply: oneshot::Sender<Result<AsyncControlInputResult>>,
+    },
     /// Represents the Handle Control Input With Snapshots case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1390,6 +1405,7 @@ impl AsyncRuntimeRequest {
             Self::SetHostRoutedIrohDiagnostics { .. }
             | Self::HandleControlInput { .. }
             | Self::HandleControlInputWithSnapshots { .. }
+            | Self::CompleteExternalUsageInput { .. }
             | Self::CompleteSnapshotControlInput { .. }
             | Self::CreateHostCheckpoint { .. } => Family::Control,
             #[cfg(test)]

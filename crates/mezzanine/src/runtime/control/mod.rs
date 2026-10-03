@@ -10,6 +10,7 @@ mod configuration;
 mod context;
 mod external_agents;
 mod external_presentation;
+pub(crate) mod external_usage;
 mod ingress;
 mod lifecycle;
 mod live_snapshot;
@@ -87,6 +88,7 @@ pub(crate) use context::{
     RuntimeAgentTranscriptContext, execute_runtime_agent_prompt_history_work,
     runtime_agent_compaction_replay_context,
 };
+pub(crate) use external_usage::ExternalUsageWork;
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
     parse_skill_prompt_invocation, project_guidance_context_block, skill_context_text,

@@ -5,14 +5,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{
     MezError, Result, TOKEN_USAGE_RETENTION_DAYS, ensure_private_parent,
     set_private_file_permissions, sqlite_i64,
 };
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const SECONDS_PER_DAY: u64 = 86_400;
 
 /// One immutable provider/model usage delta.
@@ -62,22 +62,49 @@ impl TokenUsageStore {
             "DELETE FROM token_usage_events WHERE observed_at < ?1",
             [sqlite_i64(oldest_retained, "retention cutoff")?],
         )?;
+        // Stream high-water marks remain as replay tombstones after bounded
+        // receipt/event retention. Old sequences can never become new deltas.
+        connection.execute(
+            "DELETE FROM external_usage_receipts WHERE observed_at < ?1",
+            [sqlite_i64(oldest_retained, "retention cutoff")?],
+        )?;
         Ok(())
     }
 
-    /// Appends one non-zero event, ignoring a previously recorded stable id.
+    /// Appends one non-zero event; identical replay is inert and changed replay conflicts.
     pub(crate) fn append(&self, event: &TokenUsageEvent) -> Result<bool> {
         if event.id.trim().is_empty() {
             return Err(MezError::invalid_args(
                 "token usage event id must not be empty",
             ));
         }
+        let mut connection = self.open()?;
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let existing = transaction.query_row(
+            "SELECT observed_at, provider, model, input_tokens, output_tokens, reasoning_tokens,
+                    cached_input_tokens, cache_write_input_tokens FROM token_usage_events WHERE id = ?1",
+            [&event.id], |row| Ok(TokenUsageEvent {
+                id: event.id.clone(), observed_at_unix_seconds: row_u64(row, 0)?,
+                model: ModelTokenUsageKey::new(row.get::<_, String>(1)?, row.get::<_, String>(2)?),
+                usage: ModelTokenUsage { input_tokens: row_u64(row, 3)?, output_tokens: row_u64(row, 4)?,
+                    reasoning_tokens: row_u64(row, 5)?, cached_input_tokens: row_optional_u64(row, 6)?,
+                    cache_write_input_tokens: row_optional_u64(row, 7)? },
+            }),
+        ).optional()?;
+        if let Some(existing) = existing {
+            if existing != *event {
+                return Err(MezError::conflict(
+                    "token usage event id has conflicting payload",
+                ));
+            }
+            return Ok(false);
+        }
         if event.usage.is_zero() {
             return Ok(false);
         }
-        let connection = self.open()?;
-        let changed = connection.execute(
-            "INSERT OR IGNORE INTO token_usage_events (
+        let changed = transaction.execute(
+            "INSERT INTO token_usage_events (
                  id, observed_at, provider, model, input_tokens, output_tokens,
                  reasoning_tokens, cached_input_tokens, cache_write_input_tokens
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -101,6 +128,7 @@ impl TokenUsageStore {
                     .transpose()?,
             ],
         )?;
+        transaction.commit()?;
         Ok(changed == 1)
     }
 
@@ -125,7 +153,7 @@ impl TokenUsageStore {
             "SELECT observed_at, provider, model, input_tokens, output_tokens,
                     reasoning_tokens, cached_input_tokens, cache_write_input_tokens
              FROM token_usage_events
-             WHERE observed_at >= ?1 AND observed_at <= ?2
+             WHERE observed_at >= ?1 AND observed_at <= ?2 AND event_source = 'native'
              ORDER BY observed_at ASC, id ASC",
         )?;
         let rows = statement.query_map(
@@ -169,7 +197,7 @@ impl TokenUsageStore {
     pub(crate) fn oldest_observed_at(&self, now_unix_seconds: u64) -> Result<Option<u64>> {
         let connection = self.open()?;
         let oldest = connection.query_row(
-            "SELECT MIN(observed_at) FROM token_usage_events WHERE observed_at <= ?1",
+            "SELECT MIN(observed_at) FROM token_usage_events WHERE observed_at <= ?1 AND event_source = 'native'",
             [sqlite_i64(now_unix_seconds, "query timestamp")?],
             |row| row.get::<_, Option<i64>>(0),
         )?;
@@ -182,7 +210,7 @@ impl TokenUsageStore {
             .transpose()
     }
 
-    fn open(&self) -> Result<Connection> {
+    pub(super) fn open(&self) -> Result<Connection> {
         ensure_private_parent(&self.path)?;
         let connection = Connection::open(&self.path)?;
         connection.busy_timeout(Duration::from_millis(250))?;
@@ -194,10 +222,12 @@ impl TokenUsageStore {
 
 fn initialize_schema(connection: &Connection) -> Result<()> {
     connection.execute_batch("PRAGMA journal_mode = WAL;")?;
-    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let transaction =
+        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)?;
+    let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     match version {
         0 => {
-            connection.execute_batch(
+            transaction.execute_batch(
                 "CREATE TABLE token_usage_events (
                      id TEXT PRIMARY KEY NOT NULL,
                      observed_at INTEGER NOT NULL CHECK (observed_at >= 0),
@@ -214,7 +244,7 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
                  PRAGMA user_version = 1;",
             )?;
         }
-        SCHEMA_VERSION => {}
+        1 | SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(MezError::invalid_state(format!(
                 "token usage database schema version {future} is newer than supported version {SCHEMA_VERSION}"
@@ -226,10 +256,22 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
             )));
         }
     }
+    if version < 2 {
+        transaction.execute_batch("ALTER TABLE token_usage_events ADD COLUMN harness TEXT NOT NULL DEFAULT 'mez';
+            ALTER TABLE token_usage_events ADD COLUMN event_source TEXT NOT NULL DEFAULT 'native' CHECK(event_source IN ('native','external'));
+            ALTER TABLE token_usage_events ADD COLUMN reasoning_known INTEGER NOT NULL DEFAULT 1 CHECK(reasoning_known IN (0,1));
+            CREATE TABLE external_usage_streams(id TEXT PRIMARY KEY NOT NULL,harness TEXT NOT NULL,provider TEXT NOT NULL,model TEXT NOT NULL,
+                mode TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>0),sample TEXT NOT NULL,totals TEXT NOT NULL);
+            CREATE TABLE external_usage_receipts(stream_id TEXT NOT NULL,event_id TEXT NOT NULL,fingerprint TEXT NOT NULL,
+                observed_at INTEGER NOT NULL CHECK(observed_at>=0),PRIMARY KEY(stream_id,event_id));
+            CREATE INDEX external_usage_receipts_time ON external_usage_receipts(observed_at);
+            PRAGMA user_version=2;")?;
+    }
+    transaction.commit()?;
     Ok(())
 }
 
-fn row_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+pub(super) fn row_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     let value: i64 = row.get(index)?;
     u64::try_from(value).map_err(|_| conversion_error(index, "negative token usage value"))
 }

@@ -28,36 +28,38 @@ const TOMBSTONE_SECONDS: u64 = 300;
 /// Bounded actor-owned credentials and live registrations, never raw tokens.
 #[derive(Debug, Default)]
 pub(super) struct ExternalAgentRegistry {
-    bindings: BTreeMap<[u8; 32], LaunchBinding>,
+    pub(super) bindings: BTreeMap<[u8; 32], LaunchBinding>,
     next_generation: u64,
+    pub(super) usage: super::external_usage::ExternalUsageProjection,
 }
 
 /// Exact local launch authority and optional registration settlement.
 #[derive(Debug)]
-struct LaunchBinding {
-    uid: u32,
-    pane_id: String,
-    process: RuntimePaneProcessIdentity,
+pub(super) struct LaunchBinding {
+    pub(super) uid: u32,
+    pub(super) pane_id: String,
+    pub(super) process: RuntimePaneProcessIdentity,
     project_scope: Option<ProjectScopeId>,
-    generation: u64,
-    harness: String,
+    pub(super) generation: u64,
+    pub(super) harness: String,
     version: String,
     expires: u64,
-    registration: Option<Registration>,
-    retired: bool,
+    pub(super) registration: Option<Registration>,
+    pub(super) retired: bool,
+    pub(super) accounting_owner: String,
 }
 
 /// Immutable registration metadata, bound to a single server-issued launch.
 #[derive(Debug)]
-struct Registration {
+pub(super) struct Registration {
     agent_id: AgentId,
-    external_session_id: String,
+    pub(super) external_session_id: String,
     display_name: String,
     objective: Option<String>,
 }
 
 /// Parses bounded inert metadata without echoing rejected payloads.
-fn text(params: &serde_json::Value, key: &str, max: usize) -> Result<String> {
+pub(super) fn text(params: &serde_json::Value, key: &str, max: usize) -> Result<String> {
     let value = params
         .get(key)
         .and_then(serde_json::Value::as_str)
@@ -76,7 +78,7 @@ fn text(params: &serde_json::Value, key: &str, max: usize) -> Result<String> {
 }
 
 /// Hashes only well-shaped credential input; diagnostics never include it.
-fn credential(params: &serde_json::Value) -> Result<[u8; 32]> {
+pub(super) fn credential(params: &serde_json::Value) -> Result<[u8; 32]> {
     let token = params
         .get("launch_token")
         .and_then(serde_json::Value::as_str)
@@ -157,6 +159,7 @@ impl RuntimeSessionService {
                 expires,
                 registration: None,
                 retired: false,
+                accounting_owner: crate::storage::token_usage::new_token_usage_event_id(),
             },
         );
         Ok(
@@ -451,6 +454,21 @@ impl RuntimeSessionService {
             .and_then(serde_json::Value::as_array_mut)
         {
             rows.extend(self.external_agent_rows());
+        }
+        if let Some(result) = value
+            .get_mut("result")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            let totals = self.external_token_usage(None).into_iter().map(|((harness, model), usage)| {
+                serde_json::json!({"harness":harness,"provider":model.provider,"model":model.model,
+                    "input_tokens":usage.input_tokens,"output_tokens":usage.output_tokens,
+                    "cached_input_tokens":usage.cached_input_tokens,"cache_write_input_tokens":usage.cache_write_input_tokens,
+                    "source":"external-reported","scope":"runtime-instance"})
+            }).collect::<Vec<_>>();
+            result.insert(
+                "external_token_usage".to_string(),
+                serde_json::json!(totals),
+            );
         }
         value.to_string()
     }
