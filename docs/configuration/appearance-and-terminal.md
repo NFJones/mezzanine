@@ -52,10 +52,10 @@ at grapheme boundaries. Legacy ANSI-only presentation
 records remain byte-preserving and can therefore wrap at the physical pane
 width instead.
 
-Agent transcript rails reuse `agent_transcript_status` foreground without bold,
-dim or background fill. Category labels and body styling are independent; no
-new theme slot or configuration field is required. The existing two-cell rail
-glyph is retained pending real-terminal evaluation of a lighter alternative.
+Agent transcript gutters use their row category's foreground without background
+fill. Assistant/user labels retain bold accents; status and thinking text use
+dim shadow styling. Authored body emphasis remains independent. No palette,
+theme slot or configuration field changes are required for these renditions.
 
 `terminal.shell_output_preview_lines` bounds the live command-output tail after
 wrapping (default `5`). The tail grows with received output rather than reserving

@@ -37,10 +37,10 @@ projections from very old saved presentation records are replayed unchanged
 and are not rewrapped to this configured cap; they may wrap at the physical
 pane width because rewriting terminal-control bytes is unsafe.
 
-The transcript rail uses the status-theme foreground independently of speaker
-or action category, without bold or ANSI dim. Assistant labels and rationale
-remain normal-weight; user, command and error cues retain their accents and
-words. Markdown emphasis remains authored structure, not rail styling. The
+The transcript gutter uses its speaker or action category's foreground and
+rendition. Assistant/user labels retain bold accents; rationale and status text
+use dim shadow styling. Command and error cues keep their category accents.
+Markdown body emphasis remains authored structure. The
 two-cell `▐ ` footprint is unchanged, as are copied source and continuation
 offsets. This styling change does not rewrite legacy ANSI-only records.
 

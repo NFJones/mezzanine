@@ -2547,11 +2547,11 @@ user-facing response, MUST remain visible by default so the agent never appears
 silent. These agent-authored lines, their gutter prefix characters, and their
 speaker labels MUST be visually distinct through named theme colors while
 preserving their plain-text content for copy mode, history export, and terminal
-observation. The two-cell transcript rail MUST use foreground-only status-theme
-styling independently of message category, without bold or ANSI dim. Assistant
-labels and status/rationale prose MUST remain normal-weight and undimmed;
-user, error and command labels retain their category accents. Authored Markdown
-emphasis and diff styling remain independent. The existing `▐ ` glyph and source
+observation. Transcript gutters MUST use their row category's foreground-only
+rendition. Assistant and user labels retain bold category accents; status and
+rationale text retain dim shadow styling. Error, command and diff accents retain
+their category renditions, while authored Markdown body emphasis remains
+independent. The existing `▐ ` glyph and source
 copy offsets are retained; legacy ANSI-only records MUST NOT be heuristically
 rewritten to adopt current styling. Structured agent-mode log rows and rendered transcript
 presentation rows MUST wrap at the smaller of the pane terminal width or the

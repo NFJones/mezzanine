@@ -2,8 +2,8 @@
 
 use super::diff::{agent_command_syntax_theme, agent_shell_command_highlighter};
 use super::style::{
-    AGENT_TERMINAL_MESSAGE_PREFIX, AgentTerminalPresentationStyle, agent_gutter_rendition,
-    agent_terminal_sgr_sequence, agent_text_foreground_rendition,
+    AGENT_TERMINAL_MESSAGE_PREFIX, AgentTerminalPresentationStyle, agent_terminal_sgr_sequence,
+    agent_text_foreground_rendition,
 };
 use super::{
     GraphicRendition, MARKDOWN_DARK_MUTED_FOREGROUND, MARKDOWN_DARK_NEUTRAL_FOREGROUND,
@@ -674,11 +674,8 @@ pub(crate) fn append_styled_agent_terminal_line(
     ui_theme: &UiTheme,
 ) {
     let line = sanitized_agent_terminal_line(line);
-    bytes.push_str(&agent_terminal_sgr_sequence(agent_gutter_rendition(
-        ui_theme,
-    )));
-    bytes.push_str(AGENT_TERMINAL_MESSAGE_PREFIX);
     bytes.push_str(&style.sgr_prefix(ui_theme));
+    bytes.push_str(AGENT_TERMINAL_MESSAGE_PREFIX);
     let Some(indicator) = style.speaker_indicator() else {
         bytes.push_str(&line);
         return;
@@ -702,15 +699,14 @@ pub(crate) fn append_styled_agent_terminal_rendered_line(
 ) {
     let line_text = sanitized_agent_terminal_line(&line.display);
     let label_rendition = agent_terminal_label_rendition(style, ui_theme);
-    let gutter_rendition = agent_gutter_rendition(ui_theme);
-    bytes.push_str(&agent_terminal_sgr_sequence(gutter_rendition));
+    bytes.push_str(&agent_terminal_sgr_sequence(label_rendition));
     bytes.push_str(AGENT_TERMINAL_MESSAGE_PREFIX);
     let indicator_width = style
         .speaker_indicator()
         .filter(|indicator| line_text.starts_with(indicator))
         .map(agent_terminal_text_width)
         .unwrap_or_default();
-    let mut active = gutter_rendition;
+    let mut active = label_rendition;
     let mut column = 0usize;
     for grapheme in UnicodeSegmentation::graphemes(line_text.as_str(), true) {
         let width = agent_terminal_grapheme_width(grapheme);
@@ -732,17 +728,18 @@ pub(crate) fn append_styled_agent_terminal_rendered_line(
     }
 }
 
-/// Returns label/body category styling independently of the display-only rail.
+/// Returns the baseline category rendition for transcript gutters and labels.
 pub(crate) fn agent_terminal_label_rendition(
     style: AgentTerminalPresentationStyle,
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
     let mut rendition = agent_text_foreground_rendition(style.color_pair(ui_theme));
     match style {
-        AgentTerminalPresentationStyle::Status
-        | AgentTerminalPresentationStyle::Assistant
-        | AgentTerminalPresentationStyle::DiffContext => {}
+        AgentTerminalPresentationStyle::Status | AgentTerminalPresentationStyle::DiffContext => {
+            rendition.dim = true;
+        }
         AgentTerminalPresentationStyle::UserPrompt
+        | AgentTerminalPresentationStyle::Assistant
         | AgentTerminalPresentationStyle::Error
         | AgentTerminalPresentationStyle::Command
         | AgentTerminalPresentationStyle::DiffHeader
@@ -869,11 +866,11 @@ pub(super) fn shell_output_preview_tail_uses_unicode_display_width() {
 mod hierarchy_tests {
     use super::*;
 
-    /// Plain and rich transcript adapters use the same quiet rail while user,
-    /// error and command labels retain their accents. Assistant prose remains
-    /// normal-weight and authored Markdown emphasis is not flattened.
+    /// Plain and rich adapters retain the pinned baseline category foreground
+    /// and emphasis on gutters and labels. Authored body emphasis remains
+    /// independent, and transcript renditions never paint a background.
     #[test]
-    fn transcript_rail_is_independent_of_category_and_rich_emphasis() {
+    fn transcript_renditions_match_baseline_categories_and_rich_emphasis() {
         for name in ["acid_lime", "gruvbox_light"] {
             let definition = mez_mux::theme::builtin_ui_theme_definition(name).unwrap();
             let theme = mez_mux::theme::resolve_ui_theme(name, definition).unwrap();
@@ -882,6 +879,8 @@ mod hierarchy_tests {
                 AgentTerminalPresentationStyle::Assistant,
                 AgentTerminalPresentationStyle::Error,
                 AgentTerminalPresentationStyle::Command,
+                AgentTerminalPresentationStyle::Status,
+                AgentTerminalPresentationStyle::DiffContext,
             ] {
                 let text = format!("{}body 雪", style.speaker_indicator().unwrap_or("agent: "));
                 for rich in [false, true] {
@@ -910,8 +909,15 @@ mod hierarchy_tests {
                     let row = &screen.normal_styled_content_lines()[0];
                     assert!(row.text.starts_with(AGENT_TERMINAL_MESSAGE_PREFIX));
                     let rail = rendered_line_rendition_at(&row.style_spans, 0);
-                    assert_eq!(rail, agent_gutter_rendition(&theme));
-                    assert!(!rail.bold && !rail.dim && rail.background.is_none());
+                    let shadow = matches!(
+                        style,
+                        AgentTerminalPresentationStyle::Status
+                            | AgentTerminalPresentationStyle::DiffContext
+                    );
+                    assert_eq!(rail.foreground, Some(style.color_pair(&theme).foreground));
+                    assert_eq!(rail.dim, shadow);
+                    assert_eq!(rail.bold, !shadow);
+                    assert!(rail.background.is_none());
                 }
             }
             let line = RichTextLine {
@@ -939,7 +945,7 @@ mod hierarchy_tests {
                     .unwrap();
             screen.feed(bytes.as_bytes());
             let row = &screen.normal_styled_content_lines()[0];
-            assert!(!rendered_line_rendition_at(&row.style_spans, 2).bold);
+            assert!(rendered_line_rendition_at(&row.style_spans, 2).bold);
             assert!(rendered_line_rendition_at(&row.style_spans, 7).bold);
         }
     }

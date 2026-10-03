@@ -295,8 +295,8 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
             output_line.style_spans
         );
         assert!(
-            !rendition.dim && !rendition.bold,
-            "shell output should remain readable and normal-weight in every frame: {:?}",
+            rendition.dim && !rendition.bold,
+            "shell output should retain baseline shadow styling in every frame: {:?}",
             output_line.style_spans
         );
 
@@ -329,8 +329,8 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
             view.line_style_spans[view_row]
         );
         assert!(
-            !view_rendition.dim && !view_rendition.bold,
-            "client view should preserve readable shell output in every frame: {:?}",
+            view_rendition.dim && !view_rendition.bold,
+            "client view should preserve baseline shadow output in every frame: {:?}",
             view.line_style_spans[view_row]
         );
     };
@@ -1321,7 +1321,7 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
             rendition.foreground,
             Some(config.ui_theme.colors.agent_transcript_status.foreground)
         );
-        assert!(!rendition.dim && !rendition.bold, "{output_line:?}");
+        assert!(rendition.dim && !rendition.bold, "{output_line:?}");
 
         let view = service
             .render_client_view(ClientViewRole::Primary, Size::new(80, 24).unwrap(), &config)
@@ -1344,7 +1344,7 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
             Some(config.ui_theme.colors.agent_transcript_status.foreground)
         );
         assert!(
-            !rendition.dim && !rendition.bold,
+            rendition.dim && !rendition.bold,
             "{:?}",
             view.line_style_spans[row]
         );

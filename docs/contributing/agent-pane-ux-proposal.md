@@ -5,13 +5,12 @@
 Design proposal with the first composer stage implemented. The runtime now
 supplies typed submission/binding context and the shared prompt block adds
 display-only context/help in comfortable geometry, retaining compact panes and
-existing input semantics. The quieter rail and expandable activity sections
-now have separate status: rail/category styling is separated with normal-weight
-assistant/status text, while the proposed thin glyph and expandable activity
-have different remaining scope: the thin glyph remains unadopted, and explicit
-retained activity list/detail inspection now exists through `/show-context activity`.
-Automatic inline folding and full provisional component/anchor coverage remain
-unimplemented. The evidence table below records the original inspected
+existing input semantics. Transcript renditions have been restored to the pinned
+pre-refactor baseline: category-colored gutters, bold assistant/user labels and
+dim status/thinking text. The quieter rail remains a proposal, not the adopted
+appearance. Explicit retained activity list/detail inspection now exists through
+`/show-context activity`, with typed component ownership and exact exports.
+Automatic inline folding remains unimplemented. The evidence table records the original inspected
 baseline, not every current behavior. Synthetic rendering/layout regressions
 are not measured usability or real-terminal font evaluation.
 

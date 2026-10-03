@@ -380,8 +380,8 @@ fn runtime_agent_parent_prompt_persists_raw_source_for_replay() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies thinking-log body text retains readable normal-weight status color
-/// instead of dimming prose or resetting to the terminal's default rendition.
+/// Verifies thinking-log body text retains baseline dim status styling
+/// instead of resetting to the terminal's default rendition.
 ///
 /// Thinking lines use the rich-line presentation path without explicit body
 /// spans, so this regression protects the base style inherited by unspanned
@@ -423,12 +423,12 @@ fn runtime_agent_thinking_renders_body_as_shadow_text() {
         thinking_line.style_spans.iter().any(|span| {
             body_column >= span.start
                 && body_column < span.start.saturating_add(span.length)
-                && !span.rendition.dim
+                && span.rendition.dim
                 && !span.rendition.bold
                 && span.rendition.foreground
                     == Some(service.ui_theme().colors.agent_transcript_status.foreground)
         }),
-        "thinking body should retain readable normal-weight status text: {thinking_line:?}"
+        "thinking body should retain baseline shadow status text: {thinking_line:?}"
     );
     service.terminate_all_pane_processes().unwrap();
 }
