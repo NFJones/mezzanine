@@ -1233,12 +1233,12 @@ fn render_attached_client_view_hides_agent_live_footer_while_prompt_has_input() 
 }
 
 /// Verifies that the live agent footer renders the active state label with
-/// grayscale scan-band motion over the prompt-bar background.
+/// foreground-only grayscale scan-band motion.
 ///
 /// The state label uses the active grayscale scan while the timer and stop hint
 /// remain readable as a muted static parenthetical.
 #[test]
-fn render_agent_working_footer_uses_prompt_background_grayscale_gradient() {
+fn render_agent_working_footer_uses_foreground_only_grayscale_gradient() {
     let mut ids = IdFactory::default();
     let window = Window::new(&mut ids, 0, "main", Size::new(64, 4).unwrap()).unwrap();
     let pane_id = window.panes()[0].id.to_string();
@@ -1282,9 +1282,8 @@ fn render_agent_working_footer_uses_prompt_background_grayscale_gradient() {
     let footer_text = &view.lines[footer_row];
     let state_start_byte = footer_text.find("running").unwrap();
     let state_start = UnicodeWidthStr::width(&footer_text[..state_start_byte]);
-    let prompt_background = config.ui_theme.colors.agent_prompt.background;
     assert!(footer_spans.iter().any(|span| span.start >= state_start
-        && span.rendition.background == Some(prompt_background)
+        && span.rendition.background.is_none()
         && span.rendition.foreground.is_some()));
     let parenthetical_start_byte = footer_text.find(" (").unwrap();
     let parenthetical_start = UnicodeWidthStr::width(&footer_text[..parenthetical_start_byte]);
@@ -1303,7 +1302,7 @@ fn render_agent_working_footer_uses_prompt_background_grayscale_gradient() {
         .filter(|span| {
             span.start >= parenthetical_start
                 && span.start.saturating_add(span.length) <= parenthetical_end
-                && span.rendition.background == Some(prompt_background)
+                && span.rendition.background.is_none()
                 && span.rendition.foreground.is_some()
         })
         .collect::<Vec<_>>();
@@ -1459,7 +1458,7 @@ fn render_agent_working_footer_keeps_state_styling_when_suffix_is_truncated() {
         view.line_style_spans[footer_row].iter().any(|span| {
             span.start >= state_start
                 && span.rendition.foreground.is_some()
-                && span.rendition.background == Some(config.ui_theme.colors.agent_prompt.background)
+                && span.rendition.background.is_none()
         }),
         "{:?}",
         view.line_style_spans[footer_row]

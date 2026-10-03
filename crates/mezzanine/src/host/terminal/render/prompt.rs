@@ -546,7 +546,7 @@ pub(super) struct AgentPromptBlock {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) prompt_live_footer_suffixes: Vec<Option<(usize, String)>>,
+    pub(super) prompt_live_footer_suffixes: Vec<Option<AgentPromptStatusSource>>,
     /// Display-only separator/help rows, styled independently of editable input.
     pub(super) decoration_rows: Vec<usize>,
     /// Stores the cursor row value for this data structure.
@@ -564,6 +564,16 @@ pub(super) struct AgentPromptBlock {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) cursor_visible: bool,
+}
+
+/// UI-owned status source and cell geometry captured before optional help
+/// filtering. Header animation is confined to the label, not its decoration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AgentPromptStatusSource {
+    start: usize,
+    text: String,
+    label_width: usize,
+    header: bool,
 }
 
 impl AgentPromptBlock {
@@ -635,21 +645,26 @@ impl AgentPromptBlock {
                     rendition: agent_prompt_shadow_hint_rendition(ui_theme),
                 });
             }
-            if let Some((footer_start, footer_text)) = self
+            if let Some(status) = self
                 .prompt_live_footer_suffixes
                 .get(line_index)
                 .and_then(|suffix| suffix.as_ref())
             {
                 styled_line.style_spans.extend(
-                    agent_live_footer_style_spans(
-                        footer_text,
-                        width.saturating_sub(*footer_start),
+                    agent_live_status_style_spans(
+                        &status.text,
+                        if status.header {
+                            status.label_width.min(width.saturating_sub(status.start))
+                        } else {
+                            width.saturating_sub(status.start)
+                        },
+                        status.label_width,
                         animation_tick_ms,
                         ui_theme,
-                        Some(ui_theme.colors.agent_prompt.background),
+                        None,
                     )
                     .into_iter()
-                    .map(|span| offset_style_span(span, *footer_start)),
+                    .map(|span| offset_style_span(span, status.start)),
                 );
             }
             lines.push(styled_line);
@@ -722,6 +737,10 @@ pub(super) fn render_agent_prompt_block(
         .map(|context| context.agent_display_lines.as_slice())
         .unwrap_or(&[]);
     let (display_source, live_footer) = split_agent_live_footer_display_source(display_source);
+    let status_label_width = live_footer
+        .and_then(agent_live_footer_state_label)
+        .map(terminal_text_width)
+        .unwrap_or(0);
     let composer = pane_context.and_then(|context| context.agent_composer.as_ref());
     let filtered_footer = live_footer.map(|footer| {
         if composer.is_some_and(|context| {
@@ -751,10 +770,12 @@ pub(super) fn render_agent_prompt_block(
         if !comfortable && prompt_can_show_agent_live_footer(&prompt) {
             live_footer
                 .map(|footer| {
-                    vec![Some((
-                        terminal_text_width(&format!("{MEZ_UI_PREFIX}{}", prompt.render())),
-                        footer.to_string(),
-                    ))]
+                    vec![Some(AgentPromptStatusSource {
+                        start: terminal_text_width(&format!("{MEZ_UI_PREFIX}{}", prompt.render())),
+                        text: footer.to_string(),
+                        label_width: status_label_width,
+                        header: false,
+                    })]
                 })
                 .unwrap_or_else(|| vec![None; prompt_layout.lines.len()])
         } else {
@@ -769,7 +790,15 @@ pub(super) fn render_agent_prompt_block(
         );
         prompt_layout.lines.insert(0, fit_width(&header, width));
         prompt_layout.shadow_spans.insert(0, Vec::new());
-        prompt_live_footer_suffixes.insert(0, None);
+        prompt_live_footer_suffixes.insert(
+            0,
+            live_footer.map(|footer| AgentPromptStatusSource {
+                start: terminal_text_width(&format!("── {label} · ")),
+                text: footer.to_string(),
+                label_width: status_label_width,
+                header: true,
+            }),
+        );
         prompt_layout.cursor_row += 1;
         decoration_rows.push(0);
         decoration_rows.push(prompt_layout.lines.len());
@@ -1002,12 +1031,32 @@ pub(super) fn agent_live_footer_style_spans(
     ui_theme: &UiTheme,
     background: Option<TerminalColor>,
 ) -> Vec<TerminalStyleSpan> {
+    let label_width = agent_live_footer_state_label(line)
+        .map(terminal_text_width)
+        .unwrap_or(0);
+    agent_live_status_style_spans(
+        line,
+        width,
+        label_width,
+        animation_tick_ms,
+        ui_theme,
+        background,
+    )
+}
+
+/// Applies the shared wave to an explicitly owned label extent. Help visibility
+/// cannot change status identity; clipping never styles a trailing header rule.
+fn agent_live_status_style_spans(
+    line: &str,
+    width: usize,
+    state_label_width: usize,
+    animation_tick_ms: u64,
+    ui_theme: &UiTheme,
+    background: Option<TerminalColor>,
+) -> Vec<TerminalStyleSpan> {
     let text = fit_width(line, width);
     let mut style_spans = Vec::new();
     let visible_width = overlay_text_style_width(&text, width);
-    let state_label_width = agent_live_footer_state_label(line)
-        .map(terminal_text_width)
-        .unwrap_or(0);
     if state_label_width == 0 || visible_width == 0 {
         return style_spans;
     }

@@ -24,6 +24,11 @@ The agent works from the pane working directory, its conversation state,
 configured instructions, and explicit action results; it does not passively
 receive your full terminal screen, scrollback, or other panes.
 
+In comfortable panes, live status remains in the composer header while drafting.
+Its active label retains the status wave without animating the surrounding
+composer label, timer or hints. Wave spans are foreground-only, and unavailable
+interrupt hints do not suppress the true status label.
+
 Structured agent output wraps at the smaller of the pane width and
 `terminal.agent_wrap_column_cap` (120 display cells by default). This includes
 status, error, diagnostic, action, and result rows as well as transcript text.

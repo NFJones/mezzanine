@@ -20,9 +20,24 @@ fn view(
     context: AgentComposerContext,
     role: ClientViewRole,
 ) -> mez_mux::presentation::RenderedClientView {
+    view_at_tick(size, prompt, context, role, 0)
+}
+
+/// Renders deterministic wave phases through the production attached adapter.
+fn view_at_tick(
+    size: Size,
+    prompt: &ReadlinePrompt,
+    context: AgentComposerContext,
+    role: ClientViewRole,
+    tick: u64,
+) -> mez_mux::presentation::RenderedClientView {
     let window = Window::new(&mut IdFactory::default(), 0, "composer", size).unwrap();
     let pane_id = window.panes()[0].id.to_string();
-    let mut frame = TerminalFrameContext::default();
+    let mut frame = TerminalFrameContext {
+        animation_tick_ms: tick,
+        agent_status_wave_active: true,
+        ..Default::default()
+    };
     frame.panes.insert(
         pane_id,
         TerminalPaneFrameContext {
@@ -42,6 +57,87 @@ fn view(
     render_attached_client_view(role, &window, &BTreeMap::new(), &config, size)
         .unwrap()
         .unwrap()
+}
+
+/// Only the active state label changes rendition across wave ticks. Draft,
+/// header text, timer, help and geometry remain unchanged, including when
+/// interrupt help is filtered from a read-only projection.
+#[test]
+fn composer_header_animates_only_active_status_label() {
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
+    prompt.buffer.insert_text("draft 雪");
+    for (role, intercepted) in [
+        (ClientViewRole::Primary, false),
+        (ClientViewRole::Observer, false),
+        (ClientViewRole::Primary, true),
+    ] {
+        let context = AgentComposerContext {
+            keys: intercepted.then_some(mez_mux::presentation::AgentComposerKeys {
+                escape: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let first = view_at_tick(
+            Size::new(80, 24).unwrap(),
+            &prompt,
+            context.clone(),
+            role,
+            0,
+        );
+        let later = view_at_tick(Size::new(80, 24).unwrap(), &prompt, context, role, 720);
+        if role == ClientViewRole::Observer {
+            assert!(
+                first
+                    .lines
+                    .iter()
+                    .any(|line| line.contains("Read-only view"))
+            );
+            assert!(!first.cursor_visible);
+        }
+        assert_eq!(
+            first
+                .lines
+                .iter()
+                .any(|line| line.contains("esc to interrupt")),
+            role == ClientViewRole::Primary && !intercepted
+        );
+        assert_eq!(first.lines, later.lines);
+        assert_eq!(
+            (first.cursor_row, first.cursor_column),
+            (later.cursor_row, later.cursor_column)
+        );
+        let row = first
+            .lines
+            .iter()
+            .position(|line| line.contains("executing"))
+            .unwrap();
+        assert_ne!(first.line_style_spans[row], later.line_style_spans[row]);
+        let start_byte = first.lines[row].find("executing").unwrap();
+        let start = unicode_width::UnicodeWidthStr::width(&first.lines[row][..start_byte]);
+        let end = start + "executing".len();
+        let at = |spans: &[mez_terminal::TerminalStyleSpan], column: usize| {
+            spans
+                .iter()
+                .rev()
+                .find(|span| column >= span.start && column < span.start + span.length)
+                .map(|span| span.rendition)
+                .unwrap_or_default()
+        };
+        for column in 0..80 {
+            if column < start || column >= end {
+                assert_eq!(
+                    at(&first.line_style_spans[row], column),
+                    at(&later.line_style_spans[row], column)
+                );
+            }
+        }
+        assert!(
+            later.line_style_spans[row]
+                .iter()
+                .all(|span| span.rendition.background.is_none())
+        );
+    }
 }
 
 /// Live status remains visible while drafting without stealing input/cursor;

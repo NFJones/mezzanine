@@ -3148,7 +3148,12 @@ a display-only help row around the existing input surface. The context MUST
 distinguish idle `Ask Mez`, a running turn accepting steering (`Guide this task`),
 slash-command drafts, pending approval review, history search and discarded
 paste ownership. Live state and elapsed time MUST remain visible while drafting
-at this geometry. Help MUST describe actual readline precedence: reverse-search
+at this geometry. The active header status label MUST retain the existing shared
+status wave, confined to its visible label cells with foreground-only spans.
+Composer labels, duration, borders and help remain static; removing unavailable
+interrupt help MUST NOT remove status identity or its animation. Existing
+reduced-motion and refresh scheduling remain authoritative.
+Help MUST describe actual readline precedence: reverse-search
 Enter accepts without submission, Tab cycles completion, ordinary Enter submits,
 and active-work Escape interrupts before prompt decoding. Effective mux bindings
 MUST suppress intercepted baseline hints and supply the actual editor route.

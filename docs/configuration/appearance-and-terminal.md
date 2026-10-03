@@ -57,6 +57,11 @@ fill. Assistant/user labels retain bold accents; status and thinking text use
 dim shadow styling. Authored body emphasis remains independent. No palette,
 theme slot or configuration field changes are required for these renditions.
 
+The comfortable agent composer header retains the active status-label wave.
+Only the status label animates; surrounding labels, duration and help stay
+static. Header and compact-footer wave spans do not paint a background, and
+the existing reduced-motion and refresh settings control their scheduling.
+
 `terminal.shell_output_preview_lines` bounds the live command-output tail after
 wrapping (default `5`). The tail grows with received output rather than reserving
 its maximum height or an extra blank row. At the limit, newer output replaces
