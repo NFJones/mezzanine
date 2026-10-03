@@ -288,12 +288,15 @@ loopback ports, and report a capacity conflict only when that range is
 exhausted. Reattach retains the remote `DISPLAY` and `XAUTHORITY` paths while
 rotating route credentials.
 
-When `identity = "per_session"` is enabled, direct-session daemon startup binds
-the protected per-session endpoint and runs Iroh control alongside Unix control.
-`identity = "host"` is owned by the persistent host and direct-session startup
-fails explicitly rather than silently reusing per-session key material. A
-configured endpoint failure is a startup error; Mezzanine does not silently
-weaken explicit enablement into Unix-only operation. The endpoint applies the selected lookup, relay, direct-IP, port
+Normal direct CLI sessions (`mez` and `mez serve`) apply a live override that
+disables inbound Iroh, even when disk configuration enables it with
+`identity = "per_session"` or `"host"`. They retain Unix control; choosing
+`per_session` does not expose a remote listener through these commands. Use
+`mez host serve` with `identity = "host"` for the supported remote workflow.
+The lower-level per-session endpoint implementation and its legacy key storage
+are not a direct CLI startup option. Failure to bind an enabled persistent-host
+endpoint is a startup error, not an automatic Unix-only fallback. The endpoint
+applies the selected lookup, relay, direct-IP, port
 mapping, proxy, and CA policies to both listening and explicit clients. It
 advertises the configured compression ALPNs in order, accepts one client-opened
 control stream per connection, and bounds setup, idle, connection, frame, and
@@ -907,7 +910,7 @@ description.
 | `agents.default_personality` | string | `""` | Default personality profile id; empty means none. |
 | `agents.always_exposed_mcp_servers` | string array | `[]` | MCP server ids whose compact safe directory metadata is exposed through append-only catalog snapshots on every applicable model turn. The directory makes a server referencable; `mcp_server_get` must retrieve its complete tool contract before `mcp_call`. Unchanged catalogs are reused; configuration, discovery, schema, or availability changes append an authoritative transition. Availability alone does not instruct the model to use a server, and the live registry still controls callability. |
 | `agents.auto_sizing` | table | see below | Model auto-sizing settings. |
-| `agents.subagent_placement` | string | `"new-window"` | Where root-spawned subagents are placed. |
+| `agents.subagent_placement` | string | `"new-window"` | Legacy compatibility hint; children use dedicated subagent windows in the parent's window group, not ordinary windows. Current nested descendants can share an existing subagent window with their parent when capacity permits; this is a gap from SPEC's stricter separate-window requirement. |
 | `agents.max_concurrent_agents` | integer | `4` | Global active-agent limit; parents waiting for routed, joined, or macro dependencies release capacity and reacquire it fairly before continuing. |
 | `agents.max_queued_turns` | integer | `256` | Maximum scheduler-queued agent turns; must be positive. |
 | `agents.max_queued_bytes` | integer | `4194304` | Maximum estimated bytes retained across scheduler-queued turns; must be positive. |
@@ -1319,8 +1322,8 @@ profiles when changing provider, model, or provider options.
 | `permissions.preset` | string | omitted | Optional preset, such as `read-only` or `auto`. |
 | `permissions.sandbox` | string | `"bubblewrap"` on Linux with executable `/usr/bin/bwrap`; `"seatbelt"` on macOS with executable `/usr/bin/sandbox-exec`; `"policy-only"` otherwise | Additive confinement backend. Executable presence selects generated and omitted defaults but is not runtime capability proof. Existing configurations are preserved by migration. `policy-only` does not provide OS-level isolation. |
 | `permissions.env_whitelist` | string array | `["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"]` when omitted | Portable names selected from Mez's immutable server-startup environment snapshot, not the pane shell, and forwarded to ordinary native, Bubblewrap, and Seatbelt actions. Pane process evidence separately determines shell identity and path authority. Values are bounded and redacted from status and logs; unlisted or unsafe server values are omitted. An explicit `[]` forwards none. Internal semantic `apply_patch` phases retain their fixed environment. |
-| `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. Paths unavailable on the active pane are omitted with a warning. On macOS, Seatbelt separately allows read-only access to existing real `/Library/Developer/CommandLineTools` and `/opt/homebrew` directories for toolchain loading; these are not configured scopes or writable grants. |
-| `permissions.write_scopes` | string array | omitted | Maximum pane-resolved write authority; write also implies read. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. Paths unavailable on the active pane are omitted with a warning. |
+| `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. When both scope arrays are empty (including omitted arrays), the deepest governing project-trust decision supplies read-write authority only if trusted. Deeper rejected, revoked, or pending decisions withhold fallback; see [project trust](../safety-and-trust/project-trust-and-instructions.md#distinguish-trust-from-filesystem-authority). Empty arrays alone do not disable fallback. Paths unavailable on the active pane are omitted with a warning. On macOS, Seatbelt separately allows read-only access to existing real `/Library/Developer/CommandLineTools` and `/opt/homebrew` directories for toolchain loading; these are not configured scopes or writable grants. |
+| `permissions.write_scopes` | string array | omitted | Maximum pane-resolved write authority; write also implies read. When both scope arrays are empty (including omitted arrays), fallback requires the deepest governing project-trust decision to be trusted; a matching trusted ancestor cannot override a deeper negative decision. For read-only project authority, set a non-empty read scope and an empty write scope. Paths unavailable on the active pane are omitted with a warning. |
 | `permissions.bubblewrap.executable` | string | `"/usr/bin/bwrap"` | Absolute Bubblewrap path resolved and probed in the pane environment. |
 | `permissions.bubblewrap.unavailable` | string | `"fail"` | Never runs unsandboxed automatically. A prompt-classified action may offer one exact approval-gated fallback after Bubblewrap failure. |
 | `permissions.bubblewrap.network` | string | `"isolated"` | Private network namespace policy. |

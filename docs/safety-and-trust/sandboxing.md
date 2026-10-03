@@ -145,8 +145,11 @@ make a connector safe.
 - With Seatbelt, `deny` rejects TCP, UDP, and Unix-domain socket operations in
   the visible host namespace.
 - `allow` permits networking; Seatbelt includes the system services needed for
-  ordinary host-client networking. `prompt` requires authorization of the
-  action's network requirement before that access is granted.
+  ordinary host-client networking. With `prompt`, an admitted action classified
+  as requiring networking can receive a connected sandbox plan. Admission
+  follows the active approval policy and applicable rules: `full-access` can
+  admit it without a fresh human prompt, and `auto-allow` can use the model's
+  rationale. The policy name is not a guarantee of a per-action human decision.
 
 Neither backend filters destinations. Allowing networking can permit data
 exfiltration from readable paths. `policy-only` does not enforce shell-network

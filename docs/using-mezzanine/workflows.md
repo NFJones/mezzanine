@@ -41,10 +41,16 @@ continuity, and provider behavior.
 
 X11 forwarding is an explicit authenticated-Iroh-primary workflow. In
 primary-user configuration, the host must set both `transport.iroh.enabled =
-true` and `transport.iroh.x11.enabled = true`, then restart the owning daemon.
+true` and `transport.iroh.x11.enabled = true`, and use
+`transport.iroh.identity = "host"` (the default). Check the identity setting
+if switching from a `per_session` configuration. Then start or restart the
+[persistent host](../operations/persistent-host.md) with `mez host serve`.
+Direct sessions started with `mez serve` do not expose the host's Iroh endpoint.
 The attaching machine must already have a supported `DISPLAY`, a matching
-`MIT-MAGIC-COOKIE-1` record, and `xauth`. Pair the client normally, then request
-untrusted forwarding:
+`MIT-MAGIC-COOKIE-1` record, and `xauth`. Follow
+[remote pairing](../safety-and-trust/remote-pairing-and-recovery.md) to create a
+client profile (named `home-mez` in this example), then request untrusted
+forwarding:
 
 ```console
 mez --iroh-profile home-mez attach --x11

@@ -90,9 +90,14 @@ boundary.
 
 The snapshot directory also holds `snapshots.sqlite`, a derived index the
 daemon and the snapshot CLI keep for listing, latest selection, and deletion.
-It can be deleted at any time: the manifests remain the source of truth, so the
-next read rebuilds the index from them, and a database left by an older build
-is replaced the same way. `mez storage export snapshots` prints the latest
+The manifests remain the source of truth: a missing index is rebuilt on the
+next read, and an older index schema is replaced from those manifests. A newer
+schema is rejected rather than silently discarded; use the matching newer
+binary or an appropriate backup instead of deleting it to force a downgrade.
+For manual index recovery, stop all daemons and CLI writers using that store
+and preserve the manifests, payloads, database, and any `-wal`/`-shm` sidecars
+before moving the index aside. Do not delete a live SQLite database or its
+sidecars to clear a lock. `mez storage export snapshots` prints the latest
 winners in the retired `latest.index` shape without creating or migrating the
 database.
 

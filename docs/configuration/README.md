@@ -2,7 +2,8 @@
 
 ## Purpose
 
-Provide progressive configuration guidance and one canonical schema reference.
+Customize Mezzanine using focused guides, an example configuration, and a
+complete settings reference.
 
 ## Prerequisites
 
@@ -11,7 +12,7 @@ of configuration files.
 
 ## Chapters
 
-This section owns the following configuration guidance:
+Start with the overview, then choose the settings you want to change:
 
 - [Configuration overview](overview.md)
 - [Appearance and terminal](appearance-and-terminal.md)
@@ -20,7 +21,7 @@ This section owns the following configuration guidance:
 - [Extensions, hooks, and control](extensions-hooks-and-control.md)
 - [Configuration reference](reference.md)
 - [Example configuration](../examples/config.toml)
-- [Power-inhibition operations and qualification](../operations/power-inhibition.md)
+- [Keep the host awake during agent work](../operations/power-inhibition.md)
 - [Configuration CLI](../reference-manual/cli.md#configuration-identity-and-integrations)
 
 ## Related pages

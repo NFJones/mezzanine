@@ -21,7 +21,7 @@ access, and review diagnostic exports before sharing them.
 
 ## Chapters
 
-This section owns the following operational guidance:
+Choose the guide for the host or symptom you are working with:
 
 - [Persistent multi-session host](persistent-host.md)
 - [Lifecycle, detach, and recovery](lifecycle-detach-and-recovery.md)

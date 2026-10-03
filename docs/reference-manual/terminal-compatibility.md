@@ -23,6 +23,22 @@ all xterm features. General DCS controls remain unsupported except for the
 synchronized-output markers below. Applications that require an unimplemented
 extension may need a different mode or an ordinary terminal outside Mez.
 
+### Application clipboard requests
+
+Pane applications can request clipboard writes through OSC 52, subject to
+`terminal.clipboard`. Current pane-output handling does not ask for separate
+security approval, so choose this setting deliberately for untrusted programs:
+
+- `external`: save an accepted write in the internal `osc52` paste buffer, then
+  attempt a best-effort host clipboard copy.
+- `internal`: save it only in that internal buffer, without host clipboard I/O.
+- `disabled`: reject it without changing either clipboard.
+
+Mezzanine never answers pane-originated clipboard queries or reads the host
+clipboard for them. Each OSC 52 control payload is limited to 4096 bytes;
+oversized sequences, malformed base64, and decoded non-UTF-8 writes are ignored.
+This limit is separate from the limits for interactive copy and paste.
+
 ### Synchronized output
 
 Mezzanine implements DEC synchronized-output mode 2026 and the bounded legacy

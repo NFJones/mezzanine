@@ -17,12 +17,13 @@ configuration, and restart the owning daemon. A direct-only foreign-machine
 deployment needs a stable non-zero UDP `bind_port` that the network permits;
 relay and lookup deployments need explicitly selected infrastructure.
 
-With `identity = "per_session"`, a direct-session listener runs alongside Unix
-control; failure to bind an explicitly enabled endpoint fails startup rather
-than silently removing remote service. The default host-scoped identity is
-owned only by a running `mez host serve`: direct `mez` and `mez serve` continue
-with Unix control and do not attempt to bind it. Unix remains the administration
-and recovery path.
+Use `identity = "host"` (the default) with a running `mez host serve` for
+remote access. Normal direct `mez` and `mez serve` sessions disable inbound
+Iroh through a live override and continue with Unix control, including when
+disk configuration selects `per_session`. That setting does not enable remote
+access through those direct CLI commands. An enabled persistent-host endpoint
+that cannot bind fails startup rather than silently removing remote service.
+Unix remains the administration and recovery path.
 
 ## Understand the identities
 

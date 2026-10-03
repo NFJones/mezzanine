@@ -83,6 +83,14 @@ primary-client requirement. Treat access to the local account and these commands
 as security-sensitive. The pane-local flow is preferable when available, but
 it does not prevent other same-account processes from using the direct CLI.
 
+Running services refresh external trust-store changes at trust-sensitive
+boundaries, including shell and patch admission and configuration reload. A
+successful direct CLI command confirms persistence, not that every running
+service has already refreshed its in-memory state or stopped existing work.
+Malformed external trust state causes the refresh to fail closed and withdraw
+trust-derived authority. Preserve the diagnostic, repair the store through
+supported workflows, and recheck effective layers and scopes before continuing.
+
 ## Distinguish trust from filesystem authority
 
 When both `permissions.read_scopes` and `permissions.write_scopes` are empty,

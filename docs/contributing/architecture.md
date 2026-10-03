@@ -19,14 +19,17 @@ depend on the product package. The current manifest graph is:
 
 ```text
 mezzanine -> mez-agent -> mez-core
-          -> mez-mux -> mez-terminal -> mez-core
+          -> mez-mux -> mez-terminal
+                     -> mez-core
+          -> mez-terminal
           -> mez-core
 ```
 
-`mez-agent` and `mez-terminal` each depend only on `mez-core`; `mez-mux`
-depends on `mez-core` and `mez-terminal`; `mezzanine` depends on all four lower
-crates. Keep new dependencies consistent with that layering rather than
-introducing a reverse edge.
+These arrows show workspace-crate dependencies, not third-party libraries.
+`mez-agent` depends on `mez-core`; `mez-terminal` has no workspace-crate
+dependencies; `mez-mux` depends on `mez-core` and `mez-terminal`; `mezzanine`
+depends on all four lower crates. Keep new dependencies consistent with that
+layering rather than introducing a reverse edge.
 
 | Package | Owns | Boundary |
 | --- | --- | --- |

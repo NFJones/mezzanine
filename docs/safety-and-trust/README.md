@@ -23,7 +23,7 @@ The chapters below identify current behavior and important gaps.
 
 ## Chapters
 
-This section owns the following safety guidance:
+Review the boundary relevant to your task:
 
 - [Approvals and review](approvals-and-review.md)
 - [Sandboxing](sandboxing.md)

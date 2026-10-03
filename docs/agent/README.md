@@ -12,7 +12,7 @@ routine workflows in [Using Mezzanine](../using-mezzanine/README.md).
 
 ## Chapters
 
-This section owns the following agent guidance:
+Choose the guide for your task:
 
 - [Agent overview](overview.md)
 - [Commands, skills, and macros](commands-skills-and-macros.md)

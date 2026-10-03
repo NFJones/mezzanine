@@ -144,8 +144,8 @@ cursor_blink_interval_ms = 500
 command = ["editor", "{file}"]
 fallback = [["vim", "{file}"], ["nano", "{file}"], ["vi", "{file}"]]
 
-# `escape` is the prefix key. Optional direct key settings below cover actions
-# without generated default prefix equivalents.
+# `escape` is the prefix key. Optional direct key settings below replace the
+# corresponding built-in prefix bindings.
 [keys]
 escape = "C-a"
 # Prefix suffix for external prompt editing (`Ctrl+A e` by default). Set to
@@ -502,7 +502,7 @@ custom_system_prompt = ""
 default_personality = ""
 # MCP server ids exposed on every applicable model turn.
 always_exposed_mcp_servers = []
-# Place spawned subagents in a new window by default.
+# Legacy placement hint; children always use dedicated same-group subagent windows.
 subagent_placement = "new-window"
 # Global running-agent and scheduler queue limits.
 max_concurrent_agents = 4

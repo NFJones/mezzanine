@@ -51,7 +51,7 @@ and `pane` modes. It does not alter the pane's shell history or command draft.
 | `Esc` at an idle prompt | Clear the draft without hiding the prompt. |
 | `Ctrl+D` on an empty prompt | Hide the agent shell. |
 | `Ctrl+C` twice within three seconds while idle | Hide the agent shell. |
-| `Ctrl+C` while a task runs, or `/stop` | Request interruption of the task. |
+| `Esc` or `Ctrl+C` while a task runs, or `/stop` | Request interruption of the task. |
 | `/new` | Start a separate conversation. |
 | `/resume` | Open the saved-conversation picker. |
 
@@ -142,8 +142,7 @@ shell-backed agent actions in fresh compatible shells without typing into the
 pane. It can work while a full-screen application occupies the pane, but
 stateful or interactive actions are rejected rather than redirected to it.
 State such as a command's `cd` or `export` does not carry into the next fresh
-shell. Native patch execution is currently shell-backed too: `native` does
-not mean every action runs without child processes.
+shell.
 
 `pane` mode sends shell-backed work through the interactive pane shell. It
 requires a supported Bash, Fish, Zsh, or POSIX `sh` shell ready at an empty
