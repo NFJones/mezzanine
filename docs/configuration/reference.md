@@ -15,6 +15,7 @@ precedence, trust, and validation. Compare settings against the checked-in
 ## Schema index
 
 - [Files, layers, versions, and migration](#configuration-files-and-layers)
+- [Offline and live changes](#offline-and-live-changes)
 - [Top-level fields](#top-level-fields)
 - [Persistent host](#host) and [Iroh transport](#transportiroh)
 - [Runtime](#runtime), [terminal](#terminal), [keys](#keys), and [key
@@ -124,6 +125,34 @@ Configuration is conservative:
 If you are new to Mezzanine, you usually do not need the full schema on first
 run. Start with `mez config init`, `mez config get`, and `mez config validate`,
 then return to the schema reference when customizing behavior in detail.
+
+## Offline and live changes
+
+The process CLI (`mez config get|layers|set|unset`) loads disk configuration for
+its working directory. It neither reads an attached session's live overrides
+nor applies offline edits to that session. In the session command prompt, use
+`show-options [PATH]` for effective values, source layers, and live-mutability
+diagnostics; `add-options` lists supported mutation paths and value formats.
+For example, `set-option terminal.zen_mode true` changes only the live session.
+Live overrides outrank disk layers and may continue to shadow persisted edits.
+
+The [control endpoint](../reference-manual/protocols/control-json-rpc.md)
+provides `config/get`, `config/set`, `config/unset`, and `config/reload` for a
+selected running session, including explicit persistence targets. Do not
+confuse `config/reload` with a `mez config reload` subcommand: the latter does
+not exist. Reload is not a daemon restart: runtime worker sizing and remote
+transport policy require restart, action catalogs remain frozen for existing
+agent conversations, and turn timeouts are snapshotted for each new turn.
+
+Mutation paths use ASCII `[A-Za-z0-9_-]` segments separated by dots. Set values
+are strings, integers, booleans, or string arrays, not tables, objects, or null.
+Most paths have at most three segments; named frame-pill leaves, MCP external
+capability leaves, and provider-model leaves are explicit deeper exceptions.
+Command-rule array entries and nested option maps are not scalar mutation
+targets; use typed management commands or edit and validate the file. Removing
+a setting exposes the applicable lower-precedence value, not necessarily the
+built-in default. The agent `config_change` action's `reset` is an alias for
+removing the explicit setting, not a separate CLI subcommand.
 
 
 ## Full configuration schema
@@ -319,11 +348,14 @@ rollout](../operations/iroh-production-operations-and-rollout.md).
 | --- | --- | --- | --- |
 | `runtime.cpu_count` | integer | `2` | Tokio worker threads available to daemon and foreground services; must be positive. |
 
+Changing worker sizing requires a process restart; configuration reload does
+not resize the existing Tokio runtime.
+
 ### `terminal`
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `terminal.profile` | string | `"xterm-compatible"` | Terminal compatibility profile. `xterm-compatible` is Mezzanine's bounded implemented subset, not a full xterm-emulator claim; valid defaults include `xterm-compatible` and `dumb`. |
+| `terminal.profile` | string | `"xterm-compatible"` | Terminal compatibility profile. `xterm-compatible` is Mezzanine's bounded implemented subset, not a full xterm-emulator claim; supported profiles include `xterm-compatible` and `dumb`. |
 | `terminal.term` | string | `"xterm-256color"` | `TERM` value exposed to panes. |
 | `terminal.pane_spawn_directory` | string | `"home"` | Directory policy for newly created panes: `home` or `same-directory`. |
 | `terminal.pane_spawn_view` | string | `"shell"` | Initial pane surface: `shell` or `agent`. |
@@ -394,6 +426,10 @@ The prefix key table remains available for actions whose direct fields are
 omitted. Setting a direct action field replaces that action's built-in prefix
 binding; setting it to `null` disables both paths. `list-keys` shows only the
 effective result.
+
+Explicit null bindings require JSON or YAML: TOML has no null value, and the
+scalar `mez config set` interface does not accept null. Removing a field with
+`mez config unset` restores inheritance; it does not disable the binding.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
@@ -1137,6 +1173,8 @@ evidence.
 | `model_profiles.<name>.context_limit_tokens` | integer | omitted | Alternative explicit context limit. |
 | `model_profiles.<name>.max_input_tokens` | integer | profile-specific | Optional inclusive threshold for provider-reported ordinary execution input. Mez compacts eligible context at a safe continuation boundary after a response reaches it; it does not preflight-gate the current request or guarantee the next one fits. Auxiliary router, compactor, and memory usage is excluded. |
 | `model_profiles.<name>.max_output_tokens` | integer | profile/provider-specific | Optional provider output-token cap. Generated built-in provider-model records carry editable defaults where available; a profile override remains authoritative. |
+| `model_profiles.<name>.reasoning_levels` | string array | omitted; inherited from model metadata | Supported reasoning-level metadata override, distinct from the selected `reasoning_profile`. Replaces the lower-precedence list; `[]` clears it. Uses the validated reasoning vocabulary described under providers. |
+| `model_profiles.<name>.capabilities` | string array | omitted; inherited from model metadata | Provider-neutral capability metadata override. Replaces the lower-precedence list; `[]` clears it. Uses the validated capability vocabulary described under providers. |
 | `model_profiles.<name>.provider_options` | table | see below | Provider-specific non-secret model options. |
 | `model_profiles.<name>.safety_tier` | string | `"high"` in generated profiles | Safety posture label. |
 | `model_profiles.<name>.privacy_tier` | string | `"standard"` in generated profiles | Privacy posture label. |
@@ -1641,11 +1679,11 @@ credentials.
 | `hooks.<name>.args` | string array | omitted | Program hook arguments. |
 | `hooks.<name>.shell` | string | omitted | Reserved compatibility field; accepted but not consumed by the current hook runtime. Use `command` with `kind = "focused_shell"`. |
 | `hooks.<name>.kind` | string | omitted | Invocation kind: `program`, `shell`, or `focused_shell`; omitted `kind` treats `command` as a focused-shell hook. |
-| `hooks.<name>.enabled` | boolean | omitted | Whether the hook is enabled. |
+| `hooks.<name>.enabled` | boolean | omitted; `true` effective | Whether the configured hook is enabled. No hooks are configured on first launch. |
 | `hooks.<name>.required` | boolean | omitted | When true, a `session_start` hook defaults to blocking on failure if `on_failure` is omitted. |
 | `hooks.<name>.agent_hook` | boolean | omitted | For focused-shell hooks, wait for shell availability; `agent_turn_start` and `user_prompt_submit` hooks also default to blocking on failure when this is true and `on_failure` is omitted. |
-| `hooks.<name>.timeout_ms` | integer | omitted | Hook timeout in milliseconds. |
-| `hooks.<name>.timeout_sec` | integer | omitted | Hook timeout in seconds. |
+| `hooks.<name>.timeout_ms` | integer | omitted; `30000` effective | Hook timeout in milliseconds. Takes precedence if both timeout forms are configured. |
+| `hooks.<name>.timeout_sec` | integer | omitted; 30 seconds effective | Hook timeout in seconds, used when `timeout_ms` is absent. |
 | `hooks.<name>.on_failure` | string | event-dependent | Failure behavior: `block`, `warn`, or `ignore`. Pre-shell-command, permission-request, pre-MCP-tool-use, and layout-load hooks default to `block`; qualifying required or agent hooks also default to `block`; other hooks default to `warn`. A blocking failure becomes a warning if the triggering event has already completed. |
 | `hooks.<name>.match` | table | omitted | Single matcher definition. |
 | `hooks.<name>.matches` | array | omitted | Matcher group definitions. |

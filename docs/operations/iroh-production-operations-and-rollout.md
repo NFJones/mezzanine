@@ -271,8 +271,10 @@ Use local Unix control for all trust administration.
 
 - Revoke a lost client immediately with `mez remote revoke CLIENT_ID --reason
   REASON`.
-- Stop the session before backing up or replacing server endpoint identity and
-  trust state.
+- Stop the owning daemon before backing up or replacing server endpoint identity
+  and trust state: `mez host serve` for host identity, or the direct-session
+  daemon for compatibility identity. Stopping only one hosted session is not
+  sufficient.
 - Treat endpoint key, trust database, client key, profile, and device credential
   backups as credentials with owner-only access.
 - Replacing a server endpoint key invalidates endpoint-bound invitations and
@@ -295,8 +297,11 @@ Use local Unix control for all trust administration.
 6. Preserve remote identity and trust state for later re-enable, or remove it
    only during a deliberate offline credential-retirement procedure.
 
-Rollback needs no session-data migration. Disabling the transport does not
-change local session storage or remove the Unix recovery path.
+Rollback needs no session-data migration, but the required host restart
+interrupts supervised sessions and agent work. Remote active leases are not
+reconstructed; review their failed state and any uncertain work after restart.
+Disabling the transport preserves local session storage and the Unix recovery
+path once the host is running again. See [host restart guidance](persistent-host.md#stop-upgrade-and-recover).
 
 ## Staged rollout and stop thresholds
 
@@ -321,26 +326,26 @@ Repository tests are not substitutes for native platform, production service,
 or representative network evidence.
 
 Point-in-time build, benchmark, and acceptance samples belong in generated or
-versioned release evidence, not in this runbook. The matrix below states what
-the repository currently demonstrates and what each release must still collect
-on supported platforms and approved infrastructure.
+versioned release evidence, not in this runbook. A checked-in test or harness is
+not evidence that it passed for the deployed build. Record the build/version,
+platform, configuration, result artifact, date, and responsible operator for
+each applicable gate. This page does not certify any release as qualified.
 
-| Gate | Current repository evidence | Required release evidence | Status |
-| --- | --- | --- | --- |
-| Disabled default and Unix recovery | Configuration and coexistence regressions preserve Unix control; host restart fails active remote leases and retires legacy remote snapshots. | Packaged daemon rollback drill. | Locally verified; packaged drill pending. |
-| Policy validation | Schema and effective runtime reject contradictory route, relay, lookup, type, and bound combinations. | Validate approved production configuration. | Locally verified. |
-| Direct local path | Direct Iroh control, events, reconnect, malformed traffic, timeout, abrupt loss, and stream limits have focused tests. | Native Linux and macOS controlled runs. | Local Linux environment only; macOS pending. |
-| Relay-required and direct-plus-relay | Explicit configuration paths exist. | Approved custom relay, outage, migration, latency, throughput, and reconnect runs. | Pending; no production relay approved. |
-| Lookup | Disabled, local, n0 DNS, and custom DNS policy are explicit. | Approved custom lookup ownership, DNS loss, retention, and recovery run. | Pending. |
-| Network diversity | No repository unit test proves real NAT, IPv6, proxy, captive, loss, or reordering behavior. | LAN, representative NAT, IPv4 and IPv6, proxy and CA, latency, loss, and reordering matrix. | Pending. |
-| Abuse and bounds | Connection, stream, frame, queue, setup, idle, slow-consumer, and shutdown bounds have local regressions. | Descriptor, memory, CPU, and connection-flood measurements. | Functional bounds verified; measurements pending. |
-| Privacy | Aggregate status and metrics have redaction regressions; documentation states direct and relay metadata exposure. | Production telemetry schema and retention review. | Local redaction verified; production review pending. |
-| Performance and package impact | Local report-only release workload records throughput, RSS, and PTY/input/render latency; isolated direct create, detach, reconnect, and revocation paths pass. | Cold startup, memory, CPU, release binary and package size, direct and relay latency and throughput, reconnect, observer fan-out, and concurrent-session baseline. | Local sample recorded; packaged and network baselines pending. |
-| Compatibility | ALPN and protocol version are fixed and explicit targets never fall back. | Supported client/server upgrade and rollback matrix. | Protocol behavior verified; packaged upgrade matrix pending. |
-| Client clipboard | Negotiated v2 routing, exact-client isolation, bounded assembly, malformed/timeout handling, local command ownership, and v1 fallback have focused integration regressions. | Native Linux and macOS desktop/headless runs plus packaged old/new client-server matrix. | Repository behavior verified; native/platform matrix pending. |
+| Gate | Required release evidence |
+| --- | --- |
+| Disabled default and Unix recovery | Packaged daemon rollback drill, including listener failure, host restart, failed remote leases, and local attach after recovery. |
+| Policy validation | Validate the approved production configuration and reject contradictory route, relay, lookup, and bound settings. |
+| Direct path | Native Linux and macOS attach, events, reconnect, timeout, abrupt loss, malformed traffic, and stream-limit runs. |
+| Relay and lookup | Approved service ownership plus relay-required/direct-plus-relay outage, route migration, lookup loss, retention, and recovery runs. |
+| Network diversity | LAN, representative NAT, IPv4/IPv6, proxy/CA, latency, loss, and reordering matrix; unit tests alone cannot establish this. |
+| Abuse and bounds | Connection, stream, frame, queue, slow-consumer, and shutdown behavior plus descriptor, memory, CPU, and connection-flood measurements. |
+| Privacy and authority | Reviewed telemetry/retention policy; role ceilings, exact-session access, secret redaction, device revocation, and no remote-to-Unix fallback. |
+| Performance and packaging | Cold startup, memory, CPU, binary/package size, direct/relay latency and throughput, reconnect, observer fan-out, and concurrent-session baseline. |
+| Compatibility | Supported packaged client/server upgrade and rollback matrix, including codec negotiation. |
+| Client clipboard | Native Linux/macOS desktop and headless runs, exact-client isolation, failure handling, and old/new client-server matrix. |
 
-Do not label the Iroh transport supported for production while any pending gate
-lacks an approved exception and a tracker record with an owner and due date.
+Do not label the transport supported for production while an applicable gate
+lacks release evidence or an approved exception with an owner and due date.
 
 ## Related pages
 

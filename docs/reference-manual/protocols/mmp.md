@@ -43,6 +43,7 @@ The normative versioned message envelope is an object with these fields:
 | `time` | RFC 3339 or documented monotonic time. |
 | `sender` | Authenticated sender identity. Registered agents include `agent_id`; pane, window, role, capabilities, and the bounded generated `objective` may be present. |
 | `recipient` | Agent, pane, window, session, role, capability query, or group target. |
+| `scope` | Optional top-level audience: `project`, `session`, or `null`; omitted or null means `project`. This is separate from the recipient selector. |
 | `correlation_id` | Related request ID, or `null`. |
 | `ttl_ms` | Time-to-live in milliseconds, or `null`. |
 | `content_type` | Payload media type. |
@@ -50,10 +51,12 @@ The normative versioned message envelope is an object with these fields:
 
 The current endpoint enforces this full shape for `send`, `task_status`, and
 `task_result`. Its service operations use reduced, operation-specific request
-objects instead. In particular, registration `hello` contains `protocol`,
-`type`, an optional non-empty `role`, and optional `capabilities`; an omitted
-role defaults to `default`. The service assigns the effective identity in
-`welcome`.
+objects instead. Registration `hello` contains `protocol`, `type`, an optional
+non-empty `role`, optional `capabilities`, and optional top-level `objective`;
+an omitted role defaults to `default`. The service assigns the effective
+identity in `welcome`. Raw `hello` assigns neither pane/window identity nor
+trusted project membership. Client-supplied project fields cannot establish
+that membership; the trusted runtime registration/rebinding path owns it.
 
 Runtime-authored subagent lifecycle envelopes use IDs shaped as
 `<turn-id>:task_status:<state>:<sequence>` and
@@ -75,20 +78,45 @@ non-reserved extension fields at the top level, as required for forwarding by
 the MMP contract; this is an explicit exception to the shared
 `extensions`-object convention.
 
-The `sender` object may carry an optional `objective`: the agent's bounded,
-model-generated statement of what it is currently working on, published for peer
-discovery. The field is additive to `mmp/1`; the protocol version does not
-change, and top-level unknown-field preservation is unchanged. When present it
-must be non-empty, at most 2097152 bytes (the agent-shell prompt ingestion byte
-bound), whitespace-collapsed to a single line, and free of control characters.
-Prompt ingestion rejects nothing for spanning lines, so a multi-line objective is
-accepted and collapsed instead of refused. An absent or `null` objective means
-no objective is published yet; an objective-less refresh is a no-op that leaves
-the previously published value and presence timestamp untouched, and snapshots
-or envelopes written before the field existed parse as absent. `welcome`,
-`discover_result`, and `presence`
-project the same field for the assigned identity, the matched discovery rows,
-and the announced status.
+Registered sender identities may project an optional `objective`: the agent's
+bounded, model-generated statement of current work for peer discovery. Raw
+`hello` and `presence` requests publish it at the **top level**, not inside a
+`sender` object. The field is additive to `mmp/1`; it does not change the
+protocol version or non-reserved extension forwarding. A supplied string must
+normalize to non-empty text of at most 2097152 bytes (the agent-shell prompt
+ingestion bound), whitespace-collapsed to one line and free of control
+characters. Multi-line text is collapsed rather than rejected solely for
+spanning lines. Missing or null objective does not clear a published value.
+An objective-only refresh with no value is a no-op, but a raw `presence`
+request still updates status and its timestamp even when objective is absent.
+`welcome.identity` and `discover_result.agents` project the registered
+objective; raw `presence` returns an `ack`, not an identity projection.
+
+### Registration and presence request shapes
+
+```json
+{"protocol":"mmp/1","type":"hello","role":"worker","capabilities":["docs"],"objective":"Checking protocol documentation."}
+```
+
+The response is `{"protocol":"mmp/1","type":"welcome","identity":{...}}`.
+Use the assigned `identity.agent_id` in later full envelopes. On that same
+registered connection, a presence update can be:
+
+```json
+{"protocol":"mmp/1","type":"presence","id":"presence-1","status":"busy","objective":"Validating protocol examples."}
+```
+
+Accepted statuses are `available`, `busy`, `blocked`, and `offline`; omitted
+status defaults to `available`. Dispatch updates status and `updated_at_ms`
+using service time, then applies any supplied objective. It does **not** update
+capabilities; those are registration metadata. The response is:
+
+```json
+{"protocol":"mmp/1","type":"ack","message_id":"presence-1","queued_recipients":0}
+```
+
+The request ID is optional; without it `message_id` is null. A heartbeat also
+returns this ack shape and updates liveness time without changing status.
 
 ## Message types
 
@@ -104,7 +132,7 @@ and the announced status.
 | `deliver` | Service delivers a batch containing `cursor` and sequenced `messages`. |
 | `ack` | Service response acknowledging sender-side acceptance, or recipient request advancing a subscription through `sequence` (or compatibility field `last_sequence`). |
 | `error` | Structured protocol or delivery failure. |
-| `presence` | Announce status or capability changes, including the current `objective` when published. |
+| `presence` | Update status and presence time, optionally publishing a top-level `objective`; returns an ack. It does not update capabilities. |
 | `heartbeat` | Prove connection liveness. |
 | `task_status` | Report task state. |
 | `task_result` | Report task completion. |
@@ -113,6 +141,42 @@ Types outside the baseline list must use a reverse-DNS or URI-like namespace.
 The current endpoint recognizes that namespace grammar during validation but
 does not dispatch extension types, so it rejects them as unsupported endpoint
 operations. Namespace syntax alone does not advertise extension support.
+
+## Delivery audience and recipient selection
+
+Raw `send`, `task_status`, and `task_result` envelopes accept optional top-level
+`scope: "project" | "session" | null`. Omission or null resolves to `project`;
+other values are invalid. Project delivery requires the authenticated sender's
+trusted project membership and reaches only matching identities. A sender
+without membership fails closed, not by widening to the session. A
+cross-project direct recipient is indistinguishable from an absent or
+unavailable target. `session` is an explicit visibility widening request, not
+authorization to execute work. The service records the resolved audience at
+acceptance; later runtime membership changes do not rewrite queued audiences.
+
+`recipient` is an object with exactly one supported selector: `agent_id`,
+`pane_id`, `window_id`, `role`, `capability`, `group`, or `session: true`.
+Multiple independent selectors are rejected. A selector such as
+`{"session":true}` or `{"group":"session"}` does not itself widen audience;
+with omitted scope it still selects only the sender's project peers.
+
+For a raw client registered by `hello`, project discovery shows only self
+when no additional discovery filters exclude self, until the trusted runtime
+supplies membership. Default/project sends fail
+without that membership. Explicit `scope: "session"` allows session-wide
+discovery or delivery within the local service. For example, after `hello`,
+substitute its assigned agent ID in this complete request:
+
+```json
+{"protocol":"mmp/1","id":"docs-handoff-1","type":"send","time":"2026-01-01T00:00:00Z","sender":{"agent_id":"a1"},"recipient":{"role":"worker"},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"Protocol documentation is ready for integration."}
+```
+
+The caller's own `sender.agent_id` must match the registered connection; the
+service uses the canonical registered identity, not sender-supplied membership
+or objective claims. Both nullable `correlation_id` and `ttl_ms` are required
+in these full raw envelopes even when null. Discovery uses a reduced request,
+for example `{"protocol":"mmp/1","type":"discover","scope":"session"}`;
+its result reports the resolved `scope` and filtered `agents` identities.
 
 ## Delivery, expiry, and errors
 

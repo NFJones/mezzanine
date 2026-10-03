@@ -102,20 +102,16 @@ sudo systemctl enable --now mez-host.service
 sudo systemctl status mez-host.service
 ```
 
-If the host must bind a reserved port, grant only `CAP_NET_BIND_SERVICE` to the
-`mez` executable itself rather than using `AmbientCapabilities=` in the unit:
+Use an unprivileged UDP port for optional Iroh service. Do not routinely grant
+file or ambient capabilities to the general-purpose `mez` executable merely
+to bind a reserved port. Ambient capabilities can also make a non-setuid
+Bubblewrap reject its capability state. If a deployment truly needs a reserved
+port, have its administrator design and qualify the privilege boundary rather
+than treating executable capabilities as a sandbox-compatible default.
 
-```console
-sudo setcap cap_net_bind_service=ep /home/YOUR_USER/.cargo/bin/mez
-getcap /home/YOUR_USER/.cargo/bin/mez
-```
-
-An ambient capability survives `exec` and makes a non-setuid `bwrap` process
-reject its capability state with `Unexpected capabilities but not setuid, old
-file caps config?`. A file capability on `mez` does not normally propagate to a
-capability-free `bwrap` child. Reapply `setcap` after replacing the executable
-during an upgrade. Keep `AmbientCapabilities=` empty when native shell mode
-uses Bubblewrap.
+This unit is Linux-specific. On macOS, use the deployment's launchd policy to
+run the same foreground command as the unprivileged account, preserve logs,
+and arrange graceful shutdown. Do not copy Linux capability settings to macOS.
 
 ## Enable local auto-start
 
@@ -174,6 +170,28 @@ complete lease command contract.
 Hosted-local restart reconciliation preserves the stored update timestamp when
 the wall clock moves backward, while advancing boot and assignment generations.
 Valid checkpoints remain eligible for recovery; old runtime authority does not.
+
+## Stop, upgrade, and recover
+
+Detaching a client is not stopping the host. A host stop or service-manager
+restart interrupts its supervised sessions, pane processes, and agent work.
+Hosted-local checkpoints recover layout/state, not the old live processes;
+remote active leases are not reconstructed after restart.
+
+Before a planned restart:
+
+1. Inspect `mez list --all` and `mez lease list --all`; notify attached users.
+2. Let consequential agent work settle, or stop it and record uncertain effects.
+3. Preserve private configuration and needed session data. Stop the owning host
+   before copying remote identity and trust together; protect backups as secrets.
+4. Validate configuration and use graceful shutdown. Review checkpoint or
+   shutdown errors rather than immediately forcing termination.
+5. After restart, check `mez host status`, session discovery, local attach, and
+   lease state. Review interrupted work before retrying non-idempotent actions.
+
+Read [Lifecycle, detach, and recovery](lifecycle-detach-and-recovery.md) for
+snapshots and conversation recovery. An automatic service restart restores
+availability, not proof that interrupted work completed safely.
 
 ## Add remote access deliberately
 

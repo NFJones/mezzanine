@@ -17,8 +17,8 @@ mez             # attach to an available session, or create one
 mez new         # always create a new session
 mez serve       # run a foreground service without a primary client
 mez list        # list resumable sessions
-mez attach [session-id] # attach to a resumable session
-mez attach [session-id] --observer  # request read-only observer access
+mez attach      # attach using the selected socket or default selection
+mez attach --observer  # request read-only observer access
 ```
 
 Use `-S <socket-path>` for an explicit control socket, `-L <name>` for a named
@@ -49,7 +49,8 @@ when its source detaches.
 
 ## Work with windows and panes
 
-The default prefix is `Ctrl+A`.
+The default prefix is `Ctrl+A`. In the bindings below, press and release the
+prefix before pressing the next key; uppercase letters require Shift.
 
 | Key | Result |
 | --- | --- |
@@ -90,7 +91,9 @@ the command-prompt `exit` to end that session and its panes.
 ## Snapshots
 
 Use `mez snapshot create` to save a layout, `mez snapshot` to list snapshots,
-and `mez snapshot inspect <snapshot-id>` to inspect one. `mez snapshot resume
+and `mez snapshot inspect <snapshot-id>` to inspect one. Creation targets the
+live session selected by the control socket; use `-S <socket-path>` or
+`-L <name>` when you need to select a specific session. `mez snapshot resume
 <snapshot-id>` reconstructs the saved topology, names, geometry, and known pane
 working directories without starting a daemon; `resume-latest` selects the
 newest matching snapshot. Add `--serve` to either resume command to run the
@@ -103,7 +106,12 @@ runtime with fresh pane shell processes and fresh process IDs. Neither form
 restores process state, terminal history, attached clients, client-local
 presentation, approvals, agent conversations, or live integration state.
 Snapshot files contain metadata such as pane titles and working-directory
-paths, so treat them as sensitive when sharing or backing them up. See
+paths, so treat them as sensitive when sharing or backing them up.
+
+Both resume commands accept `--restart-command <command>`. With `--serve`,
+this starts the chosen command in restored panes instead of the default shell.
+Without `--serve`, it starts transient pane processes and terminates them before
+the command exits; it is not a way to leave work running. See
 [Lifecycle, detach, and recovery](../operations/lifecycle-detach-and-recovery.md)
 for the full restore contract.
 

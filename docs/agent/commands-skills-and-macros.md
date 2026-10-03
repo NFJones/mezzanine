@@ -11,124 +11,155 @@ Open the [agent shell](../using-mezzanine/agent-shell.md) in a pane.
 
 ## Choose the control surface
 
-Use `Ctrl+A :` and its command prompt for session, window, pane, copy, and
-presentation control. It is parsed by Mezzanine rather than the pane shell.
-Use the pane agent prompt and slash commands for the agent session itself.
-Common commands are `/help`, `/status`, `/model`, `/approval`, `/permissions`,
-`/list-mcp`, `/compact`, `/new`, `/resume`, and `/stop`.
+| Surface | Use it for |
+| --- | --- |
+| Multiplexer command prompt (`Ctrl+A :` by default) | Session, window, pane, copy, and presentation controls; parsed by Mez, not the pane shell. |
+| Pane shell | Ordinary shell commands, including the `mez` CLI. |
+| Agent prompt | Natural-language tasks and agent slash commands. |
+| `$<skill-name>` at the start of an agent prompt | Load a reusable workflow for this task. |
+| `#<macro-name>` at the start of an agent prompt | Run an ordered, model-orchestrated sequence of prompts. |
+| `@<server-id>` in an agent prompt | Reference a configured MCP integration for metadata retrieval. |
 
-Use `/help` and the command prompt's `help` output for the effective live
-command catalog; bindings and capabilities can vary with configuration. The
-manual reference covers CLI, key, action, terminal, and protocol contracts;
-the live help surfaces remain authoritative for the available slash and
-terminal commands.
+Use `/help` and the multiplexer command prompt's `help` for the effective live
+catalog. Bindings and capabilities can vary with configuration. CLI commands
+have `--help`; do not type a `mez ...` command as a slash command.
 
 ## Use operational slash commands
 
-Use the following agent-shell commands to control the current pane without
-turning the command into an ordinary model request:
-
-Commands that need store or filesystem work keep synchronous pane behavior:
-after submission, that pane's prompt shows `command running` and refuses new
-prompt input until the ordinary command result appears. Other panes and global
-multiplexer controls remain available.
+Slash commands control the pane or invoke a defined workflow instead of being
+ordinary prose requests. Some, such as `/remember`, `/compact`, and `/loop`,
+can involve model work. Commands that need store or filesystem work may show
+`command running` and stop accepting prompt input until their result appears;
+other panes and global multiplexer controls remain available.
 
 | Goal | Commands |
 | --- | --- |
-| Inspect or change authority and execution mode | `/status`, `/permissions`, `/approval`, `/approve`, `/show-approvals`, `/sandbox`, and `/shell-mode` |
-| Control the current task | `/plan`, `/directive`, `/objective`, `/loop`, `/stop`, `/new`, `/fork`, `/resume`, and `/name-session` |
-| Inspect or preserve context | `/compact`, `/context-doc`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, `/copy-trace-log`, and `/list-modified-files` |
-| Select model behavior | `/model`, `/routing`, `/latency`, `/thinking`, `/personality`, and `/list-personalities` |
-| Work with local stores | `/memory`, `/remember`, `/show-memories`, `/issue`, and `/show-issues` |
+| Inspect or change authority and execution mode | `/status`, `/permissions`, `/approval`, `/approve`, `/show-approvals`, `/sandbox`, `/shell-mode` |
+| Control the current task | `/plan`, `/directive`, `/objective`, `/loop`, `/stop` |
+| Manage conversations | `/new`, `/clear`, `/fork`, `/resume`, `/name-session` |
+| Inspect or preserve context | `/compact`, `/context-doc`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, `/copy-trace-log`, `/list-modified-files` |
+| Select model behavior | `/model`, `/routing`, `/latency`, `/thinking`, `/personality`, `/list-personalities` |
+| Work with local stores | `/memory`, `/remember`, `/show-memories`, `/issue`, `/show-issues` |
 
-`/status` labels the token table's input column `Input` for pane, session,
-and displayed `/status --extended` rolling tables. This is the existing billed
-input value, not a change to provider accounting; cached input and cumulative
-cache-hit percentages remain separate columns.
+### Check before changing state
 
-`/approve` decides a pending action in the current pane; use
-`/show-approvals` when the request may belong to another pane. `/sandbox`
-reports or changes pane-local sandbox state, while advanced setup, profiles,
-and managed-home cache operations remain under `mez sandbox`. `/plan on`
-keeps the conversation in plan-only mode and removes write scopes for later
-turns; use `/plan off` before asking the agent to edit files.
+```text
+/status
+/permissions
+/approval
+/shell-mode status
+/routing status
+```
 
-`/objective <text>` persists and immediately publishes a conversation-scoped
-user objective. It wins over prompt and model-generated objectives until
-`/objective --clear`; bare `/objective` reports the current source and value.
+Bare `/routing` **toggles** routing. Use `/routing status` for inspection.
+`/plan on` enables plan-only mode and removes write scopes for later turns;
+use `/plan off` before asking for edits. `/approve` decides a pending action
+in the current pane; `/show-approvals` also finds requests in other panes.
+Review the action's scope, not just its description.
 
-`/shell-mode status` reports whether local shell work uses fresh native shells
-or the interactive pane shell. `/shell-mode native|pane` changes the current
-pane; add `--global` to persist the fallback for panes without an override.
-Shell mode selects the transport, not its authority—approval and the configured
-[sandbox](../safety-and-trust/sandboxing.md) still apply.
+`/sandbox` reports or changes pane-local sandbox state. Advanced setup,
+profiles, and managed-home cache operations remain CLI-only under `mez sandbox`.
+`/shell-mode native` or `/shell-mode pane` changes the pane's shell transport;
+add `--global` to persist the fallback for panes without an override. Transport
+does not change approval or [sandbox authority](../safety-and-trust/sandboxing.md).
 
-`/new` starts a fresh conversation without clearing the terminal view, `/fork`
-opens a new pane with a branch copied from the current or selected
-conversation, and `/resume` returns to a saved conversation. `/clear` also
-starts a fresh conversation and additionally clears the visible conversation
-and terminal view; `/compact` summarizes older closed work and is intentionally
-lossy. `/show-context` can browse entries in the current pane conversation,
-edit the selected content with `e`, or delete it with `d`. `/show-issues` uses
-`e` for the selected body and `E` for notes; `/show-memories` uses `e` for
-content. During a running turn, `/copy-context` exports that turn's assembled
-provider request. When idle, it exports a synthetic preview of the next request
-with an explicit user-prompt placeholder; that preview was not sent to a
-provider. Use it or `/copy-trace-log` only when the resulting diagnostic
-material can be handled safely. `/copy-patches` exports retained `apply_patch`
-payloads and statuses, while `/list-modified-files` reports files changed by
-the current conversation.
+### Keep or inspect task history
 
-`/loop [--fork|--new] [--limit <count>] [--goal <string>] <prompt>` repeats a
-bounded task until its completion condition or iteration limit is reached. Use
-it only when repeated autonomous work is appropriate; see
-[Subagents and messaging](subagents-and-messaging.md#use-routed-loops-sparingly)
-for its stopping rules and conversation modes.
+Use `/new` for unrelated work, `/fork` for an independent branch, `/resume`
+for saved work, and `/compact` to summarize older completed work. `/clear`
+also starts fresh and clears the view; it does not undo file changes. See
+[Context and continuity](context-and-continuity.md) for retention, archives,
+context documents, and the difference between history and persistent memory.
 
-`/memory` controls persistent-memory availability; `/memory edit <uuid>` opens
-only one memory's content in the configured external editor. `/issue` manages
-runtime-owned project issues rather than an external tracker, and `/issue edit
-<id> body|notes` externally edits only the selected prose field. Structured
-metadata remains in typed commands. `/init` creates the default `AGENTS.md`
-scaffold only when it is absent; it does not overwrite an existing instruction
-file. Durable edits use full-record compare-and-swap checks, so concurrent
-changes or deletion retain the private
-draft for `/editor-recovery` instead of overwriting the record. External editors
-launched from commands or retained record browsers run directly on the Mez
-server with a dedicated PTY and never through the pane shell, regardless of
-agent shell mode. `/auth-status`, `/refresh-provider-info`, `/debug-config`,
-`/reset-status`, and `/log-level` provide non-secret authentication, provider,
-configuration, token-accounting, and verbosity diagnostics. Use `/exit` to hide
-the agent shell after active work stops.
+`/objective <text>` sets a published objective for the current conversation;
+it takes precedence over generated objectives until `/objective --clear`.
+`/directive <text>` supplies pane-session guidance for future turns. Neither
+command grants permissions.
+
+`/show-context` browses conversation entries, with `e` to edit and `d` to
+delete selected content. `/show-issues` uses `e` for body and `E` for notes;
+`/show-memories` uses `e` for content. `/memory edit <uuid>` and `/issue edit
+<id> body|notes` open only the selected prose in the external editor. Metadata
+uses typed commands. `/issue` manages Mez's project issue store, not an external
+tracker. On a concurrent-edit conflict, Mez retains the private draft for
+`/editor-recovery` rather than overwriting the newer record.
+
+External editors run on the **Mez server**, not the attached client's machine
+or through the pane shell. This matters when attached remotely. `/init` creates
+an `AGENTS.md` scaffold only when absent; it does not overwrite existing guidance.
+
+### Diagnose or stop work
+
+`/auth-status`, `/refresh-provider-info`, `/debug-config`, `/reset-status`, and
+`/log-level` inspect authentication, refresh provider information, inspect
+configuration, reset token counters, and control verbosity. They do not grant
+provider entitlement. See [Providers and models](providers-and-models.md).
+
+During a running turn, `/copy-context` exports its assembled provider request;
+when idle, it exports an unsent next-request preview. `/copy-patches` exports
+retained patch payloads and outcomes. `/copy-trace-log` exports retained
+diagnostics, while `/list-modified-files` reports files changed by the current
+conversation. Review diagnostic exports before sharing private task data.
+
+Use `/stop` for unwanted active work and `/exit` to hide the agent shell after
+work stops. Use `/loop` only for bounded repeated work; see its
+[stopping rules](subagents-and-messaging.md#use-routed-loops-sparingly) before
+relying on a loop's completion claim.
 
 ## Invoke a skill or macro explicitly
 
-Start a prompt with `$<skill-name>` to load a reusable skill, followed by any
-task-specific context. Use `/list-skills` to inspect the effective catalog.
+### Skills: load a workflow
+
+Use `/list-skills` to inspect the effective catalog, then start a prompt with
+`$<skill-name>` and task-specific context. For example, the built-in creation
+workflow can help install a skill:
+
+```text
+$create-skill Create a user skill for read-only release-checklist reviews.
+```
+
 User skills live under `~/.config/mezzanine/skills/<name>/SKILL.md`; trusted
 project skills live under `.mezzanine/skills/<name>/SKILL.md`. Project skills
-are discovered only after project trust is granted. Their contents remain
-untrusted workflow guidance and cannot override approvals, action rules, or
-other runtime authority.
+are discovered only after project trust. A trusted project entry overrides a
+user entry of the same name, and both override the built-in entry. Inspect the
+catalog's source before invoking an unfamiliar name.
 
-`/sync-builtin-skills` synchronizes managed built-in skills into the user
-configuration root. It can change local files, so review the result before
-relying on a refreshed catalog.
+A skill file needs YAML front matter with `name` and `description`, followed
+by Markdown instructions. The directory name must match `name`, using only
+lowercase ASCII letters, digits, and hyphens. Auxiliary scripts or references
+are not automatically executed or loaded just because you invoke the skill.
+Model-selected skill discovery and loading are disabled by default; select
+skills explicitly instead of assuming the agent will find one itself.
 
-Start a prompt with `#<macro-name>` to run an ordered macro. User macros live
-under `~/.config/mezzanine/macros/<name>/MACRO.md`; trusted project macros live
-under `.mezzanine/macros/<name>/MACRO.md` and are discovered only after project
-trust is granted. Macro content cannot grant authority: one persistent
-subagent runs the ordered sequence, while normal prompt parsing, permissions,
-and approvals still apply to every step. Use `/list-macros` before invoking an
-unfamiliar macro.
+`/sync-builtin-skills` restores managed built-in copies in the user configuration
+root. It preserves valid user overrides that omit the managed-version marker
+and does not change project skills. Review the reported replacements if you
+have edited a managed copy. Skills remain workflow guidance, not permission
+to bypass approvals or action rules.
 
-Use `@<server-id>` only when a task requires a configured MCP server. That
-creates a durable reference that makes the server eligible for
-`mcp_server_get`; it does not expose callable tool metadata by itself. A
-successful `mcp_server_get` records the complete tool contract needed for
-`mcp_call`. Compaction clears retrieved tool contracts, but retains explicit
-references, so retrieve the server again after compaction.
+### Macros: run ordered steps
+
+Use `/list-macros`, then start a prompt with `#<macro-name>` and any invocation
+context. A macro token later in ordinary prose does not start a macro. User
+macros live under `~/.config/mezzanine/macros/<name>/MACRO.md`; trusted project
+macros live under `.mezzanine/macros/<name>/MACRO.md`, take precedence over a
+same-named user macro, and require project trust.
+
+Macro files use the same name and description front matter and name grammar
+as skills. Their body needs a `## Steps` section containing an ordered list of
+non-empty prompts. Use `$create-macro` to ask the built-in workflow to create
+or revise one.
+
+One persistent subagent runs the entire sequence. After each step, the main
+model judges the result and may continue, adapt the next prompt within the
+macro's purpose, retry the current step, or stop on failure. A macro is not
+an unconditional shell script: steps use normal prompt parsing, permissions,
+approvals, and delegation limits, and success requires all required steps in
+order. Review its definition and side effects before invoking it.
+
+For external tools, use a configured `@<server-id>` reference and follow
+[MCP integration](mcp-integration.md). The mention permits metadata retrieval,
+not automatic tool execution or approval.
 
 ## Related pages
 

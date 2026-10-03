@@ -87,15 +87,11 @@ enabled and its public endpoint ID; it does not report listener health, route
 policy, counters, or a dialable address. `invite` returns a short-lived bearer
 token once together with the pinned address, role, expiry, and profile name.
 The versioned invitation envelope currently uses format version 1. On the
-persistent-host path, omitting `--expires` currently uses 600 seconds even when
-`transport.iroh.invitation_ttl_seconds` differs. Supply `--expires SECONDS` to
-select an explicit lifetime in the supported 30 through 86,400 second range.
-
-The direct-session compatibility path uses the configured invitation lifetime.
-The persistent-host behavior is a known security-policy nonconformance and a
-rollout blocker when the configured value is not 600 seconds: operators must
-supply `--expires` explicitly until the host runtime honors the configured
-default.
+persistent-host and direct-session paths, omitting `--expires` uses the
+configured `transport.iroh.invitation_ttl_seconds`. Supply `--expires SECONDS`
+to override it for one invitation in the supported 30 through 86,400 second
+range. Inspect the resulting expiry before confidential transfer; a short
+lifetime narrows exposure if the bearer token is lost.
 
 ### Transfer and inspect the invitation
 
@@ -247,8 +243,11 @@ host-opened X11 stream is authenticated by a generation and random route token.
 These secret-bearing initialize records use identity/reset framing and cannot
 seed reusable compression history. Operational status exposes only aggregate
 route and stream counters. Detach, takeover, trust or lease revocation,
-transport loss, and session shutdown invalidate the old fake authority before
-cancelling that generation's workers.
+transport loss, and session shutdown revoke the old route and cancel its
+workers. Empty authority-file publication is deferred; acknowledgement does
+not prove that file cleanup reached storage. If `authority_repair_pending`
+persists, inspect the session's storage and follow the
+[X11 troubleshooting guide](../operations/troubleshooting.md#a-remote-x11-application-does-not-open-locally).
 
 Invitations, device credentials, private endpoint keys, and persisted verifiers
 are omitted from client lists, diagnostics, debug output, and audit records.

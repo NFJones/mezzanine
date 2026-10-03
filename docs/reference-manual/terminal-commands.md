@@ -27,6 +27,12 @@ active bindings and their configuration sources. Runtime- or store-backed
 commands can still reject an invocation when required state or authority is
 unavailable.
 
+Where supported, `-t TARGET` selects the target, `-s SOURCE` selects a source
+for a move or copy, `-c DIRECTORY` sets a new pane's starting directory, and
+`-F FORMAT` requests formatted output. Use `list-panes`, `list-windows`,
+`list-groups`, or `list-clients` to find identities and indexes before targeting
+an object. Flags are command-specific, not interchangeable across commands.
+
 ## Common command groups
 
 | Task | Commands |
@@ -73,6 +79,10 @@ or primary-client authority. Review completion hints, command output, and any
 resulting prompt or approval rather than assuming a command affects a detached
 or observer client.
 
+The implementation also accepts `choose-window` for an interactive window
+picker and `move-window -t INDEX` to reindex the current window; these are not
+listed in the baseline catalog above.
+
 ## Selected command contracts
 
 The following commands have behavior or safety boundaries that are useful to
@@ -84,21 +94,50 @@ know without opening the complete normative contract.
 command as `--shell-command STRING` or `--command STRING`. A spelling that has
 a value takes precedence over words after `--`, and words after `--` take
 precedence over positional words; `new-window` and `new-group` treat positional
-words as the command only when `-n`/`--name` is present. The single explicit
-string is user-authored shell source that the shell runs unchanged after
-`exec`, so Mezzanine never re-quotes it. `pipe-pane` joins its positional words
-with spaces and runs the result through the resolved shell, so those words are
-shell source too. Mezzanine never offers a candidate for a shell-source token
-unless the literal path neither begins with `-` nor contains any byte outside
-ASCII letters, digits, and `_ - . / @ % + = : ,`, which no supported shell
-interprets; static command and flag candidates are suppressed in that token.
-Path candidates for other arguments are quoted with the command language and
-read back as the exact literal path; words after `--` and `-n` positional words
-are re-quoted losslessly before `exec`. Completion classifies the active token
-against the whole command line, not only the text before the cursor, so
-arguments the pane plan never consumes offer no candidates at all, and a token
-whose role cannot be classified (for example a cursor inside a word or an open
-quote) leaves the draft unchanged.
+words as the command only when `-n`/`--name` is present. With no command, a new
+pane starts an interactive shell. `-c DIRECTORY` overrides
+`terminal.pane_spawn_directory`.
+
+An explicit command string is shell source: quote it for the Mezzanine prompt
+so that shell operators reach the new pane's shell. Words after `--` are
+preserved as literal command arguments instead. For example:
+
+```text
+new-window -n build -c /tmp -- make test
+split-window -h -d --shell-command 'printf "ready\\n"; exec bash'
+```
+
+`split-window` selects the new pane by default; `-d`/`--no-select` keeps focus
+on the original pane. `-h` splits horizontally; the default is vertical.
+
+`pipe-pane` sends subsequent pane output to a file or shell command:
+
+```text
+pipe-pane -o /tmp/pane.log
+pipe-pane --list
+pipe-pane --stop
+```
+
+Its positional command words are joined with spaces and interpreted by the
+shell, so use one quoted string when shell quoting matters. Do not paste
+untrusted shell source into either command form. Completion is deliberately
+limited for shell source: unsafe path suggestions and ambiguous tokens receive
+no candidates. Lack of a completion does not mean a command is unsupported.
+
+### Shared input, shutdown, and saved layouts
+
+`synchronize-panes on|off|toggle|status` controls ordinary process input for the
+current window. When enabled, typing reaches every pane in that window; check
+`status` before entering a destructive command and use `off` when finished.
+
+Closing live panes, windows, groups, or sessions can require confirmation or
+an explicit force flag. `exit` terminates the current session and all its panes;
+it is not a detach command. Use `detach-client` to leave processes running.
+`kill-group` cannot close the final group; terminate the session instead.
+
+`save-layout` and `load-layout` save and restore layout snapshots, not running
+processes or agent conversations. See [CLI snapshots](cli.md#snapshot-forms)
+for what is retained and for offline inspection and restore commands.
 
 ### Configuration discovery
 
@@ -113,44 +152,34 @@ values and their source layers.
 pane's configured status entries, including values moved into menu overflow.
 Read-only entries are labeled as such. Configured actions are limited to
 `rename-pane`, `copy-mode`, and `copy-selection` terminal commands with exactly
-one `-t {pane}`, and agent `/plan` and `/stop` controls. They use the same typed
-pane-scoped action as their mouse pills. The target is held by stable pane,
-configuration, and pane-context identity, so focus does not move and stale,
-closed, or changed targets are rejected instead of applying to another pane.
-`{pane}` is replaced only after revalidation with the stable owner pane. The
-exact effective `on_click` source must be present and trusted at execution;
-other terminal or agent effects are rejected. Only attached primary clients
-may open or apply the selector.
+one `-t {pane}`, and agent `/plan` and `/stop` controls. Only trusted configured
+actions may run. Selecting an entry does not move focus; closed or changed
+targets are rejected rather than applying the action to another pane. Only
+attached primary clients may open or use the selector.
 
 `pane-settings --providers [-t pane]` lists already-retained blocked pane
-providers using only provider names and sanitized reason codes. It is safe to
-use while zen mode hides pane chrome and does not refresh, admit, or execute a
-provider. After changing the underlying approval, permission, trust, context,
-or sandbox condition separately, use
+status providers by name and reason code, without running them. It remains
+available while zen mode hides pane chrome. After resolving the reported
+approval, permission, trust, context, or sandbox condition separately, use
 `pane-settings --retry-provider NAME [-t pane]` to clear that exact current
-block and make the provider due for normal admission. Retry does not approve a
-command, change trust or permissions, bypass policy, weaken sandboxing, or run
-the command inline. Observer callers and stale, closed, missing, or unblocked
-targets are rejected.
+block so the provider can be retried normally. Retry does not approve a
+command, change permissions or trust, bypass sandboxing, or run the command
+immediately. It requires a primary client and a currently blocked provider on
+a live, unchanged pane.
 
 `show-pane-status [-t pane]` diagnoses the active or requested live pane without
-changing focus. It reports the effective pane-status preset and override
-sources, stable rail/occurrence/action ownership, unavailable or
-condition-hidden entries, authoritative full/compact/hidden/overflow decisions,
-cell budgets, and retained provider pending/blocked/error/stale/refresh-age
-state. It uses the same condition and layout resolver as rendering, remains
-available in zen mode, and does not reconcile, schedule, admit, refresh, or run
-providers. Output omits provider command/output/environment data, source paths,
-working directories, and raw admission failures. Missing and stale pane targets
-are errors. The command requires the same attached-primary read authority as
-other terminal diagnostic commands.
+changing focus or running status providers. Use it to explain which preset and
+overrides apply, why entries are hidden or moved to overflow, how much display
+space they have, and whether a provider is pending, blocked, failed, or stale.
+It remains available in zen mode. Sensitive provider commands, output,
+environment values, paths, and raw failures are omitted. An attached primary
+client and a live pane target are required.
 
 ### Zen mode
 
 `zen on`, `zen off`, and `zen toggle` control the session-wide live
 `terminal.zen_mode` override. Successful changes are silent because their
-effect is immediately visible; control clients still receive a structured
-`mutated` or `noop` outcome. The command does not write configuration files or
+effect is immediately visible. The command does not write configuration files or
 change frame settings, so `zen off` restores the current configured frames.
 Set `terminal.zen_mode = true` in configuration for persistent startup
 behavior. Normal command bindings may invoke `zen toggle`. The command requires
@@ -158,37 +187,24 @@ an attached primary client, and accepts exactly one lowercase mode.
 
 `terminal.zen_focus_label_duration_ms` controls transient zen focus labels
 (1000 ms by default; 0 disables; maximum 60000). It does not change the `zen`
-command syntax. Committed focus changes show the highest changed identity:
+command syntax. Focus changes briefly identify the highest changed level:
 group at top-left, window at bottom-left, or pane at its top-left/shared top
-divider. Labels reserve no rows and run no status providers. Required controls
-take precedence; observers inherit their source primary's remaining lifetime.
-A label remains pending, without an expiry timer, until a frame actually paints
-it and reaches the client. Local terminals start the lifetime only after the
-complete ANSI frame commits, including retained partial or deferred frames.
-Iroh uses a successful server-stream flush as the delivery approximation and
-does not suppress an otherwise identical view carrying a new pending label.
-Stale or duplicate delivery receipts do not renew a lifetime.
+divider. Labels take no extra rows and do not run status providers. Required
+controls take precedence. The lifetime starts when the label is presented,
+not while a redraw is still waiting; observers share the source primary's
+remaining label lifetime.
 
 ### Iroh diagnostics
 
 `show-iroh-status` displays a table for the invoking remote client's selected
-Iroh path. It includes RTT, jitter, recent transfer rates, loss and congestion
-deltas, congestion window, MTU, sample freshness, negotiated codec, and
-connection-local session compression effectiveness. Compression reports the
-decoded-to-wire ratio, bytes saved or expanded, and compressed versus identity
-record counts accumulated for the current connection and codec, including
-bounded X11 setup and application records but excluding the raw X11 stream
-preface. Render-update diagnostics report snapshot and delta counts,
-changed rows, selected wire/decoded bytes, full-snapshot candidate bytes,
-coalescing, suppression, snapshot fallback, maximum ready depth, and total and
-maximum write-and-flush wait. A new connection or codec context starts with an
-`insufficient sample` state until it carries a complete frame, rather than
-comparing counters across reconnects.
-Path type and quality remain independent from compression effectiveness.
-Topology identifiers, addresses, credentials, terminal contents, and
-payload-derived samples are intentionally omitted.
-Local control-socket clients see an unavailable state because they are not
-attached through Iroh.
+Iroh path. Use latency (RTT), jitter, transfer rates, packet loss, congestion,
+and sample freshness to diagnose a slow or unstable connection. The table also
+shows the negotiated compression codec, bytes saved or expanded, and rendering
+traffic and wait measurements. Compression totals include X11 traffic and
+restart for each connection; a new connection may report `insufficient sample`.
+Good compression does not imply a good network path. Addresses, endpoint
+identities, credentials, and terminal contents are omitted. Local Unix-socket
+clients see an unavailable state because they are not attached through Iroh.
 
 The bottom window bar independently shows a privacy-safe plain-text Iroh status
 pill, such as `good` or `degraded`, for that same live Iroh client.

@@ -24,12 +24,22 @@ terminal that started it.
 
 ## Agent cannot run a shell command
 
-Return the pane to an ordinary shell prompt. Full-screen applications, password
-or host-key prompts, and uncertain shell boundaries block non-interactive agent
-commands to avoid sending input to the wrong foreground program. Confirm that
-`$SHELL` is usable or that `/bin/sh` is available, then inspect `/status` and
-the pane-local readiness diagnostic. Do not use a readiness override merely to
-avoid an unexplained boundary failure.
+First inspect `/status` and `/permissions` to distinguish an approval denial,
+missing project authority, sandbox failure, and shell-readiness failure. See
+[Sandboxing](../safety-and-trust/sandboxing.md) before changing confinement.
+
+In pane shell mode, return the pane to an ordinary shell prompt. Full-screen
+applications, password or host-key prompts, and uncertain shell boundaries block
+non-interactive agent commands to avoid sending input to the wrong foreground
+program. Confirm that `$SHELL` is usable or that `/bin/sh` is available, then
+inspect `/status` and the pane-local readiness diagnostic. Do not use a readiness
+override merely to avoid an unexplained boundary failure.
+
+Native shell mode runs outside the pane PTY; a full-screen application alone
+does not block it. It rejects interactive or stateful shell work instead of
+falling back to pane input. Its patches are still shell-backed, not process-free
+filesystem actions. Check the reported transport and failure before changing
+mode or retrying an action that may already have effects.
 
 ## Provider, authentication, or MCP is unavailable
 
@@ -54,8 +64,13 @@ rather than a malformed model response.
 
 Check `mez sandbox trust list` and inspect the project's `.mezzanine` overlay
 and `AGENTS.md`. A pending or rejected project overlay is intentionally not
-applied. Trusting it enables eligible project configuration but does not grant
-approval, host access, or additional sandbox authority.
+applied; use `mez config layers` to identify the actual layer state. Trusting
+it enables eligible project configuration, not approval bypass or host access.
+Separately, when both configured scope arrays are empty, a trusted project can
+supply the default sandbox read/write root. A deeper rejected or revoked trust
+decision withholds that implicit authority but does not remove explicit scopes.
+Review both the overlay and effective roots before trusting a project to clear
+a blocker.
 
 ## Display, width, or copy behavior is wrong
 
@@ -181,10 +196,12 @@ decoded-size, or unsupported-codec failures close only that connection; retain
 the non-sensitive failure class and do not log payloads or credentials.
 
 For high CPU, compare zstd with LZ4 using `just iroh-compression-bench`. For a
-poor ratio or expansion, confirm the workload is above the configured threshold
-and actually compressible before lowering `compression_min_bytes`. Immediate
-rollback is `compression_codecs = ["none"]` followed by daemon restart. Codec
-choice and compression ratio do not change direct/relay path quality.
+poor ratio or expansion, check the negotiated codec and workload first.
+`compression_min_bytes` applies to frame-based `zstd` and `lz4`, not
+`zstd-stream` or `lz4-stream`; lowering it cannot tune a streaming connection.
+Rollback is `compression_codecs = ["none"]` followed by daemon restart, which
+interrupts supervised work. Codec choice can affect latency and CPU, but the
+compression ratio is not evidence of direct/relay path quality.
 
 ## An Iroh copy does not reach the attaching machine clipboard
 

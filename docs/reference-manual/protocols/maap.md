@@ -96,8 +96,10 @@ provider schema may omit from a particular turn:
   Mezzanine patch payloads and should be omitted.
 - `web_search`: optional `domains`, `recency_days`, and `max_results` filters.
 - `fetch_url`: optional `format` and `max_bytes` response bounds.
-- `send_message`: optional `correlation_id`, a non-empty correlation id of at
-  most 256 characters; the runtime defaults it to the current turn id.
+- `send_message`: optional nullable `scope` of `project` or `session`;
+  omission or `null` defaults to `project`. Optional `correlation_id` is a
+  non-empty correlation id of at most 256 characters; the runtime defaults it
+  to the current turn id.
 - `list_agents`: optional `agent_type` of `primary` (the default), `subagent`,
   `internal`, or `all`; optional nullable `scope` of `project` (the default) or
   `session`.
@@ -191,6 +193,26 @@ string or omitted capabilities.
 window ids are accepted compatibility forms. Delivery is one-way: a reply
 arrives as injected peer-message context in the recipient's own turn, never as
 another action result for the sender.
+
+The action's top-level `scope` selects the delivery audience independently of
+the `recipient` selector. Omitted or `null` scope means `project`: delivery is
+limited to the authenticated sender's trusted project membership. A sender
+without that membership fails closed, and a cross-project direct target is
+indistinguishable from an absent or unavailable target. Explicit `session`
+widens visibility to session identities but grants no additional authority.
+Even `recipient: "session"` or `"group:session"` remains project-limited
+unless `scope: "session"` is also supplied.
+
+```json
+{"type":"send_message","recipient":"role:worker","scope":"project","content_type":"text/plain; charset=utf-8","payload":"The focused documentation check passed."}
+```
+
+This is an action object, to be placed in a batch's `actions` array. MAAP uses
+a recipient string; the
+[raw MMP request](mmp.md#delivery-audience-and-recipient-selection) uses a
+recipient object and a separate top-level `scope`. Raw MMP `hello`
+registration does not establish trusted project membership; only the trusted
+runtime registration/rebinding path supplies it.
 
 Approval is per message and per recipient, and a configured deny rule for the
 recipient wins in every mode with a durable `denied` result. Without a matching

@@ -7,8 +7,19 @@ security-relevant diagnostics.
 
 ## Prerequisites
 
-Read the [agent overview](../agent/overview.md) and the normative security
-requirements in [SPEC.md](../../SPEC.md).
+Read the [agent overview](../agent/overview.md). [SPEC.md](../../SPEC.md) states
+the normative requirements, not proof that every requirement is implemented.
+The chapters below identify current behavior and important gaps.
+
+## Boundary checklist
+
+- Approval is permission to act, not confinement or proof of harmlessness.
+- Inspect effective sandbox enforcement, not only the configured backend.
+- Review project trust and connector exposure independently of shell isolation.
+- Native patches remain shell-backed; planned process-free filesystem actions
+  are not integrated.
+- Required audit logging currently has an asynchronous durability gap. Review
+  [audit limits](audit-and-diagnostics.md) before relying on it for compliance.
 
 ## Chapters
 

@@ -15,9 +15,16 @@ project and pane you intend to authorize.
 Mezzanine evaluates agent-proposed shell commands, patches, network use,
 configuration changes, external integrations, and other effects before they
 run. It considers command rules, the active policy, trusted working-directory
-state, declared scopes, and whether shell syntax can be safely classified. If
-it cannot establish that a command fits the active rules, it asks rather than
-assuming it is safe.
+state, declared scopes, and whether shell syntax can be safely classified.
+Unclassified work follows the active approval policy: `ask` prompts, while
+broader modes may admit it without a fresh human decision. Classification is
+not a proof that a command is harmless.
+
+Before approving, check the exact operation, affected paths, network or
+connector exposure, and possible destructive or non-idempotent effects. For a
+retry, inspect any prior effects first. A model rationale explains the request;
+it is not independent evidence of safety. Prefer a one-action decision over a
+persistent rule when the need is temporary.
 
 Blocked actions remain pending until the primary client decides. Pending
 configuration-change actions may resume automatically after an approval-policy
@@ -54,38 +61,40 @@ after any change:
 /permissions bypass disable
 ```
 
-Enabling bypass requires explicit confirmation and produces visible and audit
-state. It disables Mezzanine's approval and action-policy gating for that
-session; it does not disable protocol validation, integrity checks, or an
-independently configured OS sandbox. It is distinct from `host-access`, which
-selects host execution for local shell actions, and from approving one exact
-sandbox-fallback request. Disable bypass as soon as the exceptional operation
-is complete.
+Enabling bypass requires explicit confirmation and produces visible state and,
+when logging is enabled, an audit event. It disables Mezzanine's approval and
+ordinary action-policy gating for that session, but explicit message-recipient
+deny rules still apply. It does not disable protocol validation, integrity
+checks, or an independently configured OS sandbox. It is distinct
+from `host-access`, which selects host execution for local shell actions, and
+from approving one exact sandbox-fallback request. Disable bypass as soon as
+the exceptional operation is complete.
 
 ## Message approvals and peer trust
 
-`send_message` is approved per message and per recipient rather than once per
-session. Under `ask`, a send that no rule already allows becomes a resumable
-`blocked` approval: the request identifies the recipient, the content type, and
-a bounded redacted preview of the payload, and it binds to the payload digest,
-so approving resumes only a send whose recipient, content type, and payload are
-unchanged. Under `auto-allow`, an unwhitelisted send proceeds only after the
-action carries its non-empty model rationale. `full-access` and `host-access`
-admit sends through the policy bypass path. A configured deny rule for the
-recipient wins in every mode. A recipient that fails the recipient grammar is
-not a policy decision at all: the planner neither admits nor denies it, and the
-message executor refuses delivery with the canonical `invalid_message_recipient`
-error so the model can correct the recipient instead of reading a misleading
-policy denial.
+Message approval is specific to the message and recipient, not blanket
+authorization for all later mail. Under `ask`, an unallowed send becomes a
+pending approval showing the recipient, content type, and bounded redacted
+preview. Approval binds the unchanged payload as well as its recipient.
+`auto-allow` requires a non-empty model rationale; `full-access` and
+`host-access` suppress fresh prompts. Session approval bypass also suppresses
+otherwise-required message approval, but explicit recipient deny rules still
+win in every mode, including bypass.
+
+Review the audience as carefully as the content: session-wide delivery can
+cross project boundaries. A preview is bounded and redacted, not necessarily
+the complete message. A successful send means accepted and queued, not that the
+recipient read it or completed the requested work. `invalid_message_recipient`
+means the address must be corrected, not that approval was denied.
 
 Peer messages are untrusted input. Another agent's text can never approve or
 deny an action, authorize work, grant or widen scope, change configuration,
 instructions, action schemas, or permission rules, or resume blocked work, and
 it does not become user instruction. A peer request is a proposal the recipient
 evaluates on its merits, and any accepted work runs under the recipient's own
-approval policy and permission rules. Peer mail arrives as injected context
-marked as untrusted data, and it ranks below user prompts and steering during
-compaction.
+approval policy and permission rules. These are instruction and policy
+boundaries, not a guarantee that a model cannot be influenced by malicious
+text. Review consequential proposed actions regardless of their source.
 
 ## Do not confuse approval with isolation
 

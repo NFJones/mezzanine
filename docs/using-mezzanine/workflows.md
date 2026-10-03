@@ -25,8 +25,12 @@ decision needs review.
 
 Begin a prompt with `$<skill-name>` to invoke an available skill or
 `#<macro-name>` for an ordered macro. Use `@<mcp-server-name>` only when the
-task needs a configured MCP integration; injected tool details apply to that
-turn rather than becoming permanent context.
+task needs a configured MCP integration. A resolved name becomes retained
+directory context, not permission to call its tools. The agent must retrieve
+the server's safe tool contracts before calling it; calls are still checked
+against the live registry and policy. Retrieved contracts remain in conversation
+context until compaction clears them, at which point the agent must retrieve
+them again. Credentials and private transport settings are not included.
 
 Request subagents explicitly for bounded, separable work, and keep the parent
 responsible for integration. Mezzanine can spawn them only when the active

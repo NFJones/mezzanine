@@ -24,18 +24,40 @@ configuration can replace bindings.
 | `Ctrl+A n`, `Ctrl+A p`, `Ctrl+A l` | Next, previous, or last window. |
 | `Ctrl+A (` / `Ctrl+A )` | Previous or next window group. |
 | `Ctrl+A 0`–`Ctrl+A 9`, `Ctrl+A '` | Select a window by index or prompt for one. |
-| `Ctrl+A .` | Prompt for a destination and move the current window. |
+| `Ctrl+A .` | Prompt for a new index for the current window. |
 | `Ctrl+A %` / `Ctrl+A "` | Split vertically / horizontally. |
 | `Ctrl+A` then arrow keys, `o`, or `;` | Select an adjacent, next, or last pane. |
 | `Ctrl+A q` | Display pane indexes and selection actions. |
 | `Ctrl+A z`, `Ctrl+A Space` | Toggle pane zoom / cycle layouts. |
-| `Ctrl+A x` / `Ctrl+A &` | Kill the active pane / current window, with confirmation when required. |
+| `Ctrl+A x` / `Ctrl+A &` | Ask for confirmation, then kill the active pane / current window. |
 | `Ctrl+A !`, `Ctrl+A {`, `Ctrl+A }` | Break the active pane into a window / swap it with the previous or next pane. |
 | `Ctrl+A [` / `Ctrl+A PageUp` | Enter copy mode / enter copy mode and scroll up. |
 | `Ctrl+A ]`, `Ctrl+A #`, `Ctrl+A =`, `Ctrl+A -` | Paste the latest buffer, list buffers, choose the active buffer, or delete the latest buffer in buffer context. |
 | `Ctrl+A ~` | Show Mez messages. |
 | `Ctrl+A a` | Toggle the focused pane's agent shell. |
 | `Ctrl+A e` | Open the visible agent-prompt draft in the configured external editor. |
+
+## Copy-mode controls
+
+Press `Ctrl+A [` to enter copy mode. These keys operate on retained output,
+not the pane process:
+
+| Key | Action |
+| --- | --- |
+| Arrow keys | Move the selection cursor. |
+| `Ctrl+Up` / `Ctrl+Down` | Move five rows at a time. |
+| `Ctrl+Left` / `Ctrl+Right`, or `Alt+Left` / `Alt+Right` | Move by words. |
+| PageUp / PageDown | Scroll by a page. |
+| Home / End | Move to the start / end of the line. |
+| `Ctrl+Home` / `Ctrl+End` | Move to the top / bottom of retained output. |
+| Space | Start a selection; press again after moving to copy it. |
+| Esc | Leave copy mode. |
+
+Copying updates the internal paste buffer and attempts a clipboard write when
+available. Copy mode remains open after copying; press Esc to resume process
+input. `Ctrl+C` is consumed without interrupting the process. See
+[Terminal input, copy, and history](../using-mezzanine/terminal-input-copy-and-history.md)
+for mouse selection and source-copy options.
 
 ## Prompt and browser controls
 
@@ -50,17 +72,17 @@ External editing is also non-submitting. After a successful editor close, the
 edited text returns to the in-pane prompt for review and normal submission.
 While the editor is open, it exclusively owns the complete attached terminal:
 Mez frames, prompts, overlays, and status rows are hidden, the editor receives
-raw terminal input, and closing it restores a full Mez redraw. The editor is a
-server-local subprocess on a dedicated PTY; the pane shell is not invoked, and
-its history, current input, and terminal screen remain unchanged.
+raw terminal input, and closing it restores the Mez display. The editor runs on
+the session host, even when attaching remotely. It does not change the pane
+shell's history, current input, or terminal screen.
 
 Changed drafts that cannot be safely applied after an editor failure,
 interruption, restart, or conflict remain in private host-owned recovery
 storage. Run `/editor-recovery list` from the attached primary client to view
 only bounded metadata, then use `/editor-recovery reopen <id>`,
 `/editor-recovery apply <id>`, or `/editor-recovery discard <id>`. Reopening
-never applies content automatically, applying revalidates the draft and target
-snapshot, and successful apply or discard removes the retained artifacts.
+lets you review the draft without applying it. Apply can fail if the target
+draft has changed; successful apply or discard removes the saved recovery.
 Observers cannot list or mutate recoveries.
 
 Command-output pagers use `/` to search, and an empty search repeats the last

@@ -1,8 +1,9 @@
 # Mezzanine Manual
 
-This manual explains how to install, configure, operate, and contribute to
-Mezzanine. It is organized by user task; [SPEC.md](../SPEC.md) remains the
-normative behavior and compatibility contract.
+This manual explains how to install, configure, and use Mezzanine. Start with
+the task that matches your needs; ordinary terminal use does not require an
+agent provider or authentication. Contributor guidance and protocol details
+are separate sections for people developing Mezzanine or integrations.
 
 ## Start by audience
 
@@ -41,18 +42,25 @@ normative behavior and compatibility contract.
 - [Operations and troubleshooting](operations/README.md): persistent-host
   operation, lifecycle, cache diagnostics, recovery, and symptom-based
   guidance.
-- [Manual reference](reference-manual/README.md): CLI, key, action, terminal,
-  and protocol-reference material, with links to normative contracts.
+- [Manual reference](reference-manual/README.md): CLI commands, keys, agent
+  actions, and terminal behavior. Its protocol subsection is for integration
+  implementers, not a prerequisite for using Mezzanine.
 - [Contributing](contributing/README.md): workspace architecture and local
   development validation, including cross-platform release-load checks.
 
 ## Documentation boundaries
 
-Task-oriented section landing pages and chapters state their purpose,
-prerequisites, related pages, and next step. Reference pages prioritize stable
-contracts and link to their normative source where applicable. A topic has one
-canonical owner; other pages summarize it and link to that owner. Relative
-links support both repository browsing and published copies.
+The getting-started, usage, agent, safety, configuration, and operations
+chapters target users and administrators. You do not need to read source code,
+wire protocols, or repository workflow rules to follow them. Use the command
+references when you need syntax rather than a guided workflow.
+
+[Contributing](contributing/README.md) is for developers and maintainers;
+[Protocol reference](reference-manual/protocols/README.md) is for integration
+implementers. [SPEC.md](../SPEC.md) defines normative requirements, but some
+requirements are not yet implemented. Where that affects safe use, the manual
+identifies the current limitation instead of presenting the requirement as a
+working guarantee.
 
 `docs/reference/` is intentionally outside the published manual. It retains
 research, audits, plans, and historical investigations. The published reference
@@ -63,4 +71,4 @@ material.
 
 - [README.md](../README.md): product overview and quick start.
 - [SPEC.md](../SPEC.md): normative behavior and compatibility requirements.
-- [AGENTS.md](../AGENTS.md): repository workflow and validation rules.
+- [AGENTS.md](../AGENTS.md): contributor-only repository workflow and validation rules.

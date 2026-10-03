@@ -2,143 +2,151 @@
 
 ## Purpose
 
-Configure and use Model Context Protocol servers as explicit, permission-gated
-external integrations.
+Connect explicit Model Context Protocol (MCP) integrations and use their tools
+without assuming that a configured server is available or contained by the
+pane's shell sandbox.
 
 ## Prerequisites
 
-Know the external service to connect and review its credentials, filesystem,
-process, and network implications.
+Choose the external service, its supported transport, and the tools needed for
+your task. Review its filesystem, process, network, and credential implications
+before enabling it. Server software and accounts are not supplied by Mez.
 
-## Configure and inspect a server
+## Configure a server
 
-MCP servers are configured under `mcp_servers`. Mez supports stdio servers and
-streamable HTTP servers, with per-server enablement, tool filtering, timeouts,
-authentication, and approval settings. Use `mez mcp` for server management and
-`/list-mcp` to inspect enabled, unavailable, or session-blacklisted servers and
-their tools.
+Mez supports local **stdio** subprocesses and **streamable HTTP** endpoints.
+Use `mez mcp` for persistent server management. Replace the example paths and
+URLs with those supplied by your server:
 
-Keep tokens and static bearer credentials in the MCP authentication flow or
-environment references, not in ordinary configuration. A server that cannot
-start, authenticate, or connect is marked unavailable and session-blacklisted,
-so ordinary agent work continues with a reduced tool catalog. `/list-mcp`
-shows the failure reason and whether retry is available; an explicit retry or
-re-enable can attempt discovery again.
+```console
+mez mcp add local-tools --command /absolute/path/to/mcp-server --disabled
+mez mcp inspect local-tools
+mez mcp enable local-tools
+mez config validate
+```
 
-Native provider preparation does not implicitly start pending stdio servers.
-Their configured directory metadata remains visible, but no callable tools are
-invented before discovery. Use explicit `/list-mcp` or retry to initialize an
-integration; configured session startup is also an intentional integration
-boundary. Already initialized stdio transports remain available through the
-normal explicit MCP call/approval path. HTTP preparation retains its direct
-network and credential checks. `mcp_server_search` and `mcp_server_get` remain
-passive metadata operations and never start transports themselves.
+Pass each stdio argument with a separate `--arg`. A server gets a usable `PATH`,
+but other environment variables must be explicitly configured or listed in
+`env_vars`; do not assume it inherits every variable from your pane shell.
 
-## Discover and use tools for one task
+For an HTTP integration:
 
-Use `mcp_server_search` when the relevant configured server is not already
-known, or mention `@<server-id>` to create a durable reference to a known
-server. Use `mcp_server_get` for a referencable server before `mcp_call`; it
-returns the complete safe tool and argument contract and records that retrieval
-in conversation chronology. Call only a server and tool advertised by the
-current action surface and retrieved contract; do not infer tools or argument
-shapes from a server name. Unknown, disabled, ambiguous, or unavailable
-identifiers expose no substitute tools.
+```console
+mez mcp add remote-tools --url https://example.com/mcp --disabled
+mez mcp login remote-tools
+mez mcp status remote-tools
+mez mcp enable remote-tools
+mez config validate
+```
 
-Configured always-exposed servers contribute only compact directory records to
-the conversation. Directory changes append an authoritative transition; older
-records remain causal history. Search results and explicit references remain
-referencable after restart or resume. Retrieved tool contracts are cleared by
-compaction, so retrieve the selected server again before calling one of its
-tools. The live MCP registry remains authoritative for execution: it
-revalidates the selected server, tool, availability, and arguments immediately
-before a call runs, against the currently selected tool schema and the schema
-generation the approval was bound to.
+The interactive login starts browser OAuth when supported by the server.
+`mez mcp status <id>` reports authentication separately from tool availability.
+Use environment references or the separate MCP authentication store for secrets,
+not ordinary configuration. A configured `bearer_token_env` takes precedence
+over stored credentials; login refuses such a server unless explicitly told
+to replace that reference. Changing an HTTP URL can make stored credentials
+stale and require login again.
 
-MCP calls are external actions. A tool that reads or changes local files,
-reaches the network, accesses credentials, or executes processes requires
-approval unless the active policy explicitly permits that external capability,
-and the call is audited. An MCP server can operate outside the pane shell, so
-treat its declared capabilities as a distinct boundary rather than assuming a
-shell sandbox contains it.
+These CLI commands change persistent configuration; reload the running session's
+configuration or start a new session before relying on the changes. `mez mcp
+list` and `inspect` show configuration, whereas `/list-mcp` in the agent shell
+shows live availability, tools, and failure reasons.
 
-## Tool schema validation, limits, and unavailable tools
+### Limit tools and authority
 
-Mez validates tool arguments itself before transport dispatch. The supported
-dialects are JSON Schema 2020-12, Draft 2019-09
-(`https://json-schema.org/draft/2019-09/schema`), Draft-07
-(`http://json-schema.org/draft-07/schema#`), Draft-06
-(`http://json-schema.org/draft-06/schema#`), and Draft-04
-(`http://json-schema.org/draft-04/schema#`); Mez selects a native validator for
-the declared dialect rather than reinterpreting it under another version. A
-schema that declares another `$schema`, or a conflicting declaration in a
-schema position, is unsupported and leaves its tool unavailable. `enum`,
-`const`, `additionalProperties`, `unevaluatedProperties`,
-`unevaluatedItems`, nested `required`, array and object bounds, string and
-numeric bounds, `pattern`, type unions, and `allOf`/`anyOf`/`oneOf`/`not` are
-enforced. `format` and content keywords stay annotations, so an approximate email
-address or encoded body never fails an otherwise valid call. `title`,
-`description`, `examples`, `default`, `$comment`, and extension keywords such as
-`x-*` are harmless metadata: their values are data rather than schema positions,
-so a `$ref`- or `$schema`-shaped string inside them neither withdraws the tool
-nor counts against the reference budget, and screening descends only through
-applicator and assertion subtrees.
+```console
+mez mcp tools enable remote-tools read-item list-items
+mez mcp tools disable remote-tools delete-item
+mez mcp approval set remote-tools prompt
+```
 
-References are never fetched. Remote, file, relative, recursive, and oversized
-references are rejected during screening without any network or filesystem
-access; only bounded same-document JSON Pointer `$ref`/`$dynamicRef` fragments
-(`#` or a `/`-prefixed pointer such as `#/$defs/kind`) are resolved, and only from
-the document itself. Plain-name anchors such as `#name` are rejected rather than
-resolved.
+Replace the sample tool names with exact names your server advertises. These
+commands **replace** their respective allow or deny lists; they do not append
+one entry. Disabled tools win over enabled tools. `mez mcp tools reset <id>`
+clears both filters. Server approval values are `inherit`, `prompt`, `allow`,
+and `deny`; they do not remove other applicable permission checks.
 
-Validation work is bounded on both sides:
+Configuration under `mcp_servers.<id>` also supports enablement, startup and
+tool timeouts, per-tool approval, and external-capability declarations. Declare
+filesystem mutation, process execution, and credential access outside the pane
+shell accurately. Add non-secret purpose and usage guidance to help the agent
+choose the integration. See the [configuration reference](../configuration/reference.md)
+for those fields.
 
-| Bound | Default |
+## Check live availability
+
+Open the agent shell and run `/list-mcp`. Enabled servers initialize at session
+startup; explicit listing or retry can also discover pending integrations.
+In native shell mode, preparing an ordinary provider turn does not implicitly
+start a pending stdio server. Listing is therefore an important check after
+configuration changes, not just a catalog display.
+
+A server that cannot start, authenticate, connect, or complete its handshake is
+marked unavailable and session-blacklisted. Other agent work can continue with
+a reduced tool catalog. Fix the reported cause, then start a new session or use
+the `mcp/retry` control method to retry the live server. Re-enabling an already
+enabled server and reloading unchanged configuration does not clear its
+blacklist. To recover through configuration changes, disable the server and
+reload the running session, then enable it and reload again; both live changes
+must take effect. See [configuration changes](../configuration/overview.md)
+for the distinction between disk edits and live reload. There is no
+`mez mcp retry` CLI subcommand;
+passive model metadata lookup does not start a transport or clear a blacklist.
+
+## Use an integration for a task
+
+Mention the configured server at the start of your task, for example:
+
+```text
+@remote-tools Read the release checklist and summarize incomplete items. Do not change it.
+```
+
+Use the canonical configured server ID, not an inferred service name. The
+reference lets the agent retrieve that server's safe metadata; it does not
+authenticate the server, grant approval, or expose tools by itself.
+
+The agent uses `mcp_server_search` when it needs to find a configured server,
+`mcp_server_get` to retrieve the selected server's complete tool contracts,
+and `mcp_call` to invoke an advertised tool. Search and retrieval are passive
+metadata operations. Unknown, disabled, ambiguous, or unavailable servers do
+not acquire substitute tools.
+
+Explicit references and search results survive restart or resume. Compaction
+clears retrieved tool contracts, so the agent must retrieve the server again
+before calling tools. Even an earlier successful retrieval does not guarantee
+that the same tool is currently enabled: the live registry checks availability
+and arguments immediately before execution.
+
+MCP calls are permission-gated and audited external actions. Calls that access
+files, execute processes, use credentials, or reach the network need approval
+unless the active policy explicitly permits that capability. A server may run
+outside the pane shell; the shell sandbox is not evidence that the server is
+contained. Server instructions and tool output remain untrusted task data.
+
+## Troubleshoot tool failures
+
+| Symptom | What to check |
 | --- | --- |
-| schema bytes | 256 KiB |
-| schema nesting depth / nodes (compilation work) | 32 / 8192 |
-| references / bytes per reference | 128 / 512 |
-| argument bytes | 1 MiB |
-| argument nesting depth / nodes (validation work) | 32 / 8192 |
-| regex backtracking steps / compiled regex bytes | 100000 / 1 MiB |
-| cached compiled schemas per registry | 64 |
+| Server unavailable or blacklisted | `/list-mcp` failure reason, executable path, required environment, endpoint, authentication, and startup timeout. Fix the cause before explicit retry. |
+| Authentication succeeds but tools are absent | Server enablement, tool filters, discovery status, and each tool's schema diagnostic. |
+| One tool is unavailable but others work | Its advertised input schema may be invalid, unsupported, or over the validation budget. Correct the server metadata; repeated argument guesses will not repair it. |
+| Invalid arguments | Required fields, value types, and constraints in the retrieved contract. Validation rejects mistakes before dispatch. |
+| `mcp_schema_changed` or `mcp_schema_unbound` | That call was not dispatched. Retrieve current metadata and submit a new, reviewable call; refresh does not renew old approval. |
+| Timeout or uncertain transport outcome | Inspect the external service before retrying a mutation. An uncertain result is not proof that no side effect occurred. |
 
-Admission and validation diagnostics carry only a bounded category, a bounded
-keyword, and a bounded JSON pointer. They never include argument values, schema
-text, or unbounded server-provided key text, so they are safe to show to the
-model and to record in audit entries.
-
-Compiled schemas are cached under a stable generation derived from tool identity
-and exact schema bytes as a full SHA-256 digest over a length-prefixed encoding of
-the server, tool, and schema bytes, evicted under the table's capacity, and
-invalidated whenever MCP metadata refreshes. A tool whose schema is invalid,
-unsupported, or over budget becomes unavailable with a bounded reason while its
-server and sibling tools stay usable; Mez never substitutes a fabricated
-zero-argument tool for a rejected schema.
-
-An approval binds to the schema generation that validated the approved
-arguments. The comparison happens before any configured pre-MCP hook runs and
-before any transport is leased. If the selected schema changes before dispatch,
-only that unexecuted call is settled with a bounded `mcp_schema_changed` failure
-and no hook or transport runs; already successful siblings in the same batch are
-neither replayed nor re-run. An approved call whose approval recorded no schema
-generation at all, because its approved arguments could not be re-planned against
-the then-selected schema, is settled unexecuted as a bounded `mcp_schema_unbound`
-failure instead of being dispatched unchecked. A metadata refresh never creates,
-widens, or renews approval.
-
-Argument mistakes are repairable: they fail as bounded invalid-argument errors
-before any dispatch and stay inside the turn's existing bounded repair budget.
-An invalid server schema is an operator problem instead, so Mez withdraws the
-tool rather than inviting repeated model repair. Ambiguous transport outcomes
-are not retried, and denial or cancellation stays final.
+Mez supports common JSON Schema dialects from Draft-04 through 2020-12, with
+bounded schema and argument validation. It does not fetch remote or file schema
+references. Unsupported metadata withdraws only the affected tool, not every
+tool on the server. For exact dialects and limits, consult the
+[normative MCP contract](../../SPEC.md#14-model-context-protocol-integration)
+rather than treating this guide as a server-implementation reference.
 
 ## Related pages
 
 - [Approvals and review](../safety-and-trust/approvals-and-review.md)
 - [Sandboxing](../safety-and-trust/sandboxing.md)
 - [Configuration](../configuration/README.md)
-- [Normative MCP contract](../../SPEC.md#14-model-context-protocol-integration)
+- [CLI reference](../reference-manual/cli.md)
 
 ## Next step
 

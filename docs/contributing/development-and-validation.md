@@ -9,8 +9,36 @@ before handing off a change.
 
 - Rust 1.91 or newer, including `rustfmt` and `clippy`.
 - `just` for the repository recipes.
+- GNU `timeout` available as an executable named `timeout` on `PATH`.
+- Python 3 available as `python3` for managed-shell Cargo-artifact parsing and
+  profiling scripts.
+- Bash, Fish, Zsh, and a POSIX `/bin/sh` for managed-shell and real-PTY checks.
+  The managed-shell wrapper requires Bash at `/bin/bash` or `/usr/bin/bash`,
+  Fish at `/usr/bin/fish`, `/usr/local/bin/fish`, or `/opt/homebrew/bin/fish`,
+  and Zsh at `/bin/zsh`, `/usr/bin/zsh`, or `/usr/local/bin/zsh`; missing
+  supported shells are errors, not silent skips.
 - The repository [AGENTS.md](../../AGENTS.md), which is the authoritative
   workflow and handoff guidance.
+
+On macOS, install Homebrew coreutils and expose its GNU executable names before
+running recipes or tests:
+
+```sh
+brew install coreutils fish
+export PATH="$(brew --prefix coreutils)/libexec/gnubin:$PATH"
+command -v timeout
+timeout --version
+python3 --version
+```
+
+The managed-shell wrapper itself defaults to `gtimeout` on macOS (and accepts
+`TIMEOUT_COMMAND`), but wrapping only the outer command with `gtimeout` is not
+sufficient: recipes and managed-shell test commands also invoke the executable
+name `timeout`. A shell alias does not make that name available to child
+processes. Keep coreutils' `gnubin` directory on the inherited `PATH`. Ensure
+`python3` and all supported shells above are installed too; coreutils and Fish
+alone do not supply every prerequisite. Linux typically supplies GNU timeout
+through coreutils; install Fish and Zsh if absent.
 
 ## Build and run
 

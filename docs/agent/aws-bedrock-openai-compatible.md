@@ -94,7 +94,7 @@ Completions and Models paths from it.
 AWS also documents a `bedrock-mantle` endpoint, but the endpoints have
 different feature and IAM contracts. This guide deliberately uses the
 AWS-recommended `bedrock-runtime` endpoint. Recheck the
-[OpenAI-compatible API guide](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html)
+[endpoint comparison](https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html)
 and Mez adapter support before substituting another endpoint or API dialect.
 
 Validate the connection shape before adding models:
@@ -105,31 +105,22 @@ mez config validate
 
 ## Add a model and profile
 
-Bedrock's OpenAI-compatible
-[Models API](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html#bedrock-mantle-models)
-exposes `GET /models`. Preview the raw catalog through Mez:
+The selected `bedrock-runtime` endpoint **does not implement OpenAI-compatible
+`GET /models`**. AWS documents that limitation in its
+[model-selection guidance](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html#bedrock-mantle-models).
+Do not use `mez config model sync bedrock` as the setup path for this endpoint.
+AWS's OpenAI-compatible Models API is available on `bedrock-mantle`, which is
+not the connection configured here.
 
-```console
-mez config model sync bedrock
-```
-
-If the preview contains the intended model and metadata, persist it explicitly:
-
-```console
-mez config model sync bedrock --apply
-mez config model list bedrock
-```
-
-Do not use `--prune` during initial setup. That independent option proposes
-removing configured records absent from one live response.
-
-If catalog discovery is unavailable or you need one specific inference target,
-copy its exact provider-facing identifier from current AWS documentation or a
-Bedrock service response. Pass the complete value as opaque data:
+Choose an inference target from AWS's model cards or the control-plane
+`ListFoundationModels` and `ListInferenceProfiles` operations. Verify Chat
+Completions support on `bedrock-runtime` in the chosen Region, then copy the
+exact provider-facing identifier. Pass the complete value as opaque data:
 
 ```console
 MODEL_ID='copy-the-exact-AWS-model-or-inference-profile-id'
 mez config model add bedrock "$MODEL_ID"
+mez config model list bedrock
 ```
 
 Model IDs, inference-profile IDs, and ARN-shaped values may contain dots,
@@ -174,18 +165,17 @@ mez auth status
 mez config validate
 ```
 
-In the agent pane, inspect and select the catalog:
+In the agent pane, select the Bedrock profile before inspecting its catalog:
 
 ```text
-/refresh-provider-info
-/model list
 /model bedrock-default
+/model list
 ```
 
-`/refresh-provider-info` updates only the running session's best-effort catalog
-cache. It does not edit configuration. `mez config model sync bedrock` previews
-a durable comparison, and only `--apply` writes model records. A manually added
-record remains available even when a later catalog response omits it.
+`/model list` uses the active provider. Because this endpoint lacks `/models`,
+rely on configured records rather than requiring a successful live refresh.
+`/refresh-provider-info` is a best-effort session-cache update, not a durable
+configuration edit or an AWS entitlement check.
 
 Treat successful configuration and authentication as separate from AWS model
 entitlement, quota, and regional availability. A valid profile can still fail
@@ -227,10 +217,10 @@ directs. Removing a key from Mez does not revoke it in AWS.
 - **Model unavailable:** check the current AWS model card, Chat Completions
   compatibility, endpoint availability, account access, and whether the API
   expects a foundation-model ID, inference-profile ID, or ARN.
-- **Catalog refresh or sync fails:** AWS documents `/models`, but access,
-  endpoint, or service behavior can still prevent discovery. Keep or add the
-  exact identifier with `mez config model add bedrock MODEL_ID`; runtime refresh
-  is not required for a durable configured model.
+- **Catalog refresh or sync fails:** `bedrock-runtime` does not support
+  OpenAI-compatible `/models`. Add the verified identifier with
+  `mez config model add bedrock MODEL_ID`; do not change endpoints merely to
+  make discovery work. A live refresh is not required for a configured model.
 - **Tools, structured output, or streaming fail:** OpenAI-compatible does not
   mean every Bedrock model implements every optional OpenAI behavior. Check the
   model's AWS compatibility information and configure only Mez provider options

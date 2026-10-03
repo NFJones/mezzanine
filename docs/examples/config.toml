@@ -1,6 +1,9 @@
 # Mezzanine default-configuration example.
 # This checked-in file mirrors the provider-free source template before
 # first-launch generation selects a platform-specific approval/sandbox pair.
+# Generation also sets network_policy to "allow" for Bubblewrap or Seatbelt;
+# policy-only generation retains "prompt". Prefer `mez config init` to copying
+# the portable security settings unchanged onto a different platform.
 # Optional settings and dynamic-map examples remain commented so copying the
 # rest of the template does not enable external commands or integrations.
 # Lines prefixed with `#? ` are directly activatable: remove that prefix from
@@ -146,10 +149,11 @@ fallback = [["vim", "{file}"], ["nano", "{file}"], ["vi", "{file}"]]
 [keys]
 escape = "C-a"
 # Prefix suffix for external prompt editing (`Ctrl+A e` by default). Set to
-# another chord to remap it or `null` to disable it.
+# another chord to remap it. Explicit null disabling requires JSON or YAML;
+# TOML has no null value, and omitting a field restores inheritance.
 #? edit_prompt = "e"
 # Direct bindings are disabled by default. Uncommenting a chord replaces that
-# action's built-in prefix binding; setting a field to null disables both paths.
+# action's built-in prefix binding. In JSON or YAML, null disables both paths.
 #? split_vertical = "A-\\"
 #? split_horizontal = "A--"
 #? new_window = "A-="
@@ -628,6 +632,7 @@ global_command_rules = []
 # the visible host namespace. Allow permits networking and prompt permits it
 # only for authorized network actions. Neither backend filters destinations.
 # Brokered web and MCP actions are controller-gated separately.
+# First-launch generation changes this to "allow" for Bubblewrap or Seatbelt.
 network_policy = "prompt"
 # Prompt before destructive actions not already covered by a stronger rule.
 destructive_action_policy = "prompt"
@@ -710,7 +715,7 @@ provider_refresh_leeway_seconds = 86400
 global_files = []
 # Instruction filenames searched from the project hierarchy.
 project_filenames = ["AGENTS.md"]
-# Maximum instruction bytes loaded before applying on_truncation.
+# Maximum bytes read per instruction file before applying on_truncation.
 max_bytes = 32768
 # Skip hidden directories during instruction discovery by default.
 include_hidden_directories = false
@@ -719,9 +724,10 @@ on_truncation = "summarize"
 
 # Named lifecycle hooks. No external command executes by default.
 [hooks]
-# Directly activatable program hook. Replace `event` with `events`, `program`
-# and `args` with `command` plus `shell`, `timeout_ms` with `timeout_sec`, or
-# `cwd` with `working_directory` to use those compatibility forms.
+# Directly activatable program hook. Replace `event` with `events` or
+# `timeout_ms` with `timeout_sec` to use the alternate forms. For a pane-shell
+# hook, remove `program` and `args`, add `command`, and change `kind` to
+# "focused_shell". `shell` does not select an interpreter.
 #? [hooks.example]
 #? event = "post_shell_command"
 #? program = "/usr/bin/logger"
@@ -732,6 +738,8 @@ on_truncation = "summarize"
 #? agent_hook = false
 #? timeout_ms = 5000
 #? on_failure = "warn"
+# The following fields and env table are accepted but currently ignored by
+# the hook runtime; they do not change cwd, environment, policy, or actions.
 #? cwd = "."
 #? inject_instructions = ""
 #? mutates_policy = false

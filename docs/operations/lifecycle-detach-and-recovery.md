@@ -19,13 +19,11 @@ client. For administration from another process, use `mez detach --client-id
 ID`; a bare one-shot `mez detach` cannot identify a separate attached client.
 Detaching normally leaves pane processes and agent tasks running.
 
-Explicit pane termination first requests graceful process-group shutdown and
-then escalates. Final escalation also terminates the owned primary child before
-reaping it, so cached PTY group metadata cannot leave the root alive while
-cleanup waits. Signal or reap failures retain the process handle for diagnosis
-and retry.
+Explicit pane termination requests graceful shutdown and then escalates.
+Preserve termination errors and inspect remaining processes rather than
+assuming a failed stop completed. Detach is not termination.
 
-The runtime exposes `mezctl/2` and allows up to 16 equal-authority attached
+A session allows up to 16 equal-authority attached
 primaries with independent navigation and transient presentation. One layout
 owner controls canonical PTY geometry; non-owner resizes affect only that
 client's viewport. Owner detach elects the oldest remaining primary, while
@@ -53,37 +51,28 @@ observer follows that exact source primary and receives session-view events
 only from its atomic attachment cutoff onward. Detaching the source primary,
 revocation, self-detach, or stream failure terminates the remote observer and
 requires an explicit reconnect. The configured Iroh setup timeout bounds both
-waiting for that stream and receiving its preface. It also provides one total
-transport-shutdown budget for the control bridge, X11 and event workers, and
-the endpoint; those stages do not each receive a fresh timeout. Shutdown sends
-the control-stream FIN before closing the connection, then settles or aborts
-the remaining workers concurrently within that shared budget.
-
-When `:exit` terminates a remotely attached session, Mez flushes the terminal
-response containing `session_terminated = true` before revoking that
-connection's X11 route or allowing service supervision to tear down the
-control task. If response delivery fails, drop-safe cleanup still releases the
-shutdown fence and proceeds with bounded teardown.
+event-stream setup and transport shutdown. Use `:exit` only when session
+termination is intended; it is not a detach command. A lost termination response
+can leave the outcome uncertain, so inspect session state through local control
+before repeating it.
 
 Remote terminal input is not retried after an ambiguous connection failure. If
 Mez reports that an input outcome is unknown, treat the command as possibly
 applied, inspect the session through a new explicit attach, and do not assume
-that the lost input is safe to repeat. The local Unix socket remains available
-for administration, revocation, and recovery independently of the failed remote
-channel.
+that the lost input is safe to repeat. Ordinary remote connection failure leaves
+local Unix administration available. A supervised Iroh listener failure can stop
+the host and its Unix listener together; restore the host before local recovery.
+See [Persistent multi-session host](persistent-host.md#stop-upgrade-and-recover).
 
 ## Snapshot and resume deliberately
 
 Use `mez snapshot create` to save layout state, and `mez snapshot` to list
 saved snapshots. The `inspect`, `delete`, `resume`, and `resume-latest`
-subcommands operate on those saved layouts. Snapshot payload version 5 retains
-shared session topology, canonical geometry, names, known pane working
-directories, a client-independent landing view, and version-2 local MMP state.
-MMP state retains private trusted project membership and each retained message's
-resolved project or session audience; roots and opaque scope identifiers are
-not exposed through transport or model-visible output. Snapshot version 1 has
-no resolved audience metadata, so its retained and accepted MMP traffic is
-discarded rather than replayed with a widened audience. It never restores
+subcommands operate on those saved layouts. Current snapshots retain shared
+session topology, geometry, names, known pane working directories, a landing
+view, and local inter-agent messaging state. Older messaging state without
+resolved audience metadata is discarded rather than replayed to a broader
+audience. A snapshot does not restore
 attached client IDs, layout ownership, client-local focus/history/zoom,
 transient presentation, observer authority, event credentials or cursors,
 provider credentials, terminal history, agent conversations, live MCP state,
@@ -142,35 +131,18 @@ database as `.catalog.sqlite3.backup`. A catalog created by a newer Mezzanine
 schema is not overwritten or downgraded; startup reports the incompatibility so
 the newer data remains intact.
 
-Ordinary session changes use payload-first consistency: Mez syncs transcript,
-presentation, classification, or naming files before updating the catalog.
-Exact UUID lookup validates its indexed row and repairs only that UUID when the
-row is missing; a row whose promised payload disappeared is removed. Latest
-root-session selection and active-session retention are also indexed, so these
-operations do not scan the complete session directory. If a catalog write
-fails after a payload write, preserve the files and rebuild the catalog rather
-than deleting the recoverable conversation.
+Conversation payloads are written before their catalog updates. If a catalog
+write fails, preserve those files and use the recovery commands below instead
+of deleting the conversation. An interrupted transcript write can leave only
+a durable prefix; queued history may be lost if the process exits before
+persistence accepts it. Startup reconciles retained recovery receipts and
+rejects conflicting history rather than blindly appending it. A failed
+checkpoint or write is not proof that no data was saved, nor that all displayed
+history is durable.
 
-An interrupted transcript batch can leave a durable prefix even when its
-worker reports failure. The persistence worker retries only the exact accepted
-batch: under the conversation lock it compares existing rows, rejects a
-conflicting sequence, syncs matching rows and rebuilds their summary and
-catalog before appending a verified missing suffix. Queued rows remain logical
-history, not evidence of durability for selective compaction. Before writing,
-the persistence worker saves an exact, private append receipt. On startup Mez
-reconciles retained receipts against the durable archive and rejects conflicting
-rows rather than replaying an ambiguous batch blindly. A running worker paces
-further retries after a failure. A batch still held only in the actor's queue
-has no durable receipt yet; a process exit before worker admission can lose it,
-and a checkpoint requiring those missing rows fails closed on restart.
-
-Resume completion returns at most 200 root-conversation candidates. The
-interactive resume picker keeps only a bounded, viewport-derived keyset page in
-memory and fetches adjacent pages as focus crosses an edge. Directory scope,
-subagent inclusion, prompt presence, and case-insensitive metadata search are
-evaluated in SQLite. Opening `i` loads only a bounded recent transcript tail for
-that selected row; merely listing or paging sessions does not read transcript
-payloads.
+The interactive resume picker pages through bounded metadata. Open `i` for a
+bounded recent transcript preview of the selected conversation; listing alone
+does not load its full transcript.
 
 Treat `catalog.sqlite3`, its `-wal` and `-shm` files, migration markers, and
 backups as sensitive metadata. Do not remove transcript directories or legacy
@@ -190,6 +162,13 @@ verified temporary database, retains the previous database as
 to replace a readable future schema. Keep `named-sessions.json`, `summary.json`,
 and `metadata.json`; they remain rollback and rebuild inputs for this catalog
 version, and compatibility name writes remain enabled.
+
+Before manual recovery or backup, stop the owning daemon so storage is not
+changing, and preserve the payload directories together with metadata, recovery
+receipts, and SQLite sidecars. Do not delete a live database's `-wal` or `-shm`
+files to clear a lock. A readable newer schema requires the matching newer
+Mezzanine version, not forced deletion or downgrade. Recheck catalog status
+after recovery and inspect the interrupted conversation before continuing work.
 
 Named active sessions participate in the configured age and count retention
 policy. Archive a session to preserve it outside active retention. Archives are

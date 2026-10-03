@@ -12,7 +12,7 @@ configuration files.
 
 ## Sign in interactively
 
-Run the default interactive flow:
+Run the default interactive OpenAI (ChatGPT) flow:
 
 ```sh
 mez auth login
@@ -59,7 +59,9 @@ are not rewritten during authentication, so add any required provider and model
 entries to those files yourself.
 
 Successful authentication does not guarantee a particular entitlement, quota,
-or model. Select a model with `/model` or configure a model profile.
+or model. In the agent shell, `/model` shows the active profile and configured
+profiles; `/model <profile-name>` selects a profile. Use `/model --list` to
+inspect the active provider's model catalog, or configure a model profile.
 
 ## When sign-in fails
 

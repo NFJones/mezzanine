@@ -2,250 +2,151 @@
 
 ## Purpose
 
-Explain what the agent retains across turns, how compaction changes that
-history, and how to inspect context and cache-related diagnostics.
+Keep a task's useful history, resume saved work, and choose when to start fresh
+without confusing conversation history with persistent memory.
 
 ## Prerequisites
 
 Use the [agent shell](../using-mezzanine/agent-shell.md) in an active pane.
 
-## What a turn receives
+## What the agent knows
 
-Each request combines a cache-stable invariant prefix, current project guidance,
-and ordered durable conversation chronology. Mez refreshes applicable project
-guidance before each provider request and supplies it as a final system-prompt
-suffix; chronology contains every task prelude, user or assistant event, and
-explicit action result appended since the latest compaction boundary. User,
-assistant, action-result, project-file, and terminal sources retain distinct
-roles. Terminal text becomes context only when an explicit action result
-includes it; live controller state, passive terminal content, credentials, and
-unrelated pane data are not normal model context.
+Each turn receives the applicable project instructions, selected guidance, and
+the conversation's ordered prompts, replies, and explicit action results. Mez
+refreshes project instructions before provider requests. The agent does not
+automatically see terminal scrollback, a full-screen application's contents,
+other panes, or files it has not inspected. Ask it to read a file or run a
+bounded command when current evidence is needed.
 
-An action result has one bounded model-visible representation. Mez appends that
-representation once to the durable chronological prefix, stores it in the
-conversation transcript, and replays the same bytes on later turns and after
-restart or resume. This includes captured
-shell, patch, MCP, web, fetch, and skill output, so transcripts and context
-exports can contain sensitive task data. Later results append after earlier
-ones; they do not move or replace prior output. Only explicit conversation
-compaction may summarize complete older execution groups.
-Prompt replay combines committed transcript rows with actor-queued and
-worker-owned appends in sequence order. The latter remain logically visible
-until their keyed write settles, but cannot authorize a durable compaction
-range. A missing first archive is empty only before any committed history or
-required epoch; missing older history fails visibly. Selective publication
-checks frozen committed source under the conversation lock before writing an
-epoch, even if subsequent entries arrived during summarization.
-Execution and interruption bookkeeping check archive history outside the runtime
-actor. Captured chronology awaiting that check is not an accepted append or a
-durable receipt: later history admission waits until the checked rows enter the
-ordinary append lane. A failed check keeps that conversation fenced and reports
-the error rather than silently admitting incomplete history or replaying actions.
-The complete model-facing result, including shell observation fields, is bounded
-before first exposure. Control characters such as NUL remain part of the exact
-model-visible content: typed execution blocks JSON-escape them and NUL-bearing
-display transcript rows use a versioned, reversible TSV escape. Older transcript
-rows continue to load under their original grammar. The native action result
-remains separate from a bounded model-facing projection. Native provider
-tool-result envelopes aggregate action results and are independently bounded
-against their full JSON-encoded size before the provider sees them; any
-truncation notice is retained in the exact replayed native event.
+Action results are retained as the bounded output originally shown to the model,
+not recaptured from the terminal on later turns. A truncated result does not
+become complete when you resume the conversation. Shell, patch, MCP, and web
+results can contain sensitive task data; saved conversations and context exports
+need the same care as the files being worked on.
 
-Servers listed in `agents.always_exposed_mcp_servers` use the same append-only
-model. Mez stores compact typed directory snapshots containing only server
-identity, display name, purpose, and usage guidance. An unchanged directory is
-reused in place; a configured-directory change or removal appends an
-authoritative transition. Explicit `@server` references and successful
-`mcp_server_search` results become durable references, while a successful
-`mcp_server_get` records the complete retrieved server contract needed for a
-later `mcp_call`. The live MCP registry—not historical records—still controls
-whether a call may run and revalidates its arguments immediately before
-execution. Compaction clears retrieved contracts, so a later call requires a
-fresh `mcp_server_get`.
+Hiding the agent shell or detaching the client does not start a new
+conversation. Saved history can also be resumed after restart. A fork receives
+a snapshot of its source conversation and does not absorb later parent work.
+Conversation continuity is not proof that a command completed or that the
+filesystem is unchanged: verify interrupted work before asking the agent to
+continue.
 
-The pane conversation can survive hiding the agent shell, detaching and
-reattaching the client, and ordinary session persistence. A forked or routed
-conversation uses its captured source boundary and does not absorb later parent
-history.
+## Choose a conversation operation
 
-Persisted context documents are user-owned source artifacts, not the assembled
-context of a live request. Use `/context-doc create --scope global|project
---title <title>` to create a disabled empty document, `/context-doc edit <id>`
-to edit only its content, and `/context-doc enable <id>` after it contains the
-text that future turns should receive. `/context-doc list|show|disable|delete`
-manage selection and lifecycle separately. Enabled global documents and enabled
-documents for the active project are added deterministically when a new turn is
-created, with stable document ID provenance. Editing, disabling, or deleting a
-source document never rewrites a queued, running, or completed turn; it affects
-only later turn assembly.
+| Goal | Command | Effect |
+| --- | --- | --- |
+| Continue the same task | Enter another prompt | Keeps the current conversation as context. |
+| Reduce older context | `/compact` | Summarizes eligible completed work while retaining protected instructions and recent exact history. The summary is lossy. |
+| Start an unrelated task | `/new` | Starts a fresh conversation without clearing the terminal view. |
+| Start fresh and clear the view | `/clear` | Starts a fresh conversation and clears the visible conversation and terminal view. |
+| Try a different approach | `/fork` | Copies the conversation into a new agent pane, leaving the source intact. |
+| Return to saved work | `/resume` | Opens the saved-conversation picker. |
 
-Document edits use full-record compare-and-swap checks. Concurrent metadata or
-content changes and deletion retain the private editor draft for explicit
-`/editor-recovery` handling instead of overwriting or recreating the source.
-Enablement and content updates retain a nondecreasing persisted update timestamp
-even when the wall clock moves backward. Revision checks still compare the full
-record rather than treating a timestamp as sufficient proof of freshness.
-`/show-context` continues to browse transient conversation entries and does not
-edit these persisted source documents.
+Neither `/new` nor `/clear` deletes your working files or reverses earlier
+actions. Global or project guidance can still apply to a fresh conversation;
+starting fresh is not the same as disabling that guidance or persistent memory.
 
-Saved-conversation discovery uses a private SQLite metadata catalog so a large
-session collection does not require reconstructing every summary during normal
-startup. Conversation transcripts and presentation history remain in their
-per-session files and are not stored as database blobs. The catalog can be
-rebuilt from those retained files if it is lost or corrupt. Mez writes session
-files first and then updates their catalog metadata. Exact `/resume <uuid>`,
-`/resume --latest`, and active-session retention use indexed catalog queries;
-exact lookup can repair only the requested UUID from retained files. Active
-sessions are governed by the configured age and count limits; named sessions
-count toward those limits, while archived sessions are exempt.
+### Compact a long task
 
-Resume completion is capped, and the interactive picker fetches viewport-sized
-keyset pages rather than loading the full catalog. Directory and subagent
-toggles plus picker search are applied by SQLite, while transcript detail is
-loaded only for the row you explicitly open.
+Use `/compact` when older completed work crowds out the current task. Mez can
+also attempt context-length recovery after a provider rejects an oversized
+request. It does not summarize unfinished work indiscriminately or treat token
+estimates as provider guarantees.
 
-Archived payloads are private tar+zstd files with bounded metadata sidecars.
-Ordinary catalog listing reads the sidecars rather than decompressing archives;
-restore verifies the compressed digest, manifest, entry types, and paths before
-installing an active session directory.
+If compaction fails, the error does not mean the source history was discarded.
+Mez does not publish a partial replacement as a completed durable compaction.
+Missing or corrupt required history is reported rather than silently omitted.
+Check the error and model limits, or start `/new` with a concise, verified
+handoff. After a successful compaction, ask the agent to recheck important file
+contents and results instead of treating the summary as exact evidence.
 
-In the `/resume` picker, press `r` to switch between active and archived-only
-sessions. Press `A` to archive the selected active session or restore the
-selected archive. Enter on an archived row restores it asynchronously and then
-resumes it in the pane that opened the picker. Default `/resume`, completion,
-and `--latest` continue to consider active sessions only.
+Retrieved MCP tool contracts are cleared by compaction. Explicit server
+references survive, but the agent must retrieve a server's current metadata
+again before calling its tools; see [MCP integration](mcp-integration.md).
 
-For catalog diagnostics and explicit recovery, use `mez session-catalog
-status` and `mez session-catalog rebuild`. Normal status and discovery remain
-bounded; rebuild is the deliberate full scan of retained session files.
+## Resume and preserve saved work
 
-## Compact and recover
+Give an important conversation a recognizable name while it is idle:
 
-Use `/compact` when an old conversation no longer fits efficiently. Mez
-summarizes only closed older execution groups, retains a recent exact raw tail,
-and protects active prompts and steering instructions from summarization. A
-summary is intentionally lossy; start `/new` when old context should not affect
-a new task, or use `/resume` to choose a saved conversation.
-Provider-reported input tokens describe a complete request, including cache
-reads; they are not counts for its individual context blocks. Block-size
-metadata is excluded from model-visible context and currently uses a local
-estimate. The full request also includes instructions, action schemas, and
-transport framing. A provider rejection remains authoritative when an estimate
-understates the actual context size.
+```text
+/name-session Release checklist
+/resume
+```
 
-If the manual compactor request is too large for its configured input cap or
-is rejected for context length, Mez splits only temporary, redacted source
-input into bounded chunks and asks the model to synthesize one final summary.
-Until that synthesis succeeds, neither the committed summary nor the exact
-transcript replay boundary changes. An irreducible request or exhausted retry
-budget reports a failure instead of discarding source history.
+The picker initially shows active saved conversations for the current project.
+Use its footer for navigation and filtering; these keys affect the selected row:
 
-Active-context recovery selects a contiguous recent suffix of complete groups
-within an eligible segment, not a best-fit collection of older small groups.
-Only a suffix whose estimated rendered token cost is strictly below its optional
-tail reservation remains raw; equal cost does not fit. The active-provider block
-allowance excludes fixed request overhead and protected exact context. Invisible
-provider-owned blocks cost zero, while local estimates are not provider counts.
-When the newest closed group cannot fit the raw-tail budget, it is summarized
-instead of retaining an older group in its place; exact user and task barriers
-and incomplete or unconsumed groups remain raw.
-An existing summary alone is not another reduction: planning skips that
-summary-only segment and may select a later eligible segment. Summaries remain
-anchored on their original side of each exact instruction; they are not moved
-or merged across a protected barrier.
-If the provider rejects a request for context length and configured raw-tail
-retention selects no work, Mez tries smaller optional reservations down to its
-one-percent minimum before declaring that no replacement is available. This is
-a bounded recovery-only fallback; ordinary compaction keeps the configured
-retention, and exact barriers and incomplete groups remain protected.
+| Key | Action |
+| --- | --- |
+| `a` | Toggle current-project and all-project views. |
+| `i` | Inspect the selected transcript before resuming. |
+| Enter | Resume the selected conversation. On an archived row, restore it first. |
+| `c` | Clear the selected name without deleting the conversation. |
+| `d` | Delete the selected saved conversation; deletion is refused while it is bound to a live agent pane. |
+| `r` | Toggle active and archived-only views. |
+| `A` | Archive the selected active conversation or restore the selected archive. |
 
-A completed conversation compaction writes a versioned summary and the last
-summarized transcript sequence together to a private conversation-owned epoch
-file. Selective epochs can also anchor model-authored summaries at ordered,
-complete durable execution-group ranges between exact barriers. The original
-transcript remains append-only; uncovered entries and later appends replay in
-their original order. On restart or resume, Mez loads this committed projection;
-optional pane memory is not needed to recover the summary. Corrupt epoch data
-or unreadable required history stops context construction rather than silently
-dropping older context.
-Prepublication candidate sizing uses the same typed replay projection as
-published history. Retained native call/result groups keep their provider
-ownership and ordered identity; prospective MCP invalidation drops obsolete
-manifest-bearing groups atomically, just as the stored compaction boundary does.
-If an initial model summary leaves the complete next request oversized, Mez can
-retry the same frozen source with a smaller summary-output ceiling or summarize
-another eligible closed range beyond an exact barrier. Earlier summaries remain
-provisional until one combined epoch fits the refreshed request. A non-reducing
-or exhausted retry fails without replacing the previous transcript projection;
-its diagnostic reports component estimates, not task content.
-Provider-context recovery also searches later eligible history when shrinking
-the current summary cannot cover the excess. A positive whitespace-word
-allowance is not proof that code-heavy history fits the complete request.
-This fallback budgets provider-projected token estimates after reserving
-request overhead, while existing staged plans retain their frozen allowance.
-Messages and steering arriving during staging remain in canonical arrival order.
-Mez verifies the frozen source is unchanged and rebases appended events with
-their original identities and metadata; peer mail remains lower-trust reference
-data, never direct-user authority. Repeated payloads from distinct messages stay
-distinct, delivery cursors are not replayed, and the final request budget includes
-these arrivals before publication. A genuine frozen-source rewrite fails closed.
-If the first segment has no summary allowance because later eligible closed
-history remains raw, planning accounts for those later segments before failing.
-Each segment is still summarized separately at its original anchor, advancing
-through distinct later closed ranges; exact instructions and unfinished
-work stay raw. No intermediate summary resumes the turn or publishes an epoch.
-When the selected closed source exceeds the compactor's configured input cap,
-temporary chunks preserve all source bytes (including Unicode) and are summarized
-with strictly shrinking split and synthesis work and per-request bounds. An
-irreducibly large request or non-progressing recovery fails without publishing a
-partial summary or restarting settled execution.
-The compacted block carries only a short lossy-context warning and the
-model-authored summary; pane, model, entry counts, and other audit metadata
-are not repeated in the next model-visible summary.
+`/resume <uuid>` resumes an exact active conversation. `/resume --latest`
+selects the most recently active saved **root** conversation, not necessarily
+the first named row or a conversation from the current project. Direct UUID
+resume cannot open an archive until it is restored.
 
-Observed-input compaction also protects exact historical user instructions,
-including legacy transcript user rows. A selected closed durable execution
-range can be replaced at its original position after validating the prospective
-refreshed request. When the frozen selection cannot be mapped unambiguously,
-Mez can keep a bounded summary only in the running turn after its complete next
-request fits. It leaves the raw replay boundary unchanged rather than invent a
-durable range or discard exact history; staged first-turn summaries remain
-provisional until all required segments fit. On restart, the original raw
-transcript remains authoritative;
-that fallback does not reduce replayed transcript size.
-This also applies when an earlier staged range was durable but a later range
-is valid live, pending or legacy history: earlier model summaries remain private
-and the combined recovery cannot regain selective publication merely because
-rows later commit. Changed frozen rows, conflicting committed group evidence,
-stale epochs and missing required archives still fail closed. The complete
-turn-local request includes exact late external transcript arrivals without
-restoring already summarized prefixes or summarizing unconsumed arrivals.
+Names do not protect conversations from the configured age and count retention
+limits. Archive work you need to preserve long term; archives are exempt from
+automatic active-session retention. `/name-session --ephemeral <name>` keeps a
+display name but ranks it with unnamed rows by recency. `/name-session --clear`
+removes only the current conversation's name.
 
-Use `/status` for current-pane context and token information. Cache reuse is a
-provider observation, not proof that context is correct: provider/model changes
-and compaction can legitimately create a cold request. Consult operations
-diagnostics for cache and continuity interpretation.
-Reported usage from an output-cutoff attempt counts toward cumulative token
-totals even when its response is incomplete and a later attempt succeeds.
-The latest successful execution-input sample remains separate from that cost.
+If saved-conversation discovery is damaged, `mez session-catalog status`
+reports catalog health and `mez session-catalog rebuild` explicitly rebuilds
+the index from retained session files. Rebuild is not a way to recover files
+already deleted by retention or by the user.
 
-The pane environment summary is sampled once before each user prompt. Mez
-stores it as an immutable chronological snapshot only when its exact bounded
-projection changes. Later turns replay the same bytes, and same-turn provider
-continuations keep the frozen value, so shell, project, container, manager, and
-tool changes extend history instead of rewriting its reusable prefix. Raw
-`PATH`, host/user identity, manager paths, and per-tool paths or versions remain
-outside the model-visible snapshot.
+## Reuse guidance across conversations
 
-Use `/show-context` to browse the current pane's conversation entries and, when
-appropriate, edit the selected entry with `e` or delete it with `d`. External
-editing preserves the entry's role and identity and uses conflict detection;
-cleared entries remain durable but are omitted from later model replay. During
-a running turn, `/copy-context` exports that turn's assembled provider request.
-When the pane is idle, it exports a synthetic preview of the next request with
-an explicit user-prompt placeholder; that preview was not sent to a provider.
-Both forms can include sensitive task material even though credentials and
-hidden runtime policy are excluded.
+Use a **context document** for text you want future turns to receive. It is a
+user-owned source document, not an editable copy of a live provider request.
+For project guidance:
+
+```text
+/context-doc create --scope project --title "Release constraints"
+/context-doc edit <id>
+/context-doc enable <id>
+```
+
+Replace `<id>` with the ID returned by `create`. Documents start empty and
+disabled; edit and review their content before enabling them. Use `--scope
+global` only for guidance intended for every project. `/context-doc list` and
+`/context-doc show <id>` inspect documents; `disable <id>` stops future inclusion
+without deleting the source, and `delete <id>` removes it.
+
+Changes affect later turns, not already queued, running, or completed turns.
+Concurrent edits or deletion can leave a private recovery draft instead of
+overwriting newer content; use `/editor-recovery` when Mez reports that conflict.
+
+Persistent **memory** is separate from conversation history and context
+documents. `/memory` controls availability, `/show-memories` browses records,
+and `/remember` asks the model to propose durable knowledge. Use memory for
+stable reusable facts, not current task evidence, credentials, or progress logs.
+Disabling memory does not erase the current conversation or its saved summary.
+
+## Inspect and export context safely
+
+Use `/status` for context and token information. Provider input usage includes
+cache reads; local size estimates are not exact provider token counts. A cache
+hit does not prove the context is correct, and a cold request after compaction
+or a model change is not by itself a continuity failure.
+
+`/show-context` browses conversation entries. It lets you edit selected content
+with `e` or delete it with `d`; this changes later model replay, not files or
+already executed actions. It does not edit persisted context documents.
+
+`/copy-context` exports the running turn's assembled provider request. When idle,
+it exports a synthetic next-request preview with a user-prompt placeholder;
+that preview has not been sent to a provider. `/copy-patches` exports retained
+patch payloads and outcomes, and `/copy-trace-log` exports retained diagnostics.
+Review all exports before sharing them: exclusion of credentials and hidden
+runtime policy does not remove sensitive data from prompts or action output.
 
 ## Related pages
 

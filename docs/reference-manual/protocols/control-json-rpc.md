@@ -34,17 +34,19 @@ transient presentation.
 
 ### Base transports and Iroh event streams
 
-The default transport is a user-private Unix-domain socket. TCP is optional,
-loopback-only by default, and remote TCP is disabled unless explicitly
-configured. Unix clients should use peer credentials and the private socket
-path. TCP clients must authenticate with an unguessable bearer token or a
-stronger configured mechanism before receiving session data or mutating state.
+The implemented transports are a user-private Unix-domain socket and the
+opt-in Iroh adapter. Unix clients use peer credentials and the private socket
+path. TCP is only an optional transport contract in `SPEC.md`, not an
+implemented listener or CLI switch: current control capabilities advertise
+`tcp: false`. The spec's loopback-default and bearer-token requirements for a
+future TCP adapter do not enable TCP in this implementation.
 
 The opt-in Iroh adapter uses ALPN `mezzanine/transport/1` and carries bounded
 control frames on exactly one long-lived, client-opened bidirectional control
 stream. The server accepts no client-opened unidirectional streams and lowers
 each connection to one concurrent bidirectional control stream. Primaries
-attempt event-stream versions `3 → 2 → 1`; observers attempt `3 → 1`.
+attempt event-stream versions `5 → 4 → 3 → 2 → 1`; observers attempt
+`5 → 4 → 3 → 1`. Unix and non-negotiating Iroh clients use version 1.
 Downgrade occurs only for the structured unsupported-event-version result or
 the exact legacy equivalent, never for authentication, authorization,
 malformed initialization, transport, or post-initialization failures.
@@ -52,11 +54,13 @@ Plaintext event frames distinguish incomplete input from permanent framing
 errors: malformed complete frames terminate reception immediately, without
 waiting for EOF or idle timeout or skipping bytes to reach a later event.
 After the initialize response is flushed, the server may open one unidirectional
-stream with preface `mezzanine/events/1\n`, `mezzanine/events/2\n`, or
-`mezzanine/events/3\n`, matching the negotiated version. Version 3 is the
-boundary for pushed rendered-state updates. A primary or observer v3 stream
+stream with the exact preface `mezzanine/events/1\n`, `mezzanine/events/2\n`,
+`mezzanine/events/3\n`, `mezzanine/events/4\n`, or `mezzanine/events/5\n`,
+matching the negotiated version. Event-stream versions are independent of the
+`mezctl/2` or `mezctl/3` control version and compression ALPN. Version 3 is the
+boundary for pushed rendered-state updates. A primary or observer v3–v5 stream
 sends an authoritative `render/snapshot` immediately after its preface and
-sends another complete snapshot for later actionable presentation changes.
+sends revisioned render updates for later actionable presentation changes.
 Each snapshot contains a stream-local revision, `event_cutoff`,
 `invalidate_output`, and a complete exact-client `RenderedClientView`. The
 client validates the entire frame, including its negotiated role, before
@@ -78,6 +82,33 @@ and reconstructs the complete candidate atomically; a stale or malformed delta
 fails the stream without partially changing retained state, and reattachment
 begins with a fresh snapshot.
 
+Version 4 retains the v3 pushed-render contract and adds bounded fragmentation.
+A complete framed `render/snapshot` or `render/delta` larger than 512 KiB may
+be replaced by ordered `render/chunk` notifications. Each chunk carries the
+target revision, zero-based contiguous index, total chunk count, total
+encoded-frame bytes, and base64 data. A transfer is limited to 8 MiB and 16
+chunks. Reject unnegotiated, interrupted, out-of-order, oversized, or incomplete
+transfers; validate the reassembled original frame atomically before changing
+retained state. A frame exceeding 8 MiB produces a visible bounded-transfer
+error, not a bypass of the limit.
+
+Version 5 retains v4 snapshots, whole-row deltas, and fragment bounds, and may
+send `render/sparse` when its complete decoded framed candidate is strictly
+smaller than both a whole-row delta and a snapshot. It carries `kind: "sparse"`,
+exact `base_revision`, greater `revision`, `event_cutoff`,
+`invalidate_output: false`, unchanged `line_count`, a `view` map of changed
+non-row metadata, a `remove` array of deleted metadata keys, and unique
+in-range `rows`. Each row has an index and at least one of `line` or
+`style_spans`; omitted row fields retain their base values. Omitted metadata
+retains its base value, explicit null replaces it, and `remove` deletes it.
+Role and row arrays cannot be changed through metadata or removal. Reject
+stale bases, invalid keys, duplicate/out-of-range rows, malformed text/styles,
+or invalid reconstructed views without changing the retained revision or view.
+Sparse frames are never sent on v3/v4 streams; fragmented sparse frames use
+the same v4 atomic transfer bounds. Selection compares decoded framed bytes,
+not compressed wire savings, and speculative candidates must not advance
+stateful codec history.
+
 Logical recomposition and physical terminal-output-cache validity are separate.
 An ordinary pane, window, configuration, overlay, layout, or presentation
 change—and a snapshot selected only because it is more efficient than a
@@ -89,8 +120,8 @@ client’s resize, decoder recovery, or uncertain partially committed output.
 Observer push ownership is two-sided for compatibility. The observer client
 opts in with `client.metadata.pushed_render_updates: true`, and the server
 confirms support with `capabilities.features.pushed_render_updates: true`.
-When either signal is absent, observer v3 remains notification-plus-fetch.
-Primary v3 push ownership remains version-defined.
+When either signal is absent, observer v3–v5 remains notification-plus-fetch.
+Primary v3–v5 push ownership remains version-defined.
 
 The first render update is sent immediately. Only one encoded render update is
 written at a time; while that write is backpressured, the runtime retains
@@ -100,7 +131,7 @@ invalidations, renders latest state once, and computes from the last
 successfully flushed base. Unsafe or safety-bound trigger ranges force an
 invalidating snapshot, while failed writes do not advance revision/base state.
 This is latest-state backpressure coalescing, not timer-based batching.
-The client continues consuming and presenting authoritative v3 updates while a
+The client continues consuming and presenting authoritative v3–v5 updates while a
 primary `terminal/step` acknowledgement is outstanding, so the independent
 render stream is not held behind the control RTT. The control response remains
 the ordered mutation acknowledgement and is still awaited exactly once.
@@ -109,7 +140,7 @@ terminal frame cannot prevent acknowledgement polling or capture of follow-on
 stdin. Captured input remains buffered until the preceding acknowledgement is
 decoded, preserving stop-and-wait mutation ordering without leaving keystrokes
 stuck behind physical-terminal output.
-The event decoder continues applying revisioned snapshots and deltas in order
+The event decoder continues applying revisioned render updates in order
 while presentation is busy, but its handoff is latest-state rather than an
 eight-frame FIFO. It keeps one consumer-visible wakeup and one decoder-local
 coalesced wakeup, carries any skipped output invalidation onto the newest
@@ -119,12 +150,12 @@ or pager scrolling therefore does not replay every reconstructed viewport.
 Connection-local status exposes content-free coalesced-trigger, suppressed
 update, snapshot-fallback, maximum-ready-depth, and render-write-wait metrics.
 
-Each observer v3 stream renders with terminal dimensions retained for that
+Each observer v3–v5 stream renders with terminal dimensions retained for that
 exact authenticated observer. `terminal/resize` updates only the caller's
 observer geometry and triggers an exact-client pushed render; it cannot mutate
 primary geometry, another observer, or canonical pane layout. Version 2 is
-primary-only; primary versions 2 and 3 support negotiated client-local
-clipboard writes, while observer v3 does not. Setup, idle operation, writes,
+primary-only; primary versions 2–5 support negotiated client-local
+clipboard writes, while observer streams do not. Setup, idle operation, writes,
 and teardown are bounded; wrong ALPNs, excess streams, malformed frames,
 stalled setup, and one failed connection are isolated from later clients and
 from the Unix listener.
@@ -279,7 +310,8 @@ The bound Unix stream can also carry a non-durable owner-scoped
 whether to discard its physical-output diff base before that view pull; live
 pane-divider drags set it to `false`. Version 3 additionally carries
 authoritative `render/snapshot` and `render/delta` notifications, which the
-client renders without steady-state view fetches. No event-stream version
+client renders without steady-state view fetches; v4 adds `render/chunk` and
+v5 adds `render/sparse`. No event-stream version
 carries terminal input or control responses. Terminal input is non-replayable:
 after a write, read, timeout, reset, or connection failure that leaves its
 outcome ambiguous, the client must fail visibly, close the channel, and require
@@ -319,7 +351,7 @@ screen allocation. The same safety budget applies to local/direct screen APIs
 and restored geometry; dimensions are not silently clamped.
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"example-ui","client_version":"1.0.0","requested_version":2,"requested_role":"primary","client":{"name":"example-ui","requested_role":"primary","interactive":true,"terminal":{"columns":120,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}
+{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"example-ui","client_version":"1.0.0","requested_version":2,"requested_role":"primary","event_stream_version":1,"client":{"name":"example-ui","requested_role":"primary","interactive":true,"terminal":{"columns":120,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}
 ```
 
 The implemented direct-session endpoint accepts `mezctl/2`. The persistent
@@ -421,8 +453,13 @@ Agent calls remain subject to the active permission policy.
 
 Every non-idempotent mutation requires an `idempotency_key` in its params.
 Results are replayed for a repeated key with the same caller, method, and
-parameters; reuse with changed method or parameters is a `conflict`. Read-only
-and explicitly naturally-idempotent methods may omit the key.
+parameters; reuse with changed method or parameters is a `conflict`. This is
+method-specific, not a requirement to add a key to every non-read-only call.
+Read-only methods and connection operations with schemas that omit the key
+must not receive it. `control/initialize` uses the intent-specific rules above;
+`control/shutdown` takes no params, and `control/cancel` accepts only
+`request_id`. Current cancel dispatch validates a string `request_id` and
+returns `{"cancel_requested":false}`; it does not cancel an in-flight request.
 
 ## Errors and common objects
 
@@ -462,8 +499,10 @@ must preserve unknown extensions and refetch rather than reconstructing state.
 ## Current version 2 method catalog
 
 This table summarizes the direct-session `mezctl/2` surface. “RO” means
-read-only and naturally idempotent. Every other entry requires
-`idempotency_key` unless its note says otherwise. The parameter and result
+read-only and naturally idempotent. Mutation methods have method-specific
+`idempotency_key` requirements; connection operations are not blanket keyed
+mutations. Use only fields accepted by the method's parameter schema; the
+capabilities advertise availability, not those schemas. The parameter and result
 object schemas are specified in the [baseline method table in
 `SPEC.md`](../../../SPEC.md#13-control-endpoint). The unsupported v1
 predecessor additionally exposed `session/attach` and `client/select_primary`;
@@ -471,14 +510,14 @@ v2 removes those methods and adds `client/set_layout_owner`.
 
 | Namespace | Methods | Access and purpose |
 | --- | --- | --- |
-| Control | `control/initialize`, `control/shutdown`, `control/cancel` | Negotiate a connection, close it, or cancel an owned request. Shutdown is naturally idempotent. |
+| Control | `control/initialize`, `control/shutdown`, `control/cancel` | Negotiate a connection or close it. Cancel validates a string `request_id` and currently returns `cancel_requested: false`, without cancelling work. Shutdown takes no params; cancel accepts only `request_id`, not an idempotency key. Initialize follows intent-specific rules. |
 | Session | `session/list`, `session/get`, `session/rename`, `session/kill` | Inspect, rename, or terminate sessions. List/get are RO. |
 | Client | `client/list`, `client/detach`, `client/set_layout_owner` | Inspect clients, detach a client, or atomically select an attached interactive primary as layout owner. |
 | Window | `window/list`, `window/create`, `window/rename`, `window/select`, `window/close`, `window/layout`, `window/rebalance` | Inspect, create, name, select, close, or arrange windows. List is RO; rename is naturally idempotent when unchanged. Layout and rebalance are primary-only presentation mutations. |
 | Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/rename`, `pane/zoom`, `pane/input-sync`, `pane/attention`, `pane/status`, `pane/notice`, `pane/capture` | Inspect panes, mutate layout and presentation, control synchronized input, completion attention, source-owned status, or bounded notices, or capture pane content. List is RO; capture is RO when policy permits. Status and notices are available to primary and automation clients; rename, zoom, and input synchronization are primary-only. |
 | Buffer | `buffer/list`, `buffer/create`, `buffer/read`, `buffer/delete` | Primary-only bounded internal paste-buffer inspection and mutation. List/read are RO; create requires explicit replacement for existing names. |
 | Frame | `frame/read` | Read rendered frame fields and text (RO). |
-| Terminal | `terminal/view`, `terminal/presentation/acknowledge`, `terminal/step`, `terminal/resize`, `terminal/command` | Render a client view, acknowledge receipt-bearing local frame commits, submit bytes/primary size, update exact-client observer geometry, or invoke a terminal command. Presentation acknowledgement is available to primary and observer clients; primary-only mutation applies to step and command; resize is observer-only and never changes primary or canonical geometry. Negotiated observer v3 uses the resulting pushed render instead of fetching another view. |
+| Terminal | `terminal/view`, `terminal/presentation/acknowledge`, `terminal/step`, `terminal/resize`, `terminal/command` | Render a client view, acknowledge receipt-bearing local frame commits, submit bytes/primary size, update exact-client observer geometry, or invoke a terminal command. Presentation acknowledgement is available to primary and observer clients; primary-only mutation applies to step and command; resize is observer-only and never changes primary or canonical geometry. Negotiated observer v3–v5 uses the resulting pushed render instead of fetching another view. |
 | Agent | `agent/list`, `agent/task/list`, `agent/spawn`, `agent/shell/show`, `agent/shell/hide`, `agent/shell/command` | Inspect agents/tasks (RO), manage an agent shell, start prompt work, or spawn an agent. |
 | Approval | `approval/list`, `approval/decide` | Inspect pending approvals (RO) or make a primary decision. |
 | Configuration | `config/get`, `config/set`, `config/unset`, `config/reload`, `config/validate` | Inspect or validate config (RO), or mutate/reload it. |
@@ -588,17 +627,54 @@ physical input and size updates via `terminal/step`, then apply the returned
 view or request a fresh `terminal/view`. Local clients use the Unix event
 socket. Iroh primary input requests a conditional inline view and falls back to
 one `terminal/view` when an older server returns no view. Iroh primaries
-negotiate `3 → 2 → 1`; observers negotiate `3 → 1`, using only explicit
-unsupported-version initialization results to continue to the next candidate.
-A primary or observer v3 client renders the initial and subsequent pushed
-snapshots or deltas without issuing steady-state `terminal/view` requests.
-Primary control responses acknowledge input and resize mutations; observer v3
+negotiate `5 → 4 → 3 → 2 → 1`; observers negotiate `5 → 4 → 3 → 1`, using only
+explicit unsupported-event-version initialization results to continue to the
+next candidate.
+A primary or observer v3–v5 client renders the initial and subsequent pushed
+updates without issuing steady-state `terminal/view` requests, reassembling
+v4/v5 chunks and applying v5 sparse updates atomically when used.
+Primary control responses acknowledge input and resize mutations; observer v3–v5
 uses `terminal/resize` to acknowledge only its client-local geometry change.
 Legacy event streams retain notification-plus-fetch behavior. This is
 rendered-view/input-step control, not raw PTY export; specialized frontends
 should design around the supplied view model.
 
 ## Events and replay
+
+### Unix event binding handshake
+
+An authenticated Unix `control/initialize` must explicitly include
+`event_stream_version: 1` to request event credentials. For a successful
+session-client attachment, the result adds:
+
+```json
+{"event_binding":{"version":1,"token":"<opaque-binding-token>","expires_at_unix_seconds":1767225660}}
+```
+
+This is a result fragment, not a separate response. The token is short-lived
+(currently 60 seconds), single-use, and bound to the exact initialized client
+and authenticated Unix peer UID. Omission of `event_stream_version` does not
+mint a token merely because Unix uses v1 events. Treat the token as a credential;
+never log it or substitute a client ID for it.
+
+Connect to the Unix event socket and send this as its first control-framed
+JSON request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"event/initialize","params":{"binding_token":"<opaque-binding-token>","after_event_id":42}}
+```
+
+`after_event_id` is optional and defaults to zero; when supplied it must be a
+non-negative integer. The event service authenticates the socket peer and
+consumes the token through the runtime actor before streaming notifications.
+There is no separate success response for this binding frame. Unknown,
+expired, reused, or wrong-peer tokens fail closed; detachment invalidates
+unconsumed tokens. Every later batch reauthorizes the exact live client, so
+observer cutoffs and detach transitions remain effective. Reconnect requires
+a fresh binding token rather than replaying the consumed one. This is the
+Unix event-socket handshake, not the Iroh server-opened stream preface.
+
+### Notifications and retained replay
 
 Server notifications use `event/*` methods. Params contain ordered `event_id`,
 `time`, `event_type`, `object`, and `session_id` when the recipient is allowed

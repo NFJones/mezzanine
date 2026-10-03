@@ -32,7 +32,8 @@ Creating or attaching a primary client requires an interactive terminal.
 
 ## Open the agent shell
 
-Press `Ctrl+A a` in the focused pane. The prompt belongs to that pane, so you
+With the default bindings, press `Ctrl+A`, release it, then press `a` in the
+focused pane. The prompt belongs to that pane, so you
 can still navigate other panes and use normal multiplexer controls. Start with
 a bounded request that favors inspection, such as:
 
@@ -42,6 +43,12 @@ a bounded request that favors inspection, such as:
 Review requested approvals. Approval decisions and operating-system confinement
 are separate protections; do not relax either without understanding the active
 policy and sandbox.
+
+For a first read-only investigation, enter `/plan on` before the request. This
+enables plan-only mode for subsequent turns and removes the pane's write sandbox
+scopes. Enter `/plan off` when you are ready to allow changes; use `/plan status`
+to check the mode. Use `/status` to inspect the active model and policy, and
+`/help` for the available agent controls.
 
 ## Leave and resume work
 

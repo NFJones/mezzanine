@@ -53,6 +53,17 @@ file, not an already-running session; their JSON result reports
 change. Validate after an edit; invalid configuration is rejected rather than
 partially applied.
 
+`mez config get` and `mez config layers` inspect configuration loaded from disk
+for the command's working directory; they do not query an attached session's
+live overrides. In a running session, use the command prompt (`Ctrl+A :`) and
+`show-options terminal.zen_mode` to inspect the effective value and its source,
+or `set-option terminal.zen_mode true` to make a session-only change. Use
+`add-options` for the supported mutation-path reference. Live overrides have
+higher precedence than disk configuration, so a persisted edit may still be
+shadowed in an existing session. The control endpoint also provides
+`config/get`, `config/set`, `config/unset`, and `config/reload`; see the
+[control protocol](../reference-manual/protocols/control-json-rpc.md).
+
 See the [CLI reference](../reference-manual/cli.md#configuration-identity-and-integrations)
 for complete `mez config` command forms, options, and output behavior.
 
@@ -115,9 +126,10 @@ the decision.
 
 ## Schema versions and examples
 
-The current schema is version `98` (see the [schema reference](reference.md)). Older primary user configurations migrate
-on launch; a configuration declaring a newer schema is rejected. Existing
-project overlays must declare the current schema version and are not migrated
+The current schema is version `98` (see the [schema reference](reference.md)).
+Older primary user configurations migrate on launch; a configuration declaring
+a newer schema is rejected. Existing project overlays must declare the current
+schema version and are not migrated
 automatically. When `mez config set --scope project` creates or updates an
 eligible overlay, it writes the current version for that managed file.
 
@@ -130,13 +142,16 @@ remain opaque; destructive id changes are refused while configuration still
 references the old id.
 
 The checked-in [example configuration](../examples/config.toml) is the
-provider-free first-launch template for the current schema. Actual generation adjusts
-`permissions.approval_policy` and `permissions.sandbox` for the current
-platform and fixed Bubblewrap or Seatbelt executable presence, so those values
-can differ from the portable checked-in template. Presence is not capability,
-and migration does not auto-enable an existing configuration. Use `mez config
-default` when the complete code-owned provider and model catalog is needed for
-reference.
+portable provider-free source template for the current schema, not the exact
+generated file. Generation selects `permissions.approval_policy` and
+`permissions.sandbox` for the platform and fixed sandbox executable presence.
+It also sets `permissions.network_policy = "allow"` when selecting Bubblewrap
+or Seatbelt; policy-only generation retains `"prompt"`. The checked-in template
+keeps `ask`, `bubblewrap`, and `prompt`. Prefer `mez config init` over copying
+that security tuple unchanged, especially on macOS or a host without Bubblewrap.
+Presence is not capability, and migration does not auto-enable an existing
+configuration. Use `mez config default` for the complete code-owned provider
+and model catalog.
 
 ## Related pages
 

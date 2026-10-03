@@ -13,24 +13,26 @@ diagnostics.
 ## Supported profile
 
 The default `xterm-compatible` profile is a bounded implemented subset, not a
-claim of complete xterm emulation. It handles the documented C0, ESC, CSI, OSC,
-SGR, cursor, alternate-screen, application cursor/keypad, bracketed-paste,
-focus, mouse, title, clipboard, and save/restore behaviors. Focus reporting is
-host-dependent, and clipboard handling is policy-gated. Standard primary
-device-attributes queries (`CSI c` and `CSI 0 c`) receive the conservative
-VT100-with-no-options reply `CSI ? 1 ; 0 c`; unsupported query variants are
-ignored. General DCS controls and other unimplemented capabilities remain
-unsupported even though the two narrowly defined synchronized-output markers
-below are recognized.
+claim of complete xterm emulation. It supports cursor movement, screen clearing,
+colors and styles, alternate screens, application cursor/keypad modes,
+bracketed paste, focus events, mouse reporting, titles, clipboard requests, and
+cursor save/restore within that subset. Focus reporting depends on the outer
+terminal; clipboard requests remain subject to policy. Device-attributes
+queries receive a conservative VT100-with-no-options response, not a claim of
+all xterm features. General DCS controls remain unsupported except for the
+synchronized-output markers below. Applications that require an unimplemented
+extension may need a different mode or an ordinary terminal outside Mez.
 
 ### Synchronized output
 
 Mezzanine implements DEC synchronized-output mode 2026 and the bounded legacy
-DCS markers `=1s` and `=2s`. While synchronization is active, terminal state
-continues to update but presentation is frozen until the matching end marker,
-a lifecycle boundary, or the safety timeout releases it. Synchronization does
-not nest; a new begin marker rearms the bounded interval. Alternate-screen and
-terminal-lifecycle transitions cannot leave presentation frozen indefinitely.
+DCS markers `=1s` and `=2s`. Applications can use these to avoid showing a
+partially drawn screen: output continues to be processed, but the pane keeps
+its previous display until the update ends. Resize, copy-mode entry, process
+exit, and a safety timeout prevent a missing end marker from leaving the pane
+frozen indefinitely. Repeated begin markers do not create nested updates.
+
+### Application progress
 
 Mezzanine also supports pane-local OSC 9;4 progress reports. Determinate
 normal progress appears as a percentage pill immediately to the right of the
@@ -61,43 +63,38 @@ single emoji-width policy across rendering, prompts, and copy mode. Use
 for one-cell text fallback terminals. The setting does not make all complex
 emoji narrow.
 
-Each terminal grapheme retains at most 256 UTF-8 bytes. Additional scalars that
-extend an over-budget grapheme are discarded without advancing the cursor or
-changing the retained glyph's style or width; subsequent printable text still
-renders normally. This bounds processing and storage for hostile combining
-runs. Restored display/history text uses the same UTF-8-safe prefix limit.
-Ordinary accents, variation selectors, and emoji sequences remain supported.
-Explicit raw-copy source metadata is separate from this display-cell limit.
+Each displayed grapheme (one character with its combining marks) retains at
+most 256 UTF-8 bytes. Extra combining characters beyond that limit are dropped;
+subsequent text still renders normally. Restored display and history text use
+the same limit. Ordinary accents, variation selectors, and emoji sequences
+remain supported. This is a display limit, not a guarantee that a source-copy
+record has been truncated in the same way.
 
-Rendering preserves styled blank cells and terminal autowrap semantics: a
-printable glyph in the final column sets a pending wrap rather than scrolling
-immediately. Pane-local alternate-screen state is composed into Mez's normal
-host presentation; attached clients do not switch the containing terminal to
-its alternate screen on behalf of a pane.
+Background colors on blank cells and normal terminal line wrapping are
+preserved. A full-screen pane application does not itself switch the outer
+terminal into its alternate screen; Mez manages the attached presentation.
 
 Pane alternate screens are separate from normal history. Full-screen programs
 can remain visible and explicitly captured, but their rows are not injected
 into normal scrollback or default agent context. Host bracketed paste, mouse,
 focus, application cursor, and keypad behavior follow the active pane mode
 where supported. While a pane application has bracketed paste enabled, a host
-paste payload is forwarded opaquely across terminal-read chunks: bytes that
-look like a Mez prefix or mouse report are not interpreted as multiplexer
-input.
+paste is delivered as application input: pasted bytes that look like a Mez
+prefix or mouse report do not trigger multiplexer actions.
 
-When `terminal.enhanced_keyboard_reporting = true`, Mez-owned readline prompts
-on a primary client temporarily push Kitty keyboard flags 1 and 4. Mezzanine
-pops exactly its own stack level when the prompt relinquishes input, the option
-is disabled, presentation is restored, or the client detaches. This mode is not
-enabled for observers or ordinary pane input.
+When `terminal.enhanced_keyboard_reporting = true`, Mezzanine prompts on a
+primary client temporarily request enhanced Kitty keyboard reporting from a
+compatible outer terminal. The previous keyboard mode is restored when the
+prompt closes or the client detaches. This option does not enable enhanced
+reporting for ordinary pane input or observers.
 
-Local Unix-socket and Iroh clients use the same server-owned external-editor
-subsystem. Each editor runs on a dedicated PTY independent of the pane PTY.
-While an editor owns the presentation, the initiating primary's input,
-including prefix-like bytes and bracketed paste, is forwarded without Mez
-prompt or keybinding decoding; resize and editor-driven focus and
-alternate-screen modes are propagated and restored through both transports.
-Observers remain read-only, and editor draft paths and content are not added
-to transport metadata.
+External prompt editors run on the session host for both local and Iroh
+attachments, not on the remote attaching machine. While editing, the editor
+owns the whole attached terminal: prefix keys and pasted text go to the editor
+instead of invoking Mez actions. Resizing continues to work, and closing the
+editor restores Mez without changing the pane shell's screen or input.
+Observers cannot edit. See [Key bindings](key-bindings.md#prompt-and-browser-controls)
+for draft review and recovery commands.
 
 The agent shell is a separate pane presentation surface whose prompt appears at
 the bottom of its pane. While it is visible, ordinary process input is captured
@@ -112,10 +109,6 @@ and terminal configuration. For shifted status glyphs, change
 verify alternate-screen and mouse behavior before assuming a passthrough
 problem. In nested multiplexers, do not assume exclusive control of the outer
 terminal; configure an outer binding when the default prefix does not arrive.
-
-The compatibility suite covers UTF-8 and width, control sequences, cursor and
-screen operations, SGR, alternate screens, resize propagation, paste, focus,
-mouse, OSC, application modes, nesting, and copy/history behavior.
 
 ## Related pages
 

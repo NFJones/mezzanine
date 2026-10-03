@@ -29,7 +29,14 @@ Treat hook runners as distinct execution boundaries. Program hooks can invoke
 external programs and receive structured event data on standard input. Shell
 hooks use the focused pane shell when one is available. Focused-shell hooks
 marked `agent_hook` wait for shell availability; they do not run through the
-agent action path. `on_failure` may be `block`, `warn`, or `ignore`, with
+agent action path. A configured hook is enabled by default and has a 30-second
+timeout unless overridden. Use `program` plus `args` for a program hook, or
+`command` with `kind = "focused_shell"` for a pane-shell hook. The accepted
+`shell`, `env`, `cwd`, `working_directory`, `inject_instructions`,
+`mutates_policy`, and `alters_action` fields are reserved and not consumed by
+the current runtime; do not rely on them to select an interpreter, inject an
+environment, change directory, or rewrite an action. `on_failure` may be
+`block`, `warn`, or `ignore`, with
 event-dependent defaults documented in the reference. A blocking failure stops
 an operation that has not completed; after the triggering event has completed,
 the same failure is reported as a warning. Inspect hook failures with

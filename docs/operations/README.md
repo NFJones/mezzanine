@@ -10,6 +10,15 @@ symptom-based troubleshooting.
 
 Know the basic session workflow in [Using Mezzanine](../using-mezzanine/README.md).
 
+## Before recovery or restart
+
+Preserve private diagnostics and identify the affected host, session, and pane.
+Detach leaves background work running; stopping or restarting the owning host
+does not. A saved layout or conversation is not a live process checkpoint.
+Treat uncertain command effects as possibly applied and inspect them before
+retrying. Keep a tested local Unix administration path before enabling remote
+access, and review diagnostic exports before sharing them.
+
 ## Chapters
 
 This section owns the following operational guidance:

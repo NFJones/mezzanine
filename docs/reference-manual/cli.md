@@ -20,19 +20,21 @@ Global options are `--json`, `-S PATH`, `-L NAME`, `--iroh-profile NAME`,
 `--iroh-invite-file PATH`, and `--save-as NAME`; they may appear before or after
 a command. `--save-as` requires an invitation target and selects the
 client-local alias used for later reconnects. `--json` selects machine-readable
-output. `-S` selects an explicit control
-socket and `-L` selects a named socket in the Mez runtime directory. The Iroh
-selectors are explicit remote targets, conflict with Unix socket selectors,
-and never fall back to Unix after a remote failure. Without a subcommand, `mez`
-attaches to the first local session that accepts a primary client; when none is
-available, it starts a new session. Use `mez new` to always start a new session,
-or `mez attach` to select an existing one.
+output for structured command results; interactive attachment remains a terminal
+interface. `-S` requires an absolute control-socket path, and `-L` selects a named
+socket in the Mez runtime directory. The Iroh selectors are explicit remote
+targets, conflict with Unix socket selectors, and never fall back to Unix after
+a remote failure. Without a subcommand, `mez` uses the persistent local host
+when available; otherwise it attaches to the first local session that accepts
+a primary client or starts a session if none is available. Use `mez new` to
+always start a new session. With a host target, omitted-target `mez attach` may
+also create a session; use an explicit target or `--default` to avoid creation.
 
 ## Session commands
 
 | Command | Behavior |
 | --- | --- |
-| `mez new [--dry-run] [--name NAME]` | Start a new background session and attach when interactive. `--name` assigns a session name. With `--dry-run`, validate session construction instead of starting a daemon. Alias: `new-session`. |
+| `mez new [--dry-run] [--name NAME]` | Start a new background session and attach; an interactive terminal is required unless using `--dry-run`. `--name` assigns a session name. With `--dry-run`, validate session construction instead of starting a daemon. Alias: `new-session`. |
 | `mez serve` | Start a foreground session service; it does not attach a primary client unless `--attach-primary` is supplied from an interactive terminal. Alias: `daemon`. |
 | `mez list [--all]` | List resumable sessions known to the local client. With the persistent local host, `--all` adds visible remote durable leases to the same scope-tagged aggregate. Alias: `list-sessions`. |
 | `mez attach [SESSION_ID] [--observer\|--observe\|--default] [--x11\|--x11-trusted] [--x11-takeover]` | Attach a primary client, request read-only observer access, select an existing host default without creating, or request X11 forwarding for an authenticated Iroh primary. `--observer` and `--observe` are equivalent. `--default` conflicts with an explicit target; X11 options are described below. Alias: `attach-session`. |
@@ -45,10 +47,11 @@ or `mez attach` to select an existing one.
 Creating or attaching a primary client needs an interactive terminal. `mez
 serve` can run without one. Observer attachment also requires an interactive
 terminal and immediately creates a read-only client bound to the current layout
-owner. The runtime implements `mezctl/2` and accepts up to 16 independently
-attached primaries. Each has caller-local navigation and presentation; one
-elected layout owner controls canonical PTY geometry. `mez snapshot resume
-<snapshot-id> --serve` restores a snapshot as a foreground daemon; add
+owner. A session accepts up to 16 independently attached primaries. Each has
+its own navigation and presentation; one layout owner determines shared pane
+sizes, so another client's resize does not independently resize the processes.
+`mez snapshot resume <snapshot-id> --serve` restores a snapshot as a foreground
+daemon; add
 `--attach-primary` only when the invoking terminal should also attach. Use `mez
 --help` and `mez <command> --help` for the current argument and target syntax.
 
@@ -84,8 +87,7 @@ fresh view until input, focus, mouse, or resize activity occurs.
 
 ## Snapshot forms
 
-Snapshot payload version 5 preserves recoverable shared topology, canonical
-geometry, and client-independent landing navigation. It does not preserve
+Snapshots preserve layout, pane sizes, and landing navigation. They do not preserve
 running processes, live client identities, layout ownership, transient
 presentation, terminal history, or agent conversations. Pending approvals and
 approval grants do not become authority in a restored session:
@@ -109,19 +111,19 @@ to the processes that existed when the snapshot was taken.
 
 | Command | Subcommands and scope |
 | --- | --- |
-| `mez config` | `init`, `path`, `default`, `validate`, `get`, `layers`, `set`, `unset`, and typed `model list|add|update|remove|sync`. Mutations write the user configuration by default; `--scope project` targets an eligible trusted project overlay and `--file PATH` selects an eligible file in that scope. |
+| `mez config` | `init`, `path`, `default`, `validate`, `get`, `layers`, `set`, `unset`, and typed `model list\|add\|update\|remove\|sync`. Mutations write the user configuration by default; `--scope project` targets an eligible trusted project overlay and `--file PATH` selects an eligible file in that scope. |
 | `mez auth` | `status`, `login`, and `logout` for provider credentials and metadata. |
 | `mez mcp` | `list`, `inspect`, `login`, `logout`, `status`, `add`, `remove`, `enable`, `disable`, `set`, `unset`, `tools`, and `approval` manage configured MCP servers, stored MCP credentials, tool filters, and server approval settings. |
-| `mez sandbox` | Inspect version-2 backend status, plan or enable the platform backend, disable confinement, manage presets and sanitized profiles, inspect managed-home caches, and manage project trust. Plans report the selected backend and fixed-executable presence; unavailable mutating enablement fails without changing state. `mez sandbox trust` supports `list`, `inspect PATH`, `add PATH`, `reject PATH`, and `revoke PATH`. |
+| `mez sandbox` | Inspect sandbox status, plan or enable the platform backend, disable confinement, manage presets and profiles, inspect managed-home caches, and manage project trust. If the required backend is unavailable, enablement fails without changing settings. `mez sandbox trust` supports `list`, `inspect PATH`, `add PATH`, `reject PATH`, and `revoke PATH`. |
 | `mez issue` | Add, show, update, query, and delete local project issues. |
 | `mez memory` | List, inspect, add, edit, delete, archive, mark stale, restore, record use or confirmation, supersede, prune, export, and search persistent memory records. |
 | `mez session-catalog` | Inspect and rebuild the saved-session discovery catalog. |
-| `mez remote` | Use authenticated local Unix control for `status`, `invite`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Client-local commands are `pair --invite-file PATH [--name NAME]`, `invitation inspect PATH`, and `profile list|show|rename|remove|check`. Paired Iroh clients cannot use server trust-administration methods. |
+| `mez storage export STORE` | Export `memory`, `sessions`, `leases`, `assignments`, `history`, `project-trust`, or `snapshots` as TSV for inspection. Output remains TSV even with `--json`; a missing store is an error. |
+| `mez remote` | Use authenticated local Unix control for `status`, `invite`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Client-local commands are `pair --invite-file PATH [--name NAME]`, `invitation inspect PATH`, and `profile list\|show\|rename\|remove\|check`. Paired Iroh clients cannot use server trust-administration methods. |
 | `mez completion <shell>` | Generate a completion definition for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
 
 `mez config model` manages one configured provider's reusable model records by
-their opaque canonical ids; callers never need to construct the path-safe table
-entry key. `add` accepts `--display-name`, comma-separated `--aliases`, token
+model ID. `add` accepts `--display-name`, comma-separated `--aliases`, token
 limits, comma-separated `--reasoning-levels` and `--capabilities`, and repeated
 non-secret string `--provider-option KEY=VALUE` values. `update` is selective
 and also provides explicit `--clear-*` and `--remove-provider-option` controls.
@@ -229,29 +231,20 @@ no address lookup. Paired profiles may use an address-lookup service only when
 the user explicitly configured one; a successful endpoint-ID-pinned reconnect
 refreshes authenticated route hints in the protected profile.
 
-The primary `transport.iroh.compression_codecs` array defines codec preference
-within streaming and non-streaming classes for explicit clients as well as
-listeners. When both peers support a streaming codec and its non-streaming
-alternative, `zstd-stream` or `lz4-stream` takes precedence. `zstd-stream` and
-`lz4-stream` are opt-in stateful v3 codecs, `zstd` and `lz4` are independent
-v2 application-frame codecs, and `none` is the unchanged v1 compatibility route. A
-client may try the next configured codec only before opening a stream. There is
-no hidden downgrade when `none` is absent, and
-`compression_codecs = ["none"]` is the restart-required rollback setting.
-
-X11 forwarding automatically uses that same negotiated connection codec; it
-has no separate compression flag or fallback. The authenticated X11 stream
-preface stays raw, while setup and application traffic follow the selected
-record format. Use `compression_codecs = ["none"]` when raw X11 transport is
-required for rollback or diagnosis.
+`transport.iroh.compression_codecs` controls the allowed compression choices
+for remote clients and listeners: `zstd-stream`, `lz4-stream`, `zstd`, `lz4`,
+and `none`. Streaming codecs are opt-in and take precedence over their
+non-streaming alternatives when both peers support them. Include `none` only
+if uncompressed connections are acceptable; there is no automatic downgrade
+to it when it is absent. To disable compression for diagnosis or rollback, set
+`compression_codecs = ["none"]` and restart the affected processes.
+X11 forwarding uses the same negotiated compression and has no separate flag.
 
 ### Persistent-host command contract
 
-Configuration schema 73 defines the persistent-host mode above the existing
-per-session runtime. It includes the local host and session-routing commands,
-host-scoped Iroh identity and trust store, and protocol-v3 host-only pairing
-and profile checks. The direct `mez serve` compatibility endpoint remains
-session-bound and does not interpret an omitted target as creation.
+The persistent host manages multiple sessions behind one local or remote
+endpoint. The direct `mez serve` endpoint serves only its own session; attaching
+to it does not create another session.
 
 The persistent-host command surface is:
 
@@ -305,76 +298,40 @@ mez --iroh-profile HOST list
 mez --iroh-profile HOST kill <lease-id|session-id|name> --force
 ```
 
-Omitted-target `attach` atomically selects the existing host default or creates
+Omitted-target `attach` selects the existing host default or creates
 one when none exists. `attach --default` selects an existing default and never
-creates. `new` explicitly requests fresh idempotent creation, while an explicit
+creates. `new` requests a fresh session, while an explicit
 attach target selects only an authorized existing lease. Pairing and profile
 checks are implemented as host-only operations and cannot create or attach a
 session.
-Host-only initialization advertises only the methods granted to that trust
-record. Force-kill is distinct from detach and lease administration: it must be
-granted when issuing a primary invitation and durably revokes the selected
-lease before terminating its runtime.
+Force-kill is distinct from detach and lease administration: it must be
+granted when issuing a primary invitation and revokes the selected lease before
+terminating its runtime.
 Protected profiles report scope `host` or `legacy_session`; old profiles
 without scope metadata remain legacy and are not granted host authority. Lease
 release, lease revocation, runtime kill, and client-trust revocation remain
 distinct.
 
-Interactive remote attach requires a terminal and keeps one initialized Iroh
-control stream open for its lifetime. A `primary` profile may attach as primary
-or observer; an `observer` profile cannot attach as primary. The client also
-negotiates one server-opened event stream. Primaries attempt versions
-`5 → 4 → 3 → 2 → 1`; observers attempt `5 → 4 → 3 → 1`. Only a structured unsupported-version
-initialization result advances to the next candidate; authentication,
-authorization, malformed data, transport, and later stream failures remain
-visible. Client-local clipboard writes are enabled only when a primary on v2
-through v5 receives explicit `client_clipboard_write` capability confirmation;
-observers do not receive that authority.
-Legacy authorized events wake a fresh `terminal/view`; observers receive only
-session-view events at or after their atomic attachment cutoff, and detach or
-event-stream failure ends the attach visibly.
-After a complete local presentation, compatible clients send that exact
-client's view identity on the next fetch. The server returns a small
-`not_modified` result when the complete view, pending receipts, and render
-cadence are unchanged; older servers still return the full view. Resizes and
-uncertain output discard the conditional baseline.
-The view response includes the effective `terminal.render_rate_limit_fps` for
-that client. Legacy primary and observer attach coalesce ordinary event wakeups
-behind that cadence and fetch current state at the trailing deadline; input,
-resize, and explicit output invalidation bypass the gate. An older server that
-omits the field leaves the gate disabled rather than assuming a fixed rate.
-For a negotiated primary or observer v3 stream, the event stream instead sends
-an initial authoritative exact-client snapshot and then uses revisioned
-whole-row deltas when they are safe and smaller than a replacement snapshot.
-Version 4 also supports bounded atomic render fragments. Version 5 may select
-a smaller sparse update with changed metadata and independent text/style row
-replacements; omitted fields retain their prior values, while explicit null
-replaces and explicit removal deletes optional metadata. The complete view is
-reconstructed and validated against its exact revision before commitment.
-Stale, wrong-role, or malformed deltas fail without partially changing the
-retained frame; reattachment starts from a fresh snapshot. V3 control responses
-remain mutation acknowledgements, so steady-state rendering does not issue
-`terminal/view`.
-Observer push ownership additionally requires client opt-in and server
-`pushed_render_updates` capability confirmation; older observer-v3 peers retain
-notification-plus-fetch behavior.
-When an event-stream write is backpressured, the server keeps bounded redraw
-triggers rather than stale rendered frames, then sends one latest-state update
-from the last successfully flushed base. It does not add a debounce or batching
-timer. Each observer v3 stream retains its own terminal dimensions. A local
-observer resize updates only that observer and prompts an exact-client pushed
-snapshot; it does not resize the primary, another observer, or canonical pane
-layout.
-Acceptance and preface receipt share the configured Iroh setup timeout; expiry
-closes the connection and requires an explicit reattach.
-Terminal resize, input, and view requests remain ordered one at a time behind
-their responses. If the connection fails after terminal input may have been
-sent, Mez reports that the outcome is unknown, does not reconnect or replay the
-input, and requires an explicit reattach.
+Interactive remote attach requires a terminal. A `primary` profile may attach
+as primary or observer; an `observer` profile cannot attach as primary.
+Compatible clients negotiate supported features, but authentication and
+authorization failures are not retried as compatibility fallbacks. A setup
+timeout or failed event connection ends the attachment visibly; reattach
+explicitly rather than expecting automatic recovery.
+
+Observer resizing changes only that observer's presentation, not shared pane
+sizes or another client's terminal. Ordinary redraws follow the server's
+`terminal.render_rate_limit_fps` when supported; input and resize remain
+responsive. Older peers may not support this redraw limit.
+
+If the connection fails after terminal input may have been sent, Mez reports
+that the outcome is unknown. It does not reconnect or replay the input.
+Reattach explicitly and check the pane before repeating a command.
 
 For a negotiated primary, completed copy-mode and mouse text selections update
 the server session's internal paste buffer and route the copied text to the
-attaching machine. While a client clipboard route is active, server-host
+attaching machine when client clipboard support is confirmed. Observers cannot
+write that clipboard. While a client clipboard route is active, server-host
 clipboard commands are suppressed so the copy is delivered through the
 client's configured adapter rather than duplicated on the server host; without
 a negotiated route, copies retain the best-effort server-host clipboard write.
@@ -390,11 +347,9 @@ succeeds. Clipboard reads and remote paste are not included.
 Create invitation files without exposing the token through shell arguments or
 world-readable output. `--output PATH` securely creates a new mode-`0600` file,
 refuses to replace an existing path or symlink, and prints only the created
-path. Invitations carry format version 1, and incompatible clients reject them
-before dialing. On the direct-session compatibility path, omitting `--expires`
-uses `transport.iroh.invitation_ttl_seconds`. The persistent host currently
-uses 600 seconds when the option is omitted, even when that configuration value
-differs. An explicit override must be from 30 through 86,400 seconds. For
+path. Incompatible invitation files are rejected before dialing. Omitting
+`--expires` uses `transport.iroh.invitation_ttl_seconds`, including on the
+persistent host. An explicit override must be from 30 through 86,400 seconds. For
 example:
 
 ```console

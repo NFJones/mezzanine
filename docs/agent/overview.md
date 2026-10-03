@@ -19,26 +19,42 @@ alternate-screen content, or other panes. Ask it to inspect a file, run a
 bounded command, or capture relevant output when that evidence is needed.
 
 Before a turn, Mez bootstraps the pane environment and discovers applicable
-tools. The default native mode starts fresh shell actions from the validated
-pane root process without injecting pane input. Pane mode uses the interactive
-pane shell; in that mode, a remote shell, container, full-screen program,
-password prompt, or uncertain shell boundary can make commands unavailable.
-Return a pane-mode shell to a usable prompt or follow the reported readiness
-guidance rather than assuming a command was sent safely.
+tools. In the default native shell mode, commands run in fresh local shells
+without typing into the interactive pane. They do not automatically run inside
+an SSH session or container merely because one is visible there. Pane mode uses
+the interactive pane shell, where a remote shell, full-screen program, password
+prompt, or uncertain shell boundary can make commands unavailable. Use
+`/shell-mode status` to check the transport, and follow readiness errors rather
+than assuming a command reached the intended environment.
+
+## Give a bounded task
+
+State the goal, allowed changes, constraints, and how success should be checked:
+
+```text
+Review docs/getting-started/ for incorrect commands. Compare them with CLI
+help. Report findings with file references; do not edit files.
+```
+
+For implementation, explicitly authorize the intended edits and name work that
+must remain untouched. For explanation or review, the agent should inspect and
+report rather than implement. Use `/plan on` when you want plan-only work and
+`/plan off` before asking for edits. Use `/stop` to stop unwanted active work;
+stopping does not undo completed actions.
 
 ## Review visible actions
 
-The agent uses visible actions for local reads, shell commands, patches, and
-other local interaction. The runtime provides the enabled action surface for a
-request. That configured executable catalog remains stable across ordinary
-turns until configuration changes; runtime validation still decides integration
-availability, permissions, and arguments when an action executes. Results
-become bounded conversation evidence, allowing the agent to repair recoverable
-failures without repeating already successful work.
-Complete `list_agents` and `wait` actions can display static headers while a
-provider response streams. These are provisional intentions, not discovery
-results or proof that the turn parked; only accepted actions and their settled
-results establish authoritative state.
+The agent uses visible actions for reads, shell commands, patches, and external
+integrations. Configuration determines which actions are offered; the runtime
+still checks availability, permissions, and arguments at execution time.
+Preview text while a response streams is an intention, not proof of execution.
+Check settled action results and the final validation report before accepting
+a completion claim.
+
+Results become bounded conversation evidence. Recoverable mistakes can be
+repaired, but already successful work should not be repeated merely because
+another action failed. Inspect the actual changes and tests when results are
+ambiguous, especially after interruption or a failed mutation.
 
 Permission decisions remain runtime-owned. A model cannot grant itself host
 access, filesystem authority, credentials, or a hidden local executor. Review
@@ -48,13 +64,9 @@ the requested action and its scope when approval is required.
 
 When raw shell output is hidden, running commands show a bounded live tail below
 the command preview. `terminal.shell_output_preview_lines` controls its maximum
-wrapped display rows (five by default). On short panes, the combined preview
-window is also limited to the pane height, showing its newest rows without
-discarding the retained source. New output replaces that window in
-place. After completion, the next persistent log consumes the window from its
-first row. Shorter output or removal leaves unused rows blank: it does not pull
-earlier pane logs back down. Logs scroll upward again only when new output
-reaches the bottom of the pane. The live tail is not saved as transcript history.
+wrapped display rows (five by default); short panes can show fewer rows. It
+updates in place and is not saved as transcript history. The completed action
+result, not the temporary tail, is the evidence retained for later turns.
 
 ## Related pages
 

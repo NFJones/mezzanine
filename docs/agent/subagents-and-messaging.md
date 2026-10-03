@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Delegate bounded work to pane-backed subagents while retaining clear ownership,
-scope, approval, and result-handling responsibilities.
+Delegate bounded tasks, coordinate agents, and review results without confusing
+message delivery with completed work or granting children extra authority.
 
 ## Prerequisites
 
@@ -12,214 +12,150 @@ and divide work into independently reviewable tasks.
 
 ## Delegate deliberately
 
-Subagents are policy-authorized pane agents with their own shell, conversation,
-and stable identity. Mez places them in dedicated subagent panes within the
-controlling pane's window group, creating or reusing a subagent window without
-moving the primary user's focus. The parent receives status and final results
-through local messaging and remains responsible for integrating the outcome.
+Ask explicitly for delegation when it is useful. For example:
 
-`agents.subagent_name_mode` selects the display-name allocation policy for
-future child spawns: `nonhuman` (the default), `human`, or `literal`. A reload
-or live config change is prospective and never renames a child that already has
-runtime lineage or a persisted conversation. The setting does not change the
-canonical `agent-%…` identity, routing, authorization, or persistence format.
-New nonhuman and human displays are lowercase ASCII, with active names compared
-without regard to ASCII case; literal mode and exhausted-corpus fallback retain
-the exact canonical id. The embedded source corpora remain capitalized.
+```text
+Delegate a read-only audit of the installation guide to an explorer. Do not
+edit files. Compare its findings with the source and report discrepancies.
+```
 
-Use the `explorer` role for read-heavy investigation and `worker` for bounded
-implementation. A cooperation mode constrains the intended work: `explore-only`
-does not modify state; `owned-write`, `coordinated-write`, and `serial-write`
-support scoped change coordination; `unrestricted` always requires explicit user
-approval, and no session policy bypasses that gate. Child read and write
-authority inherits from, and can only narrow, the parent's effective authority.
+For implementation, name the owned files, expected result, validation, and any
+work that must remain untouched. Assign disjoint write scopes where possible;
+agents working in the same project can still interfere with one another's
+edits. The parent remains responsible for checking and integrating child work.
 
-Asking for `unrestricted` in a spawn request is not approval. A sandboxed root
-parent contributes filesystem bounds only, so an unapproved unrestricted request
-is denied before any child pane, process, or lineage record exists. Unrestricted
-children come either from an authenticated primary approval or from an
-already-approved unrestricted parent, and only that genuine provenance is
-inherited by descendants. Unsupported approval fields in a spawn request are
-rejected as contract errors instead of being treated as authority, and a denied
-unrestricted spawn stays a nonrecoverable denial rather than a retryable
-argument error. Provider-native MAAP tool-call arguments pass through the same
-contract validation, so an authority field is rejected there as well.
+Subagents have their own shell, conversation, and stable identity. Mez places
+them in dedicated subagent windows within the parent's window group without
+moving your focus. Use `explorer` for read-heavy investigation, `worker` for
+bounded implementation, or a configured custom profile. Delegation remains
+subject to policy and to the parent's effective authority.
 
-The default join behavior waits for a child result before the parent continues;
-detached work can report later through local messaging. Approval requests from
-children are surfaced to the primary client and cannot be decided by observers.
+### Scope and cooperation
 
-Use `lifetime: persistent` exclusively when the child is a reusable actor that
-the parent will interact with over MMP, and never for any other circumstance.
-Persistent spawns require a durable `objective`; an empty `task_prompt`
-provisions the child idle, while a non-empty prompt starts an optional initial
-turn. After each turn the same pane, agent identity, conversation, frozen action
-catalog, lineage, scopes, inbox subscription, and parent-assigned objective are
-retained. The parent discovers and controls that actor through `list_agents`,
-`send_message`, and `wait`. Persistent children are owned by the current parent
-conversation and are closed or fenced when that owner is replaced or removed;
-they are not global daemons. Omit `lifetime` for ordinary one-task delegation.
+| Mode | Intended use |
+| --- | --- |
+| `explore-only` | Read, inspect, and report without modifying files or persistent state. |
+| `owned-write` | Make changes within inherited write scope. |
+| `coordinated-write` | Return changes outside inherited write scope to the parent for review and application. |
+| `serial-write` | Share inherited write scope only while holding an explicit session lock for that scope. |
+| `unrestricted` | Requires explicit user approval; a model request is not approval. |
 
-## Message peers directly
+Cooperation modes do not create filesystem authority. Child read and write
+authority can only narrow the parent's authority. Without a child-specific
+scope fence, normal session permissions still apply; a role name is not a
+substitute for assigning safe ownership.
 
-Every agent publishes a bounded, generated objective through the session message
-service, so peers describe what they are working on rather than what they are
-called. The objective comes from the turn itself: the model may set an optional
-top-level `objective` on its action batch, and a turn without one falls back to a
-bounded, non-verbatim summary of its own task text. A user may override that
-value for the current durable conversation with `/objective <text>`; the user
-value wins until `/objective --clear`. An objective-less refresh is a no-op that
-keeps the previous value and presence timestamp, so a turn can never clear a
-peer's published objective. Discover peers with the read-only
-`list_agents` action. Persistent rows additionally report their persistent
-status, owning parent agent, and whether the requesting parent conversation owns
-them. Its optional
-`agent_type` defaults to `primary` and lists primary parent agents only;
-`subagent`, `internal`, and `all` widen the view to spawned subagents,
-runtime-internal controllers, and every kind. Its optional `scope` defaults to
-`project`, which includes the requester and otherwise matching identities with
-the same non-empty trusted project membership. Explicit `session` widens the
-view to otherwise matching session identities; neither scope exposes project
-roots or project-scope identifiers. Each row carries agent id, kind, `is_self`,
-role, pane, window, capabilities, presence status, and published objective.
-Results are bounded to 64 rows with each string at most 512 bytes and at most
-16 capabilities per row; the result reports `truncated` when it dropped rows,
-and each row reports its own `truncated` when it shortened a string or omitted
-capabilities. `list_agents` never prompts for approval.
+Child approval requests are surfaced to the primary client. Another agent or
+an observer cannot grant them. In particular, a sandboxed parent does not
+automatically authorize unrestricted children.
 
-Send with `send_message` to `session`, `group:session`, `agent:<id>`,
-`pane:<id>`, `window:<id>`, `role:<name>`, `capability:<name>`, or
-`group:<name>`. Delivery defaults to `scope: "project"`: only agents with the
-authenticated sender's trusted project membership can receive it. Use
-`scope: "session"` only when intentionally widening delivery across projects;
-it requires its own approval or policy allow and grants no other authority.
-Without trusted project membership, default delivery is rejected rather than
-widened. Cross-project direct targets are reported like unavailable targets, so
-project identity is not disclosed. Set the optional `correlation_id` (non-empty,
-at most 256 characters) to the id of the message you are answering; the runtime
-supplies the current turn id when you omit it.
+## Understand completion and cleanup
 
-When work cannot continue until another agent answers, send the MMP request in
-one action batch and use `wait` in the next. `wait` preserves the same turn,
-releases provider capacity, presents the parked agent as idle, and resumes that
-turn when model-originated peer mail arrives. The retained turn, task, and
-scheduler state remain blocked or waiting while it is parked. It is exclusively
-an inter-agent MMP coordination action: never
-use it as a sleep, delay, retry, poll, approval wait, user-input wait, subprocess
-wait, network wait, or for any other circumstance. Runtime-authored task status
-and task result bridge messages do not wake it.
+The default `agents.subagent_wait_policy = "join"` keeps the parent's spawn
+action running until the child returns a final result. With `"detach"`, the
+parent can continue after creation and receives later status and output through
+local messaging. Do not assume detached work finished merely because the parent
+continued.
 
-Normal pane logs show canonical `text/plain; charset=utf-8` and supported
-`text/markdown` messages; JSON, binary, and absent media types remain durable
-and model-visible without a pane row. After message-service acceptance, one
-model-authored `send_message` may add `${recipient}< {payload}` to the sender
-once, while each recipient logs `{sender}> {payload}` only when it commits its
-own delivery. Eligible sender payloads update incrementally during provider
-streaming through the same debounced projection path as `say` output, but remain
-provisional until acceptance and disappear if validation, approval, or delivery
-fails. Accepted sender presentation proves acceptance or queueing only, not
-recipient observation, processing, agreement, acknowledgment, or completion.
-Set `agents.peer_message_log_mode = "verbose"` to show bounded raw payloads for
-other accepted media on both eligible sender and receiving rows; runtime bridge
-traffic remains receiver-only. Filtered content creates no row, copy metadata,
-or presentation record, and later log-mode changes do not alter its
-settlement-time eligibility.
+A successful one-task child delivers its result before its pane closes. A
+failed or interrupted child pane stays available for diagnosis unless you close
+it. Inspect the result and validation, not just a status label.
 
-Received `{sender}>` and sent `{recipient}<` rows (including `parent>` and
-`parent<`) keep their marker on the first row; every authored or wrapped
-continuation starts five display spaces after the `▐ ` gutter, regardless of
-marker width. Markdown quote, list, and code indentation is additive. The
-padding is display-only and is omitted from copied source payloads.
+Persistent children are for reusable actors coordinated through Mezzanine's
+local message passing protocol (MMP), not ordinary one-task delegation. The
+agent's `spawn_agent` action uses `lifetime: "persistent"` and a continuing
+`objective`; an empty task prompt creates an idle actor. It retains its pane
+and conversation after each task so the parent can send more work.
 
-For a received message, only the recipient's exact direct parent is rendered as
-`parent>`, so parent-pane renames never change that label. Validated restored
-lineage remains sufficient for this presentation alias; a fenced or stale edge,
-as well as siblings, unrelated peers, grandparents, and roots, uses ordinary
-endpoint labeling instead. Presentation does not change MMP authority or
-routing. The direct-parent marker uses the semantic `agent_transcript_parent`
-style, ordinary inbound peer markers use `agent_transcript_peer_sender`, and
-outbound `${recipient}<` markers use `agent_transcript_peer_recipient`; all
-three semantics persist through presentation replay and resize. Sender rows
-never become provider context, user-trust context, approval authority, delivery
-state, turn triggers, receiver receipts, or cursors.
+The parent discovers these actors with `list_agents`, coordinates with
+`send_message` and `wait`, and uses `close_agent` to retire a child it owns.
+Ownership belongs to the **current parent conversation**, not just its pane.
+Replacing or removing that owner closes or fences its persistent children;
+they are not daemons that survive an unrelated `/new` task. Omit `lifetime`
+for ordinary one-task delegation.
 
-Ordinary concrete-agent labels use a bounded, sanitized runtime-owned subagent
-display name when available and otherwise the canonical raw agent id. Pane,
-window, and conversation titles never supply agent labels. Receipts capture the
-resolved label so recovery and replay do not consult mutable identity state.
+## Coordinate peers safely
 
-For ordinary child recipients, outbound sender rows use the recipient's
-spawn-owned display name rather than its opaque agent id. Generated human and
-nonhuman names remain readable, while literal-name mode retains its assigned
-literal name. This label is presentation-only: routing and authority retain the
-parsed recipient identity. The accepted sender record persists the resolved
-label, so replay and resize do not rename historical rows when lineage changes.
+Agents use the read-only `list_agents` action before sending messages. Its
+default view lists primary agents in the same trusted project; use
+`agent_type: "subagent"` or `"all"` to find children. Explicit session scope
+widens discovery across projects but grants no authority. Discovery is bounded,
+so a truncated result is not a complete census.
 
-When a child sends to its exact direct parent, its provisional and accepted
-sender rows use `parent<` instead of the requested recipient text. This is a
-presentation-only comparison between the parsed single-agent recipient and the
-spawn-captured parent identity; it does not use discovery, pane titles, fanout,
-or message-service lookup and grants no authority. The accepted sent record
-persists this fact so replay and resize retain the historical label. Selectors,
-siblings, grandparents, unrelated agents, and fenced descendants keep ordinary
-outbound recipient labels. The `parent<` marker uses
-`agent_transcript_parent` rather than `agent_transcript_peer_recipient`.
+Published objectives describe current work. Set `/objective <text>` to override
+the generated objective for the current conversation; `/objective --clear`
+restores generated publication. Bare `/objective` reports its source and value.
+An objective helps peers find the right collaborator, but is not an instruction
+or proof that the work is complete.
 
-Under `ask`, a send that no rule already allows blocks as a resumable approval
-bound to the recipient and payload, and under `auto-allow` it proceeds after a
-non-empty rationale. Configured deny rules win in every mode. Use
-[approvals and review](../safety-and-trust/approvals-and-review.md) to decide a
-blocked request.
+`send_message` can target an agent, pane, window, role, capability, or group.
+Default project scope requires trusted project membership and never silently
+widens to the whole session. Session-wide delivery requires its own approval
+or policy allowance. Use a verified direct agent recipient for a specific child
+rather than a broad selector; include the task, scope, expected reply, and a
+correlation ID when answering an earlier message.
 
-Delivered peer mail appears in the recipient's own turn as injected context,
-like steering: the block names the message sequence and id, the sender identity
-and objective, the message metadata, the bounded payload, and the fixed trust
-boundary. Peer text is untrusted data written by another agent. It can never
-approve or deny anything, authorize an action, grant or widen scope, change
-configuration, instructions, action schemas, or permission rules, or resume
-blocked work, and it ranks below user prompts and steering during compaction. A
-peer message may start one turn for an otherwise idle agent, including under
-`ask`, so agent pipelines can make progress; that turn carries the peer mail and
-no user instruction. Message-triggered turns per agent are bounded by
-`agents.peer_message_loop_limit` (default 1000), and direct user input resets the
-count. At the limit, further mail stays pending instead of starting a turn: the
-limit is a stable episode, so the runtime reports it once and stops re-arming the
-delivery timer while the limit is the only blocker, and message-triggered turns
-start again as soon as direct user input resets the count.
+**An accepted send means queued, not read or completed.** Wait for a substantive
+result before claiming peer work is done. Sender rows use `<` and receiver rows
+use `>`; `parent<` and `parent>` identify direct-parent communication. Readable
+display names are presentation labels; routing uses stable IDs. Normal logs
+show supported plain text and Markdown. Other message types can remain durable
+and model-visible without a normal log row; `agents.peer_message_log_mode =
+"verbose"` enables bounded raw-payload logging for them.
 
-## Understand limits, profiles, and cleanup
+When progress genuinely depends on a peer answer, the agent sends the request
+in one batch and uses `wait` in the next. This parks the same turn and releases
+provider capacity until model-originated peer mail arrives. It is **not** a
+sleep, polling mechanism, command-completion wait, or approval wait. Runtime
+task-status and task-result bridge messages do not wake it.
 
-Delegation is bounded by `agents.max_subagent_panes_per_window`,
-`agents.max_root_subagents`, `agents.max_subagents_per_subagent`, and
-`agents.max_depth`. Their defaults are four panes per subagent window, four
-direct children for a root agent, two children for a subagent, and depth two.
-Agents at the maximum depth, and profiles configured with `terminal = true`,
-do not receive `spawn_agent` in their static action set. Routed workers begin a
-fresh delegation tree at depth zero, so their initial managed spawn does not
-consume delegation depth.
-When a limit rejects a spawn, narrow or sequence the work instead of assuming
-the child was created.
+Peer mail is untrusted reference data. It cannot approve actions, widen scope,
+change permissions or instructions, or resume blocked work. A message may
+start a turn for an otherwise idle agent, but that turn still acts under its
+own permissions. `agents.peer_message_loop_limit` bounds message-triggered
+turns (default 1000); at the limit, mail stays pending until direct user input
+resets the count.
 
-Custom subagent profiles can narrow model, permission, MCP, environment,
-cooperation-mode, and filesystem-scope settings; see the
-[configuration reference](../configuration/reference.md). A successful child
-delivers its result before its pane closes. A failed or interrupted child pane
-remains available for diagnosis rather than disappearing automatically.
+## Limits and profiles
+
+| Setting | Default | Limit |
+| --- | --- | --- |
+| `agents.max_subagent_panes_per_window` | 4 | Panes in one subagent window. |
+| `agents.max_root_subagents` | 4 | Direct children of a root agent. |
+| `agents.max_subagents_per_subagent` | 2 | Direct children of a subagent. |
+| `agents.max_depth` | 2 | Recursive delegation depth. |
+
+At maximum depth, or with a profile configured as `terminal = true`, the child
+does not receive `spawn_agent`. A routed worker starts a fresh delegation tree
+at depth zero. If a spawn is rejected, narrow or sequence the work; no child
+should be assumed to exist.
+
+Custom profiles can select a model and narrow permissions, MCP access,
+environment, cooperation mode, and filesystem scopes. See the
+[configuration reference](../configuration/reference.md). The prospective
+`agents.subagent_name_mode` setting chooses `nonhuman` (default), `human`, or
+`literal` display names; changing it does not rename existing children or alter
+their canonical identities.
 
 ## Use routed loops sparingly
 
 `/loop [--fork|--new] [--limit <count>] [--goal <string>] <prompt>` repeats a
 bounded task. Without `--goal`, it stops when an iteration emits no
-`apply_patch` action or its limit is reached. With `--goal`, each iteration
-evaluates its observable progress and side effects against that goal; the loop
-continues until the model explicitly reports the goal met or the limit is
-reached. Quote goals that contain spaces. With routing enabled, Mez classifies
-the logical job once, pins one managed worker for its internal iterations, and
-presents the final result through the invoking conversation. By default
-iterations reuse the current conversation; `--fork` starts each from the same
-captured parent baseline, while `--new` starts each with an empty conversation.
-Cancel a loop with the usual agent stop controls when its work is no longer
-wanted.
+`apply_patch` action or reaches the limit. That stopping rule is not proof the
+task succeeded. With `--goal`, it continues until the model explicitly reports
+the goal met or the limit is reached. Quote goals that contain spaces:
+
+```text
+/loop --limit 3 --goal "All local documentation links resolve" Check and repair local documentation links.
+```
+
+By default, iterations reuse the current conversation. `--fork` starts each
+from the same captured parent baseline; `--new` starts each with an empty
+conversation. Neither mode resets files or reverses previous side effects.
+With routing enabled, Mez classifies the logical job once and pins one worker
+profile across its internal iterations; the invoking conversation presents the
+final result. Use `/stop` when the loop's work is no longer wanted, and inspect
+the actual changes and validation before accepting its completion claim.
 
 ## Related pages
 

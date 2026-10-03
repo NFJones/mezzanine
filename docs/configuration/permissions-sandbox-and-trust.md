@@ -22,8 +22,13 @@ in the visible host namespace. When
 pairs `full-access` approval with Bubblewrap; otherwise it pairs `auto-allow`
 with `policy-only`. When `/usr/bin/sandbox-exec` is executable, generated macOS
 configuration pairs `full-access` with Seatbelt; otherwise it pairs
-`auto-allow` with `policy-only`. Existing configurations are not auto-enabled
-by migration. Pane shell mode prepares the selected backend through the pane
+`auto-allow` with `policy-only`. Generation also sets `network_policy = "allow"`
+for Bubblewrap or Seatbelt; policy-only generation keeps `"prompt"`. Other
+platforms generate `ask` with `policy-only`. Prefer `mez config init` to copying
+the portable example's `ask`/`bubblewrap`/`prompt` tuple unchanged. Existing
+configurations are not auto-enabled by migration.
+
+Pane shell mode prepares the selected backend through the pane
 shell; native shell mode derives shell identity, working directory, and
 canonical path authority from the pane root process and host metadata without
 pane input. Optional values named by `permissions.env_whitelist` instead come
@@ -46,7 +51,9 @@ cannot enable it. Only an explicit primary-user bypass decision can do so; see
 [Approvals and review](../safety-and-trust/approvals-and-review.md) before
 relying on any reduced gating.
 
-Read scopes are maximum read authority; write scopes also imply reads.
+With an active OS sandbox, read scopes are maximum read authority; write scopes
+also imply reads. Under `policy-only`, scopes are advisory approval and
+coordination metadata, not filesystem enforcement.
 Bubblewrap realizes them as mounts, while Seatbelt enforces canonical host-path
 operations without hiding namespaces. Network policy controls isolated versus
 connected Bubblewrap profiles or denied versus permitted Seatbelt operations,
@@ -60,8 +67,12 @@ Project configuration and project skills/macros are discovered under the active
 project root but remain pending until a primary user trusts or rejects that
 root. Use `mez sandbox trust list` to inspect decisions. Trust enables eligible
 overlay behavior and project skill/macro discovery; it does not approve an
-action, treat project content as trusted input, or expand sandbox authority by
-itself.
+action or make arbitrary project content safe. When both configured read and
+write scope lists are empty, however, a trusted root supplies default project
+read/write authority. Review that grant before trusting a repository. Explicit
+scopes remain independent grants; project overlays cannot broaden the primary
+user's execution boundary. See [Project trust and instructions](../safety-and-trust/project-trust-and-instructions.md)
+for nested decisions, revocation, and the distinction from OS confinement.
 
 ## Related pages
 

@@ -2,115 +2,99 @@
 
 ## Purpose
 
-Describe the user-visible `maap/1` action model, its action families, and the
-review and result semantics that govern agent execution.
+Understand the actions shown in an agent conversation, decide what to approve,
+and recover safely when work fails or is interrupted. You do not need to write
+action batches yourself; the agent submits them to Mezzanine.
 
 ## Prerequisites
 
-Read [Agent overview](../agent/overview.md) and [Approvals and review](../safety-and-trust/approvals-and-review.md).
+Read [Agent overview](../agent/overview.md) and
+[Approvals and review](../safety-and-trust/approvals-and-review.md).
 
-## Action batch model
+## Read an action result
 
-An agent response is a validated `maap/1` batch containing a concise rationale
-and one or more actions, plus a bounded `objective` stating what the agent is
-currently working on (a string, or `null` when the published objective is
-unchanged). The objective is a factual statement of current work and never a copy
-of the user prompt; it is published for read-only peer discovery, and a null,
-missing, malformed, or out-of-bounds value publishes nothing and never fails a
-turn. Mezzanine assigns turn and action identities,
-validates actions against the current allowed set, independently classifies
-their effects, and records a result for every syntactically identifiable
-action. A result can be
-`rejected`, `blocked`, `denied`, `running`, `succeeded`, `failed`, `cancelled`,
-`timed_out`, or `interrupted`. A batch-level parse or schema failure that
-prevents Mezzanine from identifying an action is recorded as a malformed
-response error instead. Model-provided effect claims and bookkeeping identities
-are not authoritative.
+An agent response contains a short reason and one or more actions. Mezzanine
+checks which actions are available, their arguments, and their permissions
+before execution. The agent can also publish a short current-work objective
+for other agents to discover; that is coordination information, not permission.
 
-`say` presents display-only text as `progress`, `final`, or `blocked`; text
-that looks like a command or patch does not execute. Action results are bounded
-evidence for a later continuation, while credentials, hidden policy, and raw
-terminal state remain outside ordinary model context. A blocked action result
-means execution is waiting at a resumable approval boundary. A `say` action
-with status `blocked` instead ends the conversation because user input or an
-external condition is required.
+Use the recorded result, not the agent's proposed command or completion prose,
+to determine what happened:
 
-## Action families
+| Result | Meaning and next step |
+| --- | --- |
+| `running` | Work is still in progress; no final outcome is available yet. |
+| `blocked` | The action is waiting at a resumable approval boundary. An attached primary client must decide it; observers cannot. |
+| `rejected` or `denied` | The action was not accepted or authorized. Read the reason; do not assume a retry will change policy. |
+| `succeeded` | The action completed successfully. Check the reported effects and validation for the larger task. |
+| `failed` | The action failed. Earlier file changes or other effects may already have occurred. |
+| `cancelled`, `timed_out`, or `interrupted` | Execution did not complete normally. Inspect reported effects and current state before retrying; these labels do not by themselves prove that nothing ran. |
 
-| Action | Use | Important boundary |
+An invalid response that cannot be separated into identifiable actions is
+reported as a malformed response error instead.
+
+The `say` action only displays text. A command or patch printed in such a
+message does not execute. A displayed `blocked` message means the agent needs
+input or an external condition before continuing; it is distinct from an
+action waiting in the approval interface.
+
+## Action names you may see
+
+| Action | What it does | What to review |
 | --- | --- | --- |
-| `say` | Present progress, completion, or a blocker to the user. | It is display-only and cannot execute text that resembles a command or patch. |
-| `shell_command` | Local shell inspection, commands, validation, and filesystem operations. | Uses the effective native or pane shell mode and can require approval. |
-| `apply_patch` | Semantic file-content add, update, move, or delete using `*** Begin Patch` format. | It is a MAAP action, never a shell executable; confirmed earlier file changes remain applied if a later file operation fails. |
-| `web_search`, `fetch_url` | User-requested current web search or HTTP(S) retrieval. | They are runtime network actions, not local-path readers. |
-| `list_agents` | Read-only discovery of project peers and their published objectives. | It never prompts for approval. Omitted or null `scope` uses the requester's trusted project membership; explicit `session` widens to otherwise matching session identities. Results never expose project roots or project-scope identifiers and contain only bounded identity rows. |
-| `send_message`, `spawn_agent` | Local coordination and pane-backed delegation. | `send_message` is approved per message and recipient: `ask` blocks an ungated send as a resumable approval bound to the recipient and payload digest, `auto-allow` requires a non-empty rationale, `full-access` and `host-access` use the policy bypass path, and configured deny rules always win. `spawn_agent` may use `session: fork` for a bounded immutable parent-history snapshot or `session: new` for isolation; scope and policy inherit independently and cannot be broadened by that choice. Use `lifetime: persistent` exclusively for reusable agents that will be interacted with over MMP, never for any other circumstance; provide an `objective` and coordinate them through `list_agents`, `send_message`, and `wait`. |
-| `close_agent` | Retire one caller-owned persistent child. | The runtime authorizes only the current parent conversation's live persistent child using authoritative ownership metadata. A same-owner retry succeeds without teardown when bounded current-session evidence confirms completed closure; inaccessible and stale targets remain opaque. |
-| `wait` | Park the current turn until another agent replies over MMP. | Use only for active inter-agent MMP coordination, after sending any request in an earlier batch. It is never a general delay, retry, poll, approval, user-input, subprocess, network, or external-event action. |
-| `config_change` | Supported live leaf configuration mutation. | Set values accept strings, signed integers, booleans, or string arrays; execution-boundary settings remain direct-user-only. |
-| `mcp_server_search`, `mcp_server_get` | Discover configured MCP servers and retrieve one complete tool contract. | Use `mcp_server_search` when no exact server reference is present. A resolved `@<mcp-server-name>` reference can be passed directly to `mcp_server_get`; retrieve the selected server before a later call. Discovery does not invoke an external tool. |
-| `mcp_call` | Call a durably retrieved, currently available configured MCP tool. | The live registry revalidates server, tool, arguments, external capability, and approval policy. |
-| `memory_search`, `memory_store` | Retrieve or retain runtime-owned durable memory when enabled. | Records must be safe, durable, and non-secret. |
-| `issue_add`, `issue_update`, `issue_query`, `issue_delete` | Manage runtime-owned local issues for the active project. | Issue records remain subject to the configured action set and project-store rules. |
+| `say` | Displays progress, completion, or a blocker. | Compare completion claims with execution and validation evidence. |
+| `shell_command` | Inspects files or runs commands through the effective native or pane shell mode. | Command effects, working directory, scope, network access, and approval. |
+| `apply_patch` | Adds, updates, moves, or deletes file content. | Paths and proposed changes. A multi-file patch is not an all-or-nothing transaction. |
+| `web_search`, `fetch_url` | Searches the web or retrieves an HTTP(S) URL. | External destinations and potentially sensitive query data; these are not local-file readers. |
+| `list_agents` | Discovers peers and their current-work objectives. | Discovery defaults to the trusted project; explicit session scope widens the audience. |
+| `send_message` | Sends a message to a peer or group. | Recipient, audience, and payload. Accepted delivery does not establish recipient agreement or task completion. |
+| `spawn_agent`, `close_agent` | Starts delegated work or retires a caller-owned persistent child. | Task, model, scope, and resource use; see [Subagents and messaging](../agent/subagents-and-messaging.md). |
+| `wait` | Parks an agent turn until a peer replies. | It is for inter-agent coordination, not a general delay or approval wait. |
+| `config_change` | Changes a supported live configuration setting. | The value, persistence, and effect on other work; execution-boundary settings require direct user control. |
+| `mcp_server_search`, `mcp_server_get` | Finds configured integrations and reads their available tool contracts. | Metadata inspection does not invoke an external tool. |
+| `mcp_call` | Invokes a configured MCP tool. | Tool arguments, external effects, credentials, and approval; see [MCP integration](../agent/mcp-integration.md). |
+| `memory_search`, `memory_store` | Reads or retains durable memory when enabled. | Whether retained information is reusable and non-secret. |
+| `issue_add`, `issue_update`, `issue_query`, `issue_delete` | Manages the active project's local issues. | Project, changed state, and any deletion. |
 
-The active provider schema exposes only the action subset allowed for the
-current request. `agents.enabled_actions` supplies the configured upper bound
-and defaults to every executable action. Capability negotiation and
-model-selected skill actions are not part of the ordinary provider schema. The
-model uses exposed actions directly; the runtime still revalidates live
-integration availability, permissions, and arguments, returning an explicit
-action result on failure.
+Availability depends on the configured action set and current request.
+An action listed here is not necessarily enabled in your conversation, and
+listing it does not grant approval. Mezzanine rechecks live integration state,
+permissions, and arguments when the agent uses it.
 
-## Local mutation and recovery
+## File changes and safe recovery
 
-Use `shell_command` for shell-visible inspection and `apply_patch` for ordinary
-file-content changes. Patch paths are normally relative to the pane working
-directory; traversal is rejected. Under active, non-bypassed Bubblewrap,
-absolute paths may target effective write scopes. Other execution modes reject
-absolute patch headers and targets outside the pane working directory. A patch
-failure is evidence, not success: preserve confirmed per-file changes, inspect
-the failed target's current context, and issue a smaller fresh patch rather
-than replaying the same stale hunk. Shell commands report pane-shell transport,
-bounded output, exit, timeout, and truncation data.
+Patch paths are normally relative to the pane working directory; parent
+traversal is rejected. Under active, non-bypassed Bubblewrap, absolute paths may
+target effective write scopes. Other execution modes reject absolute patch
+headers and targets outside the pane working directory. These patch checks are
+not general confinement of an unsandboxed shell.
 
-Blocked actions wait for a primary-client decision; observers cannot decide
-them. Denied, timed-out, cancelled, and policy-forbidden actions remain in the
-result history. Mezzanine can provide bounded correction opportunities for
-model-correctable failures, but a rejected approval or user cancellation is not
-automatically retried.
+Confirmed earlier file changes remain applied if a later operation fails.
+Review the result and changed files, then ask the agent to repair only the
+remaining work using fresh file context. Replaying the original batch can
+repeat effects or fail against changed content. A truncated displayed diff is
+not a complete file review.
 
-## Native semantic execution migration
+Native shell mode currently runs both shell commands and patches through fresh
+shell processes, reported as `spawned_shell`. Pane mode uses the pane shell,
+reported as `pane_shell`. Neither selecting native mode nor seeing a configured
+sandbox name proves process-free patch execution or effective OS confinement.
+Use the actual action result and [sandbox status](../safety-and-trust/sandboxing.md).
 
-Native patches currently use the legacy fresh-shell adapter and truthfully
-report `spawned_shell`. The replacement contract selects an in-process
-`native_runtime` filesystem adapter before shell lowering; foundational typed
-contracts and direct-launch accounting do not by themselves enable it. Native
-`shell_command` remains an intentional spawned shell; pane/remote patches keep
-their shell adapter. No new action or second native mode is introduced.
-
-The shared matcher now retains exact raw preimages, including CRLF, separately
-from normalized matching text. No-op patches do not normalize line endings.
-The shell-free planning adapter preserves authored order and dependent move
-endpoints, and produces bounded linear full-file unified diffs in Rust rather
-than invoking `diff`. Typed result projection retains confirmations even when
-display is truncated and requires every planned endpoint before success. These
-adapters still await production native filesystem dispatch integration.
-
-The replacement binds approval to exact patch, ordered effects, transaction and
-current authority. It must preserve partial effects and report stalled commits
-as in-flight or unknown, not infer nonexecution from timeout. Runtime filesystem
-capabilities are not OS confinement or an approved bypass. See the
-[normative migration contract](../../SPEC.md#process-free-semantic-adapter-contract-and-migration).
+Denied approvals and user cancellations are not automatically retried.
+Mezzanine may let the agent correct invalid arguments or other recoverable
+errors, but recovery does not authorize it to bypass your decision.
 
 ## Related pages
 
 - [Commands, skills, and macros](../agent/commands-skills-and-macros.md)
+- [Approvals and review](../safety-and-trust/approvals-and-review.md)
 - [MCP integration](../agent/mcp-integration.md)
 - [Sandboxing](../safety-and-trust/sandboxing.md)
-- [Complete `maap/1` reference](protocols/maap.md)
-- [Normative MAAP contract](../../SPEC.md#98-mezzanine-agent-action-protocol)
+- [MAAP protocol reference](protocols/maap.md) — for provider and harness implementers
 
 ## Next step
 
-Read [Terminal compatibility](terminal-compatibility.md) for the pane surface
-that carries local action input and output.
+Use [Approvals and review](../safety-and-trust/approvals-and-review.md) when an
+action needs a decision, or [Troubleshooting](../operations/troubleshooting.md)
+when its outcome is uncertain.

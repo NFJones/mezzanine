@@ -12,296 +12,78 @@ provider for model-backed work.
 
 ## Open and use the prompt
 
-Press `Ctrl+A a` to show or hide the agent shell for the focused pane. The
-agent prompt appears at the bottom of that pane; it does not replace the pane's
-process screen. Mezzanine retains the process and agent surfaces separately, so
-showing, hiding, or rebinding a conversation does not merge their history or
-screen state. While the prompt is visible, ordinary input for that pane goes to
-the agent shell, while multiplexer bindings, pane navigation, resizing, and
-copy-mode controls remain available. Hiding the shell asks an in-progress task
-to stop and blocks ordinary pane input until the task reaches a terminal state.
+With the default bindings, press `Ctrl+A a` to show or hide the agent shell for
+the focused pane. Press and release `Ctrl+A` before pressing `a`. The prompt
+appears at the bottom of that pane; it does not replace or merge history with
+the pane's process screen. While visible, ordinary pane input goes to the agent
+shell. Multiplexer bindings, pane navigation, resizing, and copy mode remain
+available. Use `Ctrl+A ?` to inspect effective bindings if yours differ.
+
 The agent works from the pane working directory, its conversation state,
-configured instructions, and explicit action results; it does not passively
-receive your full terminal screen, scrollback, or other panes.
+configured instructions, and explicit action results. It does not passively
+receive your full terminal screen, scrollback, or other panes. Include relevant
+output in your request or ask the agent to inspect it explicitly.
 
-In comfortable panes, live status remains in the composer header while drafting.
-Its active label retains the status wave without animating the surrounding
-composer label, timer or hints. Wave spans are foreground-only, and unavailable
-interrupt hints do not suppress the true status label.
+Type a request and press Enter. Use `Ctrl+J` for a newline without submitting.
+In native shell mode, `Ctrl+V` pastes host clipboard text into the prompt,
+preserving multiline text. Completion supports slash commands, `$` skills,
+`#` macros, and `@` MCP server names where enabled; Tab cycles candidates.
+Use Up/Down to recall prompts and `Ctrl+R` to search them. Enter in reverse
+search accepts the match without submitting it.
 
-Structured agent output wraps at the smaller of the pane width and
-`terminal.agent_wrap_column_cap` (120 display cells by default). This includes
-status, error, diagnostic, action, and result rows as well as transcript text.
-Continuation rows repeat the `│ ` gutter. Wrapped `agent: ` status/action and
-`thinking: ` rationale/summary rows keep their first-row label and use five
-spaces after the gutter on later rows. `user>`, `mez>`, `parent>`, and peer-message
-continuations also use five spaces after the gutter regardless of label length;
-Markdown structure adds its own indentation. Copy mode recovers the original logical row
-instead of inserting presentation-only wrap boundaries. Retained raw ANSI
-projections from very old saved presentation records are replayed unchanged
-and are not rewrapped to this configured cap; they may wrap at the physical
-pane width because rewriting terminal-control bytes is unsafe.
+Large bracketed pastes appear as compact `[Pasted …]` blocks, but submission
+sends the complete underlying text. History recall preserves these blocks.
+Exceptionally large complete prompts can be submitted without being retained
+for recall. An oversized or timed-out incomplete paste is discarded, along
+with subsequent bytes until its closing delimiter arrives. Follow the status
+bar notice; `Esc` at an idle prompt resumes ordinary input after a discarded
+paste.
 
-The transcript gutter uses its speaker or action category's foreground and
-rendition. Assistant/user labels retain bold accents; rationale and status text
-use dim shadow styling. Command and error cues keep their category accents.
-Markdown body emphasis remains authored structure. The
-two-cell `│ ` footprint preserves copied source and continuation offsets.
-Editable input has no gutter. Legacy ANSI-only records keep their original
-bytes; copy normalization recognizes their former `▐ ` prefix as well.
+Press `Ctrl+A e` to edit the draft externally. Closing a successful editor
+returns text to the prompt without submitting it. The editor runs on the
+server machine in its own PTY, not through the pane shell, in both `native`
+and `pane` modes. It does not alter the pane's shell history or command draft.
 
-Use `/show-context activity` to inspect recent identity-bearing action outcomes
-and retained result previews, plus accepted command intent captured before
-settlement and response-wide rationale. Rationale retains its response identity
-whether it arrived through streaming or a complete response; it does not claim
-an action or executor attempt. Accepted action summaries retain their action
-ordinal separately from response-wide rationale. Promoted summaries and command
-previews keep their original source order and renderer. Accepted action headers
-also retain action identity without implying execution success or an attempt.
-Confirmed mutation details retain the executor's section index, path and
-attempt/transaction identity. `confirmed` applies to that section only; a later
-failure can coexist with the retained effect and does not imply rollback.
-Visible executor progress becomes retained detail only after exact successful
-settlement. Failed or mismatched provisional output is not retained by this
-view. Successful promotion keeps executor identity and replays only its bounded
-preview, not the full retained detail or renderer JSON.
-An `accepted` command
-is not evidence of execution or success.
-Enter or click a row to open detail; Escape returns
-to the list without altering conversation logs. `/show-context activity <sequence>`
-opens the activity containing that presentation sequence. Press `y` to export
-versioned JSON with ordered presentation sequences and exact activity sources;
-JSON escaping preserves source bytes without adding display headings or gutters.
-Exports larger than the internal paste-buffer cap still go intact to the
-clipboard adapter; the previous internal buffer stays unchanged and a notice
-explains why. Adapter failure stays visible in the browser. Queuing a clipboard
-copy does not acknowledge desktop delivery.
-Other record browsers still copy their detail Markdown. Details distinguish
-accepted intent from observed outcomes and retain source beyond the bounded live
-preview where available. The snapshot reads at most the latest 200 cleartext
-presentation records within 8 MiB; legacy rows and unavailable attempt identities
-are not guessed. This is a client-local inspection view, not automatic inline
-folding, a log-level change, an approval route or a promise of all raw output.
+## Stop, hide, or start fresh
 
-Streaming rationale that exactly matches a validated completion can remain
-visible without a second copy being appended. A matching action header may
-remain while its accepted action is pending, together with matching progress
-text; the action's actual result is still reported separately. A changed header
-can be replaced atomically while matching rationale and progress text stay
-visible. A visible preview is not yet permanent: field closure and whole-action
-receipt do not validate the batch or complete its rich render. Only validated,
-fully rendered components become finalized; result rows additionally require
-their own settlement. Later visible logs wait for earlier visible components to
-finalize; hidden or deduplicated components release their ordering slot after
-validation without a pane projection, while replaceable command-output tails
-and executor progress never hold that permanent-log barrier. Neither failure
-nor a later pane write removes finalized logs. Provider progress is optional:
-providers that return only a complete response, including
-those that stream transport events without MAAP fragments, use the same
-validated log presentation without synthetic streaming previews. Missing
-progress does not suppress or duplicate the completed answer. Provisional
-action previews do not prove execution; rejected source does not become an action
-result. Matching command previews and multiple headers can remain visible
-across acceptance. Accepted command previews and summaries stay separate from
-their batch rationale: shell readiness, approval waits, execution failures, and
-settling a live output tail do not erase or replace those intent rows. In a
-multi-action batch, validation retains the already-rendered accepted prefix;
-later actions still follow their normal ordering and execution gates. A final
-answer following pending actions
-stays provisional and is recorded only if those actions complete successfully.
-Failed deferred URL fetches and web searches can enter bounded model correction
-after their in-flight siblings settle. Their results become context rather than
-automatic retries of the same URL or query; policy denials and exhausted
-correction budgets remain terminal.
+| Control | Result |
+| --- | --- |
+| `Esc` at an idle prompt | Clear the draft without hiding the prompt. |
+| `Ctrl+D` on an empty prompt | Hide the agent shell. |
+| `Ctrl+C` twice within three seconds while idle | Hide the agent shell. |
+| `Ctrl+C` while a task runs, or `/stop` | Request interruption of the task. |
+| `/new` | Start a separate conversation. |
+| `/resume` | Open the saved-conversation picker. |
 
-Type a request and press Enter. Use `Ctrl+J` to insert a literal newline
-without submitting it. In native shell mode, `Ctrl+V` pastes host clipboard
-text into the editable prompt while preserving multiline text. Prompt completion
-supports slash commands, `$` skills, `#` macros, and `@` MCP server names where
-enabled.
-The editable prompt begins with `⟩ ` without a transcript gutter. Input,
-completion shadows and unused row padding do not paint a background; wrapped
-input continues under the marker's body column without adding a gutter.
-This display-only marker does not change submitted text or assistant transcript
-rows, which continue to use `mez> `.
-In roomy panes (at least 64 columns and 14 body rows), a lightweight context row
-and help row surround the input. The header rule fills the pane width; static
-decoration uses dim thinking-log styling while the active status label keeps
-its wave. `ask mez` indicates ordinary submission;
-`guide this task` indicates prose will steer the running turn. Guidance and key
-hints are lowercase display text; shifted editor keys retain an explicit `s-`
-modifier, and drafts and canonical bindings are unchanged. Status and elapsed
-time remain visible while drafting. Search, slash commands, pending approvals
-and discarded paste show their own context; prose does not approve a request.
-Tab cycles completion and Enter still submits, while Enter in reverse search
-accepts the match without submitting. Active-work Escape retains interruption
-precedence. The editor hint uses effective bindings, and intercepted baseline
-hints are omitted. Observers and unfocused panes show a read-only cue.
-Small panes keep the compact editor. Decoration never becomes submitted or
-copied conversation text; reservation remains stable as status/help changes.
-The composer remains visible during agent log scroll/copy mode. Only the log
-above it scrolls or receives log-selection highlights. Explicit keyboard copy
-mode retains its cursor and input ownership; a visible draft is not another
-submission or selection surface until that interaction is explicitly entered.
-Entered draft text supports region-local mouse selection and word copying,
-without scrolling the log or submitting text. `copy-mode --draft` supplies the
-explicit keyboard route, and `copy-selection --draft --format source` exports
-exact selected source (including whole intersected collapsed paste blocks).
-Ordinary draft copy keeps hidden paste collapsed and excludes completion shadows.
-The prompt remains in this in-pane entry area by default. Press `Ctrl+A e` (or
-the active key preset's `edit_prompt` binding) to request external editing;
-closing a successful editor returns the text to the same prompt and never
-submits it automatically. Mez launches the editor on the server machine as a
-direct subprocess with its own PTY. It does not run a command through the pane
-shell, so opening an editor does not add to shell history or disturb a command
-draft already present there. This behavior is the same in `pane` and `native`
-agent shell modes.
+Hiding the shell asks an in-progress task to stop and blocks ordinary pane
+input until the task reaches a terminal state. Non-slash text submitted while
+a task runs steers that task rather than starting another turn. Prose is not
+an approval decision.
 
-Large bracketed pastes are shown as compact `[Pasted …]` blocks, but typed text
-and smaller pastes remain visible literally. History recall and `Ctrl+R` restore
-the same pasted blocks shown when the prompt was entered, and submission still
-sends the agent the complete original text. The bounded history capacity can
-retain a maximum-size bracketed paste with surrounding typed text; exceptionally
-larger complete prompts are submitted normally but are not retained for recall.
-A paste payload that exceeds the retained-byte limit, or whose closing delimiter
-never arrives in time, is discarded instead of becoming prompt input. The bytes
-after it are discarded too until the real closing delimiter arrives, so a
-truncated paste cannot submit anything; the status bar reports the discarded
-paste and `Esc` at an idle prompt resumes ordinary input.
-Press `Esc` to clear a draft without hiding the prompt. `Ctrl+D` on an empty
-prompt hides it. When no task is running, press `Ctrl+C` twice within three
-seconds to hide the prompt; when a task is running, `Ctrl+C` requests an
-immediate interruption. Non-slash text submitted while a task runs is steering
-for that task rather than a separate turn. After an interruption, the next
-non-slash prompt continues from the retained user, assistant, tool, and steering
-context: Mezzanine appends the new text as guidance without restarting the
-cancelled action or process. Use `/new` instead when the next prompt should
-start a separate conversation.
+After interruption, the next non-slash prompt continues from retained user,
+assistant, tool, and steering context. It adds guidance without restarting
+cancelled actions or processes. Use `/new` when you want an independent task
+instead. Detaching the client is different from hiding the agent shell: a
+normal detach leaves tasks running.
 
-Common controls are `/help`, `/status`, `/model`, `/approval`, `/new`,
-`/resume`, and `/stop`. Use `/plan on` to enable pane-local plan-only mode;
-it applies to subsequent turns until `/plan off` (or `/plan toggle`) disables
-it. While enabled, the pane has no write sandbox scopes. Use `/plan status` to
-inspect the current mode.
+## Inspect and control a conversation
 
-While a user-owned root agent shell remains visible, its pane frame displays
-`mez` unless the pane has an explicit title. This remains true while a hide is
-pending completion; after the agent surface actually hides, the ordinary
-automatic or program-derived title resumes. The override is presentation-only
-and does not change stored title state. Explicit names (including an explicit
-`mez`), spawned subagent names, and ephemeral worker titles are preserved.
+Use `/help` for available commands, `/status` for the pane's active model,
+policy, context, and token state, and `/approval` for approval controls.
+`/model` shows the active and configured profiles; `/model <profile-name>`
+selects one. `/model --list` lists the active provider's model catalog.
+
+Enter `/plan on` before a read-only investigation. Plan-only mode applies to
+subsequent turns until `/plan off` or `/plan toggle` disables it. While enabled,
+the pane has no write sandbox scopes; `/plan status` reports the mode. Enabling
+it during active work requests that work stop. Plan mode does not replace
+approval policy or operating-system confinement.
 
 Use `/objective <text>` to set a durable, peer-visible objective for the
-current conversation. It takes precedence over prompt- and model-derived
-objectives until `/objective --clear` restores automatic publication. Bare
-`/objective` reports the value and whether its source is `user`, `automatic`,
-or `none`. Objectives are unavailable for ephemeral loop-worker conversations.
-
-## Choose a shell mode
-
-The default `native` mode validates the pane root process and runs each local
-agent action in a fresh compatible shell without writing bootstrap input into
-the pane. `pane` mode instead sends shell-backed work through the interactive
-pane shell. Use `/shell-mode status` to inspect the effective mode,
-`/shell-mode native` or `/shell-mode pane` for a pane override, and append
-`--global` to persist the default for panes without an override.
-
-Native patch execution is currently shell-backed. The process-free filesystem
-replacement is staged behind typed contracts and launch-accounting work; do not
-interpret native mode today as a zero-child guarantee. Its target transport is
-`native_runtime`, while actual shell commands retain `spawned_shell`. There is
-no second native mode or automatic fallback. See the
-[migration contract](../../SPEC.md#process-free-semantic-adapter-contract-and-migration).
-
-Pane mode requires a supported Bash, Fish, Zsh, or POSIX `sh` prompt to be
-ready for input. A full-screen program, password prompt, or uncertain shell
-boundary makes injection unsafe; return it to an empty prompt. Runtime-created
-agent panes use bounded startup and fail with a copyable diagnostic instead of
-remaining indefinitely in bootstrap.
-
-Native launches compose their own environment instead of inheriting the
-Mezzanine daemon process environment wholesale. For ordinary actions, only
-names in `permissions.env_whitelist` are selected from an immutable snapshot
-captured when Mez starts; selected values such as `PATH` reach native,
-Bubblewrap, and Seatbelt actions unchanged. Pane-root metadata still selects
-the native shell and working directory, but exports or startup-file changes
-made later in a pane do not alter forwarded values. The runtime adds only its
-documented requirements and drops all unselected server values, including
-harness transport credentials.
-
-## Work inside SSH and container shells in pane mode
-
-This workflow applies to `pane` mode. `native` mode runs actions in fresh
-shells derived from the pane's local root process; it does not inject them into
-an interactive SSH, container, chroot, or other nested shell. Select
-`/shell-mode pane` before using the foreign-shell workflow below.
-
-When a pane-mode shell enters SSH, a container shell, a chroot, or another
-nested interactive environment, Mezzanine treats that environment as a
-separate shell authority. Explicit agent entry asserts that the foreign shell
-is at an empty, interactive prompt. Mezzanine immediately issues a bounded
-syntax-neutral identity probe and, after resolving the shell, launches an
-ephemeral managed child through a one-command `/bin/sh` loader. No Mezzanine
-executable, startup-file modification, or preinstalled compatibility shim is
-required inside the nested environment, and host-side Bash, Fish, or Zsh
-tokens and startup files are never reused across this boundary.
-
-This explicit empty-prompt assertion applies only to an existing user-owned
-foreign environment. Runtime-created agent panes use their mode-specific
-startup contract and never enter this foreign-shell discovery path.
-
-Agent work waits for that dependency-free bootstrap to validate the foreign
-shell before generated input is released. Mezzanine never silently edits remote
-startup files and never installs software in the foreign environment.
-
-The dependency-free handoff uses correlation rather than cryptographic
-attestation. On a host-observable local foreign shell, the runtime records the
-foreground process group when it writes the loader command and releases the
-bootstrap payload only after the pane worker observes a different foreground
-group. A verified non-shell foreground leader, such as an interactive SSH
-client, is an opaque transport: its remote descendants do not expose a
-host-visible process group, so a matching fresh loader record supplies launch
-correlation without waiting for an impossible transition. Unreadable or stale
-leader identity retains the stronger transition rule. The loader payload and
-fresh child token are typed into the same PTY, so a process that controls that
-PTY can observe and replay them. The process-group, interaction-generation,
-marker, and managed-child admission checks protect against stale, mismatched,
-and accidental records; they do not establish an unforgeable boundary against
-the active pane environment itself.
-
-Selecting `pane` shell mode and explicitly entering the agent shell opts into
-using a successfully correlated pane bootstrap as environment and path
-authority. After the loader and child admission checks succeed, bootstrap
-completes with a parsed environment signature, and the required foreground
-observations agree, Mezzanine publishes that signature and its derived path
-authority and marks the pane ready for typed agent shell commands. This policy
-applies to the original local pane shell and to dependency-free SSH, container,
-chroot, and other nested interactive environments. The user remains responsible
-for deciding whether the active pane environment is appropriate for agent work.
-
-Mezzanine does not promote a pane shell from version text alone. Dependency-free
-identity discovery selects an absolute launch target and shell dialect for the
-current interaction generation, and successful bootstrap binds that identity to
-the correlated child lifecycle. Failed, truncated, stale, mismatched, or
-incomplete bootstrap evidence remains degraded and typed agent shell commands
-are refused before input is generated.
-
-Managed Fish bootstrap completion waits for the matching post-source child
-prompt before foreground certification. The wrapper's end record can precede
-receiver cleanup jobs; their temporary process groups are not the persistent
-shell. The prompt is only a scheduling fence: existing process, interaction,
-foreground, and environment checks still decide authority. A missing prompt
-retains the bootstrap deadline and fails closed rather than waiting forever.
-
-An unmanaged nested shell that is not at an empty, interactive prompt cannot be
-probed safely from the local `ssh` or container-client process alone; Mezzanine
-will not inject input into a password prompt, full-screen program, or unknown
-command line. Exit the nested environment to restore normal discovery of the
-local pane shell.
-
-For all supported shells, bootstrap remains bounded and fail-closed. Exiting a
-nested environment clears its shell authority and re-arms discovery for the
-original pane shell when agent mode is visible.
+conversation. This overrides automatic objectives until `/objective --clear`.
+Bare `/objective` reports the value and whether its source is `user`,
+`automatic`, or `none`. Objectives are unavailable for ephemeral loop-worker
+conversations; do not put secrets in peer-visible text.
 
 ## Review actions and context
 
@@ -310,11 +92,99 @@ calls, or scoped subagent work. Shell, network, destructive, configuration,
 and some MCP actions can require approval. Approval policy does not itself
 confine a permitted process; sandboxing is a separate boundary.
 
+Streaming text and action previews are provisional. An accepted command or
+action header shows intent, not execution or success. Read the settled result
+before relying on an action. A confirmed file-mutation section proves that
+section's effect, not whole-action success; a later failure does not imply
+rollback.
+
+Use `/show-context activity` to inspect recent retained action intent, outcomes,
+and bounded result previews. Enter or click a row to open detail; Escape
+returns to the list. `/show-context activity <sequence>` opens the activity
+containing that presentation sequence. Press `y` to export versioned JSON
+with the retained activity sources. Treat exports as potentially sensitive:
+they can include commands, paths, and output. A queued clipboard copy does
+not prove desktop delivery; adapter failures remain visible.
+
+This inspection view does not alter conversation logs, approvals, or logging
+levels. It reads at most the latest 200 cleartext presentation records within
+8 MiB, so it is not a complete raw-output archive. Legacy records and missing
+identities are not reconstructed.
+
 Put repository-specific instructions in `AGENTS.md`. Project configuration
 overlays under `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
 `.mezzanine/config.yml`, or `.mezzanine/config.json` remain pending until
 explicitly trusted. Inspect trust with `mez sandbox trust list` before trusting
 an unfamiliar root.
+
+## Read and copy agent output
+
+Structured agent output wraps at the smaller of the pane width and
+`terminal.agent_wrap_column_cap` (120 display cells by default). Copy mode
+recovers logical text rather than inserting presentation-only wrap boundaries.
+Older ANSI-only saved records are replayed unchanged and may wrap differently.
+
+The composer remains visible while the log scrolls or is in copy mode. In
+explicit log-copy mode, the selection and keyboard input belong to the log;
+Enter does not submit the visible draft. Drag across entered draft text or
+double-click a word to copy it independently. For keyboard draft selection,
+use `copy-mode --draft` from the Mezzanine command prompt. Use
+`copy-selection --draft --format source` to include complete source from
+intersected collapsed paste blocks. See [Terminal input, copy, and
+history](terminal-input-copy-and-history.md) for selection controls and buffers.
+
+## Choose a shell mode
+
+The default `native` mode validates the pane's local root process and runs
+shell-backed agent actions in fresh compatible shells without typing into the
+pane. It can work while a full-screen application occupies the pane, but
+stateful or interactive actions are rejected rather than redirected to it.
+State such as a command's `cd` or `export` does not carry into the next fresh
+shell. Native patch execution is currently shell-backed too: `native` does
+not mean every action runs without child processes.
+
+`pane` mode sends shell-backed work through the interactive pane shell. It
+requires a supported Bash, Fish, Zsh, or POSIX `sh` shell ready at an empty
+prompt. A full-screen program, password prompt, or uncertain shell boundary
+makes injection unsafe. Runtime-created agent panes use bounded startup and
+report a diagnostic on failure rather than remaining in bootstrap indefinitely.
+
+Use `/shell-mode status` to inspect the effective mode. Select
+`/shell-mode native` or `/shell-mode pane` for a pane-local override. Append
+`--global` to persist the default for panes without an override. Pane-local
+overrides are not durable across runtime restarts.
+
+Native actions use a cleared base environment, not the daemon's full
+environment. Optional values come only from `permissions.env_whitelist` in
+the immutable snapshot captured when Mez starts, plus documented runtime
+requirements. Pane-root metadata selects the shell and working directory;
+later pane exports and startup-file changes do not change forwarded values.
+If a command needs an extra value, review the whitelist and restart the owning
+daemon to refresh its snapshot. Never put credentials in an agent prompt.
+
+## Work inside SSH and container shells
+
+Select `/shell-mode pane` before working in an interactive SSH, container,
+chroot, or other nested shell. Native mode uses the pane's local root process;
+it does not run inside that nested environment.
+
+Before explicitly opening the agent shell in an existing foreign environment,
+ensure it is at an empty interactive prompt. Agent entry asserts that this is
+safe. Mez runs a bounded identity probe and launches an ephemeral managed
+child through a `/bin/sh` loader. It needs no Mezzanine executable or
+preinstalled shim there and does not modify startup files or install software.
+Generated agent commands wait for bootstrap validation. Failed or incomplete
+bootstrap refuses typed agent commands.
+
+Selecting pane mode and entering the agent shell opts into the correlated
+bootstrap as environment and path authority. Correlation detects stale or
+mismatched records; it is not cryptographic attestation against the active
+pane environment, which can observe and replay PTY traffic. Decide whether
+that environment is appropriate for agent work before entering.
+
+Do not enter from a password prompt, full-screen program, or unknown command
+line. Return to an empty prompt or exit the nested environment. Exiting clears
+its shell authority and re-arms local discovery while agent mode is visible.
 
 ## Related pages
 

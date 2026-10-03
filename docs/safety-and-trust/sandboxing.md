@@ -2,137 +2,89 @@
 
 ## Purpose
 
-Explain the operating-system boundary for permitted local shell actions,
-including its authority limits, networking behavior, and failure handling.
+Understand what confines an approved local shell action, what remains outside
+that boundary, and how to respond when confinement cannot be established.
 
 ## Prerequisites
 
-Understand [approvals and review](approvals-and-review.md). A sandbox does not
-replace the decision to approve an action.
+Read [Approvals and review](approvals-and-review.md). Approval permits an
+action; it does not isolate it.
 
-## Native filesystem contract versus OS confinement
+## Check the actual boundary
 
-The staged process-free native patch adapter will enforce filesystem authority
-through runtime capabilities, not by confining the daemon with Bubblewrap or
-Seatbelt. Those capabilities must preserve trust and effective scopes, report
-actual enforcement separately from configured backend intent, and reject an
-incompatible mandatory OS process-confinement requirement. They are neither
-sandbox-equivalent protection nor an implicit approved bypass. Current native
-patches still use the legacy shell/backend path described below.
+Inspect the affected pane with `/permissions` and `/sandbox`. For a read-only
+CLI report, use `mez sandbox status --verbose`; `mez sandbox plan` previews
+setup without proving that an action ran under confinement.
 
-The implemented primitive layer holds directory descriptors and resolves links
-before parent traversal, bounded to 40 link expansions. It rejects nonregular
-snapshots, stale root lifetime/credentials/cwd, scope escapes, changed preimages
-and replaced ancestry before staging/publication. Adds use atomic no-replace;
-updates replace a single directory entry, leaving hard-link siblings unchanged.
-Ordinary mode bits are preserved but privilege bits are suppressed; ownership,
-ACLs and xattrs are not preserved. Missing parent creation is separately
-authorized, never implied by a file-only grant. Staged bytes and entry identity
-are checked before publication and transaction-owned cleanup.
+| Backend | Protection and limits |
+| --- | --- |
+| `policy-only` | Approval classification, not OS filesystem or shell-network confinement. |
+| `bubblewrap` | Linux namespace confinement with authorized read-only/read-write mounts. Requires the fixed `/usr/bin/bwrap` executable and a successful runtime capability probe. |
+| `seatbelt` | macOS operation-level access controls through `/usr/bin/sandbox-exec`. Host namespaces remain visible; this is not Bubblewrap-equivalent namespace isolation. Apple's deprecated interface may be unavailable on future macOS releases. |
 
-Publication also rejects changed target mode/ownership and staged safe-mode,
-owner or link-count changes, even when inode and bytes are unchanged. On macOS,
-independent supplementary-group evidence is currently unavailable for another
-PID; daemon-side filesystem capabilities fail closed for those targets rather
-than substitute daemon groups. The daemon's own process remains verifiable.
-This limitation does not change existing spawned-shell sandbox execution.
+New Linux and macOS configurations select `full-access` with their platform
+sandbox when its fixed executable is available, and `auto-allow` with
+`policy-only` otherwise. Existing configurations are preserved by migration.
+Neither a default nor executable presence proves runtime enforcement. Confirm
+the effective state before relying on it, particularly after installation or
+an OS upgrade.
 
-This is not atomic compare-and-swap against arbitrary external writers. A rename
-or replacement after the final validation remains possible. The dependent
-dispatcher must supply current actor commit leases, conflicting-write
-serialization, cancellation and effect attribution; the primitives alone do
-not enable in-process native patch dispatch.
+Status distinguishes configured intent from effective enforcement. `unavailable`
+means the backend executable is missing; `not-probed` with `unknown` networking
+means no matching runtime proof and compiled launch plan are available.
+`policy-only` and host access have `none` enforcement and `unenforced`
+networking. An `isolated` or `connected` network claim requires both the plan
+and its capability proof. A CLI preview is not an attestation of every action
+or remote process; inspect the affected action's result as well.
 
-Cancellation of an in-process filesystem worker is cooperative: a deadline or
-dropped worker handle does not stop a blocked syscall. Future commits must be
-fenced before cancellation is acknowledged; already-started commits remain
-in-flight until evidence arrives, and confirmed earlier effects remain applied.
-Unknown effects must not be replayed. See the
-[normative migration contract](../../SPEC.md#process-free-semantic-adapter-contract-and-migration).
+### Native shell mode is not process-free patching
 
-## Select a backend
+Pane mode sends agent work through the pane shell. Native shell mode runs a
+fresh process outside the pane PTY and can work while a full-screen application
+occupies the pane. Both modes use the configured local sandbox when applicable.
 
-`permissions.sandbox = "policy-only"` does not confine filesystem or
-shell-network access. Approval policy and optional audit logging remain
-separate controls. `bubblewrap` provides Linux namespace confinement.
-`seatbelt` provides macOS operation-level mandatory access control through the
-fixed `/usr/bin/sandbox-exec` interface. Seatbelt keeps the host mount, PID,
-user, IPC, UTS, and network namespaces visible; it must not be treated as
-Bubblewrap-equivalent namespace isolation. Apple deprecates the public
-`sandbox-exec`/SBPL interface, so future macOS releases may make this backend
-unavailable.
+**Native `apply_patch` still uses the shell-backed read/write path and reports
+`spawned_shell`, not `native_runtime`.** The process-free filesystem adapter is
+planned, not integrated. Existing filesystem primitives and tests do not supply
+that runtime guarantee. Do not rely on future descriptor-based publication,
+commit fencing, or cancellation protections for today's patches. See the
+[migration contract](../../SPEC.md#process-free-semantic-adapter-contract-and-migration)
+for the planned behavior.
 
-New Linux configuration selects `full-access + bubblewrap` only when
-`/usr/bin/bwrap` is an executable regular file. New macOS configuration selects
-`full-access + seatbelt` only when `/usr/bin/sandbox-exec` is executable. Either
-platform selects `auto-allow + policy-only` when its fixed executable is absent.
-Existing configurations are preserved by migration. Presence is only a setup
-decision: every sandboxed workload still requires the exact runtime capability
-probe and fails closed if that proof cannot be established.
+## Grant filesystem access narrowly
 
-Pane shell mode obtains environment and authority evidence through the pane
-shell before probing and launching. Native mode derives equivalent evidence
-from the live pane root process and host metadata, then probes and launches
-outside the pane. Both modes compile the same backend policy. Neither backend
-uses a privileged helper, and an unavailable executable or failed probe never
-silently changes execution to `policy-only` or the host.
+`permissions.read_scopes` and `permissions.write_scopes` define user filesystem
+authority; write scopes also imply reads. Bubblewrap exposes authorized paths
+as mounts, while Seatbelt controls operations on canonical host paths. Fixed
+runtime support paths and private temporary storage are also available, and
+effective authority can include Mezzanine's user skills and macros roots.
+Read the effective report rather than assuming the project is the only visible
+directory.
 
-Native mode never inherits the ambient Mezzanine daemon environment. Each native
-launch composes a cleared-base environment from validated pane-root evidence
-plus the documented runtime requirements — the workload `PATH`, `HOME`, and the
-launcher command-search path — keeps pane-root values authoritative for
-overlapping keys, and hands a code-owned launcher such as `bwrap` or the
-Seatbelt child supervisor only its launcher control entries. The guarantee is
-composition rather than credential non-possession: the builder clears the
-ambient Mezzanine environment and forwards only validated pane-root evidence
-plus declared launch requirements, so an ambient-only value that neither a pane
-nor a declaration supplies never reaches a workload or a launcher, while a value
-the pane root itself carries — including one the pane inherited when it was
-created — is treated as pane evidence and is not filtered here. Pane-creation
-environment inheritance is a separate boundary. Capability probe launchers also
-run from a cleared base carrying only the launcher command-search path, so
-ambient credentials and loader variables such as `LD_PRELOAD` or
-`DYLD_INSERT_LIBRARIES` cannot enter a probe launcher. The composed environment
-is capped at 512 entries and 256 KiB of aggregate value bytes, with 128-byte
-names and 16 KiB values, and that budget is enforced on the composed result
-rather than per source. The sandboxed payload environment stays owned by the
-compiled plan, which keeps the fixed sandbox `HOME`, XDG paths, identity,
-locale, Git isolation, and configured whitelist projections in their existing
-precedence.
+With both scope arrays empty, a trusted project supplies its canonical root as
+default read/write authority. The deepest stored trust decision governs this
+default: a nested rejection or revocation withholds it, while a nested repository
+without its own decision retains recursive parent trust. Explicit configured
+scopes are a separate grant and are not removed by rejecting an overlay. See
+[Project trust and instructions](project-trust-and-instructions.md).
 
-The deliberate compatibility inventory keeps only three ambient values: the
-workload `PATH`, the workload `HOME` when the pane root supplied none, and the
-launcher command-search path. Ambient-only proxies, locale, agent sockets,
-toolchain roots, and harness credentials are dropped instead of inherited. A
-pane that exports a proxy, locale, agent socket, or toolchain root itself still
-reaches the action, because validated pane-root evidence is the authoritative
-source for intentional pane environment.
+Unavailable configured paths are excluded with a warning, not replaced by a
+broader scope. The multi-user `/home` root cannot be an authority scope. Avoid
+granting a whole home directory or credential-bearing paths merely to make a
+tool work. Under `policy-only`, scopes and trust checks are not OS confinement:
+an admitted shell process is not physically restricted to those paths.
 
-Use `mez sandbox status --verbose` to inspect configured and effective state,
-including backend, executable, capability, profile, managed-home, network, and
-namespace facts. The JSON form is workflow schema version 3. The effective
-section reports a typed `execution_boundary`, `enforcement`, `network_mode`, and
-`reason` alongside the compatibility `sandbox` boundary spelling. A missing
-backend executable reports `unavailable`; policy-only and host access report
-`none` enforcement with `unenforced` networking; and a configured backend
-without a compiled plan and matching capability proof reports `not-probed` with
-`unknown` networking. `isolated` and `connected` claims require both a compiled
-launch plan and an exact capability proof. Use `mez sandbox
-plan` to preview the platform-selected backend and fixed-executable presence.
-The agent-shell `/sandbox`
-command exposes pane-local status and narrowly scoped enable/disable controls;
-advanced setup and managed-home workflows remain CLI operations.
+Trusted-project sandbox runs use private managed homes when a private
+configuration root is available. Neither backend copies the real home,
+credentials, or global Git configuration into that home. This does **not** mean
+credentials are inaccessible: explicitly authorized paths, forwarded environment
+values, and network access can expose them. Plan managed-home cleanup and quotas
+as deployment policy.
 
-## Understand effective authority
-
-User-configured read scopes are maximum read authority and write scopes also
-imply reads. Bubblewrap projects those scopes as read-only or read-write mounts.
-Seatbelt leaves paths in the host namespace and permits or denies file
-operations against canonical authorized paths. Effective authority
-can additionally include code-owned user `skills` and `macros` roots. When no
-user read or write scope is configured, a pane in a trusted project is intended
-to receive that project's canonical root as read-write authority; a pane with
-neither source has no project filesystem authority.
+Each sandboxed action receives a private writable temporary directory. Seatbelt
+also authorizes the resolved macOS per-user temporary root for tools such as
+BSD `mktemp`; temporary access is therefore broader than only the private
+`TMPDIR`. Forwarding an XDG path does not authorize filesystem access to it.
 
 On macOS, Seatbelt's code-owned runtime profile additionally permits read-only
 access to `/Library/Developer/CommandLineTools` and `/opt/homebrew` when each
@@ -140,93 +92,72 @@ is an existing real directory. These loader and SDK reads do not enter
 configured `permissions.read_scopes`, do not grant write access, and do not
 replace the trusted-project fallback. Missing roots add no profile rule.
 
-Unavailable configured paths are excluded with a warning rather than silently
-broadening authority. The multi-user `/home` root is never usable as an
-authority scope. Effective scopes—not approval or project instructions—define
-filesystem exposure, including credential-bearing paths, so authorize such
-paths only when intentional. Trusted-project runs use backend/profile-keyed
-private managed homes when a private configuration root is available.
-Bubblewrap mounts its managed home at a synthetic in-sandbox home path.
-Seatbelt uses its private canonical host path directly as `HOME` while denying
-operations outside authorized paths. Neither backend copies the real host home,
-credentials, or global Git configuration. Cleanup and quota remain user or
-deployment policy. Every sandboxed action also receives a code-owned private
-temporary directory as read-write authority. On macOS, Seatbelt additionally
-grants the resolved per-user temporary root so BSD `mktemp` works with its
-default parent, while retaining the private directory as `TMPDIR`. A
-whitelisted `TMPDIR` cannot replace that private directory. Whitelisted XDG
-paths are forwarded from the Mez-server snapshot unchanged when present;
-otherwise Seatbelt uses private XDG defaults under its temporary directory.
-Forwarding an XDG path does not add filesystem access to that path: effective
-read and write scopes still govern access.
-Configured environment forwarding names and sanitized Git identity do not grant
-filesystem authority.
+## Review environment and integration exposure
 
-## Control network access
+Native launches start from a cleared environment, using a small set of runtime
+requirements and optional values selected by `permissions.env_whitelist` from
+the Mez server's startup environment. Pane-root metadata helps infer the shell,
+working directory, and process identity; its environment is not forwarded
+wholesale. Deliberately forwarded credentials can still reach native work.
+Sandbox payloads use their managed environment and configured whitelist;
+semantic patches do not forward optional environment values. Do not treat
+environment composition as credential removal or assume an interactive shell
+export changes a native action's environment. Configure only required forwarding
+and check the mode and effective policy when a tool loses `PATH`, proxy,
+toolchain, or agent-socket access.
 
-`permissions.network_policy` selects whether a shell action may use networking.
-With Bubblewrap, `deny` uses an isolated network namespace. With Seatbelt,
-`deny` rejects TCP, UDP, and Unix-domain socket operations in the visible host
-namespace. `allow` grants a code-owned macOS host-client networking baseline,
-including resolver metadata, Apple system-service lookups, reachability,
-proxy, and CFNetwork operations; `prompt` grants that baseline only after the
-action's network requirement is authorized. Neither backend provides
-destination filtering, and Seatbelt continues to restrict filesystem and
-process operations. Product-owned web, fetch, and MCP actions are not child
-shell processes and have their own capability and approval gates.
+These boundaries apply to permitted local shell work, not to the entire
+Mezzanine daemon or every integration. Web, fetch, and MCP actions have separate
+capability and approval gates. An external MCP server can have its own filesystem,
+process, credential, and network access outside shell confinement. Review its
+configuration and declared effects independently; a sandboxed shell does not
+make a connector safe.
 
-## Fail safely
+## Control shell networking
 
-Probe, profile, authority, setup, and launch failures stop the action; Mez does
-not silently retry on the host. Trusted lifecycle evidence is separate from
-payload output. Only separately proven eligible pre-payload failures may offer
-one exact approval-gated unsandboxed retry. An established nonzero payload may
-receive one bounded sandbox-failure assessment. No retry is automatic, and a
-warning is required when partial effects may already exist.
-Native incomplete lifecycle errors retain bounded, credential-redacted stderr,
-outer process exit/signal, and trusted child/exit-record facts when parsing is
-valid. Malformed, truncated, or unclosed status leaves those facts unknown.
-These diagnostics do not prove that the payload did not run: completion or
-effects may be uncertain, and neither stdout nor stderr authorizes replay.
-Valid, closed missing-exit reports can reach the acting model through bounded
-failure feedback. Guidance favors a narrower read-only diagnostic, a
-sandbox-preserving alternative, or a blocker report, never replay of the
-uncertain action or implicit host access. Invalid or insufficient evidence
-remains terminal. Any new action still uses normal permissions and approvals.
+`permissions.network_policy` controls shell networking:
 
-`host-access` is a separate primary-user-only approval mode that intentionally
-runs local shell work outside the configured sandbox. It should be used only
-when the host boundary is explicitly required and understood.
+- With Bubblewrap, `deny` isolates the network namespace.
+- With Seatbelt, `deny` rejects TCP, UDP, and Unix-domain socket operations in
+  the visible host namespace.
+- `allow` permits networking; Seatbelt includes the system services needed for
+  ordinary host-client networking. `prompt` requires authorization of the
+  action's network requirement before that access is granted.
 
-## Implicit project authority
+Neither backend filters destinations. Allowing networking can permit data
+exfiltration from readable paths. `policy-only` does not enforce shell-network
+isolation even when policy classification rejects known network actions.
+Provider, web, fetch, and MCP traffic are not governed by a child shell's network
+namespace or Seatbelt profile.
 
-With `bubblewrap` or `seatbelt` active and both configured scope arrays empty,
-a pane inside a trusted project receives that project root as its default
-read/write authority. The authority comes from the deepest stored project-trust
-decision governing the pane working directory. A deeper rejected or revoked
-record withholds it even when a broader ancestor is trusted, a nested
-repository without its own record keeps the recursive parent trust, and a
-`.git` marker alone never manufactures a decision. Explicit
-`permissions.read_scopes` and `permissions.write_scopes` are a separate grant
-that a negative nested decision does not subtract. Under `policy-only` none of
-this is operating-system confinement: the effective status keeps reporting
-`policy-only` and must not be read as filesystem or shell-network isolation.
-The decision is enforced at admission for shell commands and semantic patches
-regardless of the active backend, so `policy-only`, native shell mode, and an
-approved sandbox bypass do not dispatch with withheld implicit authority. A
-rejected or revoked decision and a pending decision both fail as non-correctable
-policy denials without a dispatched payload or shell transaction. `mez sandbox
-status` resolves the same decision and reports the withheld provenance with its
-governing root instead of reporting `trusted-project`.
+## Recover without silently weakening protection
+
+Probe, profile, authority, setup, and launch failures stop the action rather than
+silently switching to the host. First inspect the diagnostic and effective
+status; repair the backend or choose a sandbox-preserving alternative.
+
+Some eligible failures may offer **one exact, approval-gated unsandboxed retry**.
+It is not automatic. A nonzero payload can already have changed files or external
+state, so review the partial-effect warning and verify the outcome before
+approving any retry. Missing or invalid completion evidence means effects may
+be unknown, not that the payload never ran. Output alone is not authorization
+to replay an uncertain action.
+
+`host-access` is a separate primary-user-only mode for intentionally running
+local shell work outside the configured sandbox. Approval bypass is another
+separate choice; neither should be used as an unexplained error workaround.
+Record why host execution is necessary, keep the exception narrow, and restore
+the intended policy afterward.
 
 ## Related pages
 
 - [Approvals and review](approvals-and-review.md)
 - [Project trust and instructions](project-trust-and-instructions.md)
+- [Audit and diagnostics](audit-and-diagnostics.md)
 - [Configuration](../configuration/README.md)
 - [Normative security contract](../../SPEC.md#18-security-and-safety)
 
 ## Next step
 
-Review [Project trust and instructions](project-trust-and-instructions.md)
-before activating a project overlay or using a trusted-project default scope.
+Inspect the pane's effective boundary and scopes before approving work that
+reads sensitive files, writes outside the project, or uses networking.

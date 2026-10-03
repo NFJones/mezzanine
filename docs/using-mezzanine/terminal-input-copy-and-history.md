@@ -23,10 +23,10 @@ inserts command-language quoting that the parser removes again, so the command
 reads exactly the entry you picked. The agent prompt keeps its own raw
 completion behavior.
 
-Completion is deliberately unavailable where your text is executed as shell
-source. The single string given to `new-window`/`new-group
---shell-command`/`--command` (and the `neww`, `newg`, and `split-window`/
-`splitw` spellings) is run by the shell unchanged, and `pipe-pane` joins its
+Completion is deliberately restricted where your text is executed as shell
+source. The single string given with `--shell-command` or `--command` to
+`new-window`, `new-group`, or `split-window` (including their `neww`, `newg`,
+and `splitw` aliases) is run by the shell unchanged, and `pipe-pane` joins its
 positional words into the same kind of shell source. Tab there only offers
 names that do not begin with `-` and are made of ASCII letters, digits, and
 `_ - . / @ % + = : ,`. Names with spaces, quotes, `$`, backticks, globs,
