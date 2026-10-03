@@ -6,6 +6,7 @@ use super::action_registry::{
 };
 use super::display_content::{
     RuntimeCommandDisplayOverlayContent, runtime_command_overlay_available_width,
+    wrap_runtime_command_display_overlay_content,
 };
 use super::product_content::*;
 use crate::runtime::render::*;
@@ -137,11 +138,9 @@ pub(super) fn render_record_browser_overlay_matching(
     // body width while a selectable list keeps its rows inside the body width.
     let registers_row_actions = prompt_selection.is_some()
         || (!record_browser.browser.is_detail_view()
-            && record_browser
-                .browser
-                .records()
-                .iter()
-                .any(|record| record_browser_open_target(record).is_some()));
+            && record_browser.browser.records().iter().any(|record| {
+                record_browser_open_target(record).is_some() || record_browser.command == "resume"
+            }));
     let terminal_width = if registers_row_actions {
         runtime_command_overlay_available_width(terminal_width, true)
     } else {
@@ -152,17 +151,29 @@ pub(super) fn render_record_browser_overlay_matching(
     } else {
         terminal_width
     };
-    let mut content = runtime_agent_shell_markdown_overlay_content_for_layout(
-        Some(record_browser.command.clone()),
-        &page.markdown,
-        ui_theme,
+    let mut content = if let Some(layout) = record_browser.browser.render_list_layout(
+        search_query.unwrap_or_default(),
         terminal_width,
-        content_width,
-    );
+        &crate::runtime::render::presentation::agent_rich_text_theme(ui_theme),
+    ) {
+        record_browser_layout_content(
+            &record_browser.command,
+            &record_browser.browser,
+            layout,
+            ui_theme,
+            terminal_width,
+        )
+    } else {
+        runtime_agent_shell_markdown_overlay_content_for_layout(
+            Some(record_browser.command.clone()),
+            &page.markdown,
+            ui_theme,
+            terminal_width,
+            content_width,
+        )
+    };
     if let Some(prompt_selection) = prompt_selection {
         content.actions = record_browser_prompt_actions(&content.lines, prompt_selection);
-    } else {
-        record_browser_row_actions(&mut content, &record_browser.browser, ui_theme);
     }
     registry.begin_generation();
     let selections = registry.register_all(std::mem::take(&mut content.actions));
@@ -212,55 +223,70 @@ pub(super) fn render_record_browser_overlay_matching(
     true
 }
 
-/// Registers one typed open action per visible record-browser row.
-///
-/// Each openable record publishes one action whose visible range is the
-/// rendered record id, generalizing the wrapped-table case where a narrow table
-/// splits an id across continuation rows. Records without a validated open
-/// target stay inert text, and a detail view registers nothing at all.
-fn record_browser_row_actions(
-    content: &mut RuntimeCommandDisplayOverlayContent,
+/// Binds literal first-cell geometry to product-owned targets before wrapping.
+/// Display labels and metadata never supply record identity or command authority.
+fn record_browser_layout_content(
+    command: &str,
     browser: &mez_mux::record_browser::RecordBrowser,
+    layout: mez_mux::record_browser::RecordBrowserLayout,
     ui_theme: &mez_mux::theme::UiTheme,
-) {
-    if browser.is_detail_view() {
-        return;
+    width: usize,
+) -> RuntimeCommandDisplayOverlayContent {
+    let mut content = RuntimeCommandDisplayOverlayContent {
+        command: Some(command.to_string()),
+        live_source: None,
+        lines: Vec::new(),
+        line_style_spans: Vec::new(),
+        line_kinds: Vec::new(),
+        line_copy_texts: Vec::new(),
+        actions: Vec::new(),
+    };
+    for line in layout.lines {
+        content.lines.push(line.display);
+        content.line_style_spans.push(line.style_spans);
+        content.line_kinds.push(line.kind);
+        content.line_copy_texts.push(line.copy_text);
     }
-    for (logical_id, record) in browser.records().iter().enumerate() {
-        let Some(target) = record_browser_open_target(record) else {
+    for range in layout.record_ranges {
+        let Some(record) = browser.records().get(range.row) else {
             continue;
         };
-        for (line_index, start_column, width) in
-            record_id_visible_fragments(&content.lines, &record.id)
-        {
-            if content.actions.iter().any(|action| {
-                action.line_index == line_index
-                    && action.start_column == start_column
-                    && action.width == width
-                    && action.target == target
-            }) {
-                continue;
-            }
-            content.actions.push(RuntimeOverlayAction {
-                logical_id,
-                line_index,
-                start_column,
-                width,
-                target: target.clone(),
-                kind: OverlaySelectionKind::Primary,
-            });
-            if let Some(style_spans) = content.line_style_spans.get_mut(line_index) {
-                push_or_extend_style_span(
-                    style_spans,
-                    TerminalStyleSpan {
-                        start: start_column,
-                        length: width,
-                        rendition: overlay_link_rendition(ui_theme),
-                    },
-                );
-            }
+        let Some(target) = (command == "list-personalities")
+            .then(|| OverlayActionTarget::RecordBrowserSelect {
+                record_id: record.id.clone(),
+            })
+            .or_else(|| record_browser_open_target(record))
+            .or_else(|| {
+                (command == "resume").then(|| OverlayActionTarget::RecordBrowserSelect {
+                    record_id: record.id.clone(),
+                })
+            })
+        else {
+            continue;
+        };
+        if range.width == 0 {
+            continue;
+        }
+        content.actions.push(RuntimeOverlayAction {
+            logical_id: range.row,
+            line_index: range.line,
+            start_column: range.start,
+            width: range.width,
+            target,
+            kind: OverlaySelectionKind::Primary,
+        });
+        if let Some(spans) = content.line_style_spans.get_mut(range.line) {
+            push_or_extend_style_span(
+                spans,
+                TerminalStyleSpan {
+                    start: range.start,
+                    length: range.width,
+                    rendition: overlay_link_rendition(ui_theme),
+                },
+            );
         }
     }
+    wrap_runtime_command_display_overlay_content(content, width, width)
 }
 
 /// Returns the validated open target for one record-browser record.
@@ -293,89 +319,6 @@ fn record_browser_prompt_actions(
             kind: OverlaySelectionKind::Primary,
         })
         .collect()
-}
-
-/// Returns the visible rendered fragments of one record id.
-///
-/// A table row is matched through its rendered first cell, which may wrap across
-/// continuation rows. A list row reports its id only when the preceding text is
-/// list indentation and marker text, so a record title cannot publish a range
-/// for another row.
-fn record_id_visible_fragments(lines: &[String], record_id: &str) -> Vec<(usize, usize, usize)> {
-    let table_fragments = record_table_id_fragments(lines, record_id);
-    if !table_fragments.is_empty() {
-        return table_fragments;
-    }
-    lines
-        .iter()
-        .enumerate()
-        .find_map(|(line_index, line)| {
-            let start_byte = line.find(record_id)?;
-            record_row_prefix_is_decoration(&line[..start_byte]).then(|| {
-                vec![(
-                    line_index,
-                    UnicodeWidthStr::width(&line[..start_byte]),
-                    UnicodeWidthStr::width(record_id),
-                )]
-            })
-        })
-        .unwrap_or_default()
-}
-
-/// Accumulates the rendered first-cell fragments of one record id.
-fn record_table_id_fragments(lines: &[String], record_id: &str) -> Vec<(usize, usize, usize)> {
-    let mut matched_id = String::new();
-    let mut fragments = Vec::new();
-    for (line_index, line) in lines.iter().enumerate() {
-        let Some((start_column, visible)) = markdown_table_first_cell_visible_text(line) else {
-            continue;
-        };
-        let candidate = format!("{matched_id}{visible}");
-        if record_id.starts_with(&candidate) {
-            matched_id = candidate;
-            fragments.push((line_index, start_column, UnicodeWidthStr::width(visible)));
-        } else if record_id.starts_with(visible) {
-            matched_id = visible.to_string();
-            fragments.clear();
-            fragments.push((line_index, start_column, UnicodeWidthStr::width(visible)));
-        } else {
-            matched_id.clear();
-            fragments.clear();
-        }
-        if matched_id == record_id {
-            return fragments;
-        }
-    }
-    Vec::new()
-}
-
-/// Returns true when the text before an id is only list indentation or marker.
-fn record_row_prefix_is_decoration(prefix: &str) -> bool {
-    let marker = prefix.trim();
-    if marker.is_empty() || matches!(marker, "•" | "-" | "*" | "‣" | "◦") {
-        return true;
-    }
-    marker
-        .strip_suffix('.')
-        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit()))
-}
-
-/// Returns the start column and trimmed text of the first rendered table cell.
-fn markdown_table_first_cell_visible_text(line: &str) -> Option<(usize, &str)> {
-    let mut dividers = line.match_indices('│').map(|(index, _)| index);
-    let first = dividers.next()?;
-    let second = dividers.next()?;
-    let cell_start = first.saturating_add('│'.len_utf8());
-    let cell = line.get(cell_start..second)?;
-    let trimmed_start = cell.trim_start();
-    let leading_bytes = cell.len().saturating_sub(trimmed_start.len());
-    let visible = trimmed_start.trim_end();
-    (!visible.is_empty()).then(|| {
-        (
-            UnicodeWidthStr::width(&line[..cell_start.saturating_add(leading_bytes)]),
-            visible,
-        )
-    })
 }
 
 /// Appends a muted Save-path completion suffix without changing editable input.
@@ -434,23 +377,37 @@ mod tests {
             Vec::new(),
         )
         .unwrap();
-        let mut content = RuntimeCommandDisplayOverlayContent {
-            command: Some("show-issues".to_string()),
-            live_source: None,
-            lines: vec![
-                "│ issue- │ Wrapped issue │".to_string(),
-                "│ 42 │              │".to_string(),
+        let layout = mez_mux::record_browser::RecordBrowserLayout {
+            lines: ["│ issue- │ Wrapped issue │", "│ 42 │              │"]
+                .into_iter()
+                .map(|display| RichTextLine {
+                    display: display.to_string(),
+                    style_spans: Vec::new(),
+                    copy_text: None,
+                    kind: RichTextLineKind::MarkdownTableRow,
+                })
+                .collect(),
+            record_ranges: vec![
+                mez_mux::render::TableFirstCellRange {
+                    row: 0,
+                    line: 0,
+                    start: 2,
+                    width: 6,
+                },
+                mez_mux::render::TableFirstCellRange {
+                    row: 0,
+                    line: 1,
+                    start: 2,
+                    width: 2,
+                },
             ],
-            line_style_spans: vec![Vec::new(), Vec::new()],
-            line_kinds: vec![RichTextLineKind::Normal, RichTextLineKind::Normal],
-            line_copy_texts: vec![None, None],
-            actions: Vec::new(),
         };
-
-        record_browser_row_actions(
-            &mut content,
+        let content = record_browser_layout_content(
+            "show-issues",
             &browser,
+            layout,
             &mez_mux::theme::deepforest_ui_theme(),
+            80,
         );
 
         assert_eq!(content.actions.len(), 2, "{content:?}");

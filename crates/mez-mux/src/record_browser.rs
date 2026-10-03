@@ -19,6 +19,14 @@ pub struct RecordBrowserPage {
     pub raw_markdown: String,
 }
 
+/// Literal browser presentation with original record indices kept through layout.
+pub struct RecordBrowserLayout {
+    /// Physical rows, with ordinary source-copy and style metadata.
+    pub lines: Vec<crate::render::RichTextLine>,
+    /// Visible first-cell ranges bound to indices in the retained record array.
+    pub record_ranges: Vec<crate::render::TableFirstCellRange>,
+}
+
 /// One record that can be shown by the shared browser.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordBrowserRecord {
@@ -740,6 +748,97 @@ impl RecordBrowser {
         self.render_list_page_with_records(&records)
     }
 
+    /// Projects a list from literal cells and trusted original record indices.
+    /// Detail and prompt views keep their existing Markdown presentation. No
+    /// executable target is derived from labels, Markdown links or metadata.
+    pub fn render_list_layout(
+        &self,
+        query: &str,
+        width: usize,
+        theme: &crate::render::RichTextTheme,
+    ) -> Option<RecordBrowserLayout> {
+        use crate::render::{RichTextLine, RichTextLineKind, TableFirstCellRange};
+        if self.is_detail_view() || self.prompt.is_some() {
+            return None;
+        }
+        let records = self
+            .records
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| {
+                query.is_empty() || record_matches_pager_query(self, record, query)
+            })
+            .collect::<Vec<_>>();
+        let mut chrome = self
+            .error
+            .as_ref()
+            .map(|error| format!("Error: {}\n\n", escape_markdown_table(error)))
+            .unwrap_or_default();
+        chrome.push_str(&list_chrome(self).join("\n"));
+        if records.is_empty() {
+            chrome.push_str(self.empty_message.as_deref().unwrap_or("No records found."));
+        }
+        let mut lines = crate::render::render_markdown(&chrome, theme, Some(width.max(1)));
+        let mut record_ranges = Vec::new();
+        if !records.is_empty() && !self.table_columns.is_empty() {
+            let headers = std::iter::once(self.table_id_column.clone())
+                .chain(self.table_columns.iter().cloned())
+                .collect();
+            let rows = records
+                .iter()
+                .map(|(_, record)| {
+                    std::iter::once(record.id.clone())
+                        .chain(self.table_column_keys.iter().map(|key| {
+                            record
+                                .metadata
+                                .iter()
+                                .find(|(record_key, _)| record_key == key)
+                                .map(|(_, value)| value.clone())
+                                .unwrap_or_default()
+                        }))
+                        .collect()
+                })
+                .collect();
+            let layout = crate::render::render_literal_table(headers, rows, width, theme);
+            let offset = lines.len();
+            record_ranges.extend(
+                layout
+                    .first_cells
+                    .into_iter()
+                    .map(|range| TableFirstCellRange {
+                        row: records[range.row].0,
+                        line: offset + range.line,
+                        ..range
+                    }),
+            );
+            lines.extend(layout.lines);
+        } else {
+            for (index, record) in records {
+                let label = list_record_label(record)
+                    .chars()
+                    .map(|ch| if ch.is_control() { ' ' } else { ch })
+                    .collect::<String>();
+                let id_width = unicode_width::UnicodeWidthStr::width(record.id.as_str());
+                record_ranges.push(TableFirstCellRange {
+                    row: index,
+                    line: lines.len(),
+                    start: 2,
+                    width: id_width,
+                });
+                lines.push(RichTextLine {
+                    display: format!("• {label}"),
+                    style_spans: Vec::new(),
+                    copy_text: Some(format!("- {label}")),
+                    kind: RichTextLineKind::Normal,
+                });
+            }
+        }
+        Some(RecordBrowserLayout {
+            lines,
+            record_ranges,
+        })
+    }
+
     /// Renders list chrome around the supplied visible record rows.
     fn render_list_page_with_records(&self, records: &[&RecordBrowserRecord]) -> RecordBrowserPage {
         let raw_markdown = list_markdown(self, records);
@@ -877,7 +976,8 @@ fn filter_field_name(field: RecordBrowserFilterField) -> &'static str {
     }
 }
 
-fn list_markdown(browser: &RecordBrowser, records: &[&RecordBrowserRecord]) -> String {
+/// Shared list heading, scope and key guidance for textual and literal layouts.
+fn list_chrome(browser: &RecordBrowser) -> Vec<String> {
     let mut lines = vec![
         format!("# {}", escape_markdown_table(&browser.title)),
         String::new(),
@@ -898,6 +998,11 @@ fn list_markdown(browser: &RecordBrowser, records: &[&RecordBrowserRecord]) -> S
         "**Keys:** `a` all/default scope · `k` kind · `p` project · `x` text · `s` save".to_string()
     }));
     lines.push(String::new());
+    lines
+}
+
+fn list_markdown(browser: &RecordBrowser, records: &[&RecordBrowserRecord]) -> String {
+    let mut lines = list_chrome(browser);
     if records.is_empty() {
         lines.push(
             browser

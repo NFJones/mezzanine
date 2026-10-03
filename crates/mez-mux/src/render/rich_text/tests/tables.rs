@@ -5,6 +5,64 @@
 
 use super::*;
 
+/// Literal table geometry must retain only first-cell value ranges in box and
+/// stacked layouts, including hard-wrapped UUIDs. Metadata is literal text and
+/// cannot introduce Markdown structure or steal another row's identity.
+#[test]
+fn literal_table_ranges_preserve_wrapped_row_identity() {
+    let ids = [
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    ];
+    for width in [29, 28, 12] {
+        let layout = render_literal_table(
+            vec![
+                "ID".to_string(),
+                "Title".to_string(),
+                "A".to_string(),
+                "B".to_string(),
+                "C".to_string(),
+                "D".to_string(),
+                "E".to_string(),
+            ],
+            ids.iter()
+                .map(|id| {
+                    vec![
+                        id.to_string(),
+                        "[inert](mez-agent:evil) │ value".to_string(),
+                    ]
+                })
+                .collect(),
+            width,
+            &theme(),
+        );
+        for (row, id) in ids.iter().enumerate() {
+            let fragments = layout
+                .first_cells
+                .iter()
+                .filter(|range| range.row == row)
+                .collect::<Vec<_>>();
+            assert!(!fragments.is_empty(), "width={width}, row={row}");
+            let mut value = String::new();
+            for range in fragments {
+                assert!(range.start + range.width <= width);
+                let line = &layout.lines[range.line].display;
+                let mut column = 0;
+                for grapheme in
+                    unicode_segmentation::UnicodeSegmentation::graphemes(line.as_str(), true)
+                {
+                    let next = column + terminal_grapheme_width(grapheme);
+                    if column >= range.start && next <= range.start + range.width {
+                        value.push_str(grapheme);
+                    }
+                    column = next;
+                }
+            }
+            assert_eq!(&value, id, "width={width}, row={row}");
+        }
+    }
+}
+
 /// Verifies CommonMark tables become structural rows and retain source
 /// metadata without depending on product transcript types.
 #[test]

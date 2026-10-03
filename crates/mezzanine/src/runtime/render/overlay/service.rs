@@ -296,6 +296,27 @@ impl RuntimeSessionService {
             return Ok(true);
         };
         match target {
+            OverlayActionTarget::RecordBrowserSelect { record_id } => {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                    return Ok(false);
+                };
+                let Some(index) = overlay
+                    .selections
+                    .iter()
+                    .position(|selection| selection.action_id == action_id)
+                else {
+                    return Ok(false);
+                };
+                let Some(browser) = overlay.record_browser.as_mut() else {
+                    return Ok(false);
+                };
+                if !browser.browser.set_active_record_id(&record_id) {
+                    return Ok(false);
+                }
+                overlay.active_selection_index = Some(index);
+                self.apply_primary_record_browser_overlay_input(primary_client_id, b"\r")
+                    .map(|changed| changed.unwrap_or(false))
+            }
             OverlayActionTarget::ActivityDetail { sequence } => {
                 let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(true);
@@ -584,6 +605,23 @@ impl RuntimeSessionService {
             return self
                 .apply_primary_record_browser_prompt_input(input)
                 .map(Some);
+        }
+        // A retained cursor is not authority to operate on a filtered-out row.
+        // Keep search, filters, save and dismissal available without a selection.
+        if !record_browser.browser.is_detail_view()
+            && overlay
+                .active_selection_index
+                .and_then(|index| overlay.selections.get(index))
+                .is_none()
+            && (matches!(selector_input_action(input), SelectorInputAction::Select)
+                || matches!(input, b"y" | b"i" | b"d" | b"e" | b"E" | b"f" | b"A" | b"c")
+                || (input == b"a"
+                    && matches!(
+                        record_browser.source,
+                        Some(RuntimeRecordBrowserOverlaySource::Approvals)
+                    )))
+        {
+            return Ok(Some(false));
         }
         if matches!(
             record_browser.source,
@@ -1229,12 +1267,14 @@ impl RuntimeSessionService {
                 return Ok(None);
             };
             record_browser.browser = browser;
-            return Ok(Some(render_record_browser_overlay(
+            let query = overlay.search_query.clone();
+            return Ok(Some(render_record_browser_overlay_matching(
                 overlay,
                 &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
+                query.as_deref(),
             )));
         }
         if input == b"i"

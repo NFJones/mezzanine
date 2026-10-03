@@ -110,6 +110,11 @@ Observers cannot list or mutate recoveries.
 Command-output pagers use `/` to search, and an empty search repeats the last
 query. Record browsers use arrow keys to select stable identifiers, Enter to
 open them, and Esc to close a prompt, return to a list, or exit the browser.
+Identifier fragments remain selectable in narrow stacked or wrapped layouts.
+Names and summaries outside the identifier cell are not additional hit areas.
+When a search has no matching rows, Enter, copy, edit, delete and other
+record-operation keys do nothing; search, filters, save and dismissal remain
+available. Search for a matching row before operating on it.
 
 ## Inspect effective bindings
 

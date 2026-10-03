@@ -9831,6 +9831,13 @@ The baseline command capabilities are:
   record detail prose MUST reflow to the smaller of that width and
   `terminal.agent_wrap_column_cap`; table-backed lists remain body-width and
   raw Markdown remains authoritative for copy and save.
+  Box, stacked and wrapped list layouts MUST retain trusted logical record
+  indices and display-cell hit ranges from layout, never recover action authority
+  by searching rendered IDs or metadata. First-column identifier fragments are
+  the interactive cells; other name/summary cells remain presentation text.
+  Enter and record-operation keys MUST require a visible eligible row: a
+  zero-match search MUST NOT activate the retained hidden cursor. Search, scope
+  controls, save and dismissal MUST remain usable without a selected row.
 - `/remember`: Ask the active model to generate durable persistent-memory
   records. Without arguments, it MUST derive a small bounded set of memory
   candidates from the current pane context. With arguments, it MUST treat the

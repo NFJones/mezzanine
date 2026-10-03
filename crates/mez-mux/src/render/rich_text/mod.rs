@@ -17,6 +17,7 @@ use wrapping::{
 };
 
 mod table_geometry;
+pub use table_geometry::{TableFirstCellRange, TableLayout, render_literal_table};
 
 mod fenced_blocks;
 

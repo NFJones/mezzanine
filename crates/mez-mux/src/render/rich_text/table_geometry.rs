@@ -6,9 +6,70 @@
 
 use super::*;
 
+/// A display-cell range in the first cell of a caller-supplied table body row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableFirstCellRange {
+    /// Zero-based body row, independent of physical wrapping.
+    pub row: usize,
+    /// Physical line in the returned table layout.
+    pub line: usize,
+    /// First terminal cell containing the value, excluding labels and padding.
+    pub start: usize,
+    /// Number of visible value cells.
+    pub width: usize,
+}
+
+/// Presentation-only table layout with caller-owned row provenance.
+pub struct TableLayout {
+    /// Rendered rows using the ordinary Markdown table geometry.
+    pub lines: Vec<RichTextLine>,
+    /// First-cell fragments; these carry no executable targets.
+    pub first_cells: Vec<TableFirstCellRange>,
+}
+
+/// Lays out literal cells without reparsing their values as Markdown.
+/// Callers retain authority separately and bind body indices to their records.
+pub fn render_literal_table(
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+    width: usize,
+    theme: &RichTextTheme,
+) -> TableLayout {
+    let mut table = MarkdownTableState::new(
+        vec![Alignment::Left; headers.len()],
+        Some(width.max(1)),
+        theme.inline_code,
+        theme.structural,
+        theme.table_alternate_row,
+    );
+    table.header_rows = 1;
+    table.rows = std::iter::once(headers)
+        .chain(rows)
+        .map(|row| {
+            row.into_iter()
+                .map(|text| MarkdownTableCell {
+                    text: sanitized_terminal_line(&text)
+                        .replace(['\n', '\r'], " ")
+                        .trim()
+                        .to_string(),
+                    style_spans: Vec::new(),
+                })
+                .collect()
+        })
+        .collect();
+    let mut first_cells = Vec::new();
+    let lines = table.render_lines_with_ranges(&mut first_cells);
+    TableLayout { lines, first_cells }
+}
+
 impl MarkdownTableState {
     /// Renders the captured table as aligned box-drawing terminal rows.
     pub(super) fn render_lines(self) -> Vec<RichTextLine> {
+        self.render_lines_with_ranges(&mut Vec::new())
+    }
+
+    /// Uses the same geometry while retaining first-cell body provenance.
+    fn render_lines_with_ranges(self, ranges: &mut Vec<TableFirstCellRange>) -> Vec<RichTextLine> {
         let column_count = self.column_count();
         if column_count == 0 {
             return Vec::new();
@@ -17,7 +78,7 @@ impl MarkdownTableState {
             .display_width
             .is_some_and(|width| width < column_count.saturating_mul(4).saturating_add(1))
         {
-            return self.render_stacked_lines(column_count);
+            return self.render_stacked_lines(column_count, ranges);
         }
         let widths = self.column_widths(column_count);
         let mut lines = Vec::new();
@@ -26,6 +87,27 @@ impl MarkdownTableState {
             let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
             for physical_row in 0..row_height {
                 let rendered = self.render_wrapped_row(&wrapped_cells, &widths, physical_row);
+                if row_index >= self.header_rows
+                    && let Some(cell) = wrapped_cells
+                        .first()
+                        .and_then(|cells| cells.get(physical_row))
+                {
+                    let width = terminal_text_width(&cell.text);
+                    if width > 0 {
+                        let padding = widths[0].saturating_sub(width);
+                        let left = match self.alignment(0) {
+                            Alignment::Right => padding,
+                            Alignment::Center => padding / 2,
+                            _ => 0,
+                        };
+                        ranges.push(TableFirstCellRange {
+                            row: row_index - self.header_rows,
+                            line: lines.len(),
+                            start: 2 + left,
+                            width,
+                        });
+                    }
+                }
                 let mut line = RichTextLine {
                     display: rendered.text.clone(),
                     style_spans: Vec::new(),
@@ -72,7 +154,11 @@ impl MarkdownTableState {
     /// Box-drawing tables require at least one content cell plus borders and
     /// padding for every column. Below that structural width, preserving the
     /// normal table would lose right-edge columns to terminal clipping.
-    fn render_stacked_lines(&self, column_count: usize) -> Vec<RichTextLine> {
+    fn render_stacked_lines(
+        &self,
+        column_count: usize,
+        ranges: &mut Vec<TableFirstCellRange>,
+    ) -> Vec<RichTextLine> {
         let width = self.display_width.unwrap_or(1).max(1);
         let headers = self.rows.first().cloned().unwrap_or_default();
         let body_start = self.header_rows.min(self.rows.len());
@@ -93,9 +179,23 @@ impl MarkdownTableState {
                         style_spans: Vec::new(),
                     });
                 let value = row.get(column).cloned().unwrap_or_default();
+                let value_start = terminal_text_width(&header.text).saturating_add(2);
+                let value_end = value_start.saturating_add(terminal_text_width(&value.text));
                 let combined = Self::stacked_cell(header, value);
-                let fragments = Self::wrap_cell(&combined, width);
-                for (fragment_index, fragment) in fragments.into_iter().enumerate() {
+                let fragments = Self::wrap_cell_with_ranges(&combined, width);
+                for (fragment_index, (fragment, source_start)) in fragments.into_iter().enumerate()
+                {
+                    let start = value_start.max(source_start);
+                    let end = value_end
+                        .min(source_start.saturating_add(terminal_text_width(&fragment.text)));
+                    if column == 0 && start < end {
+                        ranges.push(TableFirstCellRange {
+                            row: body_index,
+                            line: lines.len(),
+                            start: start - source_start,
+                            width: end - start,
+                        });
+                    }
                     let mut line = RichTextLine {
                         copy_text: Some(if fragment_index == 0 {
                             fragment.text.clone()
@@ -216,25 +316,39 @@ impl MarkdownTableState {
 
     /// Wraps one cell into physical table-row fragments.
     fn wrap_cell(cell: &MarkdownTableCell, width: usize) -> Vec<MarkdownTableCell> {
+        Self::wrap_cell_with_ranges(cell, width)
+            .into_iter()
+            .map(|(cell, _)| cell)
+            .collect()
+    }
+
+    /// Retains original display-cell offsets through hard and word wrapping.
+    fn wrap_cell_with_ranges(
+        cell: &MarkdownTableCell,
+        width: usize,
+    ) -> Vec<(MarkdownTableCell, usize)> {
         let width = width.max(1);
         let mut remaining = cell.text.as_str();
         let mut source_start = 0usize;
         if remaining.is_empty() {
-            return vec![MarkdownTableCell::default()];
+            return vec![(MarkdownTableCell::default(), 0)];
         }
         let mut lines = Vec::new();
         while !remaining.is_empty() {
             let (segment, consumed) = Self::take_cell_segment(remaining, width);
             let segment_width = terminal_text_width(segment.as_str());
-            lines.push(MarkdownTableCell {
-                text: segment,
-                style_spans: style_spans_for_rich_text_segment(
-                    &cell.style_spans,
-                    source_start,
-                    source_start.saturating_add(segment_width),
-                    0,
-                ),
-            });
+            lines.push((
+                MarkdownTableCell {
+                    text: segment,
+                    style_spans: style_spans_for_rich_text_segment(
+                        &cell.style_spans,
+                        source_start,
+                        source_start.saturating_add(segment_width),
+                        0,
+                    ),
+                },
+                source_start,
+            ));
             source_start = source_start.saturating_add(terminal_text_width(&remaining[..consumed]));
             remaining = &remaining[consumed..];
             let trimmed = remaining.trim_start();

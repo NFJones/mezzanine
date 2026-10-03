@@ -190,7 +190,7 @@ pub(crate) fn render_command_markdown_body_lines_for_width(
 }
 
 /// Maps product theme slots onto the neutral rich-text semantic palette.
-pub(super) fn agent_rich_text_theme(ui_theme: &UiTheme) -> RichTextTheme {
+pub(crate) fn agent_rich_text_theme(ui_theme: &UiTheme) -> RichTextTheme {
     RichTextTheme {
         heading: ui_theme.colors.agent_transcript_user.foreground,
         structural: markdown_structural_foreground(ui_theme),

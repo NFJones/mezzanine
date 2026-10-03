@@ -2433,6 +2433,133 @@ fn runtime_agent_shell_record_browser_filter_claims_its_page() {
 
 /// Verifies `/list-personalities` renders only safe configured profile metadata
 /// and applies the focused row through the pane-local personality command.
+/// Narrow box and stacked layouts must retain two logical selectable rows,
+/// and cursor activation must apply the same profile at either width.
+#[test]
+fn runtime_record_browser_stacked_personalities_keep_selection() {
+    for columns in [35, 34, 20] {
+        let mut service = test_runtime_service();
+        let primary = service
+            .attach_primary("primary", true, Size::new(columns, 24).unwrap(), 120)
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service.replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(), path: None, format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary, trusted: true,
+            text: "[agents]\ndefault_personality = \"alpha\"\n[personalities.alpha]\nname = \"Alpha\"\n[personalities.bravo]\nname = \"Bravo\"\n".to_string(),
+        }]).unwrap();
+        service
+            .execute_agent_shell_command(&primary, "/list-personalities")
+            .unwrap();
+        service
+            .run_pending_deferred_agent_command_for_tests()
+            .unwrap()
+            .unwrap();
+        let overlay = service.primary_display_overlay().unwrap();
+        let ids = overlay
+            .selections
+            .iter()
+            .map(|selection| selection.logical_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(ids.len(), 2, "width={columns}, overlay={overlay:?}");
+        let stale_action = overlay.selections[0].action_id;
+        for (index, selection) in overlay.selections.iter().enumerate() {
+            let column = mez_mux::overlay::overlay_rendered_selection_start(overlay, selection);
+            assert_eq!(
+                mez_mux::overlay::overlay_selection_index_at_position(
+                    overlay,
+                    selection.line_index,
+                    column,
+                ),
+                Some(index)
+            );
+        }
+        apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+        apply_record_browser_input(&mut service, &primary, b"\r");
+        assert_eq!(
+            service
+                .integration
+                .agent_personality_selections()
+                .get("%1")
+                .map(String::as_str),
+            Some("bravo")
+        );
+        apply_record_browser_input(&mut service, &primary, b"/");
+        apply_record_browser_input(&mut service, &primary, b"Bravo");
+        apply_record_browser_input(&mut service, &primary, b"\r");
+        let filtered = service.primary_display_overlay().unwrap();
+        assert!(
+            filtered
+                .selections
+                .iter()
+                .all(|selection| selection.logical_id == 1)
+        );
+        let action = filtered.selections[0].action_id;
+        service
+            .integration
+            .agent_personality_selections_mut()
+            .remove("%1");
+        service
+            .execute_primary_display_overlay_action(&primary, stale_action)
+            .unwrap();
+        assert!(
+            service
+                .integration
+                .agent_personality_selections()
+                .get("%1")
+                .is_none()
+        );
+        let observer = service
+            .session
+            .attach_observer_with_terminal("observer", None, 1)
+            .unwrap();
+        assert!(
+            !service
+                .execute_primary_display_overlay_action(&observer, action)
+                .unwrap()
+        );
+        service
+            .execute_primary_display_overlay_action(&primary, action)
+            .unwrap();
+        assert_eq!(
+            service
+                .integration
+                .agent_personality_selections()
+                .get("%1")
+                .map(String::as_str),
+            Some("bravo")
+        );
+        apply_record_browser_input(&mut service, &primary, b"/");
+        apply_record_browser_input(&mut service, &primary, b"no-such-profile");
+        apply_record_browser_input(&mut service, &primary, b"\r");
+        assert!(
+            service
+                .primary_display_overlay()
+                .unwrap()
+                .selections
+                .is_empty()
+        );
+        service
+            .integration
+            .agent_personality_selections_mut()
+            .remove("%1");
+        apply_record_browser_input(&mut service, &primary, b"\r");
+        assert!(
+            service
+                .integration
+                .agent_personality_selections()
+                .get("%1")
+                .is_none(),
+            "zero-match Enter applied a hidden profile"
+        );
+    }
+}
+
+/// Verifies `/list-personalities` renders only safe configured profile metadata
+/// and applies the focused row through the pane-local personality command.
 ///
 /// The record browser must preserve deterministic profile ordering, identify
 /// the inherited default, and refresh in place after Enter without exposing
@@ -3309,6 +3436,15 @@ fn runtime_agent_shell_record_browser_refresh_clears_stale_search_status() {
         Some("pattern not found: absent")
     );
 
+    apply_record_browser_input(&mut service, &primary, b"a");
+
+    assert_eq!(
+        service.blocked_approvals().get(&approval_id).unwrap().state,
+        mez_agent::permissions::BlockedApprovalState::Pending
+    );
+    apply_record_browser_input(&mut service, &primary, b"/");
+    apply_record_browser_input(&mut service, &primary, approval_id.as_bytes());
+    apply_record_browser_input(&mut service, &primary, b"\r");
     apply_record_browser_input(&mut service, &primary, b"a");
 
     assert_eq!(

@@ -66,6 +66,11 @@ pub(crate) enum OverlayActionTarget {
         /// Zero-based prompt option index in the rendered selector.
         index: usize,
     },
+    /// Activates a retained browser row through its source-owned Enter reducer.
+    RecordBrowserSelect {
+        /// Stable record identity, never recovered from displayed text.
+        record_id: String,
+    },
     /// Opens retained activity detail inside the current browser, without I/O.
     ActivityDetail {
         /// Exact durable presentation sequence registered by the producer.
@@ -85,6 +90,7 @@ impl OverlayActionTarget {
             | Self::SetTheme { .. }
             | Self::SetKeyPreset { .. }
             | Self::ActivityDetail { .. }
+            | Self::RecordBrowserSelect { .. }
             | Self::RecordBrowserPromptSelect { .. } => None,
         }
     }
@@ -96,6 +102,7 @@ impl OverlayActionTarget {
             Self::SetTheme { name } => Some(format!("set-theme {name}")),
             Self::SetKeyPreset { name } => Some(format!("set-key-preset {name}")),
             Self::RecordBrowserOpen { .. }
+            | Self::RecordBrowserSelect { .. }
             | Self::RecordBrowserPromptSelect { .. }
             | Self::ActivityDetail { .. } => None,
         }
