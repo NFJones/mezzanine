@@ -408,6 +408,9 @@ impl RuntimeSessionService {
             .agent_retired_provider_says
             .retain(|(_, candidate_turn_id, _, _, _)| candidate_turn_id != turn_id);
         self.presentation
+            .agent_published_header_thinking
+            .retain(|(_, candidate_turn_id, _, _, _, _)| candidate_turn_id != turn_id);
+        self.presentation
             .agent_queued_provider_outcomes
             .retain(|(_, candidate_turn_id, _, _, _), _| candidate_turn_id != turn_id);
         self.presentation
@@ -636,6 +639,27 @@ impl RuntimeSessionService {
         pane_id: &str,
         execution: &AgentTurnExecution,
     ) -> Result<()> {
+        if let Err(first) = self.drain_ordered_provider_headers_once(pane_id, execution) {
+            // Only presentation is retried. Each successfully installed component
+            // was acknowledged individually, and every failed component retained
+            // its source. A second failure remains explicit, never a silent drop.
+            return self.drain_ordered_provider_headers_once(pane_id, execution)
+                .map_err(|second| crate::error::MezError::new(second.kind(), format!(
+                    "ordered log publication failed after one presentation-only retry: {}; initial failure: {}",
+                    second.message(), first.message(),
+                )));
+        }
+        Ok(())
+    }
+
+    /// Drains one accepted-source snapshot, acknowledging only installed parts.
+    /// Pending command/result/outcome components retain their ordinal barrier even
+    /// when their header is already visible. Errors retain the failed source.
+    pub(crate) fn drain_ordered_provider_headers_once(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+    ) -> Result<()> {
         let Some(conversation_id) = self
             .agent_shell_store()
             .get(pane_id)
@@ -671,10 +695,18 @@ impl RuntimeSessionService {
                 .presentation
                 .agent_queued_provider_headers
                 .contains_key(&key)
-                && !self
+                || self
                     .presentation
-                    .agent_published_provider_headers
-                    .contains(&key)
+                    .agent_queued_provider_commands
+                    .contains_key(&key)
+                || self
+                    .presentation
+                    .agent_queued_provider_results
+                    .contains_key(&key)
+                || self
+                    .presentation
+                    .agent_queued_provider_outcomes
+                    .contains_key(&key)
             {
                 if actions[..index]
                     .iter()
@@ -739,31 +771,40 @@ impl RuntimeSessionService {
                 {
                     break;
                 }
-                let Some((approved_action, header)) =
-                    self.presentation.agent_queued_provider_headers.remove(&key)
-                else {
-                    continue;
-                };
-                if !header.is_empty() {
-                    let activity = self.activity_action_source(
+                if let Some((approved_action, header)) = self
+                    .presentation
+                    .agent_queued_provider_headers
+                    .get(&key)
+                    .cloned()
+                {
+                    if !header.is_empty()
+                        && !self
+                            .presentation
+                            .agent_published_provider_headers
+                            .contains(&key)
+                    {
+                        let activity = self.activity_action_source(
                         pane_id, execution, index,
                         crate::storage::transcript::activity::ActivityComponentKind::Header,
                         (&header, "application/vnd.mezzanine.agent-presentation.action-header+text; charset=utf-8"),
                     )?;
-                    self.append_agent_action_header_with_activity(
-                        pane_id,
-                        &approved_action,
-                        &header,
-                        activity,
-                    )?;
+                        self.append_agent_action_header_with_activity(
+                            pane_id,
+                            &approved_action,
+                            &header,
+                            activity,
+                        )?;
+                    }
+                    self.presentation
+                        .agent_published_provider_headers
+                        .insert(key.clone());
+                    self.presentation.agent_queued_provider_headers.remove(&key);
                 }
-                self.presentation
-                    .agent_published_provider_headers
-                    .insert(key.clone());
                 if let Some(command) = self
                     .presentation
                     .agent_queued_provider_commands
-                    .remove(&key)
+                    .get(&key)
+                    .cloned()
                 {
                     self.append_activity_command_for_execution(
                         pane_id, execution, action, &command,
@@ -771,9 +812,15 @@ impl RuntimeSessionService {
                     self.presentation
                         .agent_published_provider_commands
                         .insert((key.clone(), command));
+                    self.presentation
+                        .agent_queued_provider_commands
+                        .remove(&key);
                 }
-                if let Some((action, result, text)) =
-                    self.presentation.agent_queued_provider_results.remove(&key)
+                if let Some((action, result, text)) = self
+                    .presentation
+                    .agent_queued_provider_results
+                    .get(&key)
+                    .cloned()
                 {
                     self.append_ordered_activity_result(
                         pane_id,
@@ -786,11 +833,13 @@ impl RuntimeSessionService {
                     self.presentation
                         .agent_published_provider_results
                         .insert((key.clone(), text));
+                    self.presentation.agent_queued_provider_results.remove(&key);
                 }
                 if let Some(outcomes) = self
                     .presentation
                     .agent_queued_provider_outcomes
-                    .remove(&key)
+                    .get(&key)
+                    .cloned()
                 {
                     for (is_error, line) in outcomes {
                         if let Some(result) = execution
@@ -809,9 +858,19 @@ impl RuntimeSessionService {
                         self.presentation.agent_published_provider_outcomes.insert((
                             key.clone(),
                             is_error,
-                            line,
+                            line.clone(),
                         ));
+                        if let Some(pending) = self
+                            .presentation
+                            .agent_queued_provider_outcomes
+                            .get_mut(&key)
+                        {
+                            pending.retain(|entry| entry != &(is_error, line.clone()));
+                        }
                     }
+                    self.presentation
+                        .agent_queued_provider_outcomes
+                        .remove(&key);
                 }
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
             } else if action_holds_later_log(action)
@@ -1238,15 +1297,23 @@ impl RuntimeSessionService {
                 {
                     continue;
                 }
-                if self.presentation.agent_queued_provider_headers.keys().any(
-                    |(queued_pane, queued_turn, queued_conversation, queued_group, ordinal)| {
-                        queued_pane == pane_id
-                            && queued_turn == &execution.request.turn_id
-                            && owner.as_ref() == Some(queued_conversation)
-                            && queued_group == &group
-                            && *ordinal < action_index
-                    },
-                ) {
+                if self
+                    .presentation
+                    .agent_queued_provider_headers
+                    .keys()
+                    .chain(self.presentation.agent_queued_provider_commands.keys())
+                    .chain(self.presentation.agent_queued_provider_results.keys())
+                    .chain(self.presentation.agent_queued_provider_outcomes.keys())
+                    .any(
+                        |(queued_pane, queued_turn, queued_conversation, queued_group, ordinal)| {
+                            queued_pane == pane_id
+                                && queued_turn == &execution.request.turn_id
+                                && owner.as_ref() == Some(queued_conversation)
+                                && queued_group == &group
+                                && *ordinal < action_index
+                        },
+                    )
+                {
                     continue;
                 }
                 if *status == SayStatus::Progress

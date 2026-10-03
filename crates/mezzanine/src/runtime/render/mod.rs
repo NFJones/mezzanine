@@ -547,6 +547,9 @@ type RuntimeProviderLogOrdinal = (
 pub(crate) struct RuntimePresentationComponent {
     /// Current atomically replaceable presentation configuration.
     pub(super) settings: RuntimePresentationSettings,
+    /// Test-only countdown to a single failure before durable screen installation.
+    #[cfg(test)]
+    pub(super) agent_install_failure_countdown: Option<usize>,
     /// Client renders deferred until the current runtime operation succeeds.
     deferred_render_effects: Vec<RuntimeSideEffect>,
     /// Generation-keyed immutable visible rows for pane composition.
@@ -626,6 +629,10 @@ pub(crate) struct RuntimePresentationComponent {
     )>,
     /// Unshown say ordinals retired after a failed or interrupted response.
     pub(super) agent_retired_provider_says: std::collections::BTreeSet<RuntimeProviderLogOrdinal>,
+    /// Installed thinking prefixes of compound headers, fenced by exact response
+    /// and ordinal. A failed header retry cannot append its prefix twice.
+    pub(super) agent_published_header_thinking:
+        std::collections::BTreeSet<(String, String, String, String, usize, String)>,
     /// Validated executor headers waiting for preceding action logs to publish.
     pub(super) agent_queued_provider_headers: std::collections::BTreeMap<
         RuntimeProviderLogOrdinal,
@@ -1845,6 +1852,8 @@ impl RuntimePresentationComponent {
             .retain(|(candidate_pane_id, _, _, _, _)| candidate_pane_id != pane_id);
         self.agent_retired_provider_says
             .retain(|(candidate_pane_id, _, _, _, _)| candidate_pane_id != pane_id);
+        self.agent_published_header_thinking
+            .retain(|(candidate_pane_id, _, _, _, _, _)| candidate_pane_id != pane_id);
         self.agent_queued_provider_headers
             .retain(|(candidate_pane_id, _, _, _, _), _| candidate_pane_id != pane_id);
         self.agent_queued_provider_commands

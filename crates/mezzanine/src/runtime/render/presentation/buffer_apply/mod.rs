@@ -2175,10 +2175,31 @@ impl RuntimeSessionService {
         }
         let thinking_lines = agent_action_model_thinking_lines(action);
         if !thinking_lines.is_empty() && self.agent_thinking_enabled(pane_id) {
-            self.append_agent_thinking_text_to_terminal_buffer(
-                pane_id,
-                &thinking_lines.join("\n"),
-            )?;
+            let thinking = thinking_lines.join("\n");
+            let thinking_key = activity.as_ref().and_then(|source| {
+                source.action_ordinal.map(|ordinal| {
+                    (
+                        pane_id.to_string(),
+                        source.turn_id.clone(),
+                        source.conversation_id.clone(),
+                        source.response_id.clone(),
+                        ordinal,
+                        thinking.clone(),
+                    )
+                })
+            });
+            if !thinking_key.as_ref().is_some_and(|key| {
+                self.presentation
+                    .agent_published_header_thinking
+                    .contains(key)
+            }) {
+                self.append_agent_thinking_text_to_terminal_buffer(pane_id, &thinking)?;
+                if let Some(key) = thinking_key {
+                    self.presentation
+                        .agent_published_header_thinking
+                        .insert(key);
+                }
+            }
         }
         let rendered_line =
             agent_action_execution_rendered_line(header, &self.presentation.settings.ui_theme);

@@ -45,6 +45,11 @@ presentation boundary. Effective non-streaming responses and streamed transport
 responses without previewable MAAP fragments present the complete validated
 batch there, without synthetic partial text. Progress never grants action
 authority; its absence cannot suppress authoritative completion.
+Deferred components retain accepted source and response ordinals until
+successful installation. Pending command, result and outcome components remain
+ordering barriers even after their header is visible. A bounded presentation-only
+retry cannot replay actions or provider requests; repeated publication failure
+is reported rather than acknowledged as missing output.
 
 ## Action catalog
 

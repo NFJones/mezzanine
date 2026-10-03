@@ -9,6 +9,12 @@ use super::*;
 use crate::runtime::render::{RuntimeAgentShellPreview, RuntimeAgentShellPreviewPresentation};
 
 impl RuntimeSessionService {
+    /// Injects one pre-install failure after the specified successful installs.
+    #[cfg(test)]
+    pub(crate) fn fail_agent_presentation_install_for_tests(&mut self, after: usize) {
+        self.presentation.agent_install_failure_countdown = Some(after);
+    }
+
     /// Removes previews whose final output has already been retained.
     pub(super) fn retire_settled_agent_shell_previews(
         presentation: &mut RuntimeAgentShellPreviewPresentation,
@@ -202,6 +208,16 @@ impl RuntimeSessionService {
         baseline_screen: TerminalScreen,
         presentation: Option<RuntimeAgentShellPreviewPresentation>,
     ) -> Result<()> {
+        #[cfg(test)]
+        if let Some(remaining) = self.presentation.agent_install_failure_countdown.as_mut() {
+            if *remaining == 0 {
+                self.presentation.agent_install_failure_countdown = None;
+                return Err(MezError::invalid_state(
+                    "injected pre-install presentation failure",
+                ));
+            }
+            *remaining -= 1;
+        }
         let current_lineage = self
             .agent_pane_screen_lineage(pane_id, conversation_id)
             .ok_or_else(|| {

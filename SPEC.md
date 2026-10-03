@@ -2904,6 +2904,13 @@ it MUST NOT become durable or suppress deferred presentation until that work
 completes successfully. Intervening pane writes retire its provisional screen
 ownership; failure MUST NOT promote its source. Replacement MUST preserve
 static styling, wrapping, copy semantics, action results, and approved dispatch.
+Accepted deferred headers, commands, results and outcomes MUST retain their
+source and ordinal ownership until successful installation. Publishing a header
+alone MUST NOT release later assistant text past pending components of that
+ordinal. A failed installation MAY receive one bounded presentation-only retry;
+it MUST NOT redispatch an action or provider request. Repeated failure MUST
+remain explicit with the failed source retained, never silently acknowledge
+missing output. Successfully installed components MUST NOT be appended again.
 If projection is unavailable, validation fails, or source mismatches cannot be
 reconciled independently, Mezzanine MUST remove only the still-provisional
 owned suffix and present validated source through normal renderers. Provider

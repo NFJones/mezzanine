@@ -2,6 +2,151 @@
 
 use super::*;
 
+/// Accepted queued sources must survive a failure before installation of the
+/// header, command or result. Retrying presentation alone publishes every
+/// component exactly once in order; it must not rerun the underlying action.
+#[test]
+fn runtime_ordered_logs_retain_components_after_install_failure() {
+    for (after, shell) in [(0, false), (1, false), (2, false), (1, true)] {
+        let mut service = test_runtime_service();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        let started = service
+            .start_agent_prompt_turn("%1", "inspect retained log sources")
+            .unwrap();
+        let turn = service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .clone();
+        service.remove_pending_agent_provider_task(&turn.turn_id);
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new(Size::new(120, 24).unwrap(), 120).unwrap(),
+        );
+        let action = mez_agent::AgentAction {
+            id: "inspect".to_string(),
+            payload: if shell {
+                mez_agent::AgentActionPayload::ShellCommand {
+                    summary: "SUMMARY_SENTINEL".to_string(),
+                    command: ":".to_string(),
+                    interactive: false,
+                    stateful: false,
+                    timeout_ms: None,
+                }
+            } else {
+                mez_agent::AgentActionPayload::ListAgents {
+                    agent_type: None,
+                    scope: None,
+                }
+            },
+        };
+        let result = mez_agent::ActionResult::succeeded(
+            &turn,
+            &action,
+            vec!["RESULT_SENTINEL".to_string()],
+            None,
+        );
+        let say = mez_agent::AgentAction {
+            id: "later-say".to_string(),
+            payload: mez_agent::AgentActionPayload::Say {
+                status: mez_agent::SayStatus::Progress,
+                text: "SAY_SENTINEL".to_string(),
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+        };
+        let execution = mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: String::new(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    rationale: String::new(),
+                    actions: vec![action.clone(), say.clone()],
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: Default::default(),
+            action_results: vec![
+                result.clone(),
+                mez_agent::ActionResult::succeeded(&turn, &say, Vec::new(), None),
+            ],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        };
+        service
+            .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+            .unwrap();
+        service
+            .queue_ordered_provider_header_with_text(
+                "%1",
+                &execution,
+                &action,
+                "HEADER_SENTINEL".to_string(),
+            )
+            .unwrap();
+        service
+            .queue_ordered_provider_result("%1", &execution, &action, &result)
+            .unwrap();
+        // Queue without initiating the production bounded-retry wrapper so the
+        // first failed attempt and retained ownership can be observed directly.
+        let key = service
+            .presentation
+            .agent_queued_provider_headers
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        service
+            .presentation
+            .agent_queued_provider_commands
+            .insert(key, "COMMAND_SENTINEL".to_string());
+        service.fail_agent_presentation_install_for_tests(after);
+        assert!(
+            service
+                .drain_ordered_provider_headers_once("%1", &execution)
+                .is_err()
+        );
+        service
+            .flush_ordered_provider_headers("%1", &execution)
+            .unwrap();
+        service
+            .flush_ordered_provider_headers("%1", &execution)
+            .unwrap();
+        let rows = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        if shell {
+            assert_eq!(rows.matches("SUMMARY_SENTINEL").count(), 1, "{rows}");
+        }
+        let mut previous = 0;
+        for marker in [
+            "HEADER_SENTINEL",
+            "COMMAND_SENTINEL",
+            "RESULT_SENTINEL",
+            "SAY_SENTINEL",
+        ]
+        .into_iter()
+        .filter(|marker| !shell || *marker != "RESULT_SENTINEL")
+        {
+            assert_eq!(rows.matches(marker).count(), 1, "after={after}: {rows}");
+            let position = rows.find(marker).unwrap();
+            assert!(position >= previous, "after={after}: {rows}");
+            previous = position;
+        }
+    }
+}
+
 /// A validated progress say after a runtime-owned action waits for its log.
 /// The action header is emitted by its executor, not the batch presenter.
 #[test]

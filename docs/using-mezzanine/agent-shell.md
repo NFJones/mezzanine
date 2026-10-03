@@ -142,6 +142,13 @@ Structured agent output wraps at the smaller of the pane width and
 recovers logical text rather than inserting presentation-only wrap boundaries.
 Older ANSI-only saved records are replayed unchanged and may wrap differently.
 
+Later action logs and assistant text wait behind earlier presentation barriers.
+When a barrier releases, eligible components drain in response order. Accepted
+sources remain owned until installation succeeds; a bounded presentation-only
+retry does not repeat the underlying action. Already installed components remain
+visible once, while failed or interrupted work does not promote unverified
+success text.
+
 The composer remains visible while the log scrolls or is in copy mode. In
 explicit log-copy mode, the selection and keyboard input belong to the log;
 Enter does not submit the visible draft. Drag across entered draft text or
