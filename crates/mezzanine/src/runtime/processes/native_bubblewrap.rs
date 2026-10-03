@@ -201,9 +201,19 @@ pub(crate) enum NativeSandboxCapabilityProbe {
 
 impl NativeSandboxCapabilityProbe {
     /// Runs a probe with the caller's explicit workload launch ledger.
+    #[cfg(test)]
     pub(crate) fn run_accounted(
         self,
         launches: &super::launch_accounting::NativeLaunchLedger,
+    ) -> Result<crate::security::sandbox::SandboxCapability> {
+        self.run_accounted_with_cancellation(launches, None)
+    }
+
+    /// Runs the exact accounted probe with a monotonic workload cancellation fence.
+    pub(crate) fn run_accounted_with_cancellation(
+        self,
+        launches: &super::launch_accounting::NativeLaunchLedger,
+        cancellation: Option<&AtomicBool>,
     ) -> Result<crate::security::sandbox::SandboxCapability> {
         match self {
             Self::Bubblewrap(probe) => run_native_bubblewrap_capability_probe(
@@ -211,7 +221,7 @@ impl NativeSandboxCapabilityProbe {
                 &probe.pane_environment_signature,
                 probe.config_generation,
                 &probe.plan,
-                None,
+                cancellation,
                 launches,
             )
             .map(crate::security::sandbox::SandboxCapability::Bubblewrap),
@@ -220,7 +230,7 @@ impl NativeSandboxCapabilityProbe {
                 &probe.pane_environment_signature,
                 probe.config_generation,
                 &probe.plan,
-                None,
+                cancellation,
                 launches,
             )
             .map(crate::security::sandbox::SandboxCapability::Seatbelt),
@@ -1121,6 +1131,7 @@ fn run_native_bubblewrap_capability_probe(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .env_clear();
     // A capability-probe launcher runs from a cleared base and keeps only the
     // declared launcher command-search path, so an ambient credential or a
@@ -1160,6 +1171,11 @@ fn run_native_bubblewrap_capability_probe(
     let mut child = launches.launch(
         super::launch_accounting::NativeLaunchReason::SandboxProbe,
         || {
+            if cancellation.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                return Err(MezError::conflict(
+                    "native Bubblewrap probe was cancelled before launch",
+                ));
+            }
             command.spawn().map_err(|error| {
                 MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
                     &format!("native Bubblewrap capability probe could not start: {error}"),
@@ -1172,6 +1188,7 @@ fn run_native_bubblewrap_capability_probe(
     let deadline = Instant::now() + NATIVE_BUBBLEWRAP_PROBE_TIMEOUT;
     let status = loop {
         if cancellation.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            terminate_probe_group(&child);
             let _ = child.kill();
             let _ = child.wait();
             return Err(MezError::conflict(
@@ -1181,6 +1198,7 @@ fn run_native_bubblewrap_capability_probe(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
+                terminate_probe_group(&child);
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(MezError::invalid_state(
@@ -1191,6 +1209,9 @@ fn run_native_bubblewrap_capability_probe(
             }
             Ok(None) => std::thread::sleep(NATIVE_BUBBLEWRAP_PROBE_POLL_INTERVAL),
             Err(error) => {
+                terminate_probe_group(&child);
+                let _ = child.kill();
+                let _ = child.wait();
                 return Err(MezError::invalid_state(
                     crate::security::sandbox::bubblewrap_failure_remediation(&format!(
                         "native Bubblewrap capability probe wait failed: {error}"
@@ -1251,6 +1272,7 @@ fn run_native_seatbelt_capability_probe(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .env_clear();
     // A capability-probe launcher runs from a cleared base and keeps only the
     // declared launcher command-search path, so an ambient credential or a
@@ -1268,6 +1290,11 @@ fn run_native_seatbelt_capability_probe(
     let mut child = launches.launch(
         super::launch_accounting::NativeLaunchReason::SandboxProbe,
         || {
+            if cancellation.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                return Err(MezError::conflict(
+                    "native Seatbelt probe was cancelled before launch",
+                ));
+            }
             command.spawn().map_err(|error| {
                 MezError::invalid_state(format!(
                     "native Seatbelt capability probe could not start: {error}"
@@ -1280,6 +1307,7 @@ fn run_native_seatbelt_capability_probe(
     let deadline = Instant::now() + NATIVE_BUBBLEWRAP_PROBE_TIMEOUT;
     let status = loop {
         if cancellation.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            terminate_probe_group(&child);
             let _ = child.kill();
             let _ = child.wait();
             return Err(MezError::conflict(
@@ -1289,6 +1317,7 @@ fn run_native_seatbelt_capability_probe(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
+                terminate_probe_group(&child);
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(MezError::invalid_state(
@@ -1297,6 +1326,9 @@ fn run_native_seatbelt_capability_probe(
             }
             Ok(None) => std::thread::sleep(NATIVE_BUBBLEWRAP_PROBE_POLL_INTERVAL),
             Err(error) => {
+                terminate_probe_group(&child);
+                let _ = child.kill();
+                let _ = child.wait();
                 return Err(MezError::invalid_state(format!(
                     "native Seatbelt capability probe wait failed: {error}"
                 )));
@@ -1358,33 +1390,92 @@ fn native_bubblewrap_probe_output_preview(output: &[u8]) -> String {
 /// and stall until the timeout, while retaining only a bounded diagnostic
 /// prefix. The reader continues draining after the bound so it never causes a
 /// valid child to receive `SIGPIPE` merely for producing extra diagnostics.
-fn spawn_bounded_probe_reader<R>(pipe: R) -> JoinHandle<Vec<u8>>
+fn spawn_bounded_probe_reader<R>(pipe: R) -> ProbeReader
 where
-    R: Read + Send + 'static,
+    R: Read + std::os::fd::AsFd + Send + 'static,
 {
-    std::thread::spawn(move || {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancellation = Arc::clone(&cancelled);
+    let worker = std::thread::spawn(move || {
         let mut output = Vec::new();
         let mut pipe = pipe;
+        let Ok(flags) = rustix::fs::fcntl_getfl(&pipe) else {
+            return output;
+        };
+        if rustix::fs::fcntl_setfl(&pipe, flags | rustix::fs::OFlags::NONBLOCK).is_err() {
+            return output;
+        }
         let mut buffer = [0_u8; 4096];
         loop {
+            if cancellation.load(Ordering::SeqCst) {
+                break;
+            }
             match pipe.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
+                Ok(0) => break,
                 Ok(count) => {
                     let remaining =
                         NATIVE_BUBBLEWRAP_PROBE_OUTPUT_LIMIT_BYTES.saturating_sub(output.len());
                     output.extend_from_slice(&buffer[..count.min(remaining)]);
                 }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(NATIVE_BUBBLEWRAP_PROBE_POLL_INTERVAL);
+                }
+                Err(_) => break,
             }
         }
         output
-    })
+    });
+    ProbeReader {
+        cancelled,
+        worker: Some(worker),
+    }
+}
+
+/// Owns one probe pipe reader; all exit paths cancel and join it.
+struct ProbeReader {
+    cancelled: Arc<AtomicBool>,
+    worker: Option<JoinHandle<Vec<u8>>>,
+}
+
+impl Drop for ProbeReader {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+/// Requests termination of descendants in the probe's private process group.
+fn terminate_probe_group(child: &std::process::Child) {
+    if let Ok(pid) = i32::try_from(child.id()) {
+        // SAFETY: probes use process_group(0), so this group belongs to the child.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
 }
 
 /// Joins one bounded probe reader without letting reader failure obscure the
 /// primary capability-probe result.
-fn join_bounded_probe_reader(reader: Option<JoinHandle<Vec<u8>>>) -> Vec<u8> {
+fn join_bounded_probe_reader(reader: Option<ProbeReader>) -> Vec<u8> {
+    let Some(mut reader) = reader else {
+        return Vec::new();
+    };
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while reader
+        .worker
+        .as_ref()
+        .is_some_and(|worker| !worker.is_finished())
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(NATIVE_BUBBLEWRAP_PROBE_POLL_INTERVAL);
+    }
+    reader.cancelled.store(true, Ordering::SeqCst);
     reader
-        .and_then(|reader| reader.join().ok())
+        .worker
+        .take()
+        .and_then(|worker| worker.join().ok())
         .unwrap_or_default()
 }
 
@@ -1659,5 +1750,53 @@ mod tests {
 
         assert!(error.to_string().contains("was cancelled"));
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// Both probe adapters must cancel after startup, kill a delayed-effect
+    /// descendant in their private group, and join readers whose pipes remain
+    /// inherited. Pre-cancelled fixtures cannot establish these guarantees.
+    #[test]
+    fn native_probe_inflight_cancellation_stops_descendants_and_readers() {
+        for seatbelt in [false, true] {
+            let root = std::env::temp_dir().join(format!(
+                "mez-probe-inflight-{}-{}-{seatbelt}",
+                std::process::id(),
+                crate::runtime::current_unix_millis()
+            ));
+            std::fs::create_dir(&root).unwrap();
+            let ready = root.join("ready");
+            let effect = root.join("effect");
+            let command = format!(
+                "(sleep 1; printf forbidden > '{}') & printf ready > '{}'; wait",
+                effect.display(),
+                ready.display()
+            );
+            let args = vec!["-c".to_string(), command];
+            let probe = if seatbelt {
+                NativeSandboxCapabilityProbe::Seatbelt(NativeSeatbeltCapabilityProbe::for_test(
+                    "/bin/sh", args, "probe-ok",
+                ))
+            } else {
+                NativeSandboxCapabilityProbe::Bubblewrap(NativeBubblewrapCapabilityProbe::for_test(
+                    "/bin/sh", args, "probe-ok",
+                ))
+            };
+            let cancellation = Arc::new(AtomicBool::new(false));
+            let worker_flag = Arc::clone(&cancellation);
+            let worker = std::thread::spawn(move || probe.run_with_cancellation(&worker_flag));
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !ready.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            cancellation.store(true, Ordering::SeqCst);
+            let error = worker.join().unwrap().unwrap_err();
+            let reached_ready = ready.exists();
+            std::thread::sleep(Duration::from_millis(1100));
+            let performed_effect = effect.exists();
+            std::fs::remove_dir_all(root).unwrap();
+            assert!(reached_ready);
+            assert!(error.to_string().contains("was cancelled"));
+            assert!(!performed_effect, "cancelled probe descendant survived");
+        }
     }
 }

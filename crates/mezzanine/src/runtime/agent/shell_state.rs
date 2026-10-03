@@ -1057,6 +1057,8 @@ impl RuntimeSessionService {
                 turn_id: turn.turn_id.clone(),
                 action_id: action.id.clone(),
                 marker: marker.as_str().to_string(),
+                cancellation:
+                    crate::runtime::processes::native_cancellation::NativeActionCancellation::new(),
                 context,
                 capability_probe,
                 capability_probe_only,

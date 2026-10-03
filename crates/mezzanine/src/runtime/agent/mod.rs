@@ -497,6 +497,13 @@ pub(crate) struct RuntimeAgentComponent {
     pending_approved_external_actions: BTreeMap<(String, String), Option<String>>,
     /// Approved external actions currently owned by async workers.
     claimed_approved_external_actions: BTreeMap<(String, String), String>,
+    /// Cooperative cancellation shared only with each exact claimed attempt.
+    approved_external_cancellations: BTreeMap<
+        (String, String),
+        crate::runtime::processes::native_cancellation::NativeActionCancellation,
+    >,
+    /// Exact server configuration whose transport is leased by each MCP attempt.
+    approved_mcp_transport_leases: BTreeMap<(String, String), mez_agent::mcp::McpServerConfig>,
     /// Monotonic source for approved external-worker attempt identities.
     next_approved_external_action_attempt: u64,
     /// Authorized native shell actions waiting for external worker dispatch.

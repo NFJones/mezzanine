@@ -38,6 +38,16 @@ const STREAMING_SAY_PROJECTION_SETTLE_LIMIT: usize = 3;
 /// Maximum time one accepted deferred command may remain worker-owned.
 const DEFERRED_AGENT_COMMAND_DEADLINE: Duration = Duration::from_secs(120);
 
+/// Keeps a nested async task owned on cancellation, channel errors and panic.
+/// Dropping a JoinHandle detaches its task; this guard instead requests abort.
+struct AbortProviderWorkerOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortProviderWorkerOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Reports whether one provider event changes visible projection inputs.
 fn streaming_presentation_event_changes_projection(event: &mez_agent::StreamingSayEvent) -> bool {
     match event {
@@ -780,6 +790,7 @@ async fn execute_native_shell_action(
     let progress_turn_id = turn_id.clone();
     let progress_action_id = action_id.clone();
     let progress_marker = marker.clone();
+    let _cancellation_guard = dispatch.cancellation.cancel_on_drop();
     let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
     let mut last_progress_revision = 0_u64;
     let mut confirmed_patch_sections = 0_usize;
@@ -921,7 +932,22 @@ async fn execute_native_shell_action(
 }
 
 /// Executes one approved network or MCP action without holding the runtime actor.
-async fn execute_approved_external_action(
+pub(crate) async fn execute_approved_external_action(
+    handle: AsyncRuntimeSessionHandle,
+    dispatch: RuntimeApprovedExternalActionDispatch,
+) -> Result<AsyncAgentProviderWorkerResult> {
+    let cancellation = dispatch.cancellation.clone();
+    let _owner = cancellation.cancel_on_drop();
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Ok(None),
+        result = execute_approved_external_action_inner(handle, dispatch) => result,
+    }
+}
+
+/// Executes an owned external attempt. Dropping this future retires its exact
+/// transport, but cannot prove that a remote effect did not happen.
+async fn execute_approved_external_action_inner(
     handle: AsyncRuntimeSessionHandle,
     dispatch: RuntimeApprovedExternalActionDispatch,
 ) -> Result<AsyncAgentProviderWorkerResult> {
@@ -929,6 +955,7 @@ async fn execute_approved_external_action(
         turn,
         action,
         attempt,
+        cancellation: _,
         mcp,
     } = dispatch;
     let turn_id = turn.turn_id.clone();
@@ -1059,6 +1086,7 @@ async fn monitor_runtime_agent_provider_dispatch(
         Some(progress_sender),
         observation_sender,
     ));
+    let _worker_owner = AbortProviderWorkerOnDrop(worker.abort_handle());
     let mut projection_workers = JoinSet::new();
     let mut projection_dirty = false;
     loop {
@@ -2672,6 +2700,37 @@ mod tests {
             tracker.total_elapsed_ms(started_at + Duration::from_millis(20)),
             20
         );
+    }
+
+    /// Verifies a provider execution panic becomes a failed-turn event rather
+    /// than escaping the monitor task that owns daemon service supervision.
+    /// Every monitor exit path must abort its nested request, including errors
+    /// and outer-task cancellation, rather than detaching a live network task.
+    #[tokio::test]
+    async fn provider_worker_owner_drop_aborts_nested_request() {
+        let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+        let (dropped_sender, dropped_receiver) = tokio::sync::oneshot::channel();
+        struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+        let worker = tokio::spawn(async move {
+            let _signal = DropSignal(Some(dropped_sender));
+            let _ = ready_sender.send(());
+            std::future::pending::<()>().await;
+        });
+        let owner = AbortProviderWorkerOnDrop(worker.abort_handle());
+        ready_receiver.await.unwrap();
+        drop(owner);
+        tokio::time::timeout(Duration::from_secs(1), dropped_receiver)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(worker.await.unwrap_err().is_cancelled());
     }
 
     /// Verifies a provider execution panic becomes a failed-turn event rather

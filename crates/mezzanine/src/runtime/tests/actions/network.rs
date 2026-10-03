@@ -489,6 +489,19 @@ fn runtime_repeated_identical_fetches_fail_closed() {
 /// execution group and the model repeats a call whose answer it never received.
 #[tokio::test]
 async fn runtime_deferred_fetch_url_result_reaches_model_context() {
+    run_deferred_fetch_result_context(false).await;
+}
+
+/// Interrupting an issued external attempt retires its transport fence and
+/// retains unknown-effect evidence alongside confirmed results. A late remote
+/// response must not requeue the interrupted task or replay the issued call.
+#[tokio::test]
+async fn runtime_deferred_external_interruption_retains_unknown_effects() {
+    run_deferred_fetch_result_context(true).await;
+}
+
+/// Exercises shared deferred-result setup with success or interrupted ownership.
+async fn run_deferred_fetch_result_context(interrupt: bool) {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -647,6 +660,52 @@ async fn runtime_deferred_fetch_url_result_reaches_model_context() {
             .map(|block| block.content.as_str())
             .collect::<Vec<_>>()
     );
+    if interrupt {
+        let issued = service
+            .claim_approved_external_action(&turn.turn_id, &sibling.id)
+            .unwrap()
+            .unwrap();
+        service.stop_agent_turn_for_pane("%1").unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            issued.cancellation.cancelled(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !service
+                .complete_approved_external_action(
+                    crate::runtime::RuntimeApprovedExternalActionOutcome {
+                        turn_id: turn.turn_id.clone(),
+                        action_id: sibling.id.clone(),
+                        attempt: issued.attempt,
+                        result: Ok(mez_agent::ActionResult::succeeded(
+                            &turn,
+                            &sibling,
+                            vec!["late remote effect".to_string()],
+                            None
+                        )),
+                        mcp_transport: None,
+                    }
+                )
+                .unwrap()
+        );
+        assert!(!service.agent_provider_task_is_pending(&turn.turn_id));
+        service
+            .execute_agent_shell_command(&primary, "continue without replay")
+            .unwrap();
+        let resumed = runtime_prepared_context_for_turn(&service, "turn-2");
+        assert!(resumed.blocks().iter().any(|block| {
+            block.content.contains("action_interrupted_unknown_effects")
+                && block.content.contains("automatic_replay_allowed")
+        }));
+        assert!(
+            resumed
+                .blocks()
+                .iter()
+                .any(|block| block.content.contains("deferred fetch body"))
+        );
+    }
     service.terminate_all_pane_processes().unwrap();
 }
 

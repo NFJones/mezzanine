@@ -112,6 +112,7 @@ impl RuntimeSessionService {
             });
 
         if state == AgentTurnState::Interrupted {
+            self.retain_interrupted_worker_effects(&turn)?;
             self.ingest_provider_log(
                 pane_id,
                 turn_id,
@@ -215,6 +216,7 @@ impl RuntimeSessionService {
     /// share this operation so provider claims, approvals, action bookkeeping,
     /// and retained execution context cannot outlive any terminal ledger path.
     fn clear_terminal_agent_turn_runtime_state(&mut self, turn_id: &str) {
+        self.retire_cancelled_mcp_leases_for_turn(turn_id);
         let _ = self.retire_action_presentation_progress_for_turn(turn_id);
         self.clear_completed_received_peer_message_presentations_for_turn(turn_id);
         self.clear_settled_outbound_message_actions(turn_id);
@@ -272,8 +274,23 @@ impl RuntimeSessionService {
             .pending_approved_external_actions
             .retain(|identity, _| identity.0 != turn_id);
         self.agent
+            .approved_external_cancellations
+            .retain(|(owner, _), cancellation| {
+                if owner == turn_id {
+                    cancellation.cancel();
+                    false
+                } else {
+                    true
+                }
+            });
+        self.agent
             .claimed_approved_external_actions
             .retain(|(claimed_turn_id, _), _| claimed_turn_id != turn_id);
+        for ((pending_turn_id, _), dispatch) in &self.agent.pending_native_shell_dispatches {
+            if pending_turn_id == turn_id {
+                dispatch.cancellation.cancel();
+            }
+        }
         self.agent
             .pending_native_shell_dispatches
             .retain(|(pending_turn_id, _), _| pending_turn_id != turn_id);
@@ -306,6 +323,7 @@ impl RuntimeSessionService {
             .is_some_and(|conversation_id| conversation_id != turn.conversation_id);
         let completion_attention_eligible = self.subagent_lineage(&turn.agent_id).is_none();
         if state == AgentTurnState::Interrupted {
+            self.retain_interrupted_worker_effects(turn)?;
             self.ingest_provider_log(
                 &turn.pane_id,
                 &turn.turn_id,

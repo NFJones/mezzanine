@@ -51,6 +51,7 @@ impl RuntimeSessionService {
         &mut self,
         marker: &str,
     ) -> Option<RunningShellTransactionRef> {
+        self.cancel_native_shell_dispatch_for_marker(marker);
         let pane_id = self
             .process
             .running_shell_transactions

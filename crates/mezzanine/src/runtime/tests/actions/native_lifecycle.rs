@@ -5,6 +5,193 @@
 
 use super::*;
 
+/// A user may close an exact agent in another window without first focusing
+/// it. Live-process force policy still applies, and stale confirmations or
+/// foreign client IDs must never close a replacement or the invoking pane.
+#[test]
+fn runtime_agent_targeted_close_preserves_focus_and_force_policy() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "register owner")
+        .unwrap();
+    service.stop_agent_turn_for_pane("%1").unwrap();
+    let remote = service
+        .create_window_with_pane_process(&primary, "remote", true, None)
+        .unwrap();
+    let remote_id = remote.pane_id.to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&remote_id)
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "register remote")
+        .unwrap();
+    let target = service
+        .capture_agent_lifecycle_target(&primary, &remote_id)
+        .unwrap();
+    service.session.select_pane_global(&primary, "%1").unwrap();
+    let focus = service.active_pane_id().unwrap().to_string();
+    assert!(
+        service
+            .close_agent_lifecycle_target(&primary, &target, false)
+            .is_err()
+    );
+    assert!(service.find_pane_descriptor(&remote_id).is_some());
+    assert_eq!(service.active_pane_id().unwrap().as_str(), focus);
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    assert!(
+        service
+            .close_agent_lifecycle_target(&observer, &target, true)
+            .is_err()
+    );
+    service
+        .close_agent_lifecycle_target(&primary, &target, true)
+        .unwrap();
+    assert!(service.find_pane_descriptor(&remote_id).is_none());
+    assert_eq!(service.active_pane_id().unwrap().as_str(), focus);
+    assert!(
+        service
+            .close_agent_lifecycle_target(&primary, &target, true)
+            .is_err()
+    );
+    assert!(service.find_pane_descriptor("%1").is_some());
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Actor interruption must cancel the claimed native worker before a delayed
+/// write, preserve uncertain issued-effect evidence, and never control a new
+/// task through an old target or through another client's authority.
+#[test]
+fn runtime_native_targeted_interruption_fences_delayed_effect() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Native));
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .execute_agent_shell_command(&primary, "test exact interruption")
+        .unwrap();
+    let root = temp_root("targeted-native-interruption");
+    fs::create_dir_all(&root).unwrap();
+    let ready = root.join("ready");
+    let effect = root.join("effect");
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "native interruption fixture".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "test cancellation".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "shell-1".to_string(),
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
+                        summary: "Wait before writing".to_string(),
+                        command: format!(
+                            "printf ready > '{}'; sleep 2; printf forbidden > '{}'",
+                            ready.display(),
+                            effect.display()
+                        ),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: Some(5_000),
+                    },
+                }],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service.remove_pending_agent_provider_task("turn-1");
+    service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let dispatch = service
+        .claim_native_shell_action("turn-1", "shell-1")
+        .unwrap()
+        .unwrap();
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    let other = service
+        .attach_primary("other", true, Size::new(80, 24).unwrap(), 121)
+        .unwrap();
+    assert!(
+        service
+            .interrupt_agent_lifecycle_target(&other, &target)
+            .is_err()
+    );
+    let worker =
+        std::thread::spawn(move || crate::runtime::execute_native_shell_dispatch(dispatch));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !ready.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    service
+        .interrupt_agent_lifecycle_target(&primary, &target)
+        .unwrap();
+    let outcome = worker.join().unwrap();
+    let ready_exists = ready.exists();
+    let effect_exists = effect.exists();
+    assert!(
+        !service
+            .complete_native_shell_action(outcome.clone())
+            .unwrap()
+    );
+    assert!(outcome.result.unwrap().interrupted);
+    assert!(
+        service
+            .interrupt_agent_lifecycle_target(&primary, &target)
+            .is_err()
+    );
+    service
+        .execute_agent_shell_command(&primary, "continue without replay")
+        .unwrap();
+    let context = runtime_prepared_context_for_turn(&service, "turn-2");
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("action_interrupted_unknown_effects"))
+    );
+    assert!(
+        service
+            .interrupt_agent_lifecycle_target(&primary, &target)
+            .is_err()
+    );
+    assert!(service.agent_turn_is_running("turn-2"));
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+    assert!(ready_exists, "worker did not reach ready barrier");
+    assert!(
+        !effect_exists,
+        "interrupted native worker performed delayed effect"
+    );
+}
+
 /// A real child can perform effects and omit its trusted completion record.
 /// Settlement must retain diagnostic facts in model feedback, reject duplicate
 /// outcomes, and never redispatch that uncertain action automatically.

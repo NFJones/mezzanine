@@ -179,6 +179,8 @@ pub use actor_types::{
 pub(crate) use client::attached_terminal_client_service_exit;
 #[cfg(test)]
 pub use client::build_async_attached_terminal_client_service;
+#[cfg(test)]
+pub(crate) use client::execute_approved_external_action;
 pub use client::{
     AsyncAttachedTerminalClientServiceConfig, run_async_agent_command_service,
     run_async_agent_provider_service, run_async_attached_terminal_client_service,

@@ -60,6 +60,8 @@ pub(crate) struct RuntimeApprovedExternalActionDispatch {
     pub action: mez_agent::AgentAction,
     /// Actor-issued generation that fences this worker's presentation updates.
     pub attempt: String,
+    /// Exact attempt cancellation; retirement never authorizes remote replay.
+    pub cancellation: crate::runtime::processes::native_cancellation::NativeActionCancellation,
     /// MCP-specific transport state when the action is an MCP call.
     pub mcp: Option<RuntimeApprovedMcpActionDispatch>,
 }
@@ -109,6 +111,9 @@ pub(crate) struct RuntimeNativeShellDispatch {
     pub(crate) action_id: String,
     /// Exact transaction marker used to fence stale worker completions.
     pub(crate) marker: String,
+    /// Monotonic actor/worker-owner cancellation for this exact dispatch.
+    pub(crate) cancellation:
+        crate::runtime::processes::native_cancellation::NativeActionCancellation,
     /// Inferred shell, environment, and working-directory context.
     pub(crate) context: NativeShellContext,
     /// Uncached backend-tagged capability proof run by the external worker.

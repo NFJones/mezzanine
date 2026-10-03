@@ -67,6 +67,14 @@ cancelled actions or processes. Use `/new` when you want an independent task
 instead. Detaching the client is different from hiding the agent shell: a
 normal detach leaves tasks running.
 
+Interruption is a request, not rollback or proof that every worker has settled.
+Native shell workers receive an exact-owned cancellation fence and terminate
+their child process group; they do not send Ctrl+C to the pane shell. Provider
+requests are aborted when their monitor exits. MCP/network transport retirement
+cannot undo a remote effect. Issued actions with unconfirmed outcomes are retained
+as interrupted with unknown effects, and are not automatically retried. Inspect
+current state before deciding whether a new mutation is needed.
+
 In the `/resume` picker, Enter resumes the selected conversation, `i` opens its
 transcript for inspection, and `a` toggles between the current project and all
 saved conversations. Press `d` to delete the selected saved conversation;

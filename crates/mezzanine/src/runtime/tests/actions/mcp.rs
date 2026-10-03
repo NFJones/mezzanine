@@ -4,7 +4,7 @@ use super::*;
 
 /// Appends the same compactable retrieval authority that a prior successful
 /// `mcp_server_get` action would contribute before a fixture calls `fixture/echo`.
-fn grant_fixture_mcp_tool_for_turn(service: &mut RuntimeSessionService, turn_id: &str) {
+pub(super) fn grant_fixture_mcp_tool_for_turn(service: &mut RuntimeSessionService, turn_id: &str) {
     let result = mez_agent::ActionResult {
         protocol: "maap/1".to_string(),
         turn_id: turn_id.to_string(),

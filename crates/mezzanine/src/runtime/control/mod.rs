@@ -3,6 +3,7 @@
 //! This module owns the runtime control boundary for Mezzanine. It keeps related
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
+pub(crate) mod agent_lifecycle;
 mod approval;
 mod component;
 mod configuration;

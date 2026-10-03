@@ -2185,6 +2185,20 @@ accepted transcript rows or used to authorize durable history publication. Later
 history admission MUST wait for checked append acceptance; a failed archive check
 MUST report an error and fail closed rather than admit incomplete chronology.
 Context continuation MUST NOT restart cancelled actions or processes.
+Interruption admission MUST be distinguished from worker settlement. Native
+shell attempts MUST share a monotonic exact-owned cancellation fence with the
+actor; transaction retirement and async-owner drop MUST request cancellation
+without resetting that fence. Native interruption MUST NOT write Ctrl+C to the
+pane PTY. Already issued local effects and remote MCP/network outcomes may be
+unknown: retained context MUST report this uncertainty and prohibit automatic
+replay, not claim rollback or proven nonexecution. Provider monitor exit paths
+MUST abort their nested provider task instead of detaching it. Probe cancellation
+MUST terminate the owned process group and bound output-reader lifetime.
+User-management targets MUST bind the invoking attached primary, pane root
+incarnation, conversation, current task and issued attempts. Execution MUST
+revalidate those facts; stale or foreign confirmations MUST NOT affect replacement
+work. Global close MUST retain ordinary explicit-force policy for live panes
+without focusing the target first.
 When the interrupted turn belongs to a managed routed-worker workflow, the
 runtime MUST keep the child pane and parent workflow open for pane-local user
 guidance. The next prompt in that child pane MUST transfer managed-child

@@ -53,6 +53,103 @@ fn runtime_external_action_commits_model_context(result: &ActionResult) -> bool 
 }
 
 impl RuntimeSessionService {
+    /// Retires cancelled MCP leases before their attempt ownership is cleared.
+    /// A dropped connection is not Ready: rediscovery may connect explicitly new
+    /// work, never replay the interrupted call. Config replacement or an already
+    /// restored transport prevents an old lease from resetting the new server.
+    pub(crate) fn retire_cancelled_mcp_leases_for_turn(&mut self, turn_id: &str) {
+        let identities = self
+            .agent
+            .approved_mcp_transport_leases
+            .keys()
+            .filter(|(owner, _)| owner == turn_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        for identity in identities {
+            let Some(configured) = self.agent.approved_mcp_transport_leases.remove(&identity)
+            else {
+                continue;
+            };
+            let still_owned = self
+                .mcp_registry()
+                .list_servers()
+                .into_iter()
+                .any(|server| {
+                    server.configured == configured
+                        && server.configured.enabled
+                        && server.status == mez_agent::mcp::McpServerStatus::Available
+                })
+                && !self
+                    .integration
+                    .mcp_transports_mut()
+                    .transports
+                    .contains_key(&configured.id);
+            if still_owned {
+                // Enabled and registered were checked above in this actor turn.
+                // If registry admission nevertheless fails, leave it fail-closed.
+                let _ = self.mcp_registry_mut().retry_server(&configured.id);
+            }
+        }
+    }
+
+    /// Retains interruption evidence for issued effects without claiming rollback.
+    /// Confirmed siblings remain intact; only currently owned running attempts
+    /// become interrupted/unknown, and they must never be replayed automatically.
+    pub(crate) fn retain_interrupted_worker_effects(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        let Some(mut execution) = self.agent_turn_executions().get(&turn.turn_id).cloned() else {
+            return Ok(());
+        };
+        let mut observations = Vec::new();
+        for result in &mut execution.action_results {
+            let identity = (turn.turn_id.clone(), result.action_id.clone());
+            if result.status != ActionStatus::Running
+                || !(self
+                    .agent
+                    .claimed_approved_external_actions
+                    .contains_key(&identity)
+                    || self
+                        .agent
+                        .claimed_native_shell_dispatches
+                        .contains_key(&identity))
+            {
+                continue;
+            }
+            let Some(action) = execution.response.action_batch.as_ref().and_then(|batch| {
+                batch
+                    .actions
+                    .iter()
+                    .find(|action| action.id == result.action_id)
+            }) else {
+                continue;
+            };
+            let mut interrupted = ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Interrupted,
+                "action_interrupted_unknown_effects",
+                "Interruption requested; this issued attempt may already have performed effects. Cancellation is not rollback or proof of settlement. Do not automatically retry or replay it; inspect current state before any new mutation.",
+            )?;
+            interrupted.structured_content_json = Some(
+                serde_json::json!({
+                    "effect_certainty": "unknown", "cancellation_requested": true,
+                    "settlement_confirmed": false, "automatic_replay_allowed": false,
+                })
+                .to_string(),
+            );
+            *result = interrupted.clone();
+            observations.push(interrupted);
+        }
+        if !observations.is_empty() {
+            self.agent_turn_executions_mut()
+                .insert(turn.turn_id.clone(), execution);
+            self.commit_settled_action_results_context(&turn.turn_id, &observations)?;
+        }
+        Ok(())
+    }
+
     /// Queues immediately runnable MCP calls for worker execution.
     ///
     /// Registry lookup and approval classification remain actor-owned. The
@@ -657,10 +754,29 @@ impl RuntimeSessionService {
                 ));
             }
         };
+        let cancellation =
+            crate::runtime::processes::native_cancellation::NativeActionCancellation::new();
+        self.agent.approved_external_cancellations.insert(
+            (turn_id.to_string(), action_id.to_string()),
+            cancellation.clone(),
+        );
+        if let Some(mcp) = &mcp
+            && let Some(server) = self
+                .mcp_registry()
+                .list_servers()
+                .into_iter()
+                .find(|server| server.configured.id == mcp.plan.server_id)
+        {
+            let configured = server.configured.clone();
+            self.agent
+                .approved_mcp_transport_leases
+                .insert((turn_id.to_string(), action_id.to_string()), configured);
+        }
         Ok(Some(RuntimeApprovedExternalActionDispatch {
             turn,
             action,
             attempt: attempt.to_string(),
+            cancellation,
             mcp,
         }))
     }
@@ -685,6 +801,8 @@ impl RuntimeSessionService {
                 .mcp_transports_mut()
                 .insert(server_id, transport);
         }
+        self.agent.approved_external_cancellations.remove(&identity);
+        self.agent.approved_mcp_transport_leases.remove(&identity);
         if !self.approved_external_action_turn_is_current(&outcome.turn_id, &outcome.action_id) {
             self.agent
                 .pending_approved_external_actions

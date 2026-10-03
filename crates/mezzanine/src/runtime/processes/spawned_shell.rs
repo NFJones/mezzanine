@@ -234,6 +234,7 @@ pub(crate) struct SpawnedShellExecutor {
 
 impl SpawnedShellExecutor {
     /// Builds an executor around one inferred native shell context.
+    #[cfg(test)]
     pub(crate) fn new(context: NativeShellContext) -> Self {
         Self {
             context,
@@ -437,6 +438,11 @@ impl SpawnedShellExecutor {
             (None, None)
         };
         let child = self.launches.launch(self.launch_reason, || {
+            if self.interrupted.load(Ordering::SeqCst) {
+                return Err(MezError::conflict(
+                    "native shell dispatch was cancelled before launch",
+                ));
+            }
             command.spawn().map_err(|error| {
                 MezError::invalid_state(format!("spawned shell execution failed to start: {error}"))
             })
@@ -769,6 +775,7 @@ fn execute_native_shell_dispatch_inner(
         turn_id,
         action_id,
         marker,
+        cancellation,
         context,
         capability_probe,
         capability_probe_only,
@@ -780,20 +787,34 @@ fn execute_native_shell_dispatch_inner(
         started_at_unix_ms,
     } = dispatch;
     let command = request.transaction.command.clone();
-    let mut executor = SpawnedShellExecutor::new(context);
+    let mut executor = SpawnedShellExecutor::with_interrupted(context, cancellation.flag());
     executor.launch_reason = launch_reason;
     let mut sandbox_capability = None;
-    let result = if request.interactive || request.stateful {
+    let result = if executor.interrupted.load(Ordering::SeqCst) {
+        Err(MezError::conflict(
+            "native shell dispatch was cancelled before startup",
+        ))
+    } else if request.interactive || request.stateful {
         Err(MezError::invalid_args(
             "native transport does not serve stateful or interactive execution",
         ))
     } else {
         capability_probe
             .map_or(Ok(None), |probe| {
-                probe.run_accounted(&executor.launches).map(Some)
+                probe
+                    .run_accounted_with_cancellation(
+                        &executor.launches,
+                        Some(&executor.interrupted),
+                    )
+                    .map(Some)
             })
             .and_then(|capability| {
                 sandbox_capability = capability;
+                if executor.interrupted.load(Ordering::SeqCst) {
+                    return Err(MezError::conflict(
+                        "native shell dispatch was cancelled after capability probe",
+                    ));
+                }
                 if capability_probe_only {
                     return Ok(mez_agent::ShellExecutionOutput::new(
                         Some(0),
@@ -803,7 +824,6 @@ fn execute_native_shell_dispatch_inner(
                         false,
                     ));
                 }
-                executor.interrupted.store(false, Ordering::SeqCst);
                 executor
                     .materialize_launch(&request.transaction)
                     .and_then(|materialized| {
@@ -1267,6 +1287,7 @@ mod tests {
             turn_id: "turn-1".to_string(),
             action_id: "native-1".to_string(),
             marker: "0123456789abcdef0123456789abcdef".to_string(),
+            cancellation: super::super::native_cancellation::NativeActionCancellation::new(),
             context: test_context(),
             capability_probe: probe,
             capability_probe_only: false,
@@ -1277,6 +1298,70 @@ mod tests {
             launch_reason: NativeLaunchReason::ShellCommand,
             started_at_unix_ms: 1,
         }
+    }
+
+    /// Cancellation admitted before worker startup must not be reset by the
+    /// executor or launch any workload, even when the command is harmless.
+    #[test]
+    fn native_dispatch_pre_cancelled_does_not_launch() {
+        let dispatch = dispatch_with_probe("printf forbidden", None);
+        dispatch.cancellation.cancel();
+        let outcome = execute_native_shell_dispatch(dispatch);
+        assert!(outcome.result.is_err());
+        assert!(outcome.launch_counts.unwrap_or_default().is_empty());
+    }
+
+    /// A dispatch owner can stop a running child before its delayed write.
+    /// The ready file proves the workload started; cancellation must reap the
+    /// process group, not merely discard the eventual stale action result.
+    #[test]
+    fn native_dispatch_cancellation_prevents_delayed_effect() {
+        run_native_dispatch_delayed_effect(false);
+    }
+
+    /// Dropping the async dispatch owner must signal its blocking worker;
+    /// dropping a JoinHandle alone would detach it and allow the delayed write.
+    #[test]
+    fn native_dispatch_owner_drop_prevents_delayed_effect() {
+        run_native_dispatch_delayed_effect(true);
+    }
+
+    /// Runs the ready-barrier fixture with explicit or owner-drop cancellation.
+    fn run_native_dispatch_delayed_effect(owner_drop: bool) {
+        let directory = std::env::temp_dir().join(format!(
+            "mez-native-cancel-{}-{}-{}",
+            std::process::id(),
+            crate::runtime::current_unix_millis(),
+            owner_drop
+        ));
+        fs::create_dir(&directory).unwrap();
+        let ready = directory.join("ready");
+        let effect = directory.join("effect");
+        let command = format!(
+            "printf ready > '{}'; sleep 2; printf forbidden > '{}'",
+            ready.display(),
+            effect.display()
+        );
+        let dispatch = dispatch_with_probe(&command, None);
+        let cancellation = dispatch.cancellation.clone();
+        let owner = cancellation.cancel_on_drop();
+        let worker = std::thread::spawn(move || execute_native_shell_dispatch(dispatch));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if owner_drop {
+            drop(owner);
+        } else {
+            cancellation.cancel();
+        }
+        let outcome = worker.join().unwrap();
+        let ready_exists = ready.exists();
+        let effect_exists = effect.exists();
+        fs::remove_dir_all(directory).unwrap();
+        assert!(ready_exists, "workload never reached its ready barrier");
+        assert!(outcome.result.unwrap().interrupted);
+        assert!(!effect_exists, "cancelled worker performed a delayed write");
     }
 
     /// The legacy native-patch adapter must expose its direct child launch,

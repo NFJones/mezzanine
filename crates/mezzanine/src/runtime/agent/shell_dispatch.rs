@@ -164,6 +164,34 @@ impl RuntimeSessionService {
             .collect()
     }
 
+    /// Reports whether a marker belongs to native work rather than pane input.
+    pub(crate) fn native_shell_marker_has_worker_owner(&self, marker: &str) -> bool {
+        self.agent
+            .pending_native_shell_dispatches
+            .values()
+            .any(|dispatch| dispatch.marker == marker)
+    }
+
+    /// Captures exact issued attempt identities for user lifecycle revalidation.
+    pub(crate) fn agent_worker_attempts_for_turn(&self, turn_id: &str) -> Vec<(String, String)> {
+        self.agent
+            .claimed_native_shell_dispatches
+            .iter()
+            .chain(self.agent.claimed_approved_external_actions.iter())
+            .filter(|((owner, _), _)| owner == turn_id)
+            .map(|((_, action), attempt)| (action.clone(), attempt.clone()))
+            .collect()
+    }
+
+    /// Requests cancellation only for dispatches owning this exact marker.
+    pub(crate) fn cancel_native_shell_dispatch_for_marker(&self, marker: &str) {
+        for dispatch in self.agent.pending_native_shell_dispatches.values() {
+            if dispatch.marker == marker {
+                dispatch.cancellation.cancel();
+            }
+        }
+    }
+
     /// Claims one authorized native shell action for worker execution.
     pub(crate) fn claim_native_shell_action(
         &mut self,
