@@ -48,13 +48,13 @@ pub(crate) use native_workload_environment::native_ambient_environment;
 #[cfg(test)]
 pub(crate) use pane_creation_environment::daemon_only_probe_key_for_tests;
 pub(crate) use pane_process_identity::{
-    RuntimePaneProcessIdentity, RuntimePaneShellIdentityEvidence, RuntimePaneShellIdentityRefresh,
-    RuntimePaneShellIdentityUnknown, RuntimeShellIdentityUnknownReason,
+    RuntimePaneProcessIdentity, RuntimePaneProcessRole, RuntimePaneShellIdentityEvidence,
+    RuntimePaneShellIdentityRefresh, RuntimePaneShellIdentityUnknown,
+    RuntimeShellIdentityUnknownReason,
 };
 #[cfg(test)]
 pub(crate) use pane_process_identity::{
     RuntimePaneProcessIdentityInjection, RuntimePaneProcessIdentityUnavailable,
-    RuntimePaneProcessRole,
 };
 #[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;
@@ -4797,6 +4797,7 @@ impl RuntimeSessionService {
     /// deferred I/O, and subagent bookkeeping that would otherwise make a
     /// closed pane appear partially alive to later agent/session surfaces.
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) -> Result<()> {
+        self.reconcile_external_agent_registrations();
         let pane_present = self.find_pane_descriptor(pane_id).is_some();
         let agent_id = format!("agent-{pane_id}");
         if pane_present {

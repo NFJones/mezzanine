@@ -8,6 +8,7 @@ mod approval;
 mod component;
 mod configuration;
 mod context;
+mod external_agents;
 mod external_presentation;
 mod ingress;
 mod lifecycle;
@@ -1017,6 +1018,27 @@ impl RuntimeSessionService {
             return runtime_json_rpc_error(&request.id, error.kind(), error.message());
         }
 
+        // Credential-bearing requests never enter the generic replay cache.
+        if request.method.starts_with("agent/external/") {
+            let result = if request.method == "agent/external/launch" {
+                self.issue_external_agent_launch(
+                    primary_client_id,
+                    request.params.as_deref().unwrap_or("{}"),
+                )
+            } else {
+                Err(MezError::forbidden(
+                    "external hooks require capability-only authenticated ingress",
+                ))
+            };
+            return match result {
+                Ok(result) => format!(
+                    r#"{{"jsonrpc":"2.0","id":{},"result":{result}}}"#,
+                    request.id
+                ),
+                Err(error) => runtime_json_rpc_error(&request.id, error.kind(), error.message()),
+            };
+        }
+
         if !runtime_mutating_method(&request.method) {
             if request.method == "pane/capture" {
                 return self.dispatch_runtime_pane_capture(body, &request.id, primary_client_id);
@@ -1064,19 +1086,21 @@ impl RuntimeSessionService {
                 let model_profiles_by_pane = self.runtime_agent_model_profiles_by_pane();
                 let peer_wait_turn_ids = self.runtime_peer_wait_turn_ids();
                 let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
-                return dispatch_control_request_for_client_with_agent_state_and_model_profiles(
-                    body,
-                    &mut self.session,
-                    primary_client_id,
-                    None,
-                    agent_shell_store,
-                    agent_turn_ledger,
-                    AgentStateProjection::new(
-                        Some(&model_profiles_by_pane),
+                let response =
+                    dispatch_control_request_for_client_with_agent_state_and_model_profiles(
+                        body,
+                        &mut self.session,
+                        primary_client_id,
                         None,
-                        Some(&peer_wait_turn_ids),
-                    ),
-                );
+                        agent_shell_store,
+                        agent_turn_ledger,
+                        AgentStateProjection::new(
+                            Some(&model_profiles_by_pane),
+                            None,
+                            Some(&peer_wait_turn_ids),
+                        ),
+                    );
+                return self.append_external_agent_list_rows(response);
             }
             if matches!(
                 request.method.as_str(),
@@ -1345,6 +1369,19 @@ impl RuntimeSessionService {
             }
         };
 
+        if matches!(
+            request.method.as_str(),
+            "agent/external/register" | "agent/external/renew" | "agent/external/deregister"
+        ) {
+            return match self.dispatch_external_agent_request(&request, connection) {
+                Ok(result) => format!(
+                    r#"{{"jsonrpc":"2.0","id":{},"result":{result}}}"#,
+                    request.id
+                ),
+                Err(error) => runtime_json_rpc_error(&request.id, error.kind(), error.message()),
+            };
+        }
+
         if !connection.initialized() || request.method == "control/initialize" {
             let prepared = match self.prepare_remote_initialize_authority(&request, connection) {
                 Ok(prepared) => prepared,
@@ -1446,6 +1483,10 @@ impl RuntimeSessionService {
         }
         if let Err(error) = validate_control_method_params_schema(&request) {
             return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+        }
+
+        if request.method == "agent/external/launch" {
+            return self.dispatch_runtime_control_body(body, &caller_client_id);
         }
 
         if request.method == "pane/capture" {
@@ -1589,19 +1630,21 @@ impl RuntimeSessionService {
                     let model_profiles_by_pane = self.runtime_agent_model_profiles_by_pane();
                     let peer_wait_turn_ids = self.runtime_peer_wait_turn_ids();
                     let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
-                    return dispatch_control_request_for_client_with_agent_state_and_model_profiles(
-                        body,
-                        &mut self.session,
-                        &caller_client_id,
-                        None,
-                        agent_shell_store,
-                        agent_turn_ledger,
-                        AgentStateProjection::new(
-                            Some(&model_profiles_by_pane),
+                    let response =
+                        dispatch_control_request_for_client_with_agent_state_and_model_profiles(
+                            body,
+                            &mut self.session,
+                            &caller_client_id,
                             None,
-                            Some(&peer_wait_turn_ids),
-                        ),
-                    );
+                            agent_shell_store,
+                            agent_turn_ledger,
+                            AgentStateProjection::new(
+                                Some(&model_profiles_by_pane),
+                                None,
+                                Some(&peer_wait_turn_ids),
+                            ),
+                        );
+                    return self.append_external_agent_list_rows(response);
                 }
                 if matches!(
                     request.method.as_str(),

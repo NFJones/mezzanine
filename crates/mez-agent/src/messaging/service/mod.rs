@@ -182,6 +182,27 @@ impl MessageService {
             .count()
     }
 
+    /// Retires an observational identity without deleting shared envelopes or
+    /// acceptance receipts. The delivery floor prevents a reused identity from
+    /// consuming its former interval; unrelated recipients retain their mail.
+    pub fn retire_observational_identity(&mut self, agent_id: &AgentId) -> bool {
+        let identity = self.registered.remove(agent_id);
+        self.presence.remove(agent_id);
+        self.subscriptions.remove(agent_id);
+        self.subscription_order.remove(agent_id.as_str());
+        if self.fanout_after_recipient.as_deref() == Some(agent_id.as_str()) {
+            self.fanout_after_recipient = None;
+        }
+        if let Some(identity) = identity {
+            self.retired_delivery_floors
+                .insert(agent_id.clone(), (identity, self.last_sequence()));
+            self.prune_retired_delivery_floors();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Retires one agent identity and its delivery subscription.
     ///
     /// Retained envelopes matching the retired identity are discarded. A

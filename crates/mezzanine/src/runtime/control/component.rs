@@ -25,6 +25,7 @@ pub(crate) struct RuntimeControlComponent {
     event_log: Option<EventLog>,
     approval_bindings: BTreeMap<String, ApprovalBinding>,
     unix_event_bindings: BTreeMap<[u8; 32], UnixEventBinding>,
+    external_agents: super::external_agents::ExternalAgentRegistry,
 }
 
 /// Exact-client authority retained for one short-lived Unix event handshake.
@@ -53,16 +54,41 @@ impl RuntimeControlComponent {
     /// Builds control ownership from constructor-provided services.
     pub(crate) fn new(
         idempotency: ControlIdempotencyCache,
-        message_service: MessageService,
+        mut message_service: MessageService,
         event_log: Option<EventLog>,
     ) -> Self {
+        // External launches are runtime-only. Imported MMP state cannot revive
+        // an identity without the exact capability owner that registered it.
+        for identity in message_service.discover_agents_filtered_session_wide(
+            None,
+            None,
+            None,
+            Some("external-harness"),
+            None,
+            &[],
+        ) {
+            message_service.retire_observational_identity(&identity.agent_id);
+        }
         Self {
             idempotency,
             message_service,
             event_log,
             approval_bindings: BTreeMap::new(),
             unix_event_bindings: BTreeMap::new(),
+            external_agents: Default::default(),
         }
+    }
+
+    /// Returns bounded external launch and registration state.
+    pub(super) fn external_agents(&self) -> &super::external_agents::ExternalAgentRegistry {
+        &self.external_agents
+    }
+
+    /// Returns actor-owned external lifecycle state for mutation.
+    pub(super) fn external_agents_mut(
+        &mut self,
+    ) -> &mut super::external_agents::ExternalAgentRegistry {
+        &mut self.external_agents
     }
 
     /// Mints one short-lived Unix event binding for an initialized client.

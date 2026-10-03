@@ -638,6 +638,7 @@ impl RuntimeSessionService {
             (snapshot.schema_version == 1).then_some(snapshot.accepted_messages.len());
         let restored = mez_agent::messaging::MessageService::from_snapshot_state(snapshot)?;
         *self.control.message_service_mut() = restored;
+        self.retire_unbound_external_message_identities();
         if payload.payload_version >= 6 {
             self.restore_snapshot_unsettled_received_peer_message_presentations(
                 &payload.unsettled_peer_presentations,

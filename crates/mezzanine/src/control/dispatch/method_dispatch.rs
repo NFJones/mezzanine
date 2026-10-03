@@ -623,6 +623,9 @@ pub(super) fn dispatch_parsed_request(
             r#"{{"agents":{}}}"#,
             agents_json_for_params(session, request.params.as_deref())?
         )),
+        ControlDispatchKind::ExternalAgent => Err(MezError::forbidden(
+            "external agent lifecycle requires restricted live runtime ingress",
+        )),
         ControlDispatchKind::AgentTaskList => {
             validate_agent_task_list_params(session, request.params.as_deref())?;
             Ok(r#"{"tasks":[]}"#.to_string())

@@ -519,6 +519,7 @@ v2 removes those methods and adds `client/set_layout_owner`.
 | Frame | `frame/read` | Read rendered frame fields and text (RO). |
 | Terminal | `terminal/view`, `terminal/presentation/acknowledge`, `terminal/step`, `terminal/resize`, `terminal/command` | Render a client view, acknowledge receipt-bearing local frame commits, submit bytes/primary size, update exact-client observer geometry, or invoke a terminal command. Presentation acknowledgement is available to primary and observer clients; primary-only mutation applies to step and command; resize is observer-only and never changes primary or canonical geometry. Negotiated observer v3–v5 uses the resulting pushed render instead of fetching another view. |
 | Agent | `agent/list`, `agent/task/list`, `agent/spawn`, `agent/shell/show`, `agent/shell/hide`, `agent/shell/command` | Inspect agents/tasks (RO), manage an agent shell, start prompt work, or spawn an agent. |
+| External agent | `agent/external/launch`, `agent/external/register`, `agent/external/renew`, `agent/external/deregister` | Additive `external-agent/1` launch capability and observational identity lease. Launch issuance requires an attached primary; hook lifecycle requests require capability-only authenticated Unix ingress, not an initialized client role. |
 | Approval | `approval/list`, `approval/decide` | Inspect pending approvals (RO) or make a primary decision. |
 | Configuration | `config/get`, `config/set`, `config/unset`, `config/reload`, `config/validate` | Inspect or validate config (RO), or mutate/reload it. |
 | Project trust | `project/trust/list`, `project/trust/inspect`, `project/trust/decide`, `project/trust/revoke` | Inspect or decide project trust. |
@@ -528,6 +529,33 @@ v2 removes those methods and adds `client/set_layout_owner`.
 | Events | `event/list` | Replay retained, authorized events after `after_event_id`; RO. |
 
 ## Terminal frontend contract
+
+### Restricted external harness registration
+
+An attached primary calls `agent/external/launch` with `pane_id`, lowercase
+`harness`, and `version`. The response returns a random `launch_token`, monotonic
+`generation`, a 120-second launch deadline and a 60-second renewal lease. The
+launcher must deliver the token privately; do not put it in argv, logs or config.
+Launch issuance deliberately bypasses the generic request replay cache. A lost
+issuance reply requires a new capability; the unused binding expires.
+
+Hooks use fresh authenticated Unix connections **without** `control/initialize`:
+
+- `agent/external/register`: `launch_token`, `generation`, `external_session_id`,
+  `display_name`, optional bounded `objective`. Identical retry returns the same
+  `agent_id`; changed registration metadata is rejected.
+- `agent/external/renew`: token, generation and exact external session ID.
+- `agent/external/deregister`: the same fields. Repeated retirement is a no-op
+  during the 300-second tombstone horizon; after pruning credentials are rejected.
+
+The server derives pane, window and trusted project scope, never accepts those
+as hook claims. Multiple explicit launches can coexist in a pane. List metadata
+distinguishes harness/version and marks native controls unsupported (`controls:
+[]`). EOF does not retire a lease; missing renewal means telemetry unavailable,
+not process death. Root replacement, pane close and runtime restart invalidate
+registrations. Restart requires a fresh launch rather than reviving snapshot
+identities. This is same-OS-user bearer authority, not executable attestation;
+vendor hooks, bootstrap, status/title and token ingestion are separate integrations.
 
 An alternative interactive frontend is a primary client. Obtain the initial
 render with `terminal/view`:

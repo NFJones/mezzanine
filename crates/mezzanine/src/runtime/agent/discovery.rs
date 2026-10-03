@@ -180,7 +180,7 @@ impl RuntimeSessionService {
                 .capabilities
                 .iter()
                 .any(|capability| agent_list_text_is_truncated(capability));
-            let row = serde_json::json!({
+            let mut row = serde_json::json!({
                 "agent_id": agent_list_bounded_text(&agent_id),
                 "kind": self.runtime_agent_kind(&agent_id).as_str(),
                 "is_self": agent_id == turn.agent_id,
@@ -205,6 +205,22 @@ impl RuntimeSessionService {
                 }),
                 "truncated": row_truncated,
             });
+            if let Some(external) = self.external_agent_metadata(&agent_id) {
+                for field in [
+                    "harness",
+                    "harness_version",
+                    "display_name",
+                    "controls",
+                    "native",
+                    "generation",
+                ] {
+                    row[field] = external[field].clone();
+                }
+                row["window_id"] = external["window_id"].clone();
+            } else if identity.role.as_deref() == Some("external-harness") {
+                // Expired registrations cannot linger in discovery before cleanup.
+                continue;
+            }
             candidates.insert(agent_id, row);
         }
         candidates

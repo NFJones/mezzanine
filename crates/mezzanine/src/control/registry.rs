@@ -106,6 +106,8 @@ pub(super) enum ControlDispatchKind {
     ClientSetLayoutOwner,
     /// List agents.
     AgentList,
+    /// Delegate restricted external lifecycle work to the live runtime.
+    ExternalAgent,
     /// List agent tasks.
     AgentTaskList,
     /// Spawn an agent.
@@ -515,6 +517,40 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         method: "agent/task/list",
         dispatch: ControlDispatchKind::AgentTaskList,
         params_schema: ControlParamsSchema::Allowed(&["target", "agent_id", "pane_id"]),
+    },
+    ControlMethodSpec {
+        method: "agent/external/launch",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&["pane_id", "harness", "version"]),
+    },
+    ControlMethodSpec {
+        method: "agent/external/register",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "launch_token",
+            "generation",
+            "external_session_id",
+            "display_name",
+            "objective",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "agent/external/renew",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "launch_token",
+            "generation",
+            "external_session_id",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "agent/external/deregister",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "launch_token",
+            "generation",
+            "external_session_id",
+        ]),
     },
     ControlMethodSpec {
         method: "agent/spawn",

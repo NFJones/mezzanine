@@ -396,6 +396,9 @@ fn primary_control_method_fixture_request(
         "agent/task/list" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"agent/task/list","params":{}}"#.to_string()
         }
+        "agent/external/launch" | "agent/external/register" | "agent/external/renew" | "agent/external/deregister" => {
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}).to_string()
+        }
         "agent/spawn" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"agent/spawn","params":{"parent_agent":{"agent_id":"agent-%1"},"placement":{"mode":"new-pane"},"role":"explorer","cooperation_mode":"explore-only","read_scopes":["src"],"write_scopes":[],"prompt":"inspect","idempotency_key":"agent-spawn"}}"#.to_string()
         }

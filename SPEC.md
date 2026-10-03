@@ -228,6 +228,22 @@ pane process. If Mezzanine falls back to `/bin/sh`, it MUST record the
 fallback in diagnostics.
 
 The primary PID of a newly created pane MUST initially be the shell process.
+
+External harness identity uses the additive `external-agent/1` control contract.
+An attached primary MUST explicitly issue a short-lived launch capability for
+an exact local pane root incarnation through `agent/external/launch`. Hooks MUST
+present that capability and generation over authenticated Unix transport without
+initializing a general control-client role. Register, renew and deregister MUST
+bind immutable external session metadata to that launch; identical registration
+retries MUST retain the original identity and conflicting reuse MUST fail.
+Registration grants no input, approval, configuration, spawn or native task
+continuation authority. Unsupported native controls MUST be explicitly absent.
+Credentials MUST stay out of argv, logs, persisted state and generic replay caches.
+Missing renewal means unavailable telemetry, not proven process death. Pane root
+replacement, closure, expiry or runtime restart MUST retire the exact registration
+without erasing independent settled accounting. Old end events MUST NOT retire a
+new launch. This same-user observational capability does not certify vendor
+telemetry or prove which executable holds the credential.
 Pane creation commands MAY specify an explicit command to run in the new pane.
 When a pane creation command specifies an explicit command, Mezzanine MUST start
 the resolved shell path and run the explicit command from within that shell by
