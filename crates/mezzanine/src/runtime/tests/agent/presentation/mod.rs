@@ -59,9 +59,13 @@ fn ensure_agent_copy_mode_for_test<'a>(
     )
     .expect("agent presentation copy mode");
     service.insert_active_copy_mode_for_presented_surface(pane_id, copy_mode);
-    service
+    let retained = service
         .active_copy_mode_for_presented_surface_mut(pane_id)
-        .expect("retained agent presentation copy mode")
+        .expect("retained agent presentation copy mode");
+    // This helper deliberately reads the agent screen even when the fixture's
+    // currently presented surface is the process screen.
+    retained.set_agent_surface(true);
+    retained
 }
 
 mod action_progress;

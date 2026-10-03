@@ -908,6 +908,8 @@ mod hierarchy_tests {
                     screen.feed(bytes.as_bytes());
                     let row = &screen.normal_styled_content_lines()[0];
                     assert!(row.text.starts_with(AGENT_TERMINAL_MESSAGE_PREFIX));
+                    assert!(row.text.starts_with("│ "));
+                    assert_eq!(agent_terminal_text_width("│ "), 2);
                     let rail = rendered_line_rendition_at(&row.style_spans, 0);
                     let shadow = matches!(
                         style,

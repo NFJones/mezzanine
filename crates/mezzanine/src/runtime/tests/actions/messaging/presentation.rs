@@ -147,15 +147,15 @@ fn runtime_peer_message_echo_logs_sender_prefix_without_user_trust_domain() {
 
     let echoed = peer_echo_pane_lines(&service, "%1");
     assert!(
-        echoed.iter().any(|line| line == "▐ agent-%3> alpha beta"),
+        echoed.iter().any(|line| line == "│ agent-%3> alpha beta"),
         "{echoed:#?}"
     );
     assert!(
-        echoed.iter().any(|line| line == "▐      gamma delta"),
+        echoed.iter().any(|line| line == "│      gamma delta"),
         "{echoed:#?}"
     );
     assert!(
-        echoed.iter().any(|line| line == "▐      epsilon"),
+        echoed.iter().any(|line| line == "│      epsilon"),
         "{echoed:#?}"
     );
     assert_eq!(
@@ -190,7 +190,7 @@ fn runtime_peer_message_echo_logs_sender_prefix_without_user_trust_domain() {
     assert!(
         active_turn_echoed
             .iter()
-            .any(|line| line == "▐ agent-%3> cwd ok"),
+            .any(|line| line == "│ agent-%3> cwd ok"),
         "{active_turn_echoed:#?}"
     );
 
@@ -217,7 +217,7 @@ fn runtime_peer_message_echo_logs_sender_prefix_without_user_trust_domain() {
     assert_eq!(
         repeated_payload_echoed
             .iter()
-            .filter(|line| line == &"▐ agent-%3> cwd ok")
+            .filter(|line| line == &"│ agent-%3> cwd ok")
             .count(),
         2,
         "identical payloads from separate committed envelopes both log: {repeated_payload_echoed:#?}"
@@ -423,7 +423,7 @@ fn runtime_peer_message_echo_logs_one_line_for_user_prompt_turn_commit() {
     assert!(
         echoed
             .iter()
-            .any(|line| line == "▐ agent-%3> pending peer evidence"),
+            .any(|line| line == "│ agent-%3> pending peer evidence"),
         "{echoed:#?}"
     );
     service.terminate_all_pane_processes().unwrap();
@@ -794,14 +794,14 @@ fn runtime_model_peer_mail_without_bridge_provenance_logs_at_sender_and_receiver
     assert!(
         received
             .iter()
-            .any(|line| line == "▐ agent-%3> child report"),
+            .any(|line| line == "│ agent-%3> child report"),
         "a model-authored inbound message from a child with no display name keeps its \
      echo: {received:#?}"
     );
     assert!(
         received
             .iter()
-            .any(|line| line == "▐ agent-%3> named child report"),
+            .any(|line| line == "│ agent-%3> named child report"),
         "a `subagent_display_name` extension on a `send` envelope never suppresses the \
      echo: {received:#?}"
     );
@@ -956,17 +956,17 @@ fn runtime_direct_parent_peer_message_uses_stable_label_only_for_valid_exact_lin
 
     let received = peer_echo_pane_lines(&service, "%2");
     assert!(
-        received.iter().any(|line| line == "▐ parent> first parent")
-            && received.iter().any(|line| line == "▐      instruction"),
+        received.iter().any(|line| line == "│ parent> first parent")
+            && received.iter().any(|line| line == "│      instruction"),
         "the first committed parent message must use the stable label: {received:#?}"
     );
     assert!(
         received
             .iter()
-            .any(|line| line == "▐ parent> second parent")
+            .any(|line| line == "│ parent> second parent")
             && received
                 .iter()
-                .filter(|line| line.as_str() == "▐      instruction")
+                .filter(|line| line.as_str() == "│      instruction")
                 .count()
                 == 2,
         "the renamed parent must retain the stable label: {received:#?}"
@@ -1037,7 +1037,7 @@ fn runtime_direct_parent_peer_message_uses_stable_label_only_for_valid_exact_lin
         assert!(
             peer_echo_pane_lines(&service, "%2")
                 .iter()
-                .any(|line| line.starts_with(&format!("▐ {expected_label}>"))),
+                .any(|line| line.starts_with(&format!("│ {expected_label}>"))),
             "non-direct sender {sender} must keep its endpoint label"
         );
     }
@@ -1074,7 +1074,7 @@ fn runtime_direct_parent_peer_message_uses_stable_label_only_for_valid_exact_lin
     assert!(
         peer_echo_pane_lines(&service, "%2")
             .iter()
-            .any(|line| line.starts_with("▐ parent> restored parent")),
+            .any(|line| line.starts_with("│ parent> restored parent")),
         "validated restored lineage must retain the parent presentation alias"
     );
     service.fence_subagent_descendants_for_parent_conversation("agent-%1", "replacement");
@@ -1101,7 +1101,7 @@ fn runtime_direct_parent_peer_message_uses_stable_label_only_for_valid_exact_lin
     assert!(
         peer_echo_pane_lines(&service, "%2")
             .iter()
-            .any(|line| line.starts_with("▐ parent> fenced parent")),
+            .any(|line| line.starts_with("│ parent> fenced parent")),
         "fenced lineage must use the parent's trusted pretty name, not its renamed pane title"
     );
     service.terminate_all_pane_processes().unwrap();

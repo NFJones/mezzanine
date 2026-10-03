@@ -32,7 +32,7 @@ interrupt hints do not suppress the true status label.
 Structured agent output wraps at the smaller of the pane width and
 `terminal.agent_wrap_column_cap` (120 display cells by default). This includes
 status, error, diagnostic, action, and result rows as well as transcript text.
-Continuation rows repeat the `▐ ` gutter. Wrapped `agent: ` status/action and
+Continuation rows repeat the `│ ` gutter. Wrapped `agent: ` status/action and
 `thinking: ` rationale/summary rows keep their first-row label and use five
 spaces after the gutter on later rows. `user>`, `mez>`, `parent>`, and peer-message
 continuations also use five spaces after the gutter regardless of label length;
@@ -46,8 +46,9 @@ The transcript gutter uses its speaker or action category's foreground and
 rendition. Assistant/user labels retain bold accents; rationale and status text
 use dim shadow styling. Command and error cues keep their category accents.
 Markdown body emphasis remains authored structure. The
-two-cell `▐ ` footprint is unchanged, as are copied source and continuation
-offsets. This styling change does not rewrite legacy ANSI-only records.
+two-cell `│ ` footprint preserves copied source and continuation offsets.
+Editable input has no gutter. Legacy ANSI-only records keep their original
+bytes; copy normalization recognizes their former `▐ ` prefix as well.
 
 Use `/show-context activity` to inspect recent identity-bearing action outcomes
 and retained result previews, plus accepted command intent captured before

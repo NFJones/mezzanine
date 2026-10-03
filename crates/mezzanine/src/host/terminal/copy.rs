@@ -20,7 +20,9 @@ use mez_mux::render::{char_count, line_slice};
 // Copy mode, selection, and search primitives.
 
 /// Display prefix used by pane-local agent transcript lines.
-const AGENT_COPY_INDICATOR_PREFIX: &str = "▐ ";
+const AGENT_COPY_INDICATOR_PREFIX: &str = "│ ";
+/// Retained ANSI-only records keep the previous display prefix unchanged.
+const LEGACY_AGENT_COPY_INDICATOR_PREFIX: &str = "▐ ";
 /// Speaker label used by assistant response lines.
 const AGENT_COPY_ASSISTANT_LABEL: &str = "mez> ";
 /// Product adapter over mux-owned styled copy-mode state.
@@ -29,7 +31,7 @@ const AGENT_COPY_ASSISTANT_LABEL: &str = "mez> ";
 /// source-aware copy metadata belong to `mez-mux`. This adapter retains only
 /// Mezzanine transcript/Markdown normalization and host clipboard integration.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CopyMode(StyledCopyMode);
+pub struct CopyMode(StyledCopyMode, bool);
 
 /// Selects the representation written for an active copy-mode selection.
 ///
@@ -62,15 +64,24 @@ impl DerefMut for CopyMode {
 impl CopyMode {
     /// Builds copy state from normal-screen history and live terminal rows.
     pub fn from_screen(screen: &TerminalScreen, viewport_rows: usize) -> Result<Self> {
-        Ok(Self(StyledCopyMode::from_screen(screen, viewport_rows)?))
+        Ok(Self(
+            StyledCopyMode::from_screen(screen, viewport_rows)?,
+            false,
+        ))
     }
 
     /// Builds copy state from only the currently visible terminal rows.
     pub fn from_visible_screen(screen: &TerminalScreen, viewport_rows: usize) -> Result<Self> {
-        Ok(Self(StyledCopyMode::from_visible_screen(
-            screen,
-            viewport_rows,
-        )?))
+        Ok(Self(
+            StyledCopyMode::from_visible_screen(screen, viewport_rows)?,
+            false,
+        ))
+    }
+
+    /// Records explicit presentation-surface ownership. Ordinary process text
+    /// never gains transcript normalization merely by resembling a gutter.
+    pub(crate) fn set_agent_surface(&mut self, agent_surface: bool) {
+        self.1 = agent_surface;
     }
 
     /// Copies the active selection in the default rendered representation.
@@ -104,6 +115,7 @@ impl CopyMode {
     /// Copies terminal display text while preserving the user's selected cells.
     fn copy_rendered_selection(&self, start: CopyPosition, end: CopyPosition) -> Result<String> {
         let mut copied = Vec::new();
+        let mut decorated = Vec::new();
         for line in start.line..=end.line {
             let line_start = if line == start.line { start.column } else { 0 };
             let line_end = if line == end.line {
@@ -115,9 +127,26 @@ impl CopyMode {
                     .map(|display_line| char_count(display_line))
                     .unwrap_or_default()
             };
-            copied.push(self.copy_rendered_line_slice(line, line_start, line_end));
+            let selected = self.copy_rendered_line_slice(line, line_start, line_end);
+            let includes_gutter = self.1
+                && line_start == 0
+                && line_end >= 2
+                && self
+                    .0
+                    .lines()
+                    .get(line)
+                    .is_some_and(|row| strip_agent_copy_indicator(row).is_some());
+            if includes_gutter {
+                decorated.push(selected);
+            } else {
+                copied.extend(normalize_copied_selection_lines(std::mem::take(
+                    &mut decorated,
+                )));
+                copied.push(selected);
+            }
         }
-        Ok(normalize_copied_selection_lines(copied).join("\n"))
+        copied.extend(normalize_copied_selection_lines(decorated));
+        Ok(copied.join("\n"))
     }
 
     /// Copies each selected raw source group once, in display order.
@@ -250,6 +279,12 @@ fn decode_agent_copy_source_line(line: &str) -> Option<(&str, &str)> {
     encoded.split_once(':')
 }
 
+/// Removes current or retained legacy transcript decoration only at row start.
+fn strip_agent_copy_indicator(line: &str) -> Option<&str> {
+    line.strip_prefix(AGENT_COPY_INDICATOR_PREFIX)
+        .or_else(|| line.strip_prefix(LEGACY_AGENT_COPY_INDICATOR_PREFIX))
+}
+
 /// Formats copied selection lines by removing display-only agent gutters.
 fn normalize_copied_selection_lines(lines: Vec<String>) -> Vec<String> {
     let mut output = Vec::with_capacity(lines.len());
@@ -267,18 +302,18 @@ fn normalize_copied_selection_lines(lines: Vec<String>) -> Vec<String> {
                 continue;
             }
             emitted_source_lines.push(source_identity.to_string());
-            raw_line.to_string()
+            // Decoded semantic source is authored text, not decorated display.
+            // In particular a leading box-drawing glyph must remain literal.
+            flush_agent_copy_run(&mut output, &mut agent_run);
+            output.push(raw_line.to_string());
+            continue;
         } else {
-            if line
-                .strip_prefix(AGENT_COPY_INDICATOR_PREFIX)
-                .unwrap_or(line.as_str())
-                == "***"
-            {
+            if strip_agent_copy_indicator(&line).unwrap_or(line.as_str()) == "***" {
                 emitted_source_lines.clear();
             }
             line
         };
-        if let Some(stripped) = line.strip_prefix(AGENT_COPY_INDICATOR_PREFIX) {
+        if let Some(stripped) = strip_agent_copy_indicator(&line) {
             agent_run.push(stripped.to_string());
             continue;
         }
@@ -376,4 +411,28 @@ fn leading_space_count(line: &str) -> usize {
 /// Drops the requested number of leading characters from a copied line.
 fn strip_leading_chars(line: &str, count: usize) -> String {
     line.chars().skip(count).collect()
+}
+
+#[cfg(test)]
+mod gutter_tests {
+    use super::*;
+
+    /// Current and retained legacy display gutters normalize identically,
+    /// while decoded semantic source preserves authored leading glyphs.
+    #[test]
+    fn transcript_copy_preserves_authored_glyphs_and_legacy_gutters() {
+        for prefix in ["│ ", "▐ "] {
+            assert_eq!(
+                normalize_copied_selection_lines(vec![format!("{prefix}mez> answer")]),
+                vec!["answer"]
+            );
+        }
+        for raw in ["│ authored border", "▐ authored glyph", "| authored pipe"] {
+            let source = format!("{AGENT_COPY_SOURCE_LINE_PREFIX}exact:{raw}");
+            assert_eq!(
+                normalize_copied_selection_lines(vec![source.clone(), source]),
+                vec![raw]
+            );
+        }
+    }
 }

@@ -7,6 +7,38 @@ use mez_mux::paste::PasteBuffers;
 use mez_terminal::TerminalColor;
 use mez_terminal::TerminalScreen;
 
+/// Rendered selection must preserve ordinary box-drawing output and a leading
+/// authored border selected inside a transcript body, outside its real gutter.
+#[test]
+fn copy_mode_rendered_selection_preserves_authored_box_drawing_prefix() {
+    let mut screen = TerminalScreen::new(Size::new(40, 2).unwrap(), 10).unwrap();
+    screen.feed("│ authored border".as_bytes());
+    let mut copy = CopyMode::from_screen(&screen, 2).unwrap();
+    copy.select_range(
+        CopyPosition { line: 0, column: 0 },
+        CopyPosition {
+            line: 0,
+            column: 17,
+        },
+    )
+    .unwrap();
+    assert_eq!(copy.copy_selection().unwrap(), "│ authored border");
+
+    let mut screen = TerminalScreen::new(Size::new(40, 2).unwrap(), 10).unwrap();
+    screen.feed("│ mez> │ authored border".as_bytes());
+    let mut copy = CopyMode::from_screen(&screen, 2).unwrap();
+    copy.set_agent_surface(true);
+    copy.select_range(
+        CopyPosition { line: 0, column: 7 },
+        CopyPosition {
+            line: 0,
+            column: 24,
+        },
+    )
+    .unwrap();
+    assert_eq!(copy.copy_selection().unwrap(), "│ authored border");
+}
+
 /// Verifies copy mode starts at live view and pages through normal history.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -260,6 +292,7 @@ fn copy_mode_formats_agent_assistant_output_for_clipboard() {
     let mut screen = TerminalScreen::new(Size::new(40, 3).unwrap(), 10).unwrap();
     screen.feed(lines.join("\r\n").as_bytes());
     let mut copy = CopyMode::from_screen(&screen, 3).unwrap();
+    copy.set_agent_surface(true);
 
     copy.select_range(
         CopyPosition { line: 0, column: 0 },
@@ -286,6 +319,7 @@ fn copy_mode_dedents_orphan_agent_continuation_rows() {
     let mut screen = TerminalScreen::new(Size::new(40, 2).unwrap(), 10).unwrap();
     screen.feed(lines.join("\r\n").as_bytes());
     let mut copy = CopyMode::from_screen(&screen, 2).unwrap();
+    copy.set_agent_surface(true);
 
     copy.select_range(
         CopyPosition { line: 0, column: 0 },
@@ -391,6 +425,7 @@ fn copy_mode_omits_agent_indicator_prefix_from_status_lines() {
     let mut screen = TerminalScreen::new(Size::new(40, 1).unwrap(), 10).unwrap();
     screen.feed(line.as_bytes());
     let mut copy = CopyMode::from_screen(&screen, 1).unwrap();
+    copy.set_agent_surface(true);
 
     copy.select_range(
         CopyPosition { line: 0, column: 0 },

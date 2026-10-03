@@ -2963,9 +2963,10 @@ impl RuntimeSessionService {
     pub(crate) fn insert_active_copy_mode_for_presented_surface(
         &mut self,
         pane_id: &str,
-        copy_mode: CopyMode,
+        mut copy_mode: CopyMode,
     ) {
         let key = self.presented_copy_mode_key(pane_id);
+        copy_mode.set_agent_surface(key.1 == PaneSurfaceKind::Agent);
         self.presentation
             .copy
             .active_copy_modes

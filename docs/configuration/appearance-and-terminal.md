@@ -52,7 +52,7 @@ at grapheme boundaries. Legacy ANSI-only presentation
 records remain byte-preserving and can therefore wrap at the physical pane
 width instead.
 
-Agent transcript gutters use their row category's foreground without background
+Agent transcript gutters use `│ ` (two display cells) and their row category's foreground without background
 fill. Assistant/user labels retain bold accents; status and thinking text use
 dim shadow styling. Authored body emphasis remains independent. No palette,
 theme slot or configuration field changes are required for these renditions.

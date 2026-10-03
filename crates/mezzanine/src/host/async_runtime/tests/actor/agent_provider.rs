@@ -720,24 +720,24 @@ async fn actor_provider_completion_case(
     );
     assert_eq!(
         pane_text
-            .matches("▐ mez> Typed completion applied.")
+            .matches("│ mez> Typed completion applied.")
             .count(),
         1,
         "{pane_text}"
     );
     assert_eq!(
-        pane_text.matches("▐ mez> Later validated answer.").count(),
+        pane_text.matches("│ mez> Later validated answer.").count(),
         1,
         "{pane_text}"
     );
     assert!(
-        pane_text.find("▐ mez> Typed completion applied.").unwrap()
-            < pane_text.find("▐ mez> Later validated answer.").unwrap(),
+        pane_text.find("│ mez> Typed completion applied.").unwrap()
+            < pane_text.find("│ mez> Later validated answer.").unwrap(),
         "{pane_text}"
     );
     assert_eq!(
         pane_text
-            .matches("▐ thinking: test action batch rationale")
+            .matches("│ thinking: test action batch rationale")
             .count(),
         1,
         "{pane_text}"
@@ -752,8 +752,8 @@ async fn actor_provider_completion_case(
             // Elapsed-time status can cross a second boundary between the two
             // runs; compare all rows and styles without treating that clock as
             // provider-log output.
-            if line.text.starts_with("▐ Worked for ") {
-                line.text = "▐ Worked for <elapsed>".to_string();
+            if line.text.starts_with("│ Worked for ") {
+                line.text = "│ Worked for <elapsed>".to_string();
                 line.copy_text = Some("Worked for <elapsed>".to_string());
             }
             line

@@ -2551,8 +2551,9 @@ observation. Transcript gutters MUST use their row category's foreground-only
 rendition. Assistant and user labels retain bold category accents; status and
 rationale text retain dim shadow styling. Error, command and diff accents retain
 their category renditions, while authored Markdown body emphasis remains
-independent. The existing `▐ ` glyph and source
-copy offsets are retained; legacy ANSI-only records MUST NOT be heuristically
+independent. Transcript rows MUST use `│ ` (U+2502 plus space), retaining their
+two-cell footprint and source-copy offsets. Editable input remains gutter-free;
+legacy ANSI-only records MUST NOT be heuristically
 rewritten to adopt current styling. Structured agent-mode log rows and rendered transcript
 presentation rows MUST wrap at the smaller of the pane terminal width or the
 configured `terminal.agent_wrap_column_cap` display-cell limit (120 by default)
@@ -11897,7 +11898,7 @@ accepted sender record retains its settlement-time eligibility across replay.
 The logged payload MUST NOT exceed the peer-context payload bound, and each row
 MUST wrap inside the pane the way a user prompt does. Both sender and recipient
 message continuations MUST use the fixed five-space display-only indent after
-the `▐ ` gutter, independent of endpoint-label width.
+the `│ ` gutter, independent of endpoint-label width.
 A committed message from a recipient's exact direct parent MUST use the stable
 `parent>` label rather than the parent's mutable pane title. This is a
 presentation-only identity rule: validated restored lineage remains sufficient

@@ -16,7 +16,7 @@ pub(super) fn peer_echo_pane_lines(
             screen
                 .normal_content_lines()
                 .into_iter()
-                .filter(|line| line.starts_with("▐ "))
+                .filter(|line| line.starts_with("│ "))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()

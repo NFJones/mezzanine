@@ -190,7 +190,12 @@ fn display_column_for_fragment(line: &str, needle: &str) -> usize {
 /// boundaries should compare this normalized logical text instead.
 fn normalized_pane_log_text(text: &str) -> String {
     text.lines()
-        .map(|line| line.strip_prefix("▐ ").unwrap_or(line).trim())
+        .map(|line| {
+            line.strip_prefix("│ ")
+                .or_else(|| line.strip_prefix("▐ "))
+                .unwrap_or(line)
+                .trim()
+        })
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
@@ -199,10 +204,10 @@ fn normalized_pane_log_text(text: &str) -> String {
 /// Returns the expected full-width markdown frame row for a pane.
 fn expected_markdown_block_divider_line(columns: usize) -> String {
     format!(
-        "▐ {}",
+        "│ {}",
         EXPECTED_MARKDOWN_BLOCK_DIVIDER_GLYPH
             .to_string()
-            .repeat(columns.saturating_sub("▐ ".chars().count()))
+            .repeat(columns.saturating_sub("│ ".chars().count()))
     )
 }
 

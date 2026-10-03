@@ -396,7 +396,7 @@ fn runtime_agent_prompt_resume_displays_saved_transcript_context() {
         "{pane_text}"
     );
     assert!(pane_text.contains("Entries: 3"), "{pane_text}");
-    assert!(pane_text.contains("Resumed:\n▐ yes"), "{pane_text}");
+    assert!(pane_text.contains("Resumed:\n│ yes"), "{pane_text}");
     assert!(pane_text.contains("user> hello"), "{pane_text}");
     assert!(
         pane_text.contains("mez> I inspected the repo and started the change"),

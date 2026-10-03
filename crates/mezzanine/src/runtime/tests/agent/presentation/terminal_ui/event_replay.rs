@@ -34,7 +34,7 @@ fn runtime_streaming_replayed_command_start_has_one_label() {
         .unwrap()
         .normal_content_lines();
     assert_eq!(
-        lines.iter().filter(|line| line.trim_end() == "▐ $").count(),
+        lines.iter().filter(|line| line.trim_end() == "│ $").count(),
         1,
         "{lines:?}"
     );
@@ -75,7 +75,7 @@ fn runtime_streaming_replayed_say_start_has_one_label() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.trim_end() == "▐ mez>")
+            .filter(|line| line.trim_end() == "│ mez>")
             .count(),
         1,
         "{lines:?}"

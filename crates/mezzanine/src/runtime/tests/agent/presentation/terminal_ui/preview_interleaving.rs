@@ -266,9 +266,9 @@ fn runtime_streaming_say_after_settled_tail_preserves_visible_rows() {
         vec![
             "durable-three",
             "durable-four",
-            "▐ tail-one",
-            "▐ tail-two",
-            "▐ tail-three"
+            "│ tail-one",
+            "│ tail-two",
+            "│ tail-three"
         ]
     );
     service
@@ -314,14 +314,14 @@ fn runtime_streaming_say_after_settled_tail_preserves_visible_rows() {
             vec![
                 "durable-three",
                 "durable-four",
-                "▐ mez> replacement",
+                "│ mez> replacement",
                 "",
                 ""
             ],
             vec![
                 "durable-three",
                 "durable-four",
-                "▐ mez> replacement continued",
+                "│ mez> replacement continued",
                 "",
                 ""
             ],

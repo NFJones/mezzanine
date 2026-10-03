@@ -132,12 +132,12 @@ fn runtime_structured_pane_log_rows_honor_configured_column_cap() {
         "{rows:?}"
     );
     assert!(
-        rows.iter().all(|line| line.text.starts_with("▐ ")),
+        rows.iter().all(|line| line.text.starts_with("│ ")),
         "{rows:?}"
     );
     assert!(
         rows.iter()
-            .any(|line| line.text.starts_with("▐      recovery")),
+            .any(|line| line.text.starts_with("│      recovery")),
         "{rows:?}"
     );
 
@@ -263,17 +263,17 @@ fn runtime_structured_pane_log_replay_fallback_honors_configured_column_cap() {
             .all(|line| UnicodeWidthStr::width(line.as_str()) <= 24),
         "{rows:?}"
     );
-    assert!(rows.iter().all(|line| line.starts_with("▐ ")), "{rows:?}");
+    assert!(rows.iter().all(|line| line.starts_with("│ ")), "{rows:?}");
     assert!(
         rows.iter()
-            .any(|line| line.starts_with("▐      structured")),
+            .any(|line| line.starts_with("│      structured")),
         "{rows:?}"
     );
     assert!(
-        rows.iter().any(|line| line == "▐ thinking: alpha beta"),
+        rows.iter().any(|line| line == "│ thinking: alpha beta"),
         "{rows:?}"
     );
-    assert!(rows.iter().any(|line| line == "▐      gamma"), "{rows:?}");
+    assert!(rows.iter().any(|line| line == "│      gamma"), "{rows:?}");
 }
 
 /// Verifies legacy ANSI-only presentation records remain byte-stream replay
@@ -701,8 +701,8 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(pane_text.contains("▐ mez> alpha beta gamma"), "{pane_text}");
-    assert!(pane_text.contains("▐      delta epsilon"), "{pane_text}");
+    assert!(pane_text.contains("│ mez> alpha beta gamma"), "{pane_text}");
+    assert!(pane_text.contains("│      delta epsilon"), "{pane_text}");
 }
 
 mod source_ordering;

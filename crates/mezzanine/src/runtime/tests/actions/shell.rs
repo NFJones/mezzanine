@@ -798,9 +798,9 @@ fn runtime_shell_preview_handoff_preserves_bottom_viewport_origin() {
         vec![
             "durable-three",
             "durable-four",
-            "▐ tail-one",
-            "▐ tail-two",
-            "▐ tail-three",
+            "│ tail-one",
+            "│ tail-two",
+            "│ tail-three",
         ]
     );
     let projected_history_len = projected.history().len();
@@ -813,7 +813,7 @@ fn runtime_shell_preview_handoff_preserves_bottom_viewport_origin() {
     assert_eq!(replaced.history().len(), projected_history_len);
     assert_eq!(
         replaced.visible_lines(),
-        vec!["durable-three", "durable-four", "▐ next durable", "", "",]
+        vec!["durable-three", "durable-four", "│ next durable", "", "",]
     );
     assert_eq!(replaced.cursor_state().row, 3);
 }
@@ -868,7 +868,7 @@ fn runtime_shell_preview_shrink_preserves_visible_rows() {
         .unwrap();
     assert_eq!(
         service.agent_pane_screen("%1").unwrap().visible_lines(),
-        vec!["durable-three", "durable-four", "▐ shorter tail", "", ""]
+        vec!["durable-three", "durable-four", "│ shorter tail", "", ""]
     );
     assert!(service.settle_agent_shell_output_preview("%1", &owner));
     service
@@ -876,7 +876,7 @@ fn runtime_shell_preview_shrink_preserves_visible_rows() {
         .unwrap();
     assert_eq!(
         service.agent_pane_screen("%1").unwrap().visible_lines(),
-        vec!["durable-three", "durable-four", "▐ next durable", "", ""]
+        vec!["durable-three", "durable-four", "│ next durable", "", ""]
     );
     let displayed_replacement = service
         .render_client_view(ClientViewRole::Primary, client_size, &config)
@@ -949,7 +949,7 @@ fn runtime_shell_preview_shrink_keeps_clipped_replacement_visible() {
         .unwrap();
     assert_eq!(
         service.agent_pane_screen("%1").unwrap().visible_lines(),
-        vec!["▐ replacement", ""]
+        vec!["│ replacement", ""]
     );
     assert!(service.settle_agent_shell_output_preview("%1", &owner));
     service
@@ -957,7 +957,7 @@ fn runtime_shell_preview_shrink_keeps_clipped_replacement_visible() {
         .unwrap();
     assert_eq!(
         service.agent_pane_screen("%1").unwrap().visible_lines(),
-        vec!["▐ next durable", ""]
+        vec!["│ next durable", ""]
     );
 }
 
@@ -1732,7 +1732,7 @@ fn runtime_native_shell_redispatch_skips_owned_sibling_and_dispatches_later_acti
     for label in ["first", "second", "third"] {
         assert_eq!(
             pane_text
-                .matches(&format!("▐ native-redispatch-{label}\n"))
+                .matches(&format!("│ native-redispatch-{label}\n"))
                 .count(),
             1,
             "native sibling {label} should execute exactly once: {pane_text}"
@@ -2401,12 +2401,12 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(pane_text.contains("▐ $ printf 'alpha"), "{pane_text}");
-    assert!(pane_text.contains("▐   ["), "{pane_text}");
+    assert!(pane_text.contains("│ $ printf 'alpha"), "{pane_text}");
+    assert!(pane_text.contains("│   ["), "{pane_text}");
     let command_preview_line_count = pane_text
         .lines()
-        .skip_while(|line| !line.contains("▐ $ "))
-        .take_while(|line| line.contains("▐ $ ") || line.starts_with("▐   "))
+        .skip_while(|line| !line.contains("│ $ "))
+        .take_while(|line| line.contains("│ $ ") || line.starts_with("│   "))
         .count();
     assert_eq!(command_preview_line_count, 10, "{pane_text}");
     assert!(
@@ -2444,7 +2444,7 @@ fn runtime_agent_shell_command_preview_caps_wide_panes_at_120_cells() {
         .normal_styled_content_lines();
     let command_lines = styled_lines
         .iter()
-        .filter(|line| line.text.starts_with("▐ $ ") || line.text.starts_with("▐   "))
+        .filter(|line| line.text.starts_with("│ $ ") || line.text.starts_with("│   "))
         .collect::<Vec<_>>();
 
     assert!(command_lines.len() > 1, "{styled_lines:?}");
@@ -2455,14 +2455,14 @@ fn runtime_agent_shell_command_preview_caps_wide_panes_at_120_cells() {
         "{command_lines:?}"
     );
     assert!(
-        command_lines[0].text.starts_with("▐ $ "),
+        command_lines[0].text.starts_with("│ $ "),
         "{command_lines:?}"
     );
     assert!(
         command_lines
             .iter()
             .skip(1)
-            .all(|line| line.text.starts_with("▐   ")),
+            .all(|line| line.text.starts_with("│   ")),
         "{command_lines:?}"
     );
 }

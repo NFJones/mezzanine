@@ -4017,12 +4017,12 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
         "{pane_text}"
     );
     assert!(
-        pane_text.contains("▐ user> summarize visible output"),
+        pane_text.contains("│ user> summarize visible output"),
         "{pane_text}"
     );
     assert!(pane_text.contains("mez> The pane is ready."), "{pane_text}");
     assert!(
-        pane_text.contains("▐ mez> The pane is ready."),
+        pane_text.contains("│ mez> The pane is ready."),
         "{pane_text}"
     );
     assert!(
@@ -4041,9 +4041,9 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
         .into_iter()
         .find(|line| line.text.contains("mez> The pane is ready."))
         .unwrap();
-    assert!(assistant_line.text.starts_with("▐ "));
+    assert!(assistant_line.text.starts_with("│ "));
     assert!(!assistant_line.style_spans.is_empty());
-    let assistant_body_start = "▐ mez> ".chars().count();
+    let assistant_body_start = "│ mez> ".chars().count();
     assert!(
         assistant_line
             .style_spans
@@ -4071,7 +4071,7 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
         .into_iter()
         .find(|line| line.text.contains("user> summarize visible output"))
         .unwrap();
-    let user_body_start = "▐ user> ".chars().count();
+    let user_body_start = "│ user> ".chars().count();
     assert!(
         user_line
             .style_spans
@@ -4169,18 +4169,18 @@ fn runtime_user_prompt_logs_wrap_with_sixth_column_hanging_indent() {
         .unwrap()
         .normal_content_lines()
         .into_iter()
-        .filter(|line| line.starts_with("▐ "))
+        .filter(|line| line.starts_with("│ "))
         .collect::<Vec<_>>();
     assert!(
-        user_lines.iter().any(|line| line == "▐ user> alpha beta"),
+        user_lines.iter().any(|line| line == "│ user> alpha beta"),
         "{user_lines:#?}"
     );
     assert!(
-        user_lines.iter().any(|line| line == "▐      gamma delta"),
+        user_lines.iter().any(|line| line == "│      gamma delta"),
         "{user_lines:#?}"
     );
     assert!(
-        user_lines.iter().any(|line| line == "▐      epsilon"),
+        user_lines.iter().any(|line| line == "│      epsilon"),
         "{user_lines:#?}"
     );
     service.terminate_all_pane_processes().unwrap();

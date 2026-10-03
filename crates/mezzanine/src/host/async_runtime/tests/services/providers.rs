@@ -1086,7 +1086,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         .normal_content_lines()
         .join("\n");
     assert!(
-        pane_text.contains("▐ thinking: test action batch rationale"),
+        pane_text.contains("│ thinking: test action batch rationale"),
         "{pane_text}"
     );
     assert!(

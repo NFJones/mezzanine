@@ -184,7 +184,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         .map(|line| line.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    let collapsed_agent_wraps = pane_text.replace("\n▐ ", "");
+    let collapsed_agent_wraps = pane_text.replace("\n│ ", "");
     assert!(
         pane_text.contains("agent: apply patch: ") && collapsed_agent_wraps.contains(&target_rel),
         "{pane_text}"

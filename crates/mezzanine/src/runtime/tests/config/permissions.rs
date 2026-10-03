@@ -1346,7 +1346,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
         .normal_content_lines()
         .join("\n");
     assert!(pane_text.contains("project trust pending:"), "{pane_text}");
-    let collapsed_agent_wraps = pane_text.replace("\n▐ ", "");
+    let collapsed_agent_wraps = pane_text.replace("\n│ ", "");
     assert!(
         collapsed_agent_wraps.contains("/sandbox trust"),
         "{pane_text}"

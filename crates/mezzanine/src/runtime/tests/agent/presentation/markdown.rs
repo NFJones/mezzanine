@@ -163,14 +163,14 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
         assistant_line
             .style_spans
             .iter()
-            .any(|span| span.rendition.bold && span.start >= "▐ mez> ".chars().count()),
+            .any(|span| span.rendition.bold && span.start >= "│ mez> ".chars().count()),
         "{assistant_line:?}"
     );
     assert!(
         assistant_line
             .style_spans
             .iter()
-            .any(|span| span.rendition.underline && span.start >= "▐ mez> ".chars().count()),
+            .any(|span| span.rendition.underline && span.start >= "│ mez> ".chars().count()),
         "{assistant_line:?}"
     );
     assert!(
@@ -274,7 +274,7 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
     let table_rows = pane_lines
         .iter()
         .enumerate()
-        .filter(|(_, line)| line.contains('│'))
+        .filter(|(_, line)| line.strip_prefix("│ ").unwrap_or(line).contains('│'))
         .collect::<Vec<_>>();
     assert!(
         table_rows.len() > 3,
@@ -578,7 +578,7 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
             && span.rendition.foreground
                 == Some(service.ui_theme().colors.agent_transcript_user.foreground)
             && span.rendition.background.is_none()
-            && span.start >= "▐ mez> ".chars().count()
+            && span.start >= "│ mez> ".chars().count()
     }));
 
     let quote = styled_lines
@@ -731,7 +731,7 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
         .position(|line| line.text.contains("Later"))
         .unwrap();
     assert!(
-        later_heading_index > 0 && styled_lines[later_heading_index - 1].text.trim_end() == "▐",
+        later_heading_index > 0 && styled_lines[later_heading_index - 1].text.trim_end() == "│",
         "{styled_lines:?}"
     );
 }
@@ -833,7 +833,7 @@ fn runtime_agent_markdown_wraps_to_120_cells_and_indents_continuations() {
             .all(|line| line.text != expected_markdown_block_divider_line(120)),
         "{styled_lines:?}"
     );
-    let continuation_prefix = format!("▐ {}", " ".repeat("mez> • ".chars().count()));
+    let continuation_prefix = format!("│ {}", " ".repeat("mez> • ".chars().count()));
     let wrapped_lines = styled_lines
         .iter()
         .filter(|line| {
@@ -888,10 +888,10 @@ fn runtime_agent_markdown_thematic_break_expands_to_capped_divider_width() {
         .unwrap()
         .normal_styled_content_lines();
     let expected = format!(
-        "▐ mez> {}",
+        "│ mez> {}",
         EXPECTED_MARKDOWN_BLOCK_DIVIDER_GLYPH
             .to_string()
-            .repeat(120usize.saturating_sub("▐ mez> ".chars().count()))
+            .repeat(120usize.saturating_sub("│ mez> ".chars().count()))
     );
 
     assert!(

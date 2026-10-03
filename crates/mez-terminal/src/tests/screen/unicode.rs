@@ -219,6 +219,18 @@ fn terminal_screen_agent_gutter_wraps_emoji_variation_status_glyphs() {
     );
 }
 
+/// A box-drawing continuation prefix retains its two-cell footprint around
+/// Unicode bodies without changing the generic legacy-prefix fixtures.
+#[test]
+fn terminal_screen_box_drawing_gutter_wraps_unicode_body() {
+    let mut screen = TerminalScreen::new(Size::new(10, 4).unwrap(), 10).unwrap();
+    screen.set_wrap_continuation_prefix("│ ");
+    screen.feed("\x1b[31m│ \x1b[0mabcdefgh雪".as_bytes());
+    let lines = screen.visible_lines();
+    assert_eq!(lines[0], "│ abcdefgh");
+    assert!(lines[1].starts_with("│ 雪"), "{lines:?}");
+}
+
 /// Verifies live terminal-screen rows preserve multi-scalar emoji-presentation
 /// graphemes before the render canvas sees them. This protects against the
 /// scalar-cell regression where `⚠️` was reduced to bare `⚠`, causing host

@@ -93,7 +93,7 @@ fn runtime_agent_resize_reprojects_provider_and_shell_preview() {
     assert!(resized.contains("durable resize baseline"), "{resized}");
     let resized_compact = resized
         .chars()
-        .filter(|character| !character.is_whitespace() && *character != '▐')
+        .filter(|character| !character.is_whitespace() && *character != '│')
         .collect::<String>();
     assert!(
         resized_compact.contains("providerresizesource"),

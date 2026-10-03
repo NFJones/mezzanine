@@ -899,7 +899,7 @@ context_window_tokens = 128000
         .join("\n");
     let normalized_pane_text = pane_text
         .lines()
-        .map(|line| line.strip_prefix("▐ ").unwrap_or(line).trim())
+        .map(|line| line.strip_prefix("│ ").unwrap_or(line).trim())
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ");

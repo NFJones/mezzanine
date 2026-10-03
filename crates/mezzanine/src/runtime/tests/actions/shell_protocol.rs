@@ -1371,18 +1371,18 @@ fn runtime_agent_markdown_lists_keep_content_on_marker_row() {
     let pane_text = pane_lines.join("\n");
 
     assert!(
-        pane_text.contains("▐ mez> 1. first numbered item"),
+        pane_text.contains("│ mez> 1. first numbered item"),
         "{pane_text}"
     );
     assert!(
-        pane_text.contains("▐      2. second numbered item"),
+        pane_text.contains("│      2. second numbered item"),
         "{pane_text}"
     );
-    assert!(pane_text.contains("▐      • bullet item"), "{pane_text}");
+    assert!(pane_text.contains("│      • bullet item"), "{pane_text}");
     assert!(
-        !pane_lines.iter().any(|line| line.trim_end() == "▐ mez> 1."
-            || line.trim_end() == "▐      2."
-            || line.trim_end() == "▐      •"),
+        !pane_lines.iter().any(|line| line.trim_end() == "│ mez> 1."
+            || line.trim_end() == "│      2."
+            || line.trim_end() == "│      •"),
         "{pane_text}"
     );
 }

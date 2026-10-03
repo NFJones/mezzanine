@@ -66,25 +66,25 @@ fn runtime_agent_peer_and_parent_lines_colorize_name_markers() {
         service.ui_theme().colors.agent_transcript_error.foreground,
         "the parent marker must not reuse the transcript error foreground"
     );
-    let gutter = "▐ ".chars().count();
+    let gutter = "│ ".chars().count();
     for (text, marker, pair) in [
         (
-            "▐ agent-%3> check cwd",
+            "│ agent-%3> check cwd",
             "agent-%3>",
             service.ui_theme().colors.agent_transcript_peer_sender,
         ),
         (
-            "▐ parent> direct parent evidence",
+            "│ parent> direct parent evidence",
             "parent>",
             service.ui_theme().colors.agent_transcript_parent,
         ),
         (
-            "▐ parent> ordinary peer evidence",
+            "│ parent> ordinary peer evidence",
             "parent>",
             service.ui_theme().colors.agent_transcript_peer_sender,
         ),
         (
-            "▐ parent> restore parent",
+            "│ parent> restore parent",
             "parent>",
             service.ui_theme().colors.agent_transcript_parent,
         ),
@@ -317,13 +317,13 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
     assert!(
         replayed
             .iter()
-            .any(|line| line == "▐ agent-%3> check the pane cwd"),
+            .any(|line| line == "│ agent-%3> check the pane cwd"),
         "{replayed:#?}"
     );
     assert!(
         replayed
             .iter()
-            .any(|line| line == "▐ parent> direct parent replay evidence"),
+            .any(|line| line == "│ parent> direct parent replay evidence"),
         "{replayed:#?}"
     );
     // Replay re-derives each received-message marker from the persisted label,
@@ -346,7 +346,7 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
     );
     let received_marker = replayed_styled_rows
         .iter()
-        .find(|line| line.text == "▐ agent-%3> check the pane cwd")
+        .find(|line| line.text == "│ agent-%3> check the pane cwd")
         .expect("replayed received peer line");
     assert!(
         received_marker.style_spans.iter().any(|span| {
@@ -366,7 +366,7 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
     );
     let direct_parent_marker = replayed_styled_rows
         .iter()
-        .find(|line| line.text == "▐ parent> direct parent replay evidence")
+        .find(|line| line.text == "│ parent> direct parent replay evidence")
         .expect("replayed direct-parent peer line");
     assert!(
         direct_parent_marker.style_spans.iter().any(|span| {
@@ -490,7 +490,7 @@ fn runtime_agent_legacy_peer_message_record_still_replays() {
     assert!(
         verbose_rows
             .iter()
-            .any(|line| line == "▐ agent-%3> legacy peer evidence"),
+            .any(|line| line == "│ agent-%3> legacy peer evidence"),
         "verbose replay preserves legacy received payloads: {verbose_rows:#?}"
     );
     assert!(
