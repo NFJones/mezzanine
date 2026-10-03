@@ -178,8 +178,10 @@ recovery journals, while explicit catalog rebuild may enumerate sidecars
 without decompressing every archive.
 
 The `/resume` pager is active-only and scoped to the current Git project by
-default: sibling directories share the nearest repository root, including
-worktrees; outside Git, each canonical directory is its own project. Use `a`
+default: directories within the same nearest `.git` root share a project key.
+Each separate worktree or nested repository has its own root and project key;
+sharing a Git common directory does not merge their saved-session lists.
+Outside Git, each canonical directory is its own project. Use `a`
 to toggle all projects, `r` for the archived-only view, `A` to archive or
 restore the selected row, and Enter to restore and then resume an archived
 row. The Directory column and direct resume retain the saved working directory,

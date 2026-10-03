@@ -92,6 +92,30 @@ is an existing real directory. These loader and SDK reads do not enter
 configured `permissions.read_scopes`, do not grant write access, and do not
 replace the trusted-project fallback. Missing roots add no profile rule.
 
+### Inspect and clean managed Bubblewrap homes
+
+Use the dedicated maintenance commands rather than deleting managed homes by
+hand. These commands manage Bubblewrap homes, not provider prompt caches or
+Seatbelt temporary storage:
+
+```sh
+mez sandbox cache status PATH
+mez sandbox cache clear PATH --dry-run
+mez sandbox cache clear PATH --yes
+mez sandbox cache prune --dry-run
+```
+
+Replace `PATH` with the project directory; omit it to use the current directory.
+`clear` previews unless `--yes` confirms deletion. `prune` previews all inactive
+homes; add `--yes` only after reviewing that broader candidate set. `--dry-run`
+remains non-mutating even with `--yes`. Maintenance is limited to the private
+managed-home root, rejects symlinks and unsupported entries, and skips homes
+locked by active workloads. There is no automatic periodic or age-based pruning
+or persisted quota policy. Trust revocation does attempt best-effort removal of
+the affected project's managed home; verify the outcome rather than assuming
+cleanup succeeded. Cleanup removes managed-home files and caches, not project files, and
+does not revoke project trust or change explicit scopes.
+
 ## Review environment and integration exposure
 
 Native launches start from a cleared environment, using a small set of runtime

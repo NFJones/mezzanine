@@ -128,8 +128,9 @@ A skill file needs YAML front matter with `name` and `description`, followed
 by Markdown instructions. The directory name must match `name`, using only
 lowercase ASCII letters, digits, and hyphens. Auxiliary scripts or references
 are not automatically executed or loaded just because you invoke the skill.
-Model-selected skill discovery and loading are disabled by default; select
-skills explicitly instead of assuming the agent will find one itself.
+Model-selected skill discovery and loading are disabled and are not available
+through `agents.enabled_actions`. Use `/list-skills` and invoke the chosen
+workflow explicitly with `$<skill-name>`.
 
 `/sync-builtin-skills` restores managed built-in copies in the user configuration
 root. It preserves valid user overrides that omit the managed-version marker

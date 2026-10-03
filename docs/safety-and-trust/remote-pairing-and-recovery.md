@@ -109,9 +109,11 @@ name, scope, expiry and expired state, role, an abbreviated server fingerprint,
 and direct/relay route counts. It never prints the token.
 
 The role is only an attachment ceiling. `--allow-create` is required for remote
-`new` and omitted-target `attach`. Add `--allow-kill` only when that primary
-device should also be able to force-kill sessions it created; it requires
-`--allow-create`. Use `--max-leases`, `--max-live-sessions`, and
+`new` and for the creation fallback of omitted-target `attach`, not for resuming
+an existing authorized default. To avoid fallback creation, select an explicit
+session target or use `attach --default`. Add `--allow-kill` only when that
+primary device should also be able to force-kill sessions it created; it
+requires `--allow-create`. Use `--max-leases`, `--max-live-sessions`, and
 `--lease-lifetime-ceiling` to narrow creation authority below host limits.
 
 Invitation redemption and profile checks use host-only initialization. They do

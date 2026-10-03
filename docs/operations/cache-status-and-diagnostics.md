@@ -67,6 +67,13 @@ Run it only on a trusted machine; environment secrets remain accessible to
 appropriately privileged local processes. Do not type a real key into shell
 history or enable shell tracing.
 
+**Current credential-exposure limit:** the script also passes the authorization
+header to `curl` as a command-line argument. The key can therefore be visible
+to processes or monitoring tools allowed to inspect that process's arguments,
+even though the probe's own output is sanitized. Do not run it on a shared host
+or where process-argument collection is enabled without an approved credential
+handling policy.
+
 With `OPENAI_API_KEY` already supplied by your approved credential workflow:
 
 ```sh

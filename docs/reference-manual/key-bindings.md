@@ -68,6 +68,11 @@ editable input. The agent prompt recognizes `/` slash commands, `$` skills,
 `#` macros, and `@` MCP servers. `Ctrl+V` pastes host clipboard text into the
 visible agent prompt without submitting it.
 
+In the agent prompt, `Ctrl+J` inserts a literal newline; ordinary Enter submits
+the draft. During a running turn, ordinary submitted text guides that task
+rather than starting an independent one. In reverse history search, Enter
+accepts the match without submitting it; submit with a later Enter.
+
 External editing is also non-submitting. After a successful editor close, the
 edited text returns to the in-pane prompt for review and normal submission.
 While the editor is open, it exclusively owns the complete attached terminal:

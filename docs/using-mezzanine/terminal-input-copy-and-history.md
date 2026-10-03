@@ -102,15 +102,22 @@ The command prompt also provides `copy-selection`, `paste-clipboard`,
 `delete-buffer`. Bracketed paste is used when the pane application supports it.
 Host clipboard behavior depends on the terminal clipboard configuration.
 
+Use `choose-buffer NAME` to choose a named copy target, creating an empty buffer
+if needed, and `paste-buffer -b NAME` to paste that specific buffer. Copying with
+Space remains in copy mode; press Escape before returning to ordinary input.
+
 Alternate-screen application content is not added to normal pane scrollback;
 copying such a pane copies its currently visible text rather than hidden history.
 
 ## History and notifications
 
-Use `search-history` and `export-history` for normal pane history.
-`clear-history` clears bounded history after the applicable confirmation policy
-without changing the current screen unless requested. Use `show-messages` for
-diagnostics, pending approvals, and visible hook failures.
+Use `search-history` and `export-history` for the currently presented pane
+surface: process history when the agent shell is hidden, agent history when it
+is visible. Run `clear-history --confirm` to clear that surface's bounded history
+without changing its current screen. Without an explicit confirmation flag,
+`clear-history` reports that confirmation is required and leaves history intact.
+These commands do not implicitly expose or clear the hidden surface.
+Use `show-messages` for diagnostics, pending approvals, and visible hook failures.
 
 Command-output views support `/` text search. An empty `/` repeats the previous
 search. Exact behavior and all default bindings belong to the manual reference.

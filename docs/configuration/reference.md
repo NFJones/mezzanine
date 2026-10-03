@@ -513,7 +513,7 @@ their dedicated theme behavior.
 ```toml
 [frames.window.pills.cpu]
 label = "CPU"
-command = "printf '42%'"
+command = "printf '%s\\n' '42%'"
 interval_seconds = 1
 timeout_ms = 750
 empty_behavior = "hide"
@@ -1026,8 +1026,10 @@ an agent boundary for cache accounting and anti-probing isolation. Diagnostics
 report the purpose and a partition digest, never the raw identity or prompt.
 Reasoning-level vocabularies are per provider: DeepSeek accepts `low`, `high`,
 and `max` (the `xhigh` alias maps to `max`); OpenAI Responses accepts `low`,
-`medium`, `high`, and `xhigh`; Anthropic Messages accepts `low`, `medium`,
-`high`, `xhigh`, and `max`. Unknown adapter kinds stay permissive. A model
+`medium`, `high`, and `xhigh`, with `none` and `max` also accepted for the
+configured `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna` records. Anthropic
+Messages accepts `low`, `medium`, `high`, `xhigh`, and `max`. Unknown adapter
+kinds stay permissive. A model
 profile whose `reasoning_profile` cannot be matched against resolvable
 metadata is rejected at validation time; renaming or deleting a model record
 therefore requires re-declaring its `reasoning_levels` and `capabilities`.
@@ -1416,7 +1418,9 @@ and whether a workload currently holds the home active. `cache clear [PATH]`
 and `cache prune` preview inactive deletion candidates unless `--yes` is given;
 `--dry-run` always previews. Active homes are skipped. Inspection and deletion
 reject symlinks and remain scoped to Mezzanine's private project/profile cache
-root. There is no automatic cleanup or persisted quota setting.
+root. There is no automatic periodic or age-based pruning or persisted quota
+setting. Trust revocation does attempt best-effort removal of the affected
+project's managed home; verify cleanup rather than assuming it succeeded.
 
 Guided setup is available through `mez sandbox plan`, `enable`, `preset apply`,
 and `disable`. Project trust records are managed through `mez sandbox trust`.
@@ -1508,11 +1512,13 @@ supplementary groups. Changing the mapping does not discard the project's
 persistent XDG caches.
 
 Mezzanine collects the active UID, primary GID, and named kernel group set from
-the active pane bootstrap. It rejects unknown or inactive configured names,
-duplicate GID mappings, and the automatic primary group. Probes and workloads
-invoke the pane-local configured Bubblewrap executable directly. Mezzanine does
-not add, replace, or filter supplementary credentials, so a pane session must
-already carry every configured group and may retain unconfigured ambient groups.
+the active pane bootstrap. At runtime, unknown or inactive configured names,
+aliases of an already selected GID, and entries duplicating the automatic
+primary group are omitted from the synthetic group file with warnings; they do
+not by themselves reject sandbox admission. Probes and workloads invoke the
+pane-local configured Bubblewrap executable directly. Mezzanine does not add,
+replace, or filter supplementary credentials: selected names must already be
+active in the pane, and unconfigured ambient kernel groups remain inherited.
 
 Mezzanine then validates the configured Bubblewrap executable inside the target
 pane environment. The probe requires usable

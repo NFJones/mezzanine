@@ -77,7 +77,9 @@ Enter `/plan on` before a read-only investigation. Plan-only mode applies to
 subsequent turns until `/plan off` or `/plan toggle` disables it. While enabled,
 the pane has no write sandbox scopes; `/plan status` reports the mode. Enabling
 it during active work requests that work stop. Plan mode does not replace
-approval policy or operating-system confinement.
+approval policy or operating-system confinement. With `policy-only` or sandbox
+bypass, removing write scopes does not make shell processes OS-confined or
+guarantee read-only execution.
 
 Use `/objective <text>` to set a durable, peer-visible objective for the
 conversation. This overrides automatic objectives until `/objective --clear`.
@@ -151,8 +153,10 @@ report a diagnostic on failure rather than remaining in bootstrap indefinitely.
 
 Use `/shell-mode status` to inspect the effective mode. Select
 `/shell-mode native` or `/shell-mode pane` for a pane-local override. Append
-`--global` to persist the default for panes without an override. Pane-local
-overrides are not durable across runtime restarts.
+`--global` to persist the default for panes without an override. A global change
+does not clear an existing pane-local override, including one in the issuing
+pane; check `/shell-mode status` afterward. Pane-local overrides are not durable
+across runtime restarts.
 
 Native actions use a cleared base environment, not the daemon's full
 environment. Optional values come only from `permissions.env_whitelist` in

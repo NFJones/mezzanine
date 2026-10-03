@@ -537,7 +537,8 @@ render with `terminal/view`:
 ```
 
 The result is `{ "view": RenderedClientView | null, "presentation_ids":
-[integer], "event_cutoff": integer }`.
+[integer], "view_identity": string, "event_cutoff": integer,
+"render_rate_limit_fps": integer }`.
 `event_cutoff` is the latest ordered server event whose applied state is
 represented when the authoritative view is rendered. A view includes its role;
 authoritative and client size; viewport and scroll bounds; cursor state;
@@ -545,6 +546,17 @@ input/output modes; an optional agent-prompt region; textual `lines`; and
 `line_style_spans`. A frontend renders this projection, respecting cursor,
 styles, scroll responsibility, bracketed paste, mouse reporting, and any
 animation refresh interval.
+
+For a conditional fetch, send `if_view_identity` with the server-issued lowercase
+SHA-256 identity of the last completely committed exact-client view. The identity
+also covers pending presentation receipt IDs and effective render cadence. When
+all of these still match, the server may instead return
+`{ "not_modified": true, "view_identity": string, "event_cutoff": integer,
+"render_rate_limit_fps": integer }`, without `view` or `presentation_ids`.
+Reject this response unless its identity matches the committed base; otherwise
+retain that frame and advance the event cutoff. A null `view` is not a
+not-modified response. Omitting `if_view_identity` retains the complete-view
+response, and older peers may return a complete view even when it is supplied.
 
 Send user input through `terminal/step`, with bytes as integers in `0..255`.
 Include `client_size` whenever geometry changes and set `render` false only

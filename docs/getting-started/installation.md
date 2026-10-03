@@ -58,16 +58,23 @@ Cargo-installed executable, run:
 cargo uninstall mezzanine
 ```
 
-## Before enabling confinement
+## Check first-run protection defaults
 
 Linux Bubblewrap confinement requires executable `/usr/bin/bwrap`. macOS
 Seatbelt confinement requires executable `/usr/bin/sandbox-exec`; Apple
 deprecates this command/profile interface, so verify it on every supported
-macOS release. Mezzanine installs no privileged helper. Missing fixed
-executables select `policy-only` for new configuration, and explicitly
-configured backends fail closed rather than falling back. Review filesystem,
-network, approval, and backend-specific namespace semantics before enabling
-confinement.
+macOS release. Mezzanine installs no privileged helper.
+
+New Linux and macOS configurations select the available fixed backend with
+`full-access` approval policy. If the platform's fixed executable is missing,
+they select `policy-only` with `auto-allow` instead: this does **not** provide
+operating-system confinement or require approval for every action. Executable
+presence is not proof that confinement works on your machine; explicitly
+configured backends fail closed rather than falling back.
+
+Before submitting an agent task, inspect `/sandbox status` and `/approval` in
+the agent shell. Review filesystem, network, approval, and backend-specific
+namespace semantics in [Safety, trust, and security](../safety-and-trust/README.md).
 
 ## Related pages
 

@@ -92,6 +92,27 @@ suite:
 | Release-mode load and latency | `just release-load-check` or `just release-load-sweep` |
 | Iroh compression behavior or performance | `just iroh-compression-bench` |
 | Iroh v3 pushed-render behavior or RTT modeling | `just iroh-render-bench` |
+| OpenAI cache-probe authorization, request shape, and redaction (fake transport) | `just test-openai-prompt-cache-probe` |
+
+Wrap test-running recipes that do not supply their own timeout, including the
+release-load and Iroh benchmark recipes, in `timeout` with a budget of at least
+120 seconds; allow extra time for release compilation or a multi-run sweep.
+
+For native Linux power-inhibition changes, the optional
+`MEZ_REAL_LINUX_POWER_INHIBITION=1 just test-real-linux-power-inhibition`
+qualifies the real systemd-logind and desktop ScreenSaver backend. It requires
+a systemd host, `busctl`, accessible system and session D-Bus services, and
+`DBUS_SESSION_BUS_ADDRESS`; WSL and missing services fail preflight rather than
+substituting fake coverage. The script supplies a 120-second test timeout and
+does not change idle settings.
+
+`just probe-openai-prompt-cache` is a separate live-provider observation, not
+part of the offline regression recipe or required suite. It sends two synthetic
+requests only with `MEZ_OPENAI_CACHE_PROBE=1`, an environment-supplied
+`OPENAI_API_KEY`, and `MEZ_OPENAI_CACHE_PROBE_MODEL`. It requires `curl` and
+Python 3, uses only the canonical OpenAI Responses endpoint, and prints sanitized
+cache-usage observations. Do not put credentials in command arguments or reports;
+live requests require explicit authorization and may incur provider charges.
 
 The release-load artifact is content-safe and report-only. Alongside the
 multi-pane PTY/input/render workload, it records the fixture count and body

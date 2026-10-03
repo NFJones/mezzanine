@@ -61,6 +61,10 @@ prefix before pressing the next key; uppercase letters require Shift.
 | `Ctrl+A n` / `Ctrl+A p` | Select the next or previous window. |
 | `Ctrl+A C` | Create a window group. |
 | `Ctrl+A (` / `Ctrl+A )` | Select the previous or next group. |
+| `Ctrl+A z` | Toggle zoom for the active pane. |
+| `Ctrl+A x` | Kill the active pane after confirmation. |
+| `Ctrl+A &` | Kill the current window after confirmation. |
+| `Ctrl+A Ctrl+A` | Send a literal `Ctrl+A` to the pane process. |
 | `Ctrl+A d` | Detach the invoking primary client. |
 
 Open the Mezzanine command prompt with `Ctrl+A :` for commands such as
@@ -104,7 +108,16 @@ non-live reconstructed session model and resume plan; it does not leave a
 runtime or pane processes running. With `--serve`, Mez starts a new live
 runtime with fresh pane shell processes and fresh process IDs. Neither form
 restores process state, terminal history, attached clients, client-local
-presentation, approvals, agent conversations, or live integration state.
+presentation, approvals, or live integration state. Agent conversations are
+saved separately, not embedded in the layout snapshot. Snapshot resume with
+`--serve` creates a fresh session identity and does not automatically inherit
+the original session's pane-to-conversation bindings. Non-live reconstruction
+retains the snapshot's session identity but starts no conversation runtime.
+Use `/resume` in the live session to select a saved
+conversation explicitly. Same-session recovery can restore matching durable
+conversation bindings, but that is separate from this snapshot workflow;
+unrecoverable active turns are marked interrupted rather than replayed.
+
 Snapshot files contain metadata such as pane titles and working-directory
 paths, so treat them as sensitive when sharing or backing them up.
 

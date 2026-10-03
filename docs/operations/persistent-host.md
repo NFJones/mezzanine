@@ -80,7 +80,7 @@ Type=simple
 User=YOUR_USER
 Group=YOUR_GROUP
 Environment=HOME=/home/YOUR_USER
-Environment=XDG_RUNTIME_DIR=/run/mez
+Environment=MEZ_TMPDIR=/run/mez
 RuntimeDirectory=mez
 RuntimeDirectoryMode=0700
 ExecStart=/home/YOUR_USER/.cargo/bin/mez host serve
@@ -101,6 +101,23 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now mez-host.service
 sudo systemctl status mez-host.service
 ```
+
+Use the same runtime-directory selection in every administering or attaching
+shell for this unit:
+
+```sh
+export MEZ_TMPDIR=/run/mez
+mez host status
+```
+
+`MEZ_TMPDIR` takes precedence over other runtime-directory settings and selects
+`/run/mez/mez-<uid>` for this example. Without that export, a normal Linux login
+shell usually selects `$XDG_RUNTIME_DIR/mez` instead and can miss the running
+host or start a separate direct-session daemon. Do not use `-S` to target
+`host.sock`: that selector expects a session control socket and bypasses host
+routing. Keep the same configuration root as the service as well. Using
+`MEZ_TMPDIR` avoids replacing the desktop session's `XDG_RUNTIME_DIR`; it does
+not supply a graphical session bus or clipboard environment to the service.
 
 Use an unprivileged UDP port for optional Iroh service. Do not routinely grant
 file or ambient capabilities to the general-purpose `mez` executable merely

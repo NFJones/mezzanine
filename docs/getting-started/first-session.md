@@ -40,15 +40,19 @@ a bounded request that favors inspection, such as:
 > Read this crate, identify the most relevant failing or risky area, and
 > propose the smallest safe fix. Start with local reads and focused commands.
 
-Review requested approvals. Approval decisions and operating-system confinement
-are separate protections; do not relax either without understanding the active
-policy and sandbox.
+Before submitting the request, inspect `/sandbox status` and `/approval`.
+First-run defaults may allow actions without asking, and `policy-only` provides
+no operating-system confinement. Review any requested approvals. Approval
+decisions and confinement are separate protections; do not relax either without
+understanding the active policy and sandbox.
 
 For a first read-only investigation, enter `/plan on` before the request. This
 enables plan-only mode for subsequent turns and removes the pane's write sandbox
 scopes. Enter `/plan off` when you are ready to allow changes; use `/plan status`
-to check the mode. Use `/status` to inspect the active model and policy, and
-`/help` for the available agent controls.
+to check the mode. Plan mode instructs the agent not to make changes; it is not
+an OS-enforced read-only boundary under `policy-only` or sandbox bypass.
+Use `/status` to inspect the active model and policy, and `/help` for the
+available agent controls.
 
 ## Leave and resume work
 

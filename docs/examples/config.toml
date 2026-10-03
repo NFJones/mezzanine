@@ -487,8 +487,10 @@ peer_message_loop_limit = 1000
 # while bridge traffic remains receiver-only. `verbose` adds bounded raw media.
 peer_message_log_mode = "normal"
 # Saved-session title source: `generated` stores one bounded model-authored
-# title per conversation, else falls back to the agent objective and then the
-# first prompt; `objective`, `last_prompt`, and `first_prompt` mirror that source
+# title after the first prompt and refreshes it every five inbound prompts
+# (from the user, parent, or peers).
+# Without a generated title it falls back to the agent objective and then the
+# first prompt; `objective`, `last_prompt`, and `first_prompt` use that source
 # without a provider call. A manual `/name-session` name always wins.
 session_title_policy = "generated"
 # Optional cheaper model profile for generated session titles; empty uses the
@@ -654,8 +656,9 @@ env_whitelist = ["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"]
 #? unavailable = "fail"
 #? network = "isolated"
 #? environment = "minimal"
-# Exact host supplementary groups to project. The primary group is automatic;
-# an empty list strips all ambient supplementary groups.
+# Supplementary names exposed in the synthetic group file. The primary group
+# is automatic; an empty list adds no supplementary names to that file.
+# This does not add, replace, or filter inherited kernel group credentials.
 #? group_whitelist = []
 #? git_user_name = "Your Name"
 #? git_user_email = "you@example.invalid"

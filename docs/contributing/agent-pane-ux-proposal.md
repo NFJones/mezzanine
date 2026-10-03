@@ -5,7 +5,11 @@
 Design proposal with the first composer stage implemented. The runtime now
 supplies typed submission/binding context and the shared prompt block adds
 display-only context/help in comfortable geometry, retaining compact panes and
-existing input semantics. Transcript renditions have been restored to the pinned
+existing input semantics. The adopted editable marker is `⟩ `, with no outer
+transcript gutter or explicit background on the marker, draft, shadow hints,
+or input padding. The earlier `❱ ` and colored-input-surface descriptions below
+are historical proposal material, not the current composer contract.
+Transcript renditions have been restored to the pinned
 pre-refactor baseline: category-colored gutters, bold assistant/user labels and
 dim status/thinking text. The quieter rail remains a proposal, not the adopted
 appearance. Explicit retained activity list/detail inspection now exists through
@@ -20,7 +24,7 @@ hierarchy first; introduce expandable activity groups only after giving them
 reliable semantic identity. Preserve Mezzanine's multiplexer density, keyboard
 editing, explicit execution boundaries, and stable logs.
 
-## What the current implementation establishes
+## Original implementation baseline
 
 | Evidence | UX implication |
 | --- | --- |

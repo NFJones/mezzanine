@@ -31,6 +31,19 @@ live-change behavior. Keep the destination in a private, operator-controlled
 directory with sufficient space. Do not point it at an untrusted repository,
 shared writable directory, or symlink.
 
+Use a dedicated directory: logging creates missing storage and applies `0700`
+to the immediate parent and `0600` to the log file. Choosing an existing shared
+directory can therefore change its permissions. Relative `audit.path` values
+resolve beneath the Mezzanine configuration root.
+
+**Current path-safety limit:** audit file appends do not reject a symlink at the
+destination or use a no-follow file open. The asynchronous writer checks the
+immediate parent for a symlink, but this is not descriptor-based protection of
+the entire path. Protect every parent directory from untrusted replacement;
+owner-only permissions applied after opening are not proof of safe path
+resolution. Do not assume the stronger remote credential-file handling also
+applies to audit logs.
+
 When enabled, structured records cover security-relevant events such as
 authentication, permissions, approvals, shell execution, configuration,
 subagents, and connectors. Fields include event/session identity, actor, action,

@@ -243,5 +243,7 @@ directs. Removing a key from Mez does not revoke it in AWS.
 
 ## Next step
 
-Run `mez config validate`, reload Mez, and use `/model list` to confirm that the
-Bedrock profile is selectable before relying on it for production work.
+Run `mez config validate`, reload Mez, and select `/model bedrock-default`.
+Use `/model list` to inspect the active provider's configured model records
+before relying on it for production work; listing models does not verify AWS
+entitlement or a successful inference request.
