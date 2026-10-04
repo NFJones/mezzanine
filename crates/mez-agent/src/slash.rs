@@ -6,6 +6,9 @@
 
 use std::fmt;
 
+mod status;
+pub use status::{STATUS_USAGE, StatusOptions, StatusScope, parse_status_options};
+
 /// Describes the externally visible effect class of an agent slash command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashCommandEffect {

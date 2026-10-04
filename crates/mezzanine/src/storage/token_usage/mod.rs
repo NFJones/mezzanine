@@ -17,7 +17,10 @@ mod history;
 mod projects;
 mod store;
 
-pub(crate) use history::TokenHistoryScope;
+pub(crate) use history::checked_usage_sum as checked_history_usage_sum;
+pub(crate) use history::{
+    TokenHistoryKey, TokenHistoryScope, TokenHistorySnapshot, TokenHistoryUsage,
+};
 
 pub(crate) use projects::{
     AccountingOrigin, AccountingProjectId, AccountingProjectRecord, accounting_origin_for_root,

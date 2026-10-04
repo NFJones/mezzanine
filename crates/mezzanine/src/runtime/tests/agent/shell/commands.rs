@@ -567,7 +567,7 @@ fn runtime_agent_shell_extended_status_handles_empty_and_degraded_stores() {
         r#"{"jsonrpc":"2.0","id":"invalid-extended","method":"agent/shell/command","params":{"idempotency_key":"invalid-extended","input":"/status --verbose"}}"#,
         &primary,
     );
-    assert!(invalid.contains("status accepts only the optional --extended argument"));
+    assert!(invalid.contains(mez_agent::slash::STATUS_USAGE));
 
     let broken_path = root.join("database-is-a-directory");
     fs::create_dir_all(&broken_path).unwrap();

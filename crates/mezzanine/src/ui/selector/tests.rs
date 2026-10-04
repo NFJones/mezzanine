@@ -1060,7 +1060,10 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
         " [--fork|--new] [--limit <int>] [--goal <string>] <prompt>"
     );
     assert_eq!(latency_hint.text, " <slow|default|fast>");
-    assert_eq!(status_hint.text, " [--extended]");
+    assert_eq!(
+        status_hint.text,
+        " [--extended] [--project | --all-projects]"
+    );
     assert_eq!(plan_hint.text, " <on|off|toggle|status>");
     assert_eq!(trust_hint.text, " [project-root|latest|list|pending]");
     assert_eq!(shell_mode_hint.text, " <status|pane|native>");

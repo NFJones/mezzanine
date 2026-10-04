@@ -49,6 +49,7 @@ pub use discovery::{
 pub use discovery::{
     discover_project_trust_prompt, select_overlay_for_directory, summarize_overlay_capabilities,
 };
+pub(crate) use resolution::resolve_canonical_project_trust_provenance;
 pub use resolution::{ProjectTrustProvenance, resolve_project_trust_provenance};
 #[cfg(test)]
 pub use types::ProjectTrustPrompt;

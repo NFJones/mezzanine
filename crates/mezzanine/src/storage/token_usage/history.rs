@@ -57,7 +57,10 @@ pub(crate) struct TokenHistorySnapshot {
 /// Adds exact history counters while preserving existing unknown-cache semantics.
 /// Every field is checked before returning a replacement, so errors cannot leave
 /// a partly updated aggregate or a plausible saturated total.
-fn checked_usage_sum(current: ModelTokenUsage, next: ModelTokenUsage) -> Result<ModelTokenUsage> {
+pub(crate) fn checked_usage_sum(
+    current: ModelTokenUsage,
+    next: ModelTokenUsage,
+) -> Result<ModelTokenUsage> {
     fn sum(a: u64, b: u64) -> Result<u64> {
         a.checked_add(b)
             .ok_or_else(|| MezError::invalid_state("token history aggregate overflow"))

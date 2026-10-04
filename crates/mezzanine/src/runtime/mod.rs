@@ -259,6 +259,7 @@ pub(crate) use config::{
 mod control;
 pub(crate) use control::ExternalUsageWork;
 pub(crate) use control::RuntimeControlComponent;
+pub(crate) use control::status::StatusControlWork;
 pub(crate) use control::{
     RuntimeAgentTranscriptContext, execute_runtime_agent_prompt_history_work,
 };

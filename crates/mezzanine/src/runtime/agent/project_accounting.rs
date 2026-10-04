@@ -378,6 +378,18 @@ impl RuntimeSessionService {
     }
 
     /// Returns pane-view partitions without database or project discovery.
+    /// Returns native runtime-instance partitions independently of pane resets.
+    pub(crate) fn project_usage_for_instance(&self) -> Vec<ProjectTokenUsage> {
+        let mut rows = Vec::new();
+        for conversation in self.agent.agent_token_usage_by_conversation.keys() {
+            for row in self.project_usage_for_conversation(conversation) {
+                add_partition(&mut rows, row.project_id, &row.model, row.usage);
+            }
+        }
+        rows
+    }
+
+    /// Returns pane-view partitions without database or project discovery.
     pub(crate) fn project_usage_for_pane(&self, pane: &str) -> Vec<ProjectTokenUsage> {
         self.agent
             .project_usage_by_pane

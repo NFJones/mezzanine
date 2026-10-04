@@ -9992,19 +9992,31 @@ The baseline command capabilities are:
   conversation and immutable project origin; pane totals require the original
   root incarnation. Auxiliary title usage MUST NOT replace ordinary context/cache
   samples, and accounting failure MUST NOT replay a provider request.
-  `/status` MUST accept the optional `--extended`
-  argument and MUST reject other arguments. Only `/status --extended` may query
-  durable token-accounting storage or render rolling-history sections. It MUST
-  append `7-Day Token Usage`, `30-Day Token Usage`, `60-Day Token Usage`, and
-  `90-Day Token Usage` tables in that order after the pane and mez-session
-  accounting tables, using the same columns and per-model formatting. Each
+  `/status` MUST accept `[--extended] [--project | --all-projects]` in either
+  flag order, rejecting duplicates, conflicting scopes, values and operands.
+  Unqualified status MUST preserve overall totals and memory-only live display.
+  Scoped reports MUST be labelled STATIC snapshots: `--project` selects the
+  invoking pane's eligible qualified accounting project without a path argument;
+  unavailable project evidence MUST NOT fall back to overall totals.
+  `--all-projects` MUST include registered zero-use projects, trust/version labels,
+  historical unregistered partitions and an explicit unattributed remainder.
+  Accounting tables MUST retain harness/provider/model identity and unknown
+  category coverage; pane model/context/permission diagnostics remain pane-scoped.
+  Only `--extended` may query durable accounting, outside serialized actor
+  ownership. Acceptance freezes client, pane/conversation, command generation,
+  project/cwd evidence, counters, registry and UTC time. Stale outcomes MUST NOT
+  publish to a changed owner; interactive reports belong only to their caller.
+  Rolling windows are `1`, `7`, `30`, `60`, and `90` days in that order, stopping
+  at the first window containing the oldest eligible retained event, or including
+  all windows for older history. Empty history omits rolling sections. All-project
+  comparisons MUST share the same window set and one read snapshot. Each
   window MUST use one shared UTC query time, include events exactly on its
   `days * 86,400`-second lower boundary, and exclude future-dated events. The
   durable store MUST retain raw events for at least 90 days, preserve unknown
   cached-token counters, include main and auxiliary provider calls, and MUST
   NOT fabricate history from restored transcript totals. Collection therefore
   begins when durable accounting is installed; existing transcript totals are
-  not backfilled. Empty attached storage MUST render header-only rolling tables.
+  not backfilled. Zero-use registered headings MUST NOT fabricate model rows.
   Query or prior write failure MUST render a bounded rolling-accounting
   unavailable diagnostic instead of deceptively empty totals.
 - `/reset-status`: Clear only the current panes pane-lifetime provider token

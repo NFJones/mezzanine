@@ -16,6 +16,15 @@ token information. At debug or trace logging levels, `/copy-trace-log` exports
 the pane's bounded retained diagnostic trace. Review it before sharing: task
 and action diagnostics can be sensitive, and trace output is not the audit log.
 
+Use `/status --project` for the invoking pane's eligible accounting project,
+or `/status --all-projects` for registered projects (including zero usage),
+historical IDs and unattributed remainder. Neither scope accepts a path. These
+are STATIC accounting snapshots, while model/context/permission diagnostics
+remain pane-scoped. Add `--extended` in either order for off-actor durable history.
+All projects share one UTC query instant, consistent read snapshot and visible
+1/7/30/60/90-day window set. Missing registry/project/storage is unavailable,
+not verified zero. Pane reset does not erase session or durable expense.
+
 | Observation | Interpretation |
 | --- | --- |
 | `Cumulative cache hit` | Token-weighted ratio across retained provider samples, including cold starts and auxiliary routing or sizing requests. |

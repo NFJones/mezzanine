@@ -479,6 +479,9 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_routing_applied: BTreeSet<String>,
     /// Provider turns queued for worker dispatch.
     pending_agent_provider_tasks: BTreeSet<String>,
+    /// Acceptance-frozen status inputs awaiting exact deferred-command claim.
+    pending_status_reports:
+        BTreeMap<(String, u64), crate::runtime::commands::RuntimeStatusReportWork>,
     /// Provider turns claimed by workers but not yet settled.
     claimed_agent_provider_tasks: BTreeMap<String, RuntimeAgentProviderClaim>,
     /// Exact issued requests retained independently of active content claims.
@@ -930,8 +933,33 @@ impl RuntimeAgentComponent {
         true
     }
 
+    /// Retains one acceptance snapshot, replacing obsolete inputs for that pane.
+    pub(crate) fn retain_status_report(
+        &mut self,
+        pane: &str,
+        generation: u64,
+        report: crate::runtime::commands::RuntimeStatusReportWork,
+    ) {
+        self.pending_status_reports
+            .retain(|(owner, _), _| owner != pane);
+        self.pending_status_reports
+            .insert((pane.to_string(), generation), report);
+    }
+
+    /// Consumes the exact snapshot associated with a deferred status claim.
+    pub(crate) fn take_status_report(
+        &mut self,
+        pane: &str,
+        generation: u64,
+    ) -> Option<crate::runtime::commands::RuntimeStatusReportWork> {
+        self.pending_status_reports
+            .remove(&(pane.to_string(), generation))
+    }
+
     /// Cancels any non-terminal command whose pane has been removed.
     pub(crate) fn cancel_agent_command(&mut self, pane_id: &str) -> bool {
+        self.pending_status_reports
+            .retain(|(pane, _), _| pane != pane_id);
         let Some(lifecycle) = self.agent_command_lifecycles.get_mut(pane_id) else {
             return false;
         };
@@ -959,6 +987,8 @@ impl RuntimeAgentComponent {
             && let Some(lifecycle) = self.agent_command_lifecycles.get_mut(pane_id)
             && !lifecycle.phase.is_terminal()
         {
+            self.pending_status_reports
+                .remove(&(pane_id.to_string(), command_id));
             lifecycle.phase = RuntimeAgentCommandLifecyclePhase::Cancelled;
             return true;
         }
@@ -967,6 +997,7 @@ impl RuntimeAgentComponent {
 
     /// Cancels every deferred command during terminal runtime shutdown.
     pub(crate) fn cancel_all_agent_commands(&mut self) -> usize {
+        self.pending_status_reports.clear();
         let mut count = 0usize;
         for lifecycle in self.agent_command_lifecycles.values_mut() {
             if !lifecycle.phase.is_terminal() {

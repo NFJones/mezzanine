@@ -17,6 +17,9 @@ use crate::runtime::runtime_agent_turn_duration_display;
 use crate::storage::token_usage::TOKEN_USAGE_WINDOWS_DAYS;
 use crate::ui::command::auth_status_store_table_row;
 
+mod report;
+pub(crate) use report::RuntimeStatusReportWork;
+
 const TOKEN_USAGE_TABLE_COLUMNS: [&str; 7] = [
     "Provider",
     "Model",
@@ -94,27 +97,24 @@ impl RuntimeSessionService {
     /// Executes `/status` against the live runtime status source.
     pub(super) fn execute_agent_shell_status_command(
         &self,
+        client: &mez_core::ids::ClientId,
         pane_id: &str,
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
         let slash = parse_slash_command(input)?
             .ok_or_else(|| MezError::invalid_args("status command must be a slash command"))?;
-        let extended = match slash.args.trim() {
-            "" => false,
-            "--extended" => true,
-            _ => {
-                return Err(MezError::invalid_args(
-                    "status accepts only the optional --extended argument",
-                ));
-            }
-        };
-        let body = self.runtime_agent_status_display_with_options(pane_id, extended)?;
-        if extended {
+        let options =
+            mez_agent::slash::parse_status_options(&slash.args).map_err(MezError::invalid_args)?;
+        if options.extended || options.scope != mez_agent::slash::StatusScope::Overall {
+            let body = self
+                .prepare_status_report(client, pane_id, options)?
+                .render()?;
             Ok(AgentShellCommandOutcome::Display {
                 command: "status".to_string(),
                 body,
             })
         } else {
+            let body = self.runtime_agent_status_display_with_options(pane_id, false)?;
             Ok(AgentShellCommandOutcome::LiveDisplay {
                 command: "status".to_string(),
                 body,
@@ -160,6 +160,16 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
         extended: bool,
+    ) -> Result<String> {
+        self.runtime_agent_status_display_with_accounting(pane_id, extended, true)
+    }
+
+    /// Builds pane diagnostics separately from the selected accounting report.
+    fn runtime_agent_status_display_with_accounting(
+        &self,
+        pane_id: &str,
+        extended: bool,
+        accounting: bool,
     ) -> Result<String> {
         let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
             MezError::new(
@@ -365,11 +375,13 @@ impl RuntimeSessionService {
             ],
             vec![
                 "Pane agent tokens".to_string(),
-                Self::runtime_agent_provider_token_usage_summary(&token_usage_by_model),
+                if accounting { Self::runtime_agent_provider_token_usage_summary(&token_usage_by_model) }
+                else { "see scoped accounting snapshot".to_string() },
             ],
             vec![
                 "Cumulative cache hit".to_string(),
-                Self::runtime_agent_cumulative_cache_hit_display(&token_usage_by_model),
+                if accounting { Self::runtime_agent_cumulative_cache_hit_display(&token_usage_by_model) }
+                else { "see scoped accounting snapshot".to_string() },
             ],
             vec![
                 "Latest request cache hit".to_string(),
@@ -545,7 +557,7 @@ impl RuntimeSessionService {
         ];
         let mut lines = vec!["## Agent Status".to_string(), String::new()];
         lines.extend(runtime_markdown_table(&["Field", "Value"], &rows));
-        if !token_usage_by_model.is_empty() {
+        if accounting && !token_usage_by_model.is_empty() {
             lines.push(String::new());
             lines.push("### Pane Agent Token Usage".to_string());
             lines.push(String::new());
@@ -554,7 +566,7 @@ impl RuntimeSessionService {
                 &Self::runtime_agent_provider_token_usage_rows(&token_usage_by_model),
             ));
         }
-        if !instance_token_usage_by_model.is_empty() {
+        if accounting && !instance_token_usage_by_model.is_empty() {
             lines.push(String::new());
             lines.push("### Mez Session Token Usage".to_string());
             lines.push(String::new());

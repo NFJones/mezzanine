@@ -44,6 +44,7 @@ pub(super) struct ExternalUsageProjection {
 struct ProjectedStream {
     pane_id: String,
     process: RuntimePaneProcessIdentity,
+    project: Option<crate::storage::token_usage::AccountingProjectId>,
     harness: String,
     model: ModelTokenUsageKey,
     revision: u64,
@@ -261,6 +262,7 @@ impl RuntimeSessionService {
                     .or_insert_with(|| ProjectedStream {
                         pane_id: work.pane_id,
                         process: work.process,
+                        project: work.report.project,
                         harness: work.report.harness,
                         model: work.report.model,
                         revision: 0,
@@ -310,6 +312,46 @@ impl RuntimeSessionService {
                 .add_assign(usage);
         }
         totals
+    }
+
+    /// Moves only the pane-view baseline; durable deduplication remains intact.
+    /// Projects exact external partitions and coverage without querying storage.
+    pub(crate) fn external_usage_partitions(
+        &self,
+        pane_id: Option<&str>,
+    ) -> Vec<(
+        crate::storage::token_usage::TokenHistoryKey,
+        crate::storage::token_usage::TokenHistoryUsage,
+    )> {
+        self.control
+            .external_agents()
+            .usage
+            .streams
+            .values()
+            .filter_map(|stream| {
+                let counters = if let Some(pane) = pane_id {
+                    if stream.pane_id != pane
+                        || !self.pane_process_identity_is_current(pane, &stream.process)
+                    {
+                        return None;
+                    }
+                    stream.totals.difference(stream.reset_baseline).ok()?
+                } else {
+                    stream.totals
+                };
+                Some((
+                    crate::storage::token_usage::TokenHistoryKey {
+                        project: stream.project.clone(),
+                        harness: stream.harness.clone(),
+                        model: stream.model.clone(),
+                    },
+                    crate::storage::token_usage::TokenHistoryUsage {
+                        usage: counters.normalized(),
+                        reasoning_known: counters.reasoning_tokens.is_some(),
+                    },
+                ))
+            })
+            .collect()
     }
 
     /// Moves only the pane-view baseline; durable deduplication remains intact.

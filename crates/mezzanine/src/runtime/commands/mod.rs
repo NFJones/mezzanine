@@ -82,6 +82,7 @@ mod shell_mode;
 mod show_records;
 mod slash;
 mod status;
+pub(crate) use status::RuntimeStatusReportWork;
 
 #[cfg(test)]
 pub(crate) use show_records::read_context_browser_for_command;

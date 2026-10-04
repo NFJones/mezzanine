@@ -86,6 +86,18 @@ does not make the conversation eligible for deletion.
 
 Use `/help` for available commands, `/status` for the pane's active model,
 policy, context, and token state, and `/approval` for approval controls.
+`/status [--extended] [--project | --all-projects]` accepts either flag order.
+Without scope flags it retains overall totals. `--project` takes no path and
+selects the invoking pane's eligible accounting project; missing evidence is
+reported as unavailable rather than silently showing overall usage.
+`--all-projects` includes zero-use registered projects, trust/version labels,
+historical project IDs and unattributed expense. Scoped reports are STATIC
+snapshots; diagnostics still describe the pane, not the selected accounting scope.
+Only `--extended` reads durable history, on a worker using one frozen UTC instant
+and read snapshot. Rolling sections use age-limited 1/7/30/60/90-day windows.
+Changing project, replacing the conversation or detaching the caller while work
+is pending prevents stale interactive delivery. `/reset-status` clears only the
+pane view, not session partitions or durable history.
 Generated session-title requests contribute reported token usage even when their
 reply is rejected as a title. Their usage is auxiliary: it does not replace the
 latest ordinary request's context/cache sample. Late issued responses settle

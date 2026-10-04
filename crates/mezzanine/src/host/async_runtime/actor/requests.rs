@@ -15,6 +15,41 @@ use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::host::terminal::AttachedTerminalClientStepPlan;
 
 impl AsyncRuntimeSessionActor {
+    /// Runs a finite status history query off actor and retains ordered RPC reply ownership.
+    fn dispatch_status_control_query(
+        &self,
+        work: crate::runtime::StatusControlWork,
+        mut completion: AsyncRuntimeRequest,
+    ) {
+        let sender = self.sender.clone();
+        tokio::spawn(async move {
+            #[cfg(test)]
+            if let (Some(started), Some(release)) = &work.worker_gate {
+                started.notify_one();
+                release.notified().await;
+            }
+            let report = work.report.clone();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                tokio::task::spawn_blocking(move || report.render()),
+            )
+            .await
+            .map_err(|_| MezError::invalid_state("status history deadline exceeded"))
+            .and_then(|joined| {
+                joined.map_err(|_| MezError::invalid_state("status history worker failed"))
+            })
+            .and_then(|result| result);
+            if let AsyncRuntimeRequest::CompleteStatusControlInput { result: target, .. } =
+                &mut completion
+            {
+                *target = result;
+            }
+            let _ = sender
+                .send(AsyncRuntimeRequestEnvelope::new(completion))
+                .await;
+        });
+    }
+
     /// Runs bounded durable usage I/O outside serialized actor ownership. The
     /// task retains settlement after reply loss; a retry reads the same checkpoint.
     fn dispatch_external_usage_commit(
@@ -831,6 +866,43 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
+                    && let Some(prepared) =
+                        self.service.prepare_status_control_work(&body, &connection)
+                {
+                    match prepared {
+                        Ok(work) => {
+                            let completion = AsyncRuntimeRequest::CompleteStatusControlInput {
+                                work: Some(Box::new(work.clone())),
+                                result: Ok(String::new()),
+                                connection,
+                                output_prefix: Vec::new(),
+                                consumed_prefix: consumed,
+                                remaining_input: input[consumed..].to_vec(),
+                                max_content_length,
+                                snapshots: None,
+                                reply,
+                            };
+                            self.dispatch_status_control_query(work, completion);
+                        }
+                        Err(body) => {
+                            self.dispatch_control_continuation(Box::new(
+                                AsyncRuntimeRequest::CompleteStatusControlInput {
+                                    work: None,
+                                    result: Ok(body),
+                                    output_prefix: Vec::new(),
+                                    consumed_prefix: consumed,
+                                    remaining_input: input[consumed..].to_vec(),
+                                    max_content_length,
+                                    snapshots: None,
+                                    connection,
+                                    reply,
+                                },
+                            ));
+                        }
+                    }
+                    return false;
+                }
+                if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
                     && let Ok(request) = crate::control::parse_json_rpc_request(&body)
                     && request.method == "agent/external/usage"
                 {
@@ -866,12 +938,20 @@ impl AsyncRuntimeSessionActor {
                     }
                     return false;
                 }
-                self.record_terminal_control_request_metrics(&input, max_content_length);
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let previous_id = self.side_effect_routes.next_transcript_claim_id();
+                // Every frame re-enters actor admission so later history work
+                // cannot hide behind an ordinary synchronous first frame.
+                let frame_len = decode_control_frame(&input, max_content_length)
+                    .map(|(_, consumed)| consumed)
+                    .unwrap_or(input.len());
+                self.record_terminal_control_request_metrics(
+                    &input[..frame_len],
+                    max_content_length,
+                );
                 let transition_result =
                     self.service.handle_control_input_for_connection_transition(
-                        &input,
+                        &input[..frame_len],
                         max_content_length,
                         &mut connection,
                     );
@@ -906,6 +986,55 @@ impl AsyncRuntimeSessionActor {
                         &mut result,
                     );
                 let should_notify = result.as_ref().is_ok_and(|result| result.consumed > 0);
+                // Wait for this frame's receipts before submitting its successor.
+                // Retain initialization cleanup until the aggregate reply is owned
+                // by the transport; a lost continuation must still release it.
+                let reply = if frame_len < input.len()
+                    && result.is_ok()
+                    && !terminal_lifecycle_deferred
+                {
+                    let (frame_reply, frame_result) =
+                        tokio::sync::oneshot::channel::<crate::Result<AsyncControlInputResult>>();
+                    let sender = self.sender.clone();
+                    let remaining_input = input[frame_len..].to_vec();
+                    tokio::spawn(async move {
+                        let aggregate = async {
+                            let mut first = frame_result.await.map_err(|_| {
+                                MezError::invalid_state("control frame lost its receipt reply")
+                            })??;
+                            let (next_reply, next_result) = tokio::sync::oneshot::channel();
+                            sender
+                                .send(AsyncRuntimeRequestEnvelope::new(
+                                    AsyncRuntimeRequest::HandleControlInput {
+                                        input: remaining_input,
+                                        max_content_length,
+                                        connection: first.connection.clone(),
+                                        retain_connection_cleanup: false,
+                                        reply: next_reply,
+                                    },
+                                ))
+                                .await
+                                .map_err(|_| {
+                                    MezError::invalid_state("control continuation lost its actor")
+                                })?;
+                            let mut next = next_result.await.map_err(|_| {
+                                MezError::invalid_state("control continuation lost its reply")
+                            })??;
+                            first.output.extend_from_slice(&next.output);
+                            next.output = first.output;
+                            next.consumed = first.consumed.saturating_add(next.consumed);
+                            if next.connection_cleanup.is_none() {
+                                next.connection_cleanup = first.connection_cleanup.take();
+                            }
+                            Ok(next)
+                        }
+                        .await;
+                        let _ = reply.send(aggregate);
+                    });
+                    frame_reply
+                } else {
+                    reply
+                };
                 if let Some(TranscriptReceiptReply::Control(reply, result)) = self
                     .start_transcript_receipt_admission(
                         previous_id,
@@ -932,6 +1061,43 @@ impl AsyncRuntimeSessionActor {
                 snapshots,
                 reply,
             } => {
+                if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
+                    && let Some(prepared) =
+                        self.service.prepare_status_control_work(&body, &connection)
+                {
+                    match prepared {
+                        Ok(work) => {
+                            let completion = AsyncRuntimeRequest::CompleteStatusControlInput {
+                                work: Some(Box::new(work.clone())),
+                                result: Ok(String::new()),
+                                connection,
+                                output_prefix,
+                                consumed_prefix: consumed_prefix.saturating_add(consumed),
+                                remaining_input: input[consumed..].to_vec(),
+                                max_content_length,
+                                snapshots: Some(snapshots),
+                                reply,
+                            };
+                            self.dispatch_status_control_query(work, completion);
+                        }
+                        Err(body) => {
+                            self.dispatch_control_continuation(Box::new(
+                                AsyncRuntimeRequest::CompleteStatusControlInput {
+                                    work: None,
+                                    result: Ok(body),
+                                    output_prefix,
+                                    consumed_prefix: consumed_prefix.saturating_add(consumed),
+                                    remaining_input: input[consumed..].to_vec(),
+                                    max_content_length,
+                                    snapshots: Some(snapshots),
+                                    connection,
+                                    reply,
+                                },
+                            ));
+                        }
+                    }
+                    return false;
+                }
                 if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
                     && let Ok(request) = crate::control::parse_json_rpc_request(&body)
                     && request.method == "agent/external/usage"
@@ -1147,6 +1313,83 @@ impl AsyncRuntimeSessionActor {
                     connection_cleanup: None,
                     terminal_lifecycle_flush: None,
                 }));
+                self.notify_event_delivery();
+                false
+            }
+            AsyncRuntimeRequest::CompleteStatusControlInput {
+                work,
+                result,
+                connection,
+                mut output_prefix,
+                consumed_prefix,
+                remaining_input,
+                max_content_length,
+                snapshots,
+                reply,
+            } => {
+                let body = match work {
+                    Some(work) => self.service.complete_status_control_work(*work, result),
+                    None => result.unwrap_or_else(|error| {
+                        crate::runtime::runtime_json_rpc_error(
+                            "null",
+                            error.kind(),
+                            error.message(),
+                        )
+                    }),
+                };
+                output_prefix.extend_from_slice(&encode_control_body(&body));
+                if remaining_input.is_empty() {
+                    let _ = reply.send(Ok(AsyncControlInputResult {
+                        output: output_prefix,
+                        consumed: consumed_prefix,
+                        connection,
+                        connection_cleanup: None,
+                        terminal_lifecycle_flush: None,
+                    }));
+                } else {
+                    if let Some(snapshots) = snapshots {
+                        self.dispatch_control_continuation(Box::new(
+                            AsyncRuntimeRequest::HandleControlInputWithSnapshots {
+                                input: remaining_input,
+                                output_prefix,
+                                consumed_prefix,
+                                record_metrics: false,
+                                max_content_length,
+                                connection,
+                                snapshots,
+                                reply,
+                            },
+                        ));
+                    } else {
+                        // Retain plain ingress: a report cannot grant repository access.
+                        let (next_reply, next_result) = tokio::sync::oneshot::channel();
+                        self.dispatch_control_continuation(Box::new(
+                            AsyncRuntimeRequest::HandleControlInput {
+                                input: remaining_input,
+                                max_content_length,
+                                connection,
+                                retain_connection_cleanup: false,
+                                reply: next_reply,
+                            },
+                        ));
+                        tokio::spawn(async move {
+                            let result = next_result
+                                .await
+                                .map_err(|_| {
+                                    MezError::invalid_state("control continuation lost its reply")
+                                })
+                                .and_then(|result| result)
+                                .map(|mut result| {
+                                    output_prefix.extend_from_slice(&result.output);
+                                    result.output = output_prefix;
+                                    result.consumed =
+                                        consumed_prefix.saturating_add(result.consumed);
+                                    result
+                                });
+                            let _ = reply.send(result);
+                        });
+                    }
+                }
                 self.notify_event_delivery();
                 false
             }

@@ -279,6 +279,14 @@ fn execute_agent_shell_command_with_context_inner(
             body: agent_shell_help_display(),
         },
         "status" => {
+            let options = mez_agent::slash::parse_status_options(&invocation.args)
+                .map_err(AgentShellSessionError::invalid_args)?;
+            if options.extended || options.scope != mez_agent::slash::StatusScope::Overall {
+                return Ok(Some(AgentShellCommandOutcome::RequiresRuntime {
+                    command,
+                    reason: "scoped and extended status require runtime accounting".to_string(),
+                }));
+            }
             let session = store.get(pane_id).ok_or_else(|| {
                 AgentShellSessionError::not_found("agent shell session not found for pane")
             })?;

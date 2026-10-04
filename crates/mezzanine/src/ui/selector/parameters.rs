@@ -55,7 +55,7 @@ pub(super) fn agent_parameter_hint(command: &str) -> Option<&'static str> {
     match command {
         "directive" => Some(" <status|show|clear|default|none|text>"),
         "loop" => Some(" [--fork|--new] [--limit <int>] [--goal <string>] <prompt>"),
-        "status" => Some(" [--extended]"),
+        "status" => Some(" [--extended] [--project | --all-projects]"),
         "memory" => Some(" <on|off|toggle|status|show>"),
         "plan" => Some(" <on|off|toggle|status>"),
         "issue" => Some(" <add|query|delete> [--kind defect|task] [--title text]"),

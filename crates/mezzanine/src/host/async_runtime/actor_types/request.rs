@@ -414,6 +414,27 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<AsyncControlInputResult>>,
     },
+    /// Settles a captured status query and resumes the remaining control frames.
+    CompleteStatusControlInput {
+        /// Authorized acceptance snapshot and exact command lease.
+        work: Option<Box<crate::runtime::StatusControlWork>>,
+        /// Rendered report or bounded worker error.
+        result: Result<String>,
+        /// Original authenticated connection.
+        connection: ControlConnectionState,
+        /// Responses already encoded before this frame.
+        output_prefix: Vec<u8>,
+        /// Bytes consumed through this report frame.
+        consumed_prefix: usize,
+        /// Later frames retained in original order.
+        remaining_input: Vec<u8>,
+        /// Original framing bound.
+        max_content_length: usize,
+        /// Optional repository context for subsequent frames.
+        snapshots: Option<SnapshotRepository>,
+        /// Original protocol reply owner.
+        reply: oneshot::Sender<Result<AsyncControlInputResult>>,
+    },
     /// Completes an actor-admitted external usage commit without replaying work.
     CompleteExternalUsageInput {
         /// Immutable credential-free attribution captured before storage work.
@@ -1405,6 +1426,7 @@ impl AsyncRuntimeRequest {
             Self::SetHostRoutedIrohDiagnostics { .. }
             | Self::HandleControlInput { .. }
             | Self::HandleControlInputWithSnapshots { .. }
+            | Self::CompleteStatusControlInput { .. }
             | Self::CompleteExternalUsageInput { .. }
             | Self::CompleteSnapshotControlInput { .. }
             | Self::CreateHostCheckpoint { .. } => Family::Control,

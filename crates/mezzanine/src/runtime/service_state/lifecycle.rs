@@ -216,6 +216,8 @@ pub(crate) struct RuntimeAgentCommandAsyncWork {
 /// makes an accidental dependency on actor state a compile error.
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeAgentCommandPrepared {
+    /// Acceptance-frozen status snapshot; only its worker queries history.
+    Status(Box<crate::runtime::commands::RuntimeStatusReportWork>),
     /// Renders one skill or macro catalog from the captured roots.
     ///
     /// `/list-skills` and `/list-macros` walk the configured user catalog plus

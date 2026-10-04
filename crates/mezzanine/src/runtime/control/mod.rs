@@ -20,6 +20,7 @@ mod protocol;
 mod remote;
 mod snapshot;
 mod state;
+pub(crate) mod status;
 mod subagents;
 use super::{
     AgentContext, AgentId, AgentShellStore, AgentTurnLedger, AgentTurnState, ApprovalDecision,

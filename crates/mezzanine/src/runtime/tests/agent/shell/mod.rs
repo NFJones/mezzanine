@@ -8,3 +8,4 @@ mod native_filesystem;
 mod navigation;
 mod records;
 mod state;
+mod status_scopes;

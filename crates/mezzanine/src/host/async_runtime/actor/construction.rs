@@ -509,7 +509,9 @@ impl AsyncRuntimeSessionActor {
             ) {
                 self.sync_metrics_snapshot_to_service();
             }
-            let should_shutdown = self.handle_request(envelope.request).await;
+            // Keep the large request dispatcher future off the enclosing actor
+            // run-loop stack as new independently owned request families grow.
+            let should_shutdown = Box::pin(self.handle_request(envelope.request)).await;
             // Internal command paths may queue transcript effects without a
             // dedicated producer callback. Schedule their held claims before
             // the next request can drain the ordered persistence lane.

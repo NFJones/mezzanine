@@ -27,6 +27,8 @@ use crate::runtime::{
 /// Prepared-input family one moved slash command consumes off the actor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeAgentCommandFamily {
+    /// Captured status diagnostics and rolling accounting history.
+    Status,
     /// Catalog displays that walk the configured and project catalogs.
     Catalog,
     /// Provider credential status reads.
@@ -65,6 +67,7 @@ pub(crate) fn off_actor_command_family(
     input: &str,
 ) -> Option<RuntimeAgentCommandFamily> {
     match command {
+        "status" => Some(RuntimeAgentCommandFamily::Status),
         "list-skills" | "list-macros" => Some(RuntimeAgentCommandFamily::Catalog),
         "auth-status" => Some(RuntimeAgentCommandFamily::AuthStatus),
         "issue" => Some(RuntimeAgentCommandFamily::IssueStore),
@@ -126,6 +129,11 @@ impl RuntimeSessionService {
             return false;
         }
         match command {
+            "status" => super::parse_slash_command(input)
+                .ok()
+                .flatten()
+                .and_then(|slash| mez_agent::slash::parse_status_options(&slash.args).ok())
+                .is_some_and(|options| options.extended),
             "issue" => {
                 super::issues::runtime_issues_enabled(self)
                     && self.integration.config_root().is_some()
@@ -185,7 +193,19 @@ impl RuntimeSessionService {
         if command == "resume" && !super::resume::runtime_agent_resume_args_are_picker(input) {
             self.agent.cancel_agent_command(pane_id);
         }
+        let status_report = if command == "status" {
+            let slash = super::parse_slash_command(input)?
+                .ok_or_else(|| MezError::invalid_args("status requires slash input"))?;
+            let options = mez_agent::slash::parse_status_options(&slash.args)
+                .map_err(MezError::invalid_args)?;
+            Some(self.prepare_status_report(primary_client_id, pane_id, options)?)
+        } else {
+            None
+        };
         let claim_generation = self.begin_agent_command_claim(pane_id, &conversation_id)?;
+        if let Some(report) = status_report {
+            self.retain_pending_status_report(pane_id, claim_generation, report);
+        }
         self.presentation
             .push_pending_deferred_agent_command(RuntimeAgentCommandDispatch {
                 primary_client_id: primary_client_id.clone(),
@@ -250,6 +270,28 @@ impl RuntimeSessionService {
         // Each family names exactly what the worker may read; a command with no
         // family has no off-actor executor yet and keeps executing inline.
         let prepared = match family {
+            RuntimeAgentCommandFamily::Status => {
+                let Some(report) = self.take_pending_status_report(pane_id, claim_generation)
+                else {
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "status acceptance snapshot unavailable",
+                    );
+                };
+                if report.client != *_primary_client_id || !self.status_report_is_current(&report) {
+                    self.agent.cancel_matching_agent_command(
+                        pane_id,
+                        conversation_id,
+                        claim_generation,
+                    );
+                    return Ok(None);
+                }
+                RuntimeAgentCommandPrepared::Status(Box::new(report))
+            }
             RuntimeAgentCommandFamily::Catalog => RuntimeAgentCommandPrepared::Catalog {
                 config_root: self
                     .integration
@@ -603,6 +645,15 @@ impl RuntimeSessionService {
         work: &RuntimeAgentCommandAsyncWork,
     ) -> RuntimeAgentCommandAsyncOutcome {
         let body = match &work.prepared {
+            RuntimeAgentCommandPrepared::Status(report) => match report.render() {
+                Ok(body) => body,
+                Err(error) => {
+                    return RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    };
+                }
+            },
             RuntimeAgentCommandPrepared::Catalog {
                 config_root,
                 project_root,
@@ -1005,6 +1056,17 @@ impl RuntimeSessionService {
         work: &RuntimeAgentCommandAsyncWork,
         outcome: RuntimeAgentCommandAsyncOutcome,
     ) -> Result<bool> {
+        if let RuntimeAgentCommandPrepared::Status(report) = &work.prepared {
+            if !self.status_report_is_current(report) {
+                self.agent.cancel_matching_agent_command(
+                    &work.pane_id,
+                    &work.conversation_id,
+                    work.claim_generation,
+                );
+                return Ok(false);
+            }
+            self.presentation.activate_client_state(&report.client);
+        }
         let current_conversation = self
             .agent_shell_store()
             .get(&work.pane_id)

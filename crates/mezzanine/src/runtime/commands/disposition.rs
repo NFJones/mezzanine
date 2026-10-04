@@ -106,7 +106,7 @@ pub(super) const COMMAND_EXECUTION_METADATA: &[CommandExecutionMetadata] = &[
     Entry::inline("copy", None),
     Entry::inline("directive", None),
     Entry::inline("exit", None),
-    Entry::inline("status", None),
+    Entry::deferred("status", true, None),
     Entry::inline("plan", None),
     Entry::inline("model", Some(Awaited::Model)),
     Entry::inline("thinking", None),
@@ -267,8 +267,8 @@ mod tests {
         }
         assert_eq!(
             runtime_agent_slash_command_disposition("status"),
-            RuntimeAgentSlashCommandDisposition::Inline,
-            "status reads only in-memory session and provider bookkeeping"
+            RuntimeAgentSlashCommandDisposition::Deferred,
+            "extended status has prepared history work; ordinary reads stay inline"
         );
     }
 
@@ -307,6 +307,7 @@ mod tests {
                 "list-modified-files",
                 "show-approvals",
                 "list-personalities",
+                "status",
             ])
         );
         let awaited = COMMAND_EXECUTION_METADATA
