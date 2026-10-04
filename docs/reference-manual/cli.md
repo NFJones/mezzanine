@@ -120,6 +120,14 @@ extensions, request credentials, start providers or install configuration, and
 does not certify private launch delivery, renewal, reload rebinding or accounting.
 Package-independent tests also run via `timeout 120s node --test scripts/test-pi-observer.mjs`.
 
+The pure Pi launch-owner reducer retains at most 32 lifecycle reports (one slot
+reserved for retirement). Exact pending identities survive observer reload;
+only the originating owner's head acknowledgment consumes a report. Old observer
+epochs cannot publish after replacement. Provisional outcomes do not publish
+success before settlement, and repeated settlement preserves its accepted
+outcome. Queue/counter exhaustion is explicit and leaves accepted state intact.
+The reducer has no transport, credentials, renewal timer or installation authority.
+
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.

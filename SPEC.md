@@ -294,6 +294,14 @@ synchronous bounded queue, retain neutral callback results on telemetry loss,
 and obtain the session from each current callback context. Offline released
 loader/runner qualification MUST remain distinct from private launch, renewal,
 session rebinding, live provider usage and certified-manifest acceptance.
+Pi launch-owned lifecycle sequencing MUST preserve pending report identities
+across observer reload and consume only launch-fenced head acknowledgments.
+The pure reducer bounds pending reports at 32, reserving one retirement slot;
+queue/counter exhaustion MUST leave accepted state unchanged. Provisional
+outcomes MUST NOT publish terminal presentation before settlement, and duplicate
+settlement MUST NOT erase its accepted outcome. Reload replacement stays bound
+to the same session; a new session requires separately authorized ownership.
+These reducer guarantees alone MUST NOT imply working transport or renewal.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow
