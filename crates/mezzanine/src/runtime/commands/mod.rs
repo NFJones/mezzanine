@@ -1273,23 +1273,34 @@ impl RuntimeSessionService {
             return Err(MezError::conflict("steering turn conversation changed"));
         }
         self.check_steering_receipt_capacity(&turn, input, display)?;
-        let context = self
-            .agent_turn_contexts_mut()
-            .get_mut(&turn.turn_id)
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let steering_ordinal = context
-            .blocks()
-            .iter()
-            .filter(|block| block.label.starts_with("user steering "))
-            .count()
-            .saturating_add(1);
-        let steering_label = format!("user steering {steering_ordinal}");
-        let sequence = context
-            .append_user_event(
-                steering_label,
-                mez_agent::agent_turn_steering_context_content(&steering),
-            )
-            .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        let insertion = (|| {
+            let context = self
+                .agent_turn_contexts_mut()
+                .get_mut(&turn.turn_id)
+                .ok_or_else(|| {
+                    MezError::invalid_state("runtime agent turn context is unavailable")
+                })?;
+            let steering_ordinal = context
+                .blocks()
+                .iter()
+                .filter(|block| block.label.starts_with("user steering "))
+                .count()
+                .saturating_add(1);
+            let steering_label = format!("user steering {steering_ordinal}");
+            context
+                .append_user_event(
+                    steering_label,
+                    mez_agent::agent_turn_steering_context_content(&steering),
+                )
+                .map_err(|error| MezError::invalid_state(error.to_string()))
+        })();
+        let sequence = match insertion {
+            Ok(sequence) => sequence,
+            Err(error) => {
+                self.release_empty_steering_reservation(&turn);
+                return Err(error);
+            }
+        };
         self.retain_steering_receipt(&turn, sequence.get(), input, display);
         self.append_agent_status_text_to_terminal_buffer(
             pane_id,

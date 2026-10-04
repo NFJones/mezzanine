@@ -2,6 +2,62 @@
 
 use super::*;
 
+/// Source exhaustion rejects before canonical insertion, active owner pressure
+/// never evicts pending work, and a terminal owner is the only eviction target.
+#[test]
+fn steering_receipts_source_and_owner_budgets_preserve_active_work() {
+    let (mut service, turn) = fixture();
+    let before = service.agent_turn_contexts()[&turn.turn_id].clone();
+    assert!(
+        service
+            .inject_agent_steering_with_display("%1", "input", &"x".repeat(SOURCE_CAPACITY))
+            .is_err()
+    );
+    assert_eq!(service.agent_turn_contexts()[&turn.turn_id], before);
+    assert!(!service.agent.steering_receipts.contains_key(&turn.turn_id));
+    for index in 0..OWNER_CAPACITY {
+        let mut owner_turn = turn.clone();
+        owner_turn.turn_id = format!("budget-{index:03}");
+        service
+            .agent
+            .steering_receipts
+            .insert(owner_turn.turn_id.clone(), Receipts::new(&owner_turn, None));
+    }
+    assert!(
+        service
+            .check_steering_receipt_capacity(&turn, "input", "display")
+            .is_err()
+    );
+    assert_eq!(service.agent.steering_receipts.len(), OWNER_CAPACITY);
+    service
+        .agent
+        .steering_receipts
+        .get_mut("budget-000")
+        .unwrap()
+        .settle();
+    service
+        .check_steering_receipt_capacity(&turn, "input", "display")
+        .unwrap();
+    assert!(!service.agent.steering_receipts.contains_key("budget-000"));
+    assert!(service.agent.steering_receipts.contains_key("budget-001"));
+    assert!(service.agent.steering_receipts.contains_key(&turn.turn_id));
+    assert_eq!(service.agent.steering_receipts.len(), OWNER_CAPACITY);
+}
+
+/// Failed canonical insertion must release a newly reserved empty receipt owner,
+/// otherwise failed submissions consume the finite active-owner budget forever.
+#[test]
+fn steering_receipts_missing_context_releases_empty_reservation() {
+    let (mut service, turn) = fixture();
+    service.agent_turn_contexts_mut().remove(&turn.turn_id);
+    assert!(
+        service
+            .inject_agent_steering_with_display("%1", "input", "display")
+            .is_err()
+    );
+    assert!(!service.agent.steering_receipts.contains_key(&turn.turn_id));
+}
+
 /// Kernel identity can change between observations within one actor turn.
 /// Final transfer must not reserve a replacement-root owner, and failed root
 /// admission must settle rather than restore the original queue as pending.

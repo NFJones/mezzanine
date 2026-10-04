@@ -385,6 +385,19 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Releases only an empty exact-owner reservation after failed insertion.
+    /// Accepted occurrences must never be removed by this cleanup path.
+    pub(crate) fn release_empty_steering_reservation(&mut self, turn: &AgentTurnRecord) {
+        if self
+            .agent
+            .steering_receipts
+            .get(&turn.turn_id)
+            .is_some_and(|owner| owner.belongs_to(turn) && owner.entries.is_empty())
+        {
+            self.agent.steering_receipts.remove(&turn.turn_id);
+        }
+    }
+
     /// Records accepted canonical identity before fallible trace/presentation work.
     pub(crate) fn retain_steering_receipt(
         &mut self,
