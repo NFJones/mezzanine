@@ -41,6 +41,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 pane_id: "%1".to_string(),
                 conversation_id: "saved-tokens".to_string(),
                 primary_display_name: None,
+                steering_recovery: Vec::new(),
                 prompt_cache_lineage_id: "lineage-saved-tokens".to_string(),
                 visibility: "visible".to_string(),
                 running_turn_id: None,

@@ -6,7 +6,8 @@
 //! guesses. Auxiliary requests cannot acknowledge receipts. Terminal cleanup
 //! settles unconsumed receipts without replaying input or effects. This initial
 //! owner carries manual-compaction occurrences through history claims, but does
-//! not implement restart persistence or log promotion.
+//! not implement log promotion. Bounded checkpoint recovery retains display-only
+//! evidence and converts abandoned pending ownership to admission uncertainty.
 
 use std::collections::BTreeSet;
 
@@ -399,6 +400,7 @@ impl RuntimeSessionService {
                 status: Status::Pending,
                 process: owner.process.clone(),
             });
+            self.publish_steering_recovery_checkpoint();
         }
     }
 
@@ -450,6 +452,7 @@ impl RuntimeSessionService {
             && Self::steering_process_matches(owner.process.as_ref(), process.as_ref())
         {
             owner.admit(dispatch.claim_generation, &sequences);
+            self.publish_steering_recovery_checkpoint();
         }
     }
 
@@ -457,6 +460,7 @@ impl RuntimeSessionService {
     pub(crate) fn settle_steering_receipts(&mut self, turn_id: &str) {
         if let Some(owner) = self.agent.steering_receipts.get_mut(turn_id) {
             owner.settle();
+            self.publish_steering_recovery_checkpoint();
         }
     }
 
@@ -472,6 +476,9 @@ impl RuntimeSessionService {
 
 #[cfg(test)]
 mod tests;
+
+/// Checkpoint projection and restart reconciliation never grant execution ownership.
+mod recovery;
 
 impl super::RuntimeAgentComponent {
     /// Retains bounded terminal evidence for consumed pre-history queue owners.

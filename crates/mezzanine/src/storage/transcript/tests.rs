@@ -1487,6 +1487,7 @@ fn agent_session_metadata(
         pane_id: "%1".to_string(),
         conversation_id: conversation_id.to_string(),
         primary_display_name: None,
+        steering_recovery: Vec::new(),
         prompt_cache_lineage_id: format!("lineage-{conversation_id}"),
         visibility: "visible".to_string(),
         running_turn_id: None,
@@ -4251,7 +4252,9 @@ fn transcript_store_exports_prompt_history_without_creating_the_store() {
 fn agent_session_metadata_decoder_accepts_pre_pane_identity_rows() {
     let metadata = agent_session_metadata("$legacy", "legacy-conversation");
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    let (pre_name_row, name) = encoded.rsplit_once('\t').unwrap();
+    let (pre_recovery_row, recovery) = encoded.rsplit_once('\t').unwrap();
+    assert_eq!(recovery, "[]");
+    let (pre_name_row, name) = pre_recovery_row.rsplit_once('\t').unwrap();
     assert!(name.is_empty());
     let (pre_partition_row, partitions) = pre_name_row
         .rsplit_once('\t')
@@ -4263,7 +4266,7 @@ fn agent_session_metadata_decoder_accepts_pre_pane_identity_rows() {
     assert!(appended_field.is_empty());
 
     let legacy_row = legacy_row.replacen(
-        "mez-agent-session-metadata/3",
+        "mez-agent-session-metadata/4",
         "mez-agent-session-metadata/1",
         1,
     );
@@ -4292,9 +4295,40 @@ fn agent_session_metadata_round_trips_project_partitions() {
         usage,
     }];
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    assert!(encoded.starts_with("mez-agent-session-metadata/3\t"));
+    assert!(encoded.starts_with("mez-agent-session-metadata/4\t"));
     assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
     metadata.project_token_usage[0].usage.input_tokens += 1;
+    assert!(encode_agent_session_metadata(&metadata).is_err());
+}
+
+/// Recovery metadata preserves occurrence IDs, exact display bytes and typed
+/// admission evidence. Version-three migration produces no invented receipts;
+/// malformed duplicate IDs are rejected rather than silently deduplicated.
+#[test]
+fn agent_session_metadata_steering_recovery_round_trip_and_v3_migration() {
+    use mez_agent::transcript::{SteeringRecoveryReceipt, SteeringRecoveryStatus};
+    let mut metadata = agent_session_metadata("$recovery", "recovery-conversation");
+    metadata.steering_recovery = vec![SteeringRecoveryReceipt {
+        id: "occurrence".into(),
+        turn_id: Some("turn".into()),
+        event_sequence: Some(9),
+        display: "exact\t雪\r\n\\source".into(),
+        status: SteeringRecoveryStatus::Admitted(7),
+    }];
+    let encoded = encode_agent_session_metadata(&metadata).unwrap();
+    assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
+    let (legacy, _) = encoded.rsplit_once('\t').unwrap();
+    let legacy = legacy.replacen(
+        "mez-agent-session-metadata/4",
+        "mez-agent-session-metadata/3",
+        1,
+    );
+    let mut expected = metadata.clone();
+    expected.steering_recovery.clear();
+    assert_eq!(decode_agent_session_metadata(&legacy).unwrap(), expected);
+    metadata
+        .steering_recovery
+        .push(metadata.steering_recovery[0].clone());
     assert!(encode_agent_session_metadata(&metadata).is_err());
 }
 

@@ -549,6 +549,9 @@ pub(crate) struct RuntimeAgentComponent {
     agent_compaction_epochs: BTreeMap<String, u64>,
     /// Bounded exact steering receipts retained through terminal settlement.
     steering_receipts: BTreeMap<String, steering::Receipts>,
+    /// Execution-inert receipt evidence hydrated from a previous runtime owner.
+    restored_steering_recovery:
+        BTreeMap<(String, String), Vec<mez_agent::transcript::SteeringRecoveryReceipt>>,
     /// Terminal pre-turn receipt evidence, fenced by exact history command owner.
     settled_deferred_steering: BTreeMap<(String, String, u64), Vec<steering::Receipt>>,
     /// Exact actor-owned receipts while a history command is queued or claimed.
@@ -2668,6 +2671,7 @@ impl RuntimeSessionService {
                 epoch: compaction_epoch,
                 receipt: steering::Receipt::deferred(prompt, display, process),
             });
+        self.publish_steering_recovery_checkpoint();
         Ok(())
     }
 

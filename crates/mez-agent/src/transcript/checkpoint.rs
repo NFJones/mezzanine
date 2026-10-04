@@ -71,6 +71,8 @@ pub struct AgentSessionMetadata {
     pub latest_request_usage: Option<LatestModelRequestUsage>,
     /// Immutable MAAP action catalog captured when this pane session started.
     pub allowed_actions: Option<AllowedActionSet>,
+    /// Execution-inert steering occurrence evidence, separate from model history.
+    pub steering_recovery: Vec<super::SteeringRecoveryReceipt>,
 }
 
 /// Provider/model identity needed to reconstruct a runtime-generated pane profile.
@@ -106,6 +108,7 @@ impl AgentSessionMetadata {
         validate_required("mezzanine session id", &self.mezzanine_session_id)?;
         validate_required("pane id", &self.pane_id)?;
         validate_conversation_id(&self.conversation_id)?;
+        super::validate_steering_recovery(&self.steering_recovery)?;
         if let Some(name) = &self.primary_display_name
             && (name.is_empty()
                 || name.len() > 128

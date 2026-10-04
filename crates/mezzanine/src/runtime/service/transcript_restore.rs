@@ -496,6 +496,11 @@ impl RuntimeSessionService {
                     *self.agent_turn_ledger_mut() = ledger;
                     self.reconcile_active_turn_sleep_inhibition();
                 }
+                self.restore_steering_recovery(
+                    &pane_id,
+                    &conversation_id,
+                    &metadata.steering_recovery,
+                )?;
                 Ok(())
             })();
             if let Err(error) = hydrate_result {
@@ -747,10 +752,12 @@ impl RuntimeSessionService {
                     .map(|membership| membership.canonical_root().to_string_lossy().into_owned());
                 let token_usage_by_model =
                     self.agent_token_usage_for_conversation(&conversation_id);
-                AgentSessionMetadata {
+                Ok(AgentSessionMetadata {
                     mezzanine_session_id: mezzanine_session_id.clone(),
                     pane_id: session.pane_id.clone(),
                     conversation_id: conversation_id.clone(),
+                    steering_recovery: self
+                        .steering_recovery_checkpoint(&session.pane_id, &conversation_id)?,
                     primary_display_name: if session.ephemeral {
                         fallback_parent.and_then(|state| state.parent_display_name.clone())
                     } else {
@@ -834,9 +841,9 @@ impl RuntimeSessionService {
                     } else {
                         session.allowed_actions.clone()
                     },
-                }
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         if self.persistence.transcript_uses_adapter() {
             return Ok(self.persistence.queue_agent_session_metadata(
                 store,

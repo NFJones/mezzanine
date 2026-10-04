@@ -655,6 +655,7 @@ impl RuntimeSessionService {
                 AgentShellCommandOutcome::RequiresRuntime { command, .. } if command == "exit"
             )
         });
+        let mut steering_accepted = false;
         let response = match (|| -> Result<String> {
             let response =
                 if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
@@ -1139,6 +1140,7 @@ impl RuntimeSessionService {
                     if let Some(turn_id) =
                         self.inject_agent_steering_with_display(&pane_id, input, display_input)?
                     {
+                        steering_accepted = true;
                         let visibility = self.agent_shell_visibility_for_pane(&pane_id)?;
                         let steer_outcome = AgentShellCommandOutcome::Mutated {
                             command: "prompt".to_string(),
@@ -1209,7 +1211,13 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
-        self.checkpoint_agent_session_metadata()?;
+        if steering_accepted {
+            // Canonical acceptance cannot be undone by checkpoint publication.
+            // Preserve the receipt and response; never invite input replay.
+            self.publish_steering_recovery_checkpoint();
+        } else {
+            self.checkpoint_agent_session_metadata()?;
+        }
         Ok(response)
     }
 

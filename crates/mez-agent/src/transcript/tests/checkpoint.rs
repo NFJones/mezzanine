@@ -22,6 +22,7 @@ fn valid_checkpoint() -> AgentSessionMetadata {
         pane_id: "%1".to_string(),
         conversation_id: "conversation-1".to_string(),
         primary_display_name: None,
+        steering_recovery: Vec::new(),
         prompt_cache_lineage_id: "lineage-1".to_string(),
         visibility: "visible".to_string(),
         running_turn_id: None,

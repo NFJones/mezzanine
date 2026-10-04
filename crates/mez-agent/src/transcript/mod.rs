@@ -8,12 +8,17 @@ mod checkpoint;
 mod context_event;
 mod error;
 mod records;
+mod steering;
 mod summary;
 
 pub use checkpoint::{AgentSessionMetadata, PaneModelProfileSelection};
 pub use context_event::{TRANSCRIPT_CONTEXT_EVENT_MARKER, TranscriptContextEvent};
 pub use error::TranscriptContractError;
 pub use records::{TranscriptEntry, TranscriptRole, validate_conversation_id};
+pub use steering::{
+    STEERING_RECOVERY_BYTES, STEERING_RECOVERY_ENTRIES, SteeringRecoveryReceipt,
+    SteeringRecoveryStatus, validate_steering_recovery,
+};
 pub use summary::{
     ConversationSummary, bounded_summary_text, summarize_conversation,
     transcript_entry_user_content,

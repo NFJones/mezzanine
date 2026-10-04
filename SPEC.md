@@ -5894,7 +5894,17 @@ reconstruct receipts after transfer, settlement or bounded evidence eviction.
 Pre-history compaction queues MUST settle exact not-sent receipt evidence when
 discarded on conversation replacement, pane removal, stale epoch or shutdown.
 Teardown MUST consume queue ownership without rejoining or redispatching input.
-Restart persistence and pending-log promotion remain unfinished.
+Session metadata version 4 MUST retain bounded typed steering occurrence evidence
+separately from canonical model history. Version 3 and older metadata MUST decode
+with no invented receipt evidence. Restored pending evidence MUST become admission
+unknown: a checkpoint may predate actual local admission, so restart MUST NOT
+claim not-sent or resend input. Recovery MUST NOT recreate process, approval,
+provider or canonical input ownership. Positive admission and not-sent evidence
+remain unchanged. Checkpoint failure MUST retain live receipts and report incomplete
+restart evidence without failing or replaying already accepted input. Recovery
+is limited to checkpointed active pane bindings; terminal history is bounded.
+Manual resume recovery, complete transition publication and pending-log promotion
+remain unfinished.
 Ordinary-turn receipt acceptance and admission MUST retain and revalidate the
 existing pane process incarnation. Unreadable identity for an existing root MUST
 reject acceptance; replacement MUST NOT acknowledge old receipts. An in-place
