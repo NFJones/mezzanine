@@ -609,6 +609,8 @@ Concurrent first opens may contend while enabling SQLite WAL. The ledger retries
 only that idempotent setup step within a finite contention budget, before usage
 transactions begin. It does not automatically replay accounting transactions;
 persistent contention returns an explicit error and leaves replay identity intact.
+Already-current schema inspection does not acquire migration writer ownership;
+actual migrations still recheck the version inside their immediate transaction.
 
 SQLite schema v2 migrates legacy rows to harness `mez` without counter backfill.
 The ledger stores harness/model counters and opaque stream identities, not prompt,

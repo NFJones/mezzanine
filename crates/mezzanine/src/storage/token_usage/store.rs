@@ -267,6 +267,13 @@ fn initialize_wal(connection: &Connection) -> Result<()> {
 /// Migrates schema transactionally after bounded WAL setup succeeds.
 fn initialize_schema(connection: &Connection) -> Result<()> {
     initialize_wal(connection)?;
+    // Current-schema inspection needs no writer ownership. Migrations still
+    // reread the version after acquiring their immediate transaction below.
+    let observed_version: i64 =
+        connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if observed_version == SCHEMA_VERSION {
+        return Ok(());
+    }
     let transaction =
         rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| {

@@ -6,6 +6,31 @@
 use super::*;
 use mez_agent::ModelTokenUsageKey;
 
+/// Current-schema connections must remain readable while another connection
+/// owns a WAL writer. Schema inspection is not a migration and must not acquire
+/// a second writer lock merely to read committed accounting state.
+#[test]
+fn external_current_schema_open_does_not_require_writer_admission() {
+    let (store, report) = fixture();
+    store.ingest_external(&report, 100).unwrap();
+    let blocker = rusqlite::Connection::open(store.path()).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE;").unwrap();
+    let snapshot = store
+        .history_snapshot(100, &[1], &TokenHistoryScope::default())
+        .unwrap();
+    assert_eq!(
+        snapshot.windows[&1]
+            .values()
+            .next()
+            .unwrap()
+            .usage
+            .input_tokens,
+        report.counters.input_tokens
+    );
+    blocker.execute_batch("ROLLBACK;").unwrap();
+    assert!(!store.ingest_external(&report, 100).unwrap().applied);
+}
+
 /// Persistent setup contention fails within a finite budget before any usage
 /// transaction begins. An explicit retry after the lock clears commits once;
 /// the setup retry loop must never duplicate a checkpoint or delta.
