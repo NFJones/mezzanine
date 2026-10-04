@@ -236,6 +236,14 @@ impl RuntimeSessionService {
                 .any(|claim| claim.task.pane_id == pane)
     }
 
+    /// Returns the exact resume fence owned by the retained human pause.
+    pub(crate) fn agent_human_pause_generation(&self, pane: &str) -> Option<u64> {
+        self.agent
+            .human_pauses
+            .get(pane)
+            .map(|pause| pause.generation)
+    }
+
     /// Returns truthful Pausing/Paused presentation without implying cancellation.
     #[allow(dead_code)] // Administrative browser consumes this typed status.
     pub(crate) fn agent_human_pause_status(&self, pane: &str) -> Option<&'static str> {

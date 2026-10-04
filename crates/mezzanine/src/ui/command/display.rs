@@ -85,7 +85,7 @@ fn terminal_help_command_rows() -> Vec<(&'static str, &'static str)> {
 /// Returns the help category for one terminal command.
 fn terminal_command_category(name: &str) -> &'static str {
     match name {
-        "agent-shell" => "agent and integrations",
+        "agent-shell" | "list-agents" => "agent and integrations",
         "add-options" | "bind-key" | "list-key-presets" | "list-keys" | "set-key-preset"
         | "set-option" | "set-theme" | "show-options" | "source-file" | "unbind-key"
         | "list-themes" | "zen" => "configuration",
@@ -179,6 +179,9 @@ fn terminal_command_description(name: &str) -> &'static str {
         "zen" => "hide or restore passive Mezzanine chrome.",
         "show-messages" => "show diagnostics, pending approvals, and hook failures.",
         "show-metrics" => "show async runtime counters and histograms.",
+        "list-agents" => {
+            "browse session agents; explicitly focus, interrupt, pause/resume or confirm close."
+        }
         "show-iroh-status" => "show the invoking client's live Iroh path quality.",
         "show-pane-status" => "diagnose resolved pane status layout and retained provider state.",
         "show-options" => "show effective options.",

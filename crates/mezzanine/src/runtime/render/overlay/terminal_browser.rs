@@ -154,7 +154,7 @@ impl RuntimeSessionService {
         if self.require_live().is_err() {
             return Ok(output);
         }
-        let handoff = if matches!(outcomes.last(), Some(CommandOutcome::Display { command, .. }) if command == "choose-window")
+        let handoff = if matches!(outcomes.last(), Some(CommandOutcome::Display { command, .. }) if matches!(command.as_str(), "choose-window" | "list-agents"))
             && outcomes
                 .iter()
                 .filter(|outcome| {
@@ -166,23 +166,43 @@ impl RuntimeSessionService {
                 .count()
                 == 1
         {
-            let group_id = self
-                .session
-                .active_group()
-                .ok_or_else(|| MezError::invalid_state("window group unavailable"))?
-                .id
-                .to_string();
+            let command = match outcomes.last() {
+                Some(CommandOutcome::Display { command, .. }) => command.clone(),
+                _ => return Err(MezError::invalid_state("selection outcome unavailable")),
+            };
+            let (browser, source) = if command == "list-agents" {
+                let (browser, targets) = self.agent_management_browser(client)?;
+                (
+                    browser,
+                    RuntimeRecordBrowserOverlaySource::Agents {
+                        client_id: client.as_str().into(),
+                        targets,
+                        confirmation: None,
+                    },
+                )
+            } else {
+                let group_id = self
+                    .session
+                    .active_group()
+                    .ok_or_else(|| MezError::invalid_state("window group unavailable"))?
+                    .id
+                    .to_string();
+                (
+                    self.terminal_window_record_browser()?,
+                    RuntimeRecordBrowserOverlaySource::TerminalWindows {
+                        client_id: client.as_str().into(),
+                        group_id,
+                    },
+                )
+            };
             Some(TerminalBrowserHandoff {
                 client: client.clone(),
                 generation,
                 state: RuntimeRecordBrowserOverlayState {
                     pane_id: self.active_pane_id()?.to_string(),
-                    command: "choose-window".into(),
-                    source: Some(RuntimeRecordBrowserOverlaySource::TerminalWindows {
-                        client_id: client.as_str().into(),
-                        group_id,
-                    }),
-                    browser: self.terminal_window_record_browser()?,
+                    command,
+                    source: Some(source),
+                    browser,
                     stack: Vec::new(),
                 },
             })

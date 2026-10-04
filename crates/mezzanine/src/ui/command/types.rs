@@ -206,6 +206,7 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "list-windows",
     "list-panes",
     "list-clients",
+    "list-agents",
     "detach-client",
     "attach-session",
     "list-sessions",
@@ -260,7 +261,7 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         | "list-buffers" | "choose-buffer" | "delete-buffer" | "capture-pane" | "save-buffer"
         | "clear-history" | "search-history" | "export-history" | "pipe-pane"
         | "refresh-client" | "show-metrics" | "show-iroh-status" | "show-pane-status"
-        | "agent-shell" | "pane-settings" => BaselineCommandStatus::RuntimeRequired,
+        | "agent-shell" | "pane-settings" | "list-agents" => BaselineCommandStatus::RuntimeRequired,
         "bind-key" | "unbind-key" | "set-key-preset" | "set-theme" | "set-option"
         | "source-file" | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
         "zen" => BaselineCommandStatus::RuntimeRequired,

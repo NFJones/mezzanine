@@ -596,6 +596,17 @@ impl RuntimeSessionService {
                 .apply_primary_record_browser_prompt_input(input)
                 .map(Some);
         }
+        if let Some(changed) =
+            self.apply_agent_management_overlay_input(primary_client_id, input)?
+        {
+            return Ok(Some(changed));
+        }
+        let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {
+            return Ok(Some(false));
+        };
+        let Some(record_browser) = overlay.record_browser.as_ref() else {
+            return Ok(None);
+        };
         // A retained cursor is not authority to operate on a filtered-out row.
         // Keep search, filters, save and dismissal available without a selection.
         if !record_browser.browser.is_detail_view()

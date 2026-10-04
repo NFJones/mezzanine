@@ -7,6 +7,7 @@
 //! input dispatch and frame composition.
 
 mod action_registry;
+mod agent_management;
 mod display_content;
 mod product_content;
 mod record_adapter;

@@ -204,7 +204,9 @@ impl AsyncRuntimeSessionActor {
                 runtime_event_requires_registry_persistence(&event);
             let event_requires_global_reconciliation =
                 runtime_event_requires_global_reconciliation(&event);
-            let application = self.apply_runtime_event(event).await?;
+            // Event families retain independently owned settlement state. Keep
+            // their combined future off the event-batch caller's bounded stack.
+            let application = Box::pin(self.apply_runtime_event(event)).await?;
             if application.applied {
                 registry_persistence_required =
                     registry_persistence_required || event_requires_registry_persistence;

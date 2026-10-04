@@ -82,8 +82,10 @@ ownership. Explicit primary resume supplies one continuation prompt and does not
 repeat settled actions. It supersedes unissued candidates rather than carrying
 their old approvals into changed work. Peer mail, approval replies and child
 completion cannot unpause the agent; already-running children may continue.
-These APIs are intended for the administrative agent browser, not new slash
-commands. Runtime pause is not transparent process suspension across restart.
+Use `:list-agents` from the terminal command prompt for these targeted controls:
+`p` pauses/resumes the selected native agent, `i` interrupts, and `d` arms close
+confirmation. They are not new slash commands. Enter focuses only after explicit
+activation. Runtime pause is not transparent process suspension across restart.
 
 In the `/resume` picker, Enter resumes the selected conversation, `i` opens its
 transcript for inspection, and `a` toggles between the current project and all

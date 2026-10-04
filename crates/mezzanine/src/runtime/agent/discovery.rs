@@ -275,7 +275,7 @@ impl RuntimeSessionService {
     /// identity of its own. Agents with a subagent lineage map to
     /// `AgentConversationKind::Subagent`, which default resume discovery hides,
     /// and every remaining pane agent maps to a `Root` primary agent.
-    fn runtime_agent_kind(&self, agent_id: &str) -> AgentKind {
+    pub(crate) fn runtime_agent_kind(&self, agent_id: &str) -> AgentKind {
         if self.runtime_agent_is_internal_controller(agent_id) {
             AgentKind::Internal
         } else if self.agent.subagent_lineage.contains_key(agent_id) {

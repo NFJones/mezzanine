@@ -71,7 +71,7 @@ arguments and runtime requirements.
   `paste-clipboard`, `paste-buffer`, `create-buffer`, `list-buffers`,
   `choose-buffer`, `delete-buffer`, `save-buffer`, `clear-history`,
   `search-history`, and `export-history`.
-- **Agent and diagnostics:** `agent-shell`, `show-messages`, `show-metrics`,
+- **Agent and diagnostics:** `agent-shell`, `list-agents`, `show-messages`, `show-metrics`,
   `show-iroh-status`, and `show-pane-status`.
 
 Some commands require an active runtime, control endpoint, configuration store,
@@ -97,6 +97,24 @@ rather than attaching one chooser to unrelated rows.
 
 The following commands have behavior or safety boundaries that are useful to
 know without opening the complete normative contract.
+
+### Live agent management
+
+`:list-agents` (or `list-agents` in a command binding) takes no arguments. It
+shows all current session registrations, including roots, children, internal
+controllers and external harnesses, not saved conversations or the model-facing
+64-row audience projection. Rows retain canonical IDs, location, state, objective
+and operation availability separately from clipped display text.
+
+Enter or an identifier-cell click focuses the selected pane globally for the
+invoking primary and dismisses only on success. Navigation and search never focus.
+`i` interrupts native work; `p` pauses or explicitly resumes its retained task;
+`r` refreshes in place. Already-running children may continue while a parent is
+paused. External/no-pane registrations do not acquire native lifecycle controls.
+`d` arms an exact-target close confirmation: `y` explicitly confirms force-close
+of its live process, while `n` or Esc cancels. A changed task, incarnation or
+overlay generation invalidates confirmation rather than redirecting it to a
+neighbor. Lifecycle changes refresh the retained list without changing focus.
 
 ### Pane creation and pipe shell commands
 

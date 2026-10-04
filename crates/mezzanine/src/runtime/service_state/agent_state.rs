@@ -107,6 +107,12 @@ pub(crate) type RuntimeRecordBrowserOverlayFrame =
 /// Query context retained for one backend-specific record-browser overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeRecordBrowserOverlaySource {
+    /// Administrative session snapshot with exact targets and modal confirmation.
+    Agents {
+        client_id: String,
+        targets: BTreeMap<String, crate::runtime::control::agent_browser::AgentBrowserTarget>,
+        confirmation: Option<Box<crate::runtime::control::agent_browser::AgentCloseConfirmation>>,
+    },
     /// In-memory terminal selection, bound to the invoking client and group.
     TerminalWindows { client_id: String, group_id: String },
     /// Live session-wide pending approval queue.

@@ -2,6 +2,168 @@
 
 use super::*;
 
+/// A task settling while close is armed invalidates that exact confirmation;
+/// confirmation cannot close a replacement task or drift to a neighboring row.
+#[test]
+fn runtime_agent_management_browser_rejects_changed_close_target() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let remote = service
+        .create_window_with_pane_process(&primary, "remote", true, None)
+        .unwrap();
+    let pane = remote.pane_id.to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane)
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "remote task")
+        .unwrap();
+    service.session.select_pane_global(&primary, "%1").unwrap();
+    service
+        .execute_attached_display_command(&primary, "list-agents")
+        .unwrap();
+    let input = |service: &mut RuntimeSessionService, bytes: &[u8]| {
+        service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(bytes.to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+    };
+    input(&mut service, format!("/agent-{pane}\r").as_bytes());
+    input(&mut service, b"d");
+    service.stop_agent_turn_for_pane(&pane).unwrap();
+    input(&mut service, b"y");
+    assert!(service.find_pane_descriptor(&pane).is_some());
+    assert_eq!(service.active_pane_id().unwrap().as_str(), "%1");
+    assert!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .lines
+            .iter()
+            .any(|line| line.contains("changed"))
+    );
+    input(&mut service, b"\r");
+    assert!(service.primary_display_overlay().is_none());
+    assert_eq!(service.active_pane_id().unwrap().as_str(), pane);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Management keys must affect the selected agent across windows, not the pane
+/// that opened the browser. Pause/resume and interruption retain focus; close
+/// requires explicit target-labelled confirmation and supports cancellation.
+#[test]
+fn runtime_agent_management_browser_controls_selected_remote_agent() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "owner task")
+        .unwrap();
+    service.stop_agent_turn_for_pane("%1").unwrap();
+    let remote = service
+        .create_window_with_pane_process(&primary, "remote", true, None)
+        .unwrap();
+    let pane = remote.pane_id.to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane)
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "remote task")
+        .unwrap();
+    service.session.select_pane_global(&primary, "%1").unwrap();
+    service
+        .execute_attached_display_command(&primary, "list-agents")
+        .unwrap();
+    let input = |service: &mut RuntimeSessionService, bytes: &[u8]| {
+        service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(bytes.to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+    };
+    input(&mut service, format!("/agent-{pane}\r").as_bytes());
+    input(&mut service, b"p");
+    assert_eq!(service.agent_human_pause_status(&pane), Some("paused"));
+    assert_eq!(service.active_pane_id().unwrap().as_str(), "%1");
+    input(&mut service, b"p");
+    assert!(service.agent_human_pause_status(&pane).is_none());
+    input(&mut service, b"i");
+    assert_eq!(service.active_pane_id().unwrap().as_str(), "%1");
+    assert!(!service.agent_shell_pane_has_active_turn(&pane));
+    input(&mut service, b"d");
+    assert!(service.find_pane_descriptor(&pane).is_some());
+    input(&mut service, b"n");
+    assert!(service.find_pane_descriptor(&pane).is_some());
+    input(&mut service, b"d");
+    input(&mut service, b"y");
+    assert!(service.find_pane_descriptor(&pane).is_none());
+    assert!(service.find_pane_descriptor("%1").is_some());
+    assert_eq!(service.active_pane_id().unwrap().as_str(), "%1");
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// The administrative list mounts from a normal terminal without creating an
+/// agent session, and must not inherit the model-facing discovery row cap.
+#[test]
+fn runtime_agent_management_browser_mounts_uncapped() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    for index in 0..70 {
+        service.message_service_mut().register_agent(
+            None,
+            None,
+            format!("fixture-{index}"),
+            Vec::new(),
+        );
+    }
+    service
+        .execute_attached_display_command(&primary, "list-agents")
+        .unwrap();
+    let state = service
+        .primary_display_overlay()
+        .unwrap()
+        .record_browser
+        .as_ref()
+        .unwrap();
+    assert_eq!(state.browser.records().len(), 70);
+    assert!(service.agent_shell_store().get("%1").is_none());
+    assert!(
+        service
+            .execute_terminal_command(&primary, "list-agents --all")
+            .is_err()
+    );
+}
+
 /// A configured command binding must use the same typed browser handoff as
 /// prompt submission, preserving attached execution report effects.
 #[test]

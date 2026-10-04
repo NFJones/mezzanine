@@ -122,6 +122,11 @@ in-memory catalog. Keyboard and identifier-cell mouse activation select the same
 stable record ID. Refresh preserves search and retires old clickable identities;
 navigation, searching and dismissal do not change focus.
 
+In `list-agents`, Enter focuses the selected pane, `i` interrupts native work,
+`p` pauses/resumes, and `r` refreshes. `d` opens target-labelled close confirmation;
+`y` confirms force-close and `n` or Esc cancels. Search and save prompts take key
+precedence. Unsupported operations report an error without changing another row.
+
 ## Inspect effective bindings
 
 Run `list-keys` in the command prompt or press `Ctrl+A ?`. This shows active

@@ -161,7 +161,8 @@ impl RuntimeSessionService {
         active_index: usize,
     ) -> Result<Option<RecordBrowser>> {
         let browser = match source {
-            RuntimeRecordBrowserOverlaySource::TerminalWindows { .. } => {
+            RuntimeRecordBrowserOverlaySource::TerminalWindows { .. }
+            | RuntimeRecordBrowserOverlaySource::Agents { .. } => {
                 return Err(MezError::invalid_state(
                     "terminal catalog records cannot be deleted",
                 ));
@@ -480,6 +481,9 @@ impl RuntimeSessionService {
         source: &RuntimeRecordBrowserOverlaySource,
     ) -> Result<RecordBrowser> {
         match source {
+            RuntimeRecordBrowserOverlaySource::Agents { .. } => Err(MezError::invalid_state(
+                "administrative catalogs refresh through their live owner",
+            )),
             RuntimeRecordBrowserOverlaySource::TerminalWindows { .. } => {
                 self.terminal_window_record_browser()
             }
@@ -720,6 +724,7 @@ impl RuntimeSessionService {
         source: &RuntimeRecordBrowserOverlaySource,
     ) -> RuntimeRecordBrowserOverlaySource {
         match source {
+            RuntimeRecordBrowserOverlaySource::Agents { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::TerminalWindows { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Approvals => source.clone(),
             RuntimeRecordBrowserOverlaySource::SavedSessions {
@@ -885,6 +890,7 @@ impl RuntimeSessionService {
     ) -> Result<RuntimeRecordBrowserOverlaySource> {
         let value = value.trim();
         match source {
+            RuntimeRecordBrowserOverlaySource::Agents { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::TerminalWindows { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Approvals => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::SavedSessions {
@@ -1365,6 +1371,7 @@ fn set_record_browser_scope_indicator(
     source: &RuntimeRecordBrowserOverlaySource,
 ) {
     let indicator = match source {
+        RuntimeRecordBrowserOverlaySource::Agents { .. } => "live runtime session".to_string(),
         RuntimeRecordBrowserOverlaySource::TerminalWindows { group_id, .. } => {
             format!("window group {group_id}")
         }

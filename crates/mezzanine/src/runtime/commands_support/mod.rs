@@ -338,6 +338,16 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_show_messages_display(service),
         })),
+        "list-agents" => {
+            if !invocation.args.is_empty() {
+                return Err(MezError::invalid_args("list-agents accepts no arguments"));
+            }
+            let (browser, _) = service.agent_management_browser(primary_client_id)?;
+            Ok(Some(CommandOutcome::Display {
+                command: invocation.name.clone(),
+                body: browser.render_page().raw_markdown,
+            }))
+        }
         "show-metrics" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: runtime_show_metrics_display(service),
