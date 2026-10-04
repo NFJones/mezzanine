@@ -216,6 +216,7 @@ mod messages;
 mod outcome;
 mod presentation;
 pub(crate) use presentation::RuntimeProviderLogInput;
+mod project_accounting;
 mod provider_context;
 mod provider_events;
 mod provider_execution;
@@ -480,6 +481,9 @@ pub(crate) struct RuntimeAgentComponent {
     pending_agent_provider_tasks: BTreeSet<String>,
     /// Provider turns claimed by workers but not yet settled.
     claimed_agent_provider_tasks: BTreeMap<String, RuntimeAgentProviderClaim>,
+    /// Exact issued requests retained independently of active content claims.
+    provider_accounting_owners:
+        BTreeMap<(String, u64), project_accounting::ProviderAccountingOwner>,
     /// Provider turns whose actor-validated memory or issue actions are being
     /// settled by the bounded persistence worker.
     pending_agent_provider_persistence: BTreeSet<String>,
@@ -533,12 +537,17 @@ pub(crate) struct RuntimeAgentComponent {
     /// In-flight compaction tasks retained by pane and generation until each
     /// worker settles, including tasks superseded by a newer pane generation.
     claimed_agent_compaction_tasks: BTreeMap<(String, u64), RuntimeAgentCompactionTask>,
+    /// Issued compactor expense survives content claim retirement.
+    compaction_accounting_owners:
+        BTreeMap<(String, u64), project_accounting::AuxiliaryAccountingOwner>,
     /// Panes currently running model-backed durable-memory generation.
     agent_remembering_panes: BTreeMap<String, u64>,
     /// Durable-memory generation tasks waiting for provider dispatch.
     pending_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
     /// Durable-memory generation tasks claimed by provider workers.
     claimed_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
+    /// Issued memory expense is consumed by exact observation, never pane alone.
+    remember_accounting_owners: BTreeMap<String, project_accounting::AuxiliaryAccountingOwner>,
     /// Turn-less generated-title tasks waiting for provider dispatch.
     ///
     /// The map is keyed by conversation id, so at most one title request can be
@@ -556,6 +565,10 @@ pub(crate) struct RuntimeAgentComponent {
     /// Cumulative provider token usage keyed by conversation and model.
     agent_token_usage_by_conversation:
         BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
+    /// Immutable native origin partitions beside conversation totals.
+    project_usage_by_conversation: BTreeMap<String, Vec<mez_agent::ProjectTokenUsage>>,
+    /// Pane-view partitions, independently cleared by reset-status.
+    project_usage_by_pane: BTreeMap<String, Vec<mez_agent::ProjectTokenUsage>>,
     /// Incremental provider token usage across all conversations for status display.
     agent_instance_token_usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
     /// Cumulative provider token usage keyed by pane and model.
@@ -2267,6 +2280,7 @@ impl RuntimeSessionService {
     /// Clears cumulative token usage for one pane without changing conversation totals.
     pub(crate) fn reset_agent_token_usage_for_pane(&mut self, pane_id: &str) -> bool {
         let external = self.reset_external_token_usage(pane_id);
+        self.agent.project_usage_by_pane.remove(pane_id);
         self.agent
             .agent_token_usage_by_pane
             .remove(pane_id)
@@ -2710,6 +2724,21 @@ impl RuntimeSessionService {
                 (task.task_generation, task.conversation_id.clone()),
             );
         }
+        let process = self.pane_process_identity(&task.pane_id).ok();
+        self.agent
+            .compaction_accounting_owners
+            .entry((task.pane_id.clone(), task.task_generation))
+            .or_insert_with(|| project_accounting::AuxiliaryAccountingOwner {
+                pane: task.pane_id.clone(),
+                conversation: task.conversation_id.clone(),
+                origin: task.accounting_origin.clone(),
+                model: ModelTokenUsageKey::new(
+                    &task.model_profile.provider,
+                    &task.model_profile.model,
+                ),
+                process,
+                observation: crate::storage::token_usage::new_token_usage_event_id(),
+            });
         self.agent
             .claimed_agent_compaction_tasks
             .insert((task.pane_id.clone(), task.task_generation), task);
@@ -2877,9 +2906,37 @@ impl RuntimeSessionService {
         pane_id: impl Into<String>,
         task: RuntimeAgentRememberTask,
     ) {
+        let process = self.pane_process_identity(&task.pane_id).ok();
+        self.agent
+            .remember_accounting_owners
+            .entry(task.observation_id.clone())
+            .or_insert_with(|| project_accounting::AuxiliaryAccountingOwner {
+                pane: task.pane_id.clone(),
+                conversation: task.conversation_id.clone(),
+                origin: task.accounting_origin.clone(),
+                model: ModelTokenUsageKey::new(
+                    &task.model_profile.provider,
+                    &task.model_profile.model,
+                ),
+                process,
+                observation: format!("remember:{}", task.observation_id),
+            });
         self.agent
             .claimed_agent_remember_tasks
             .insert(pane_id.into(), task);
+    }
+
+    /// Finishes claimed durable-memory state and clears pane activity.
+    /// Checks exact worker ownership without consuming a replacement request.
+    pub(crate) fn agent_remember_observation_matches(
+        &self,
+        pane_id: &str,
+        observation_id: &str,
+    ) -> bool {
+        self.agent
+            .claimed_agent_remember_tasks
+            .get(pane_id)
+            .is_some_and(|task| task.observation_id == observation_id)
     }
 
     /// Finishes claimed durable-memory state and clears pane activity.

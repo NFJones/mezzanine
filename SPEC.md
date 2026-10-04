@@ -272,8 +272,14 @@ SQLite telemetry schema 3 stores lossless canonical root bytes and directory
 object-qualified opaque mappings separately from events. Canonical aliases share
 a mapping; detected path replacement creates another ID and preserves historical
 mappings. Relocation is not inferred from Git remotes or titles. Mapping does not
-grant execution authority or backfill legacy expense. Producer partitions,
-and scoped status are separate integration work. Telemetry schema 4 adds nullable
+grant execution authority or backfill legacy expense. Native incurred usage MUST
+retain request-frozen project partitions beside overall counters. Exact issued
+worker ownership MUST settle expense independently of stale response content;
+duplicates MUST NOT charge again or revive retired tasks. Conversation metadata
+version 2 preserves partitions; legacy totals remain unattributed. Restore and
+failed-resume rollback MUST conserve partitions without creating ledger events.
+Pane reset clears only its view. Scoped status is separate integration work.
+Telemetry schema 4 adds nullable
 project IDs to immutable deltas and external checkpoints; legacy rows remain
 unattributed. Replay comparison MUST include project attribution. External stream
 origins are server-bound at launch and MUST NOT change within an epoch. Grouped

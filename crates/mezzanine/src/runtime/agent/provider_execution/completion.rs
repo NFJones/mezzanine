@@ -23,8 +23,21 @@ impl RuntimeSessionService {
         turn_id: &str,
         execution: AgentTurnExecution,
     ) -> Result<bool> {
-        self.apply_agent_provider_completed_event_inner(agent_id, turn_id, execution)
+        Box::pin(self.apply_agent_provider_completed_event_inner(agent_id, turn_id, execution))
             .await
+    }
+
+    /// Applies content after exact issued-request expense has already settled.
+    pub(crate) async fn apply_accounted_provider_completed_event(
+        &mut self,
+        agent_id: &AgentId,
+        turn_id: &str,
+        execution: AgentTurnExecution,
+    ) -> Result<bool> {
+        Box::pin(self.apply_agent_provider_completed_event_with_accounting(
+            agent_id, turn_id, execution, true,
+        ))
+        .await
     }
 
     /// Owns provider-completion mutation after the caller validates its pane target.
@@ -32,7 +45,21 @@ impl RuntimeSessionService {
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
+        execution: AgentTurnExecution,
+    ) -> Result<bool> {
+        Box::pin(self.apply_agent_provider_completed_event_with_accounting(
+            agent_id, turn_id, execution, false,
+        ))
+        .await
+    }
+
+    /// Separates already-settled incurred expense from accepted response content.
+    async fn apply_agent_provider_completed_event_with_accounting(
+        &mut self,
+        agent_id: &AgentId,
+        turn_id: &str,
         mut execution: AgentTurnExecution,
+        usage_settled: bool,
     ) -> Result<bool> {
         self.require_live()?;
         let Some(turn) = self
@@ -274,7 +301,10 @@ impl RuntimeSessionService {
             &provider_id,
             provider_owner,
             execution,
-            true,
+            super::result_apply_async::ProviderExecutionApplyOptions {
+                defer_external_actions: true,
+                usage_settled,
+            },
         ))
         .await
         {

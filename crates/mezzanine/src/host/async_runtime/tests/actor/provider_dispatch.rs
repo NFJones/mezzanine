@@ -857,6 +857,7 @@ async fn async_actor_compaction_failure_cancels_claim_lease() {
                 task_generation: generation,
                 kind: "forbidden".to_string(),
                 message: "provider rejected request".to_string(),
+                usage: Default::default(),
                 provider_failure_json: None,
                 provider_raw_text: None,
             },

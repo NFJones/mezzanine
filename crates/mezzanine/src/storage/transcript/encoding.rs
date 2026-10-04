@@ -34,7 +34,9 @@ const LEGACY_PROMPT_HISTORY_VERSION: &str = "mez-agent-prompt-history/1";
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/1";
+const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/2";
+/// Metadata before project partitions; old expense remains unattributed.
+const LEGACY_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/1";
 /// Defines the AGENT PRESENTATION VERSION const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -424,6 +426,11 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
                 ))
             })?
             .unwrap_or_default(),
+        serde_json::to_string(&metadata.project_token_usage).map_err(|error| {
+            MezError::invalid_state(format!(
+                "project accounting metadata encoding failed: {error}"
+            ))
+        })?,
     ]
     .into_iter()
     .map(|field| escape_field(&field))
@@ -434,24 +441,31 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
 /// Decodes one agent-session metadata row from the store's TSV format.
 pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMetadata> {
     let fields = split_fields(line)?;
-    if !(fields.len() == 11
-        || fields.len() == 12
-        || fields.len() == 14
-        || fields.len() == 18
-        || fields.len() == 19
-        || fields.len() == 20
-        || fields.len() == 21
-        || fields.len() == 22
-        || fields.len() == 23
-        || fields.len() == 24
-        || fields.len() == 25
-        || fields.len() == 26
-        || fields.len() == 27
-        || fields.len() == 29
-        || fields.len() == 30
-        || fields.len() == 31
-        || fields.len() == 32)
-        || fields[0] != AGENT_SESSION_METADATA_VERSION
+    let legacy = fields
+        .first()
+        .is_some_and(|version| version == LEGACY_AGENT_SESSION_METADATA_VERSION);
+    let current = fields
+        .first()
+        .is_some_and(|version| version == AGENT_SESSION_METADATA_VERSION);
+    if !((current && fields.len() == 33)
+        || (legacy
+            && (fields.len() == 11
+                || fields.len() == 12
+                || fields.len() == 14
+                || fields.len() == 18
+                || fields.len() == 19
+                || fields.len() == 20
+                || fields.len() == 21
+                || fields.len() == 22
+                || fields.len() == 23
+                || fields.len() == 24
+                || fields.len() == 25
+                || fields.len() == 26
+                || fields.len() == 27
+                || fields.len() == 29
+                || fields.len() == 30
+                || fields.len() == 31
+                || fields.len() == 32)))
     {
         return Err(MezError::invalid_args(
             "invalid agent session metadata entry",
@@ -612,6 +626,13 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
             .map(|value| decode_token_usage_by_model(value))
             .transpose()?
             .unwrap_or_default(),
+        project_token_usage: if current {
+            serde_json::from_str(&fields[32]).map_err(|error| {
+                MezError::invalid_args(format!("project accounting metadata is invalid: {error}"))
+            })?
+        } else {
+            Vec::new()
+        },
         context_usage_snapshot: fields
             .get(context_usage_snapshot_index)
             .filter(|value| !value.is_empty())

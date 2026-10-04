@@ -460,6 +460,8 @@ pub enum AgentCompactionEvent {
         pane_id: String,
         /// Exact queued task generation that produced the failure.
         task_generation: u64,
+        /// Reported incurred usage before failure, never inferred from diagnostics.
+        usage: mez_agent::ModelTokenUsage,
         /// Stable failure kind for diagnostics.
         kind: String,
         /// Human-readable failure.
@@ -478,6 +480,8 @@ pub enum AgentRememberEvent {
     Completed {
         /// Pane whose `/remember` command completed.
         pane_id: String,
+        /// Exact issued memory request, independent of later pane ownership.
+        observation_id: String,
         /// Provider response produced by the memory worker.
         response: Box<ModelResponse>,
     },
@@ -485,6 +489,10 @@ pub enum AgentRememberEvent {
     Failed {
         /// Pane whose `/remember` command failed.
         pane_id: String,
+        /// Exact issued memory request whose failure may retire its claim.
+        observation_id: String,
+        /// Reported incurred usage before failure, independently of content acceptance.
+        usage: mez_agent::ModelTokenUsage,
         /// Stable failure kind for diagnostics.
         kind: String,
         /// Human-readable failure.

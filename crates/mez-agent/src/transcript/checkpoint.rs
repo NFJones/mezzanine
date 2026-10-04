@@ -59,6 +59,8 @@ pub struct AgentSessionMetadata {
     pub token_usage: ModelTokenUsage,
     /// Provider-reported token usage accumulated per provider/model.
     pub token_usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    /// Frozen native project partitions; absent legacy metadata is unattributed.
+    pub project_token_usage: Vec<crate::ProjectTokenUsage>,
     /// Last provider-reported context usage label shown in pane status.
     pub context_usage: Option<String>,
     /// Last provider request-context snapshot shown in pane status.
@@ -167,6 +169,42 @@ impl AgentSessionMetadata {
         for key in self.token_usage_by_model.keys() {
             validate_required("token usage provider", &key.provider)?;
             validate_required("token usage model", &key.model)?;
+        }
+        let mut partitions = BTreeMap::new();
+        let mut identities = std::collections::BTreeSet::new();
+        for partition in &self.project_token_usage {
+            if let Some(id) = &partition.project_id {
+                validate_required("accounting project id", id)?;
+                if id.len() != 36
+                    || !id.bytes().enumerate().all(|(index, byte)| {
+                        if matches!(index, 8 | 13 | 18 | 23) {
+                            byte == b'-'
+                        } else {
+                            byte.is_ascii_hexdigit()
+                        }
+                    })
+                {
+                    return Err(TranscriptContractError::new(
+                        "invalid accounting project id",
+                    ));
+                }
+            }
+            validate_required("token usage provider", &partition.model.provider)?;
+            validate_required("token usage model", &partition.model.model)?;
+            if !identities.insert((partition.project_id.clone(), partition.model.clone())) {
+                return Err(TranscriptContractError::new(
+                    "duplicate project accounting partition",
+                ));
+            }
+            partitions
+                .entry(partition.model.clone())
+                .or_insert_with(ModelTokenUsage::default)
+                .add_assign(partition.usage);
+        }
+        if !self.project_token_usage.is_empty() && partitions != self.token_usage_by_model {
+            return Err(TranscriptContractError::new(
+                "project accounting partitions must conserve model totals",
+            ));
         }
         if let Some(latest) = self.latest_request_usage.as_ref() {
             validate_required("latest request usage provider", &latest.model.provider)?;

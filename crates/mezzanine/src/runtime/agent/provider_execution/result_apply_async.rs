@@ -10,6 +10,14 @@ use super::super::{
 };
 use crate::runtime::{RuntimeAgentProviderPersistenceOutcome, RuntimeAgentProviderPersistenceWork};
 
+/// Actor completion policy, separate from provider response and execution identity.
+pub(super) struct ProviderExecutionApplyOptions {
+    /// External actions cross the supervised worker boundary rather than running inline.
+    pub(super) defer_external_actions: bool,
+    /// Exact issued-request expense was already consumed before content acceptance.
+    pub(super) usage_settled: bool,
+}
+
 impl RuntimeSessionService {
     /// Runs the apply agent provider execution async operation for this subsystem.
     ///
@@ -23,8 +31,12 @@ impl RuntimeSessionService {
         provider_id: &str,
         provider_owner: Option<mez_agent::ProviderContinuityOwner>,
         mut execution: AgentTurnExecution,
-        defer_external_actions: bool,
+        options: ProviderExecutionApplyOptions,
     ) -> Result<AgentTurnExecution> {
+        let ProviderExecutionApplyOptions {
+            defer_external_actions,
+            usage_settled,
+        } = options;
         if self.subagent_descendant_is_fenced(&turn.agent_id) {
             return Err(super::super::MezError::forbidden(
                 "fenced subagent descendant cannot apply provider execution after parent conversation replacement",
@@ -71,10 +83,12 @@ impl RuntimeSessionService {
                 .runtime_metrics_mut()
                 .record_provider_token_usage(*usage, *usage, key);
         }
-        self.record_agent_provider_token_usage_by_model(
-            &turn.pane_id,
-            &execution.routing_token_usage_by_model,
-        );
+        if !usage_settled {
+            self.record_agent_provider_token_usage_by_model(
+                &turn.pane_id,
+                &execution.routing_token_usage_by_model,
+            );
+        }
         self.integration
             .runtime_metrics_mut()
             .record_provider_response(
@@ -82,12 +96,20 @@ impl RuntimeSessionService {
                 execution.latest_response_usage,
                 &token_usage_key,
             );
-        self.record_agent_provider_token_usage_with_profile(
-            &turn.pane_id,
-            execution.response.usage,
-            execution.latest_response_usage,
-            Some(model_profile),
-        );
+        if usage_settled {
+            self.record_agent_latest_context_usage(
+                &turn.conversation_id,
+                execution.latest_response_usage,
+                Some(model_profile),
+            );
+        } else {
+            self.record_agent_provider_token_usage_with_profile(
+                &turn.pane_id,
+                execution.response.usage,
+                execution.latest_response_usage,
+                Some(model_profile),
+            );
+        }
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
         self.append_agent_trace_maap_response(
             turn,

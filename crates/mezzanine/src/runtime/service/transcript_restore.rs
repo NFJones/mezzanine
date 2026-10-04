@@ -461,6 +461,12 @@ impl RuntimeSessionService {
                     &pane_id,
                     token_usage_by_model,
                 );
+                self.restore_project_usage(
+                    &conversation_id,
+                    &pane_id,
+                    metadata.project_token_usage.clone(),
+                    false,
+                );
                 self.restore_agent_context_usage(
                     &conversation_id,
                     metadata.context_usage.clone(),
@@ -784,6 +790,7 @@ impl RuntimeSessionService {
                     project_root,
                     token_usage: runtime_agent_total_token_usage_by_model(&token_usage_by_model),
                     token_usage_by_model,
+                    project_token_usage: self.project_usage_for_conversation(&conversation_id),
                     context_usage: self.agent_context_usage_display(&conversation_id),
                     context_usage_snapshot: self.agent_context_usage_snapshot(&conversation_id),
                     latest_request_usage: self
@@ -1267,6 +1274,7 @@ impl RuntimeSessionService {
         self.set_pane_approval_policy_override(pane_id, prepared.approval_policy);
         let token_usage_by_model = runtime_agent_token_usage_by_model_from_metadata(&metadata);
         self.merge_restored_agent_token_usage(conversation_id, pane_id, token_usage_by_model);
+        self.restore_project_usage(conversation_id, pane_id, metadata.project_token_usage, true);
         self.restore_agent_context_usage(
             conversation_id,
             metadata.context_usage,

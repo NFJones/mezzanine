@@ -1375,6 +1375,7 @@ fn agent_session_metadata(
         project_root: None,
         token_usage: Default::default(),
         token_usage_by_model: BTreeMap::new(),
+        project_token_usage: Vec::new(),
         context_usage: None,
         context_usage_snapshot: None,
         latest_request_usage: None,
@@ -4118,12 +4119,49 @@ fn transcript_store_exports_prompt_history_without_creating_the_store() {
 fn agent_session_metadata_decoder_accepts_pre_pane_identity_rows() {
     let metadata = agent_session_metadata("$legacy", "legacy-conversation");
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    let (legacy_row, appended_field) = encoded
+    let (pre_partition_row, partitions) = encoded
+        .rsplit_once('\t')
+        .expect("current metadata rows include project partitions");
+    assert_eq!(partitions, "[]");
+    let (legacy_row, appended_field) = pre_partition_row
         .rsplit_once('\t')
         .expect("current metadata rows include the appended selection field");
     assert!(appended_field.is_empty());
 
-    assert_eq!(decode_agent_session_metadata(legacy_row).unwrap(), metadata);
+    let legacy_row = legacy_row.replacen(
+        "mez-agent-session-metadata/2",
+        "mez-agent-session-metadata/1",
+        1,
+    );
+    assert_eq!(
+        decode_agent_session_metadata(&legacy_row).unwrap(),
+        metadata
+    );
+}
+
+/// Versioned metadata preserves opaque project partitions and unknown cache
+/// counters; inconsistent partitions fail validation rather than rewriting totals.
+#[test]
+fn agent_session_metadata_round_trips_project_partitions() {
+    let mut metadata = agent_session_metadata("$partitions", "partition-conversation");
+    let model = mez_agent::ModelTokenUsageKey::new("provider", "model");
+    let usage = mez_agent::ModelTokenUsage {
+        input_tokens: 7,
+        output_tokens: 2,
+        ..Default::default()
+    };
+    metadata.token_usage = usage;
+    metadata.token_usage_by_model.insert(model.clone(), usage);
+    metadata.project_token_usage = vec![mez_agent::ProjectTokenUsage {
+        project_id: Some("12345678-1234-1234-1234-123456789abc".to_string()),
+        model,
+        usage,
+    }];
+    let encoded = encode_agent_session_metadata(&metadata).unwrap();
+    assert!(encoded.starts_with("mez-agent-session-metadata/2\t"));
+    assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
+    metadata.project_token_usage[0].usage.input_tokens += 1;
+    assert!(encode_agent_session_metadata(&metadata).is_err());
 }
 
 /// Verifies that active agent-session metadata is replaced per Mezzanine
@@ -4172,6 +4210,7 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
         project_root: Some("/workspace".to_string()),
         token_usage: owned_token_usage,
         token_usage_by_model: BTreeMap::from([(owned_token_usage_key, owned_token_usage)]),
+        project_token_usage: Vec::new(),
         context_usage: Some("10%".to_string()),
         context_usage_snapshot: Some(mez_agent::AgentContextUsageSnapshot {
             input_tokens: 100,

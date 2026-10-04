@@ -1571,6 +1571,7 @@ fn runtime_routed_child_malformed_compaction_completion_recovers_parent() {
             target: RuntimeAgentCompactionTarget::Conversation,
             conversation_chunks: None,
             compaction_request_shape: None,
+            accounting_origin: crate::storage::token_usage::AccountingOrigin::Unattributed,
         },
     );
 
@@ -1654,6 +1655,7 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
             target: RuntimeAgentCompactionTarget::Conversation,
             conversation_chunks: None,
             compaction_request_shape: None,
+            accounting_origin: crate::storage::token_usage::AccountingOrigin::Unattributed,
         },
     );
     service

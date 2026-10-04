@@ -1874,6 +1874,11 @@ impl RuntimeSessionService {
         if retain_request_chain && let Some((request, _, _)) = openai_request_shape {
             self.retain_agent_provider_request_chain(turn, request);
         }
+        if self.agent.provider_accounting_owners.len() >= 4096 {
+            return Err(MezError::invalid_state(
+                "issued provider accounting capacity exhausted",
+            ));
+        }
         self.agent.claimed_agent_provider_tasks.insert(
             turn.turn_id.clone(),
             RuntimeAgentProviderClaim {
@@ -1903,6 +1908,20 @@ impl RuntimeSessionService {
                 "provider_task claim_lease started generation={generation} timeout_ms={timeout_ms}"
             ),
         )?;
+        self.agent.provider_accounting_owners.insert(
+            (turn.turn_id.clone(), generation),
+            super::project_accounting::ProviderAccountingOwner {
+                turn: turn.clone(),
+                profile: dispatch
+                    .auto_sizing
+                    .as_ref()
+                    .map(|routing| routing.router_profile.clone())
+                    .unwrap_or_else(|| dispatch.model_profile.clone()),
+                origin: dispatch.accounting_origin.clone(),
+                process: self.pane_process_identity(&turn.pane_id).ok(),
+                observation_id: crate::storage::token_usage::new_token_usage_event_id(),
+            },
+        );
         Ok(RuntimeTransition {
             applied: true,
             side_effects: vec![RuntimeSideEffect::ScheduleTimer {

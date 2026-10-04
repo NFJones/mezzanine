@@ -7,7 +7,7 @@
 use crate::ModelProfile;
 
 /// Stable provider/model identity for token-cost accounting.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct ModelTokenUsageKey {
     /// Provider id that served the request.
     pub provider: String,
@@ -45,7 +45,7 @@ fn non_empty_or_unknown(value: String) -> String {
 }
 
 /// Provider-reported token usage for one or more model requests.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModelTokenUsage {
     /// Provider-visible total input tokens, including any cache-read or
     /// cache-write counters reported separately by the provider.
@@ -58,6 +58,17 @@ pub struct ModelTokenUsage {
     pub cached_input_tokens: Option<u64>,
     /// Input tokens written into the provider prompt cache, when reported.
     pub cache_write_input_tokens: Option<u64>,
+}
+
+/// One persisted native expense partition; project identity grants no authority.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProjectTokenUsage {
+    /// Opaque product-owned project ID, absent for legacy/unqualified expense.
+    pub project_id: Option<String>,
+    /// Exact provider/model whose inclusive counters were observed.
+    pub model: ModelTokenUsageKey,
+    /// Cumulative counters with unknown cache categories preserved.
+    pub usage: ModelTokenUsage,
 }
 
 impl ModelTokenUsage {

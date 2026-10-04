@@ -538,6 +538,8 @@ pub struct MezError {
     /// This state is distinct from diagnostic raw text and contains no
     /// executable incomplete native-call arguments.
     provider_output_limit_state: Option<Box<mez_agent::ProviderOutputLimitState>>,
+    /// Incurred counters retained independently of final recovery classification.
+    provider_incurred_usage: Option<Box<mez_agent::ModelTokenUsage>>,
     /// This local transcript failure happened before any append, so only the
     /// persistence operation may be retried without ambiguous partial writes.
     local_transcript_precommit_retryable: bool,
@@ -561,6 +563,7 @@ impl MezError {
             provider_raw_text: None,
             provider_failure_json: None,
             provider_output_limit_state: None,
+            provider_incurred_usage: None,
             local_transcript_precommit_retryable: false,
             pane_backend_failure: false,
             sandbox_lifecycle_failure: None,
@@ -733,6 +736,27 @@ impl MezError {
     pub fn provider_output_limit_state(&self) -> Option<&mez_agent::ProviderOutputLimitState> {
         self.provider_output_limit_state.as_deref()
     }
+
+    /// Retains total observed expense without changing failure recovery semantics.
+    pub(crate) fn with_provider_incurred_usage(
+        mut self,
+        usage: mez_agent::ModelTokenUsage,
+    ) -> Self {
+        self.provider_incurred_usage = Some(Box::new(usage));
+        self
+    }
+
+    /// Returns explicit incurred expense, otherwise reported cutoff counters.
+    pub(crate) fn provider_incurred_usage(&self) -> mez_agent::ModelTokenUsage {
+        self.provider_incurred_usage
+            .as_deref()
+            .copied()
+            .unwrap_or_else(|| {
+                self.provider_output_limit_state()
+                    .map(|state| state.usage)
+                    .unwrap_or_default()
+            })
+    }
 }
 
 impl From<io::Error> for MezError {
@@ -749,6 +773,7 @@ impl From<io::Error> for MezError {
             provider_raw_text: None,
             provider_failure_json: None,
             provider_output_limit_state: None,
+            provider_incurred_usage: None,
             local_transcript_precommit_retryable: false,
             pane_backend_failure: false,
             sandbox_lifecycle_failure: None,

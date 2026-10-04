@@ -75,6 +75,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                     },
                 }),
                 token_usage: saved_token_usage,
+                project_token_usage: Vec::new(),
                 token_usage_by_model: std::collections::BTreeMap::from([(
                     saved_token_usage_key.clone(),
                     saved_token_usage,

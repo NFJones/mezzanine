@@ -92,5 +92,9 @@ fn runtime_auto_sizing_provider_error(
     if let Some(failure_json) = error.provider_failure_json() {
         routed_error = routed_error.with_provider_failure_json(failure_json.to_string());
     }
+    if let Some(state) = error.provider_output_limit_state() {
+        routed_error = routed_error.with_provider_output_limit_state(state.clone());
+    }
+    routed_error = routed_error.with_provider_incurred_usage(error.provider_incurred_usage());
     routed_error
 }

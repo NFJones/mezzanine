@@ -6020,6 +6020,7 @@ fn runtime_agent_compaction_late_completion_accounts_after_replacement_settles()
             task_generation: replacement_generation,
             kind: "forbidden".to_string(),
             message: "replacement provider failure".to_string(),
+            usage: Default::default(),
             provider_failure_json: None,
             provider_raw_text: None,
         })
@@ -6113,6 +6114,7 @@ fn runtime_agent_compaction_stale_failure_preserves_replacement_task() {
             task_generation: old_generation,
             kind: "forbidden".to_string(),
             message: "stale failure must be ignored".to_string(),
+            usage: Default::default(),
             provider_failure_json: None,
             provider_raw_text: None,
         })
@@ -7054,6 +7056,7 @@ fn runtime_manual_compaction_recovers_provider_context_limit() {
                 task_generation,
                 kind: "invalid_state".to_string(),
                 message: "provider context length exceeded".to_string(),
+                usage: Default::default(),
                 provider_failure_json: Some(
                     r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#.to_string(),
                 ),

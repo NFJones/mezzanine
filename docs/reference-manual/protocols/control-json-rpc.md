@@ -621,8 +621,13 @@ one UTC time and oldest-event boundary. Scans are bounded and fail rather than
 return partial totals. Legacy status still selects native events only, now using
 the consistent snapshot reader. An earlier write-gap diagnostic survives later
 successful writes because they do not establish recovery of missing expense.
-Producer accounting partitions and scoped `/status` reporting remain separate
-integration tasks; legacy expense is never backfilled from cwd or transcript totals.
+Native producer accounting retains frozen project partitions beside overall
+counters. Exact issued requests may settle reported expense after content is
+stale or cancelled, without reviving the task or charging a replacement pane.
+Conversation metadata v2 preserves partitions; legacy totals remain unattributed.
+Restore and failed-resume rollback emit no new usage events. Pane reset changes
+only its view. Scoped `/status` reporting remains separate integration work;
+legacy expense is never backfilled from cwd or transcript totals.
 
 An alternative interactive frontend is a primary client. Obtain the initial
 render with `terminal/view`:

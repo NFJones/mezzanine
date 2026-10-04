@@ -827,6 +827,7 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
                 latest_request_usage: None,
                 token_usage: Default::default(),
                 token_usage_by_model: Default::default(),
+                project_token_usage: Vec::new(),
                 allowed_actions: None,
             }],
         )
@@ -877,6 +878,7 @@ fn runtime_restart_hydration_creates_blank_surface_for_hidden_empty_session() {
                 project_root: None,
                 token_usage: Default::default(),
                 token_usage_by_model: Default::default(),
+                project_token_usage: Vec::new(),
                 context_usage: None,
                 context_usage_snapshot: None,
                 latest_request_usage: None,
@@ -978,6 +980,7 @@ fn runtime_restart_objective_metadata_failure_restores_prior_pane_state() {
                 project_root: None,
                 token_usage: Default::default(),
                 token_usage_by_model: Default::default(),
+                project_token_usage: Vec::new(),
                 context_usage: None,
                 context_usage_snapshot: None,
                 latest_request_usage: None,

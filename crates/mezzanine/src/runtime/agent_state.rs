@@ -619,6 +619,8 @@ pub enum RuntimeAgentLoopSettlement {
 pub struct RuntimeAgentCompactionTask {
     /// Unique queued/claimed task generation used to reject stale worker outcomes.
     pub task_generation: u64,
+    /// Frozen project provenance of this model request, retained across retries.
+    pub(crate) accounting_origin: crate::storage::token_usage::AccountingOrigin,
     /// Logical compaction epoch retained across recursive and retry generations.
     pub compaction_epoch: u64,
     /// Pane whose visible status should remain `compacting`.
@@ -787,6 +789,12 @@ pub struct RuntimeAgentCompactionDispatch {
 pub struct RuntimeAgentRememberTask {
     /// Pane whose visible status should remain `memorizing`.
     pub pane_id: String,
+    /// Original conversation, independent of later pane rebinding.
+    pub(crate) conversation_id: String,
+    /// Frozen project provenance of this model request.
+    pub(crate) accounting_origin: crate::storage::token_usage::AccountingOrigin,
+    /// Stable observation namespace for this memory request.
+    pub(crate) observation_id: String,
     /// Active model profile name used for the memory request.
     pub model_profile_name: String,
     /// Active model profile copied for completion metadata.

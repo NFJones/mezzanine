@@ -1942,6 +1942,7 @@ fn runtime_restored_agent_bound_pane_clears_daemon_environment_while_unbound_res
                 allowed_actions: None,
                 token_usage: Default::default(),
                 token_usage_by_model: Default::default(),
+                project_token_usage: Vec::new(),
             }],
         )
         .unwrap();
@@ -3728,6 +3729,7 @@ fn restored_agent_session_metadata(
         allowed_actions: None,
         token_usage: Default::default(),
         token_usage_by_model: Default::default(),
+        project_token_usage: Vec::new(),
     }
 }
 

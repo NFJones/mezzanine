@@ -13,7 +13,7 @@ use super::{
     runtime_action_status_name, runtime_agent_provider_context_usage_display,
     runtime_unrecovered_action_failure_output, transcript_entries_for_execution,
 };
-use crate::storage::token_usage::{TokenUsageEvent, new_token_usage_event_id};
+use crate::storage::token_usage::new_token_usage_event_id;
 use crate::storage::transcript::ConversationTranscriptRead;
 use mez_agent::TranscriptContextEvent;
 
@@ -1299,30 +1299,25 @@ impl RuntimeSessionService {
         let token_usage_key = profile
             .map(|profile| ModelTokenUsageKey::new(profile.provider.clone(), profile.model.clone()))
             .unwrap_or_else(ModelTokenUsageKey::unknown);
-        self.record_durable_token_usage(
+        self.record_native_usage_observation(
+            &conversation_id,
+            Some(pane_id),
+            &crate::storage::token_usage::AccountingOrigin::Unattributed,
             &token_usage_key,
             usage,
-            self.persistence.token_usage_time(),
+            new_token_usage_event_id(),
         );
-        self.agent
-            .agent_token_usage_by_conversation
-            .entry(conversation_id.clone())
-            .or_default()
-            .entry(token_usage_key.clone())
-            .or_default()
-            .add_assign(usage);
-        self.agent
-            .agent_instance_token_usage_by_model
-            .entry(token_usage_key.clone())
-            .or_default()
-            .add_assign(usage);
-        self.agent
-            .agent_token_usage_by_pane
-            .entry(pane_id.to_string())
-            .or_default()
-            .entry(token_usage_key)
-            .or_default()
-            .add_assign(usage);
+        self.record_agent_latest_context_usage(&conversation_id, latest_context_usage, profile);
+    }
+
+    /// Updates only the accepted ordinary request sample, never cumulative expense.
+    pub(super) fn record_agent_latest_context_usage(
+        &mut self,
+        conversation_id: &str,
+        latest_context_usage: ModelTokenUsage,
+        profile: Option<&ModelProfile>,
+    ) {
+        let conversation_id = conversation_id.to_string();
         if let Some(profile) = profile {
             let profile_key = ModelTokenUsageKey::new(&profile.provider, &profile.model);
             let context_usage = if latest_context_usage.input_tokens > 0 {
@@ -1404,44 +1399,15 @@ impl RuntimeSessionService {
         if usage_by_model.is_empty() {
             return;
         }
-        let observed_at_unix_seconds = self.persistence.token_usage_time();
         for (key, usage) in usage_by_model {
-            if !usage.is_zero() {
-                self.record_durable_token_usage(key, *usage, observed_at_unix_seconds);
-            }
-        }
-        let mut changed = false;
-        let conversation_usage = self
-            .agent
-            .agent_token_usage_by_conversation
-            .entry(conversation_id.to_string())
-            .or_default();
-        let pane_usage = self
-            .agent
-            .agent_token_usage_by_pane
-            .entry(pane_id.to_string())
-            .or_default();
-        for (key, usage) in usage_by_model {
-            if usage.is_zero() {
-                continue;
-            }
-            conversation_usage
-                .entry(key.clone())
-                .or_default()
-                .add_assign(*usage);
-            self.agent
-                .agent_instance_token_usage_by_model
-                .entry(key.clone())
-                .or_default()
-                .add_assign(*usage);
-            pane_usage
-                .entry(key.clone())
-                .or_default()
-                .add_assign(*usage);
-            changed = true;
-        }
-        if changed {
-            let _ = self.checkpoint_agent_session_metadata();
+            self.record_native_usage_observation(
+                conversation_id,
+                Some(pane_id),
+                &crate::storage::token_usage::AccountingOrigin::Unattributed,
+                key,
+                *usage,
+                new_token_usage_event_id(),
+            );
         }
     }
 
@@ -1488,18 +1454,6 @@ impl RuntimeSessionService {
         self.integration
             .runtime_metrics_mut()
             .record_provider_cumulative_token_usage(usage, &key);
-        self.agent
-            .agent_token_usage_by_conversation
-            .entry(task.conversation_id.clone())
-            .or_default()
-            .entry(key.clone())
-            .or_default()
-            .add_assign(usage);
-        self.agent
-            .agent_instance_token_usage_by_model
-            .entry(key.clone())
-            .or_default()
-            .add_assign(usage);
         let same_pane = self
             .agent_shell_store()
             .get(&task.pane_id)
@@ -1509,60 +1463,14 @@ impl RuntimeSessionService {
                     .ok()
                     .is_some_and(|current| identity.same_incarnation(&current))
             });
-        if same_pane {
-            self.agent
-                .agent_token_usage_by_pane
-                .entry(task.pane_id.clone())
-                .or_default()
-                .entry(key.clone())
-                .or_default()
-                .add_assign(usage);
-        }
-        if let Some(store) = self.persistence.cloned_token_usage_store() {
-            let event = TokenUsageEvent {
-                id: format!("title:{}", task.attempt_id),
-                project: task.accounting_origin.project_id().cloned(),
-                observed_at_unix_seconds: self.persistence.token_usage_time(),
-                model: key,
-                usage,
-            };
-            if self.persistence.token_usage_uses_adapter() {
-                self.persistence
-                    .queue_token_usage(RuntimeSideEffect::PersistTokenUsage { store, event });
-            } else if store.append(&event).is_err() {
-                self.persistence.record_token_usage_write_gap();
-            }
-        }
-        let _ = self.checkpoint_agent_session_metadata();
-    }
-
-    /// Best-effort records one settled provider usage delta without affecting
-    /// provider response settlement or retry behavior.
-    fn record_durable_token_usage(
-        &mut self,
-        model: &ModelTokenUsageKey,
-        usage: ModelTokenUsage,
-        observed_at_unix_seconds: u64,
-    ) {
-        let Some(store) = self.persistence.cloned_token_usage_store() else {
-            return;
-        };
-        let event = TokenUsageEvent {
-            id: new_token_usage_event_id(),
-            project: None,
-            observed_at_unix_seconds,
-            model: model.clone(),
+        self.record_native_usage_observation(
+            &task.conversation_id,
+            same_pane.then_some(task.pane_id.as_str()),
+            &task.accounting_origin,
+            &key,
             usage,
-        };
-        if self.persistence.token_usage_uses_adapter() {
-            self.persistence
-                .queue_token_usage(RuntimeSideEffect::PersistTokenUsage { store, event });
-            return;
-        }
-        match store.append(&event) {
-            Ok(_) => self.persistence.clear_token_usage_health_error(),
-            Err(_) => self.persistence.record_token_usage_write_gap(),
-        }
+            format!("title:{}", task.attempt_id),
+        );
     }
 
     /// Stores the latest provider-reported quota usage for the active pane conversation.

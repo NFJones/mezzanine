@@ -6,6 +6,101 @@
 use super::*;
 use crate::storage::token_usage::{AccountingOrigin, TokenUsageStore};
 
+/// Retiring memory content ownership must retain exact issued expense. A late
+/// result charges the original conversation once but cannot mutate replacement
+/// memory work, latest samples, or a replacement pane's view.
+#[test]
+fn runtime_accounting_memory_cancelled_completion_retains_expense() {
+    let base = temp_root("accounting-memory-cancelled");
+    fs::create_dir_all(&base).unwrap();
+    let mut service = test_runtime_service();
+    let store = TokenUsageStore::new(base.join("usage.sqlite"));
+    service.set_token_usage_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let task = crate::runtime::RuntimeAgentRememberTask {
+        pane_id: "%1".into(),
+        conversation_id: conversation.clone(),
+        accounting_origin: AccountingOrigin::Unattributed,
+        observation_id: "memory-issued".into(),
+        model_profile_name: "fixture".into(),
+        model_profile: mez_agent::ModelProfile::default(),
+        scope: mez_agent::memory::MemoryScope::Global,
+        request: runtime_model_request_fixture_for_agent("memory", "agent-%1"),
+    };
+    service.claim_agent_remember_task_state("%1", task);
+    service.fail_agent_remember_task("%1");
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "memory-replacement", 0)
+        .unwrap();
+    let event = crate::runtime::AgentRememberEvent::Failed {
+        pane_id: "%1".into(),
+        observation_id: "memory-issued".into(),
+        usage: mez_agent::ModelTokenUsage {
+            input_tokens: 23,
+            output_tokens: 2,
+            ..Default::default()
+        },
+        kind: "invalid_state".into(),
+        message: "reported cutoff".into(),
+        provider_failure_json: None,
+        provider_raw_text: None,
+    };
+    assert!(
+        !service
+            .apply_agent_remember_transition(event.clone())
+            .unwrap()
+            .applied
+    );
+    assert!(
+        !service
+            .apply_agent_remember_transition(event)
+            .unwrap()
+            .applied
+    );
+    assert_eq!(
+        service
+            .agent_token_usage_for_conversation(&conversation)
+            .values()
+            .next()
+            .unwrap()
+            .input_tokens,
+        23
+    );
+    assert!(
+        service
+            .agent_token_usage_for_conversation("memory-replacement")
+            .is_empty()
+    );
+    assert!(service.agent_token_usage_for_pane("%1").is_empty());
+    assert_eq!(
+        store
+            .history_snapshot(
+                crate::runtime::current_unix_seconds(),
+                &[1],
+                &crate::storage::token_usage::TokenHistoryScope::default()
+            )
+            .unwrap()
+            .windows[&1]
+            .values()
+            .next()
+            .unwrap()
+            .usage
+            .input_tokens,
+        23
+    );
+    fs::remove_dir_all(base).unwrap();
+}
+
 /// Managed provider continuations must observe standalone persisted revocation
 /// after mapping preparation. The earlier issued dispatch keeps its origin;
 /// the fresh dispatch must not charge the revoked project. No provider I/O runs.
@@ -226,7 +321,394 @@ async fn runtime_accounting_origin_production_dispatch_retains_frozen_project() 
         service.claimed_accounting_origin_for_tests(&started.turn_id),
         Some(&frozen)
     );
-    service.terminate_all_pane_processes().unwrap();
+    let agent = AgentId::opaque("agent-%1".to_string()).unwrap();
+    let key = mez_agent::ModelTokenUsageKey::new(
+        &dispatch.model_profile.provider,
+        &dispatch.model_profile.model,
+    );
+    let usage = std::collections::BTreeMap::from([(
+        key.clone(),
+        mez_agent::ModelTokenUsage {
+            input_tokens: 17,
+            output_tokens: 3,
+            cached_input_tokens: Some(0),
+            ..Default::default()
+        },
+    )]);
+    // Retiring content ownership must not retire exact incurred-expense evidence.
+    service.clear_claimed_agent_provider_task(&started.turn_id);
+    assert!(!service.settle_provider_request_usage(&agent, &started.turn_id, 8, &usage));
+    assert!(service.settle_provider_request_usage(&agent, &started.turn_id, 7, &usage));
+    assert!(!service.settle_provider_request_usage(&agent, &started.turn_id, 7, &usage));
+    let partitions = service.project_usage_for_conversation(&dispatch.turn.conversation_id);
+    assert_eq!(partitions.len(), 1);
+    assert_eq!(
+        partitions[0].project_id.as_deref(),
+        frozen.project_id().map(|id| id.as_str())
+    );
+    assert_eq!(partitions[0].usage, usage[&key]);
+    assert_eq!(
+        service.agent_token_usage_for_conversation(&dispatch.turn.conversation_id)[&key],
+        usage[&key]
+    );
+    assert!(
+        service
+            .agent_latest_request_usage(&dispatch.turn.conversation_id)
+            .is_none()
+    );
+    assert!(service.reset_agent_token_usage_for_pane("%1"));
+    assert!(service.project_usage_for_pane("%1").is_empty());
+    assert_eq!(
+        service.project_usage_for_conversation(&dispatch.turn.conversation_id),
+        partitions
+    );
+    let store = TokenUsageStore::new(base.join("usage.sqlite"));
+    let history = store
+        .history_snapshot(
+            crate::runtime::current_unix_seconds(),
+            &[1],
+            &crate::storage::token_usage::TokenHistoryScope::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        history.windows[&1].values().next().unwrap().usage,
+        usage[&key]
+    );
+    let mut restored = test_runtime_service();
+    restored.replace_restored_agent_token_usage(
+        &dispatch.turn.conversation_id,
+        "%1",
+        usage.clone(),
+    );
+    restored.restore_project_usage(
+        &dispatch.turn.conversation_id,
+        "%1",
+        partitions.clone(),
+        false,
+    );
+    assert_eq!(
+        restored.project_usage_for_conversation(&dispatch.turn.conversation_id),
+        partitions
+    );
+    assert_eq!(restored.project_usage_for_pane("%1"), partitions);
+    assert_eq!(
+        store
+            .history_snapshot(
+                crate::runtime::current_unix_seconds(),
+                &[1],
+                &crate::storage::token_usage::TokenHistoryScope::default()
+            )
+            .unwrap()
+            .windows[&1]
+            .values()
+            .next()
+            .unwrap()
+            .usage,
+        usage[&key]
+    );
+    service
+        .record_claimed_agent_provider_task(&dispatch, 9, 30_000)
+        .unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&started.turn_id)
+        .unwrap()
+        .append_user_event("steering", "new instruction after dispatch")
+        .unwrap();
+    let mut request =
+        runtime_model_request_fixture_for_agent(&started.turn_id, &dispatch.turn.agent_id);
+    request.provider = dispatch.model_profile.provider.clone();
+    request.model = dispatch.model_profile.model.clone();
+    let execution = mez_agent::AgentTurnExecution {
+        request,
+        response: mez_agent::ModelResponse {
+            provider: dispatch.model_profile.provider.clone(),
+            model: dispatch.model_profile.model.clone(),
+            raw_text: "stale content".into(),
+            usage: mez_agent::ModelTokenUsage {
+                input_tokens: 5,
+                ..Default::default()
+            },
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    let (handle, actor) = crate::host::async_runtime::AsyncRuntimeSessionActor::new(
+        service,
+        crate::host::async_runtime::AsyncRuntimeActorConfig::default(),
+    )
+    .unwrap();
+    let client = async {
+        for expected in [1, 0] {
+            let mut batch = crate::runtime::RuntimeEventBatch::new();
+            batch.push(crate::runtime::RuntimeEvent::AgentProvider(
+                crate::runtime::AgentProviderEvent::Completed {
+                    agent_id: agent.clone(),
+                    turn_id: started.turn_id.clone(),
+                    claim_generation: 9,
+                    execution: Box::new(execution.clone()),
+                },
+            ));
+            assert_eq!(
+                handle.submit_runtime_events(batch).await.unwrap().applied,
+                expected
+            );
+        }
+        handle.shutdown().await.unwrap();
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert_eq!(
+        exit.service
+            .agent_token_usage_for_conversation(&dispatch.turn.conversation_id)[&key]
+            .input_tokens,
+        22
+    );
+    let partitions = exit
+        .service
+        .project_usage_for_conversation(&dispatch.turn.conversation_id);
+    assert_eq!(
+        partitions[0].project_id.as_deref(),
+        frozen.project_id().map(|id| id.as_str())
+    );
+    assert_eq!(partitions[0].usage.input_tokens, 22);
+    assert!(
+        exit.service
+            .agent_latest_request_usage(&dispatch.turn.conversation_id)
+            .is_none()
+    );
+    // A router is a distinct paid producer, not the ordinary execution model.
+    struct CutoffRouter;
+    impl crate::integrations::agent::provider::AsyncModelProvider for CutoffRouter {
+        fn provider_id(&self) -> &str {
+            "router-provider"
+        }
+        fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+            mez_agent::ProviderApiCompatibility::OpenAiResponses
+        }
+        fn send_request_async<'a>(
+            &'a self,
+            _request: &'a mez_agent::ModelRequest,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<mez_agent::ModelResponse>> + Send + 'a>,
+        > {
+            Box::pin(async {
+                Err(MezError::invalid_state("router cutoff")
+                    .with_provider_failure_json(r#"{"error":{"code":"max_tokens"}}"#)
+                    .with_provider_output_limit_state(mez_agent::ProviderOutputLimitState::new(
+                        "router-provider",
+                        "openai-responses",
+                        "max_tokens",
+                        None,
+                        "",
+                        0,
+                        0,
+                        mez_agent::ModelTokenUsage {
+                            input_tokens: 31,
+                            output_tokens: 4,
+                            ..Default::default()
+                        },
+                        mez_agent::ProviderOutputLimitContinuationDisposition::ContinueVisibleText,
+                    )))
+            })
+        }
+    }
+    let router_profile = mez_agent::ModelProfile {
+        provider: "router-provider".into(),
+        model: "router-model".into(),
+        ..Default::default()
+    };
+    let target = |size: &str| mez_agent::AutoSizingTargetProfile {
+        size: size.into(),
+        profile_name: "accounting-test".into(),
+        profile: dispatch.model_profile.clone(),
+        supported_reasoning_efforts: Vec::new(),
+    };
+    let routing = mez_agent::AutoSizingDispatch {
+        router_profile_name: "router-fixture".into(),
+        router_profile: router_profile.clone(),
+        default_profile_name: "accounting-test".into(),
+        default_profile: dispatch.model_profile.clone(),
+        small: target("small"),
+        medium: target("medium"),
+        large: target("large"),
+        turn_metadata: None,
+        allowed_reasoning_efforts: Vec::new(),
+        fallback_policy: mez_agent::AutoSizingFallbackPolicy::UseDefaultProfile,
+    };
+    let mut routed_dispatch = dispatch.clone();
+    routed_dispatch.auto_sizing = Some(routing.clone());
+    exit.service
+        .record_claimed_agent_provider_task(&routed_dispatch, 10, 30_000)
+        .unwrap();
+    let error = crate::runtime::runtime_execute_auto_sizing_with_async_provider(
+        &CutoffRouter,
+        &routing,
+        &dispatch.turn,
+        dispatch.context.durable(),
+        mez_agent::AllowedActionSet::say_only(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error
+            .provider_output_limit_state()
+            .unwrap()
+            .usage
+            .input_tokens,
+        31
+    );
+    exit.service
+        .clear_claimed_agent_provider_task(&started.turn_id);
+    assert!(exit.service.settle_provider_cutoff_usage(
+        &agent,
+        &started.turn_id,
+        10,
+        error.provider_output_limit_state()
+    ));
+    assert!(!exit.service.settle_provider_cutoff_usage(
+        &agent,
+        &started.turn_id,
+        10,
+        error.provider_output_limit_state()
+    ));
+    let router_key = mez_agent::ModelTokenUsageKey::new("router-provider", "router-model");
+    let partitions = exit
+        .service
+        .project_usage_for_conversation(&dispatch.turn.conversation_id);
+    let router = partitions
+        .iter()
+        .find(|row| row.model == router_key)
+        .unwrap();
+    assert_eq!(
+        router.project_id.as_deref(),
+        frozen.project_id().map(|id| id.as_str())
+    );
+    assert_eq!(router.usage.input_tokens, 31);
+    assert_eq!(
+        exit.service
+            .agent_token_usage_for_conversation(&dispatch.turn.conversation_id)[&key]
+            .input_tokens,
+        22
+    );
+    assert!(
+        exit.service
+            .agent_latest_request_usage(&dispatch.turn.conversation_id)
+            .is_none()
+    );
+    for effect in exit.service.persistence.take_token_usage_effects() {
+        if let RuntimeSideEffect::PersistTokenUsage { store, event } = effect {
+            store.append(&event).unwrap();
+        }
+    }
+    let history = store
+        .history_snapshot(
+            crate::runtime::current_unix_seconds(),
+            &[1],
+            &crate::storage::token_usage::TokenHistoryScope::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        history.windows[&1]
+            .iter()
+            .find(|(key, _)| key.model == router_key)
+            .unwrap()
+            .1
+            .usage
+            .input_tokens,
+        31
+    );
+    exit.service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(base).unwrap();
+}
+
+/// Compatibility ingress without an issued accounting owner rejects stale
+/// content without manufacturing expense from an unowned completion payload.
+#[tokio::test]
+async fn runtime_accounting_claim_only_stale_completion_does_not_invent_expense() {
+    let base = temp_root("accounting-stale-completion");
+    fs::create_dir_all(&base).unwrap();
+    let mut service = test_runtime_service();
+    let store = TokenUsageStore::new(base.join("usage.sqlite"));
+    service.set_token_usage_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "observe expense only")
+        .unwrap();
+    service
+        .record_claimed_agent_provider_context_for_tests(&started.turn_id, 0)
+        .unwrap();
+    // A test claim has no issued-accounting owner; install one from a real
+    // dispatch is covered above. This case qualifies the compatibility ingress
+    // and verifies that stale-context refusal itself leaves totals untouched.
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&started.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "fixture".into(),
+            model: "fixture".into(),
+            raw_text: "stale content".into(),
+            usage: mez_agent::ModelTokenUsage {
+                input_tokens: 5,
+                ..Default::default()
+            },
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    execution.request.agent_id = turn.agent_id.clone();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&started.turn_id)
+        .unwrap()
+        .append_user_event("steering", "new instruction")
+        .unwrap();
+    assert!(
+        service
+            .apply_agent_provider_completed_event(
+                &AgentId::opaque(turn.agent_id).unwrap(),
+                &started.turn_id,
+                execution
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        service
+            .agent_token_usage_for_conversation(&turn.conversation_id)
+            .is_empty()
+    );
+    assert!(
+        store
+            .history_snapshot(
+                crate::runtime::current_unix_seconds(),
+                &[1],
+                &crate::storage::token_usage::TokenHistoryScope::default()
+            )
+            .unwrap()
+            .windows[&1]
+            .is_empty()
+    );
     fs::remove_dir_all(base).unwrap();
 }
 

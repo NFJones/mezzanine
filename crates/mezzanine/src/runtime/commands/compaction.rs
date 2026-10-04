@@ -729,6 +729,7 @@ impl RuntimeSessionService {
             .last()
             .map(|entry| entry.sequence);
         let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
+        self.refresh_project_trust_store_from_disk_if_changed()?;
         let mut request = runtime_model_compaction_request(
             &model_profile,
             pane_id,
@@ -753,6 +754,7 @@ impl RuntimeSessionService {
             task_generation: 0,
             compaction_epoch: 0,
             pane_id: pane_id.to_string(),
+            accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
             conversation_id: conversation_id.clone(),
             source: source.to_string(),
             transcript_entries,
@@ -896,10 +898,12 @@ impl RuntimeSessionService {
                 runtime_limit_compaction_summary_output(&mut request, plan.summary_budget_words());
             }
         }
+        self.refresh_project_trust_store_from_disk_if_changed()?;
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             task_generation: 0,
             compaction_epoch: 0,
             pane_id: turn.pane_id.clone(),
+            accounting_origin: self.capture_accounting_origin_for_pane(&turn.pane_id),
             conversation_id,
             source: match trigger {
                 RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => {
@@ -996,6 +1000,7 @@ impl RuntimeSessionService {
         if self.pending_agent_compaction_task_generation(pane_id) != Some(task_generation) {
             return Ok(None);
         }
+        self.require_auxiliary_accounting_capacity()?;
         let Some(mut task) = self.take_pending_agent_compaction_task(pane_id) else {
             return Ok(None);
         };
@@ -1213,20 +1218,24 @@ impl RuntimeSessionService {
             AgentCompactionEvent::Failed {
                 pane_id,
                 task_generation,
+                usage,
                 kind,
                 message,
                 provider_failure_json,
                 ..
-            } => (
-                pane_id.clone(),
-                self.apply_agent_compaction_failed_event_for_generation(
-                    &pane_id,
-                    task_generation,
-                    &kind,
-                    &message,
-                    provider_failure_json.as_deref(),
-                )?,
-            ),
+            } => {
+                self.record_compaction_failure_usage(&pane_id, task_generation, usage);
+                (
+                    pane_id.clone(),
+                    self.apply_agent_compaction_failed_event_for_generation(
+                        &pane_id,
+                        task_generation,
+                        &kind,
+                        &message,
+                        provider_failure_json.as_deref(),
+                    )?,
+                )
+            }
         };
         if applied && !self.agent_is_compacting(&pane_id) {
             self.resume_agent_compaction_steering(&pane_id)?;
@@ -1263,20 +1272,10 @@ impl RuntimeSessionService {
         response: ModelResponse,
     ) -> Result<bool> {
         let current_conversation = self.agent_compaction_task_is_current(pane_id, task_generation);
+        self.record_compaction_failure_usage(pane_id, task_generation, response.usage);
         let Some(mut task) = self.finish_agent_compaction_task(pane_id, task_generation) else {
             return Ok(false);
         };
-        self.record_agent_provider_token_usage_for_conversation(
-            pane_id,
-            &task.conversation_id,
-            &std::collections::BTreeMap::from([(
-                mez_agent::ModelTokenUsageKey::new(
-                    &task.model_profile.provider,
-                    &task.model_profile.model,
-                ),
-                response.usage,
-            )]),
-        );
         self.record_agent_provider_quota_usage_for_conversation(
             pane_id,
             &task.conversation_id,

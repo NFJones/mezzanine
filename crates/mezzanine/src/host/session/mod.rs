@@ -1088,6 +1088,7 @@ mod tests {
                         allowed_actions: None,
                         token_usage: Default::default(),
                         token_usage_by_model: Default::default(),
+                        project_token_usage: Vec::new(),
                     }],
                 )
                 .unwrap();

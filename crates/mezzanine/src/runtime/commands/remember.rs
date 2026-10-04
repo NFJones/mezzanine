@@ -419,6 +419,7 @@ impl RuntimeSessionService {
         let agent_id = format!("agent-{pane_id}");
         let (model_profile_name, model_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
+        self.refresh_project_trust_store_from_disk_if_changed()?;
         let request = runtime_model_remember_request(
             &model_profile,
             pane_id,
@@ -430,6 +431,13 @@ impl RuntimeSessionService {
         )?;
         self.queue_agent_remember_task(RuntimeAgentRememberTask {
             pane_id: pane_id.to_string(),
+            conversation_id: self
+                .agent_shell_store()
+                .get(pane_id)
+                .map(|session| session.session_id.clone())
+                .unwrap_or_else(|| format!("pane:{pane_id}")),
+            accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
+            observation_id: crate::storage::token_usage::new_token_usage_event_id(),
             model_profile_name: model_profile_name.clone(),
             model_profile: model_profile.clone(),
             scope: self.runtime_remember_scope_for_pane(pane_id),
@@ -461,16 +469,38 @@ impl RuntimeSessionService {
         event: AgentRememberEvent,
     ) -> Result<RuntimeTransition> {
         let (pane_id, applied) = match event {
-            AgentRememberEvent::Completed { pane_id, response } => (
-                pane_id.clone(),
-                self.apply_agent_remember_completed_event(&pane_id, *response)?,
-            ),
+            AgentRememberEvent::Completed {
+                pane_id,
+                observation_id,
+                response,
+            } => {
+                self.record_remember_failure_usage(&pane_id, &observation_id, response.usage);
+                (
+                    pane_id.clone(),
+                    if self.agent_remember_observation_matches(&pane_id, &observation_id) {
+                        self.apply_agent_remember_completed_event(&pane_id, *response)?
+                    } else {
+                        false
+                    },
+                )
+            }
             AgentRememberEvent::Failed {
-                pane_id, message, ..
-            } => (
-                pane_id.clone(),
-                self.apply_agent_remember_failed_event(&pane_id, &message)?,
-            ),
+                pane_id,
+                observation_id,
+                usage,
+                message,
+                ..
+            } => {
+                self.record_remember_failure_usage(&pane_id, &observation_id, usage);
+                (
+                    pane_id.clone(),
+                    if self.agent_remember_observation_matches(&pane_id, &observation_id) {
+                        self.apply_agent_remember_failed_event(&pane_id, &message)?
+                    } else {
+                        false
+                    },
+                )
+            }
         };
         Ok(self.runtime_pane_transition_with_render(
             &pane_id,
@@ -488,17 +518,19 @@ impl RuntimeSessionService {
         let Some(task) = self.finish_agent_remember_task(pane_id) else {
             return Ok(false);
         };
-        self.record_agent_provider_token_usage_by_model(
+        let current = self
+            .agent_shell_store()
+            .get(pane_id)
+            .is_some_and(|session| session.session_id == task.conversation_id);
+        self.record_remember_failure_usage(pane_id, &task.observation_id, response.usage);
+        self.record_agent_provider_quota_usage_for_conversation(
             pane_id,
-            &std::collections::BTreeMap::from([(
-                mez_agent::ModelTokenUsageKey::new(
-                    &task.model_profile.provider,
-                    &task.model_profile.model,
-                ),
-                response.usage,
-            )]),
+            &task.conversation_id,
+            &response.quota_usage,
         );
-        self.record_agent_provider_quota_usage(pane_id, &response.quota_usage);
+        if !current {
+            return Ok(false);
+        }
         let candidates = runtime_remember_candidates_from_response(&response)?;
         let Some(config_root) = self
             .integration
@@ -575,14 +607,24 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<Option<RuntimeAgentRememberDispatch>> {
+        self.require_auxiliary_accounting_capacity()?;
         let Some(task) = self.take_pending_agent_remember_task(pane_id) else {
             return Ok(None);
         };
         if !self.agent_is_remembering(pane_id) {
             return Ok(None);
         }
-        let provider =
-            self.runtime_model_provider_for_profile(&task.model_profile, "provider_remember")?;
+        let provider = match self
+            .runtime_model_provider_for_profile(&task.model_profile, "provider_remember")
+        {
+            Ok(provider) => provider,
+            Err(error) => {
+                // No worker was issued. Retire only this failed admission here,
+                // rather than sending a pane-only failure that could race new work.
+                self.apply_agent_remember_failed_event(pane_id, error.message())?;
+                return Err(error);
+            }
+        };
         self.claim_agent_remember_task_state(pane_id, task.clone());
         Ok(Some(RuntimeAgentRememberDispatch { task, provider }))
     }

@@ -3505,6 +3505,7 @@ fn runtime_resume_objective_metadata_failure_restores_prior_binding_and_identity
                 ),
                 project_root: None,
                 token_usage: target_usage,
+                project_token_usage: Vec::new(),
                 token_usage_by_model: std::collections::BTreeMap::from([(
                     target_usage_key.clone(),
                     target_usage,

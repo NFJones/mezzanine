@@ -623,6 +623,10 @@ impl RuntimeSessionService {
         let previous_conversation_usage =
             self.agent_token_usage_for_conversation(&previous_session.session_id);
         let target_conversation_usage = self.agent_token_usage_for_conversation(&conversation_id);
+        let previous_pane_partitions = self.project_usage_for_pane(pane_id);
+        let previous_conversation_partitions =
+            self.project_usage_for_conversation(&previous_session.session_id);
+        let target_conversation_partitions = self.project_usage_for_conversation(&conversation_id);
         let previous_context_usage = self.agent_context_usage_display(&previous_session.session_id);
         let previous_context_snapshot =
             self.agent_context_usage_snapshot(&previous_session.session_id);
@@ -901,6 +905,19 @@ impl RuntimeSessionService {
                     previous_conversation_usage,
                 );
                 self.restore_agent_token_usage_for_pane(pane_id, previous_pane_usage);
+                self.restore_project_usage(
+                    &conversation_id,
+                    pane_id,
+                    target_conversation_partitions,
+                    false,
+                );
+                self.restore_project_usage(
+                    &previous_session.session_id,
+                    pane_id,
+                    previous_conversation_partitions,
+                    false,
+                );
+                self.restore_project_usage_for_pane(pane_id, previous_pane_partitions);
                 self.restore_agent_context_usage(
                     &conversation_id,
                     target_context_usage,

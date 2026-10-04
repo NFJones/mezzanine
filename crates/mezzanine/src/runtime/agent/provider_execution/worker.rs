@@ -211,6 +211,28 @@ impl RuntimeSessionService {
     }
 
     /// Applies worker-settled provider persistence through actor-owned state.
+    /// Applies accepted content whose exact issued expense has already settled.
+    pub(crate) async fn apply_accounted_provider_completed_transition(
+        &mut self,
+        agent_id: &AgentId,
+        turn_id: &str,
+        execution: AgentTurnExecution,
+    ) -> Result<crate::runtime::RuntimeTransition> {
+        let pane_id = self
+            .agent_turn_ledger()
+            .turn(turn_id)
+            .map(|turn| turn.pane_id.clone());
+        let applied = self
+            .apply_accounted_provider_completed_event(agent_id, turn_id, execution)
+            .await?;
+        let reason = applied.then_some(crate::runtime::RenderInvalidationReason::PaneOutput);
+        Ok(pane_id.map_or_else(
+            || self.runtime_transition_with_render(applied, reason),
+            |pane| self.runtime_pane_transition_with_render(&pane, applied, reason),
+        ))
+    }
+
+    /// Applies worker-settled provider persistence through actor-owned state.
     pub(crate) async fn apply_agent_provider_persistence_settled_transition(
         &mut self,
         outcome: crate::runtime::RuntimeAgentProviderPersistenceOutcome,
@@ -1058,7 +1080,10 @@ impl RuntimeSessionService {
                 provider.provider_id(),
             ),
             execution,
-            false,
+            super::result_apply_async::ProviderExecutionApplyOptions {
+                defer_external_actions: false,
+                usage_settled: false,
+            },
         )
         .await
     }

@@ -1491,8 +1491,14 @@ impl AsyncRuntimeSessionActor {
                 agent_id,
                 turn_id,
                 claim_generation,
-                selection,
+                mut selection,
             } => {
+                let accounted = self.service.settle_provider_request_usage(
+                    &agent_id,
+                    &turn_id,
+                    claim_generation,
+                    &selection.routing_token_usage_by_model,
+                );
                 if !self
                     .service
                     .agent_provider_claim_matches(&agent_id, &turn_id, claim_generation)
@@ -1504,6 +1510,10 @@ impl AsyncRuntimeSessionActor {
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
                 self.timers.provider_retry.remove(turn_id.as_str());
+                if accounted {
+                    // The issued accounting owner already charged these counters.
+                    selection.routing_token_usage_by_model.clear();
+                }
                 let mut transition = self
                     .service
                     .apply_routing_selected_transition(&agent_id, &turn_id, *selection)?;
@@ -1525,6 +1535,12 @@ impl AsyncRuntimeSessionActor {
                 provider_raw_text,
                 provider_output_limit_state,
             } => {
+                let accounted = self.service.settle_provider_cutoff_usage(
+                    &agent_id,
+                    &turn_id,
+                    claim_generation,
+                    provider_output_limit_state.as_deref(),
+                );
                 if !self
                     .service
                     .agent_provider_claim_matches(&agent_id, &turn_id, claim_generation)
@@ -1555,7 +1571,9 @@ impl AsyncRuntimeSessionActor {
                 if let Some(state) = provider_output_limit_state {
                     error = error.with_provider_output_limit_state(*state);
                 }
-                if let Some(turn) = self.service.agent_turn_ledger().turn(&turn_id).cloned() {
+                if !accounted
+                    && let Some(turn) = self.service.agent_turn_ledger().turn(&turn_id).cloned()
+                {
                     self.service.record_agent_output_cutoff_usage(&turn, &error);
                 }
                 let recovery = decide_provider_failure_recovery(
@@ -1676,6 +1694,12 @@ impl AsyncRuntimeSessionActor {
                 claim_generation,
                 execution,
             } => {
+                let accounted = self.service.settle_provider_execution_usage(
+                    &agent_id,
+                    &turn_id,
+                    claim_generation,
+                    &execution,
+                );
                 if !self
                     .service
                     .agent_provider_claim_matches(&agent_id, &turn_id, claim_generation)
@@ -1686,10 +1710,17 @@ impl AsyncRuntimeSessionActor {
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
                 self.timers.provider_retry.remove(turn_id.as_str());
-                let mut transition = self
-                    .service
-                    .apply_agent_provider_completed_transition(&agent_id, &turn_id, *execution)
-                    .await?;
+                let mut transition = if accounted {
+                    self.service
+                        .apply_accounted_provider_completed_transition(
+                            &agent_id, &turn_id, *execution,
+                        )
+                        .await?
+                } else {
+                    self.service
+                        .apply_agent_provider_completed_transition(&agent_id, &turn_id, *execution)
+                        .await?
+                };
                 self.admit_provider_settlement_deadline(&turn_id, &mut transition)?;
                 if transition.applied {
                     transition

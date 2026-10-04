@@ -41,6 +41,7 @@ fn valid_checkpoint() -> AgentSessionMetadata {
         project_root: None,
         token_usage: ModelTokenUsage::default(),
         token_usage_by_model: BTreeMap::<ModelTokenUsageKey, ModelTokenUsage>::new(),
+        project_token_usage: Vec::new(),
         context_usage: None,
         context_usage_snapshot: None,
         latest_request_usage: None,

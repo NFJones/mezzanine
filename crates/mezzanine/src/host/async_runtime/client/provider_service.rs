@@ -662,6 +662,7 @@ async fn dispatch_agent_provider_side_effects(
                             AgentCompactionEvent::Failed {
                                 pane_id,
                                 task_generation,
+                                usage: Default::default(),
                                 kind: provider_worker_error_kind(&error).to_string(),
                                 message: error.message().to_string(),
                                 provider_failure_json: error
@@ -684,20 +685,8 @@ async fn dispatch_agent_provider_side_effects(
                 let dispatch = match handle.claim_agent_remember_task(pane_id.clone()).await {
                     Ok(Some(dispatch)) => dispatch,
                     Ok(None) => continue,
-                    Err(error) => {
-                        let mut batch = RuntimeEventBatch::new();
-                        batch.push(RuntimeEvent::AgentRemember(AgentRememberEvent::Failed {
-                            pane_id,
-                            kind: provider_worker_error_kind(&error).to_string(),
-                            message: error.message().to_string(),
-                            provider_failure_json: error
-                                .provider_failure_json()
-                                .map(str::to_string),
-                            provider_raw_text: error.provider_raw_text().map(str::to_string),
-                        }));
-                        handle.submit_runtime_events(batch).await?;
-                        continue;
-                    }
+                    // Claim failure is retired by its actor-owned admission.
+                    Err(_) => continue,
                 };
                 workers.spawn(monitor_runtime_agent_remember_dispatch(
                     handle.clone(),
@@ -1321,6 +1310,7 @@ async fn monitor_runtime_agent_remember_dispatch(
 ) -> Result<AsyncAgentProviderWorkerResult> {
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
+    let observation_id = dispatch.task.observation_id.clone();
     let conversation_id = dispatch
         .task
         .request
@@ -1339,7 +1329,7 @@ async fn monitor_runtime_agent_remember_dispatch(
                 while let Ok(observation) = observation_receiver.try_recv() {
                     submit_provider_wire_request_observation(&handle, observation).await?;
                 }
-                return Ok(Some(remember_worker_event(pane_id, Ok(result))));
+                return Ok(Some(remember_worker_event(pane_id, observation_id, Ok(result))));
             }
             Some(observation) = observation_receiver.recv() => {
                 submit_provider_wire_request_observation(&handle, observation).await?;
@@ -1502,6 +1492,7 @@ fn compaction_worker_event(
             RuntimeEvent::AgentCompaction(AgentCompactionEvent::Failed {
                 pane_id,
                 task_generation,
+                usage: error.provider_incurred_usage(),
                 kind: provider_worker_error_kind(&error).to_string(),
                 message: error.message().to_string(),
                 provider_failure_json: error.provider_failure_json().map(str::to_string),
@@ -1513,6 +1504,7 @@ fn compaction_worker_event(
             RuntimeEvent::AgentCompaction(AgentCompactionEvent::Failed {
                 pane_id,
                 task_generation,
+                usage: Default::default(),
                 kind: "invalid_state".to_string(),
                 message: format!("provider worker join failed: {error}"),
                 provider_failure_json: None,
@@ -1526,12 +1518,14 @@ fn compaction_worker_event(
 /// Converts a durable memory worker result into a runtime event.
 fn remember_worker_event(
     pane_id: String,
+    observation_id: String,
     result: std::result::Result<Result<mez_agent::ModelResponse>, tokio::task::JoinError>,
 ) -> (RuntimeEvent, bool) {
     match result {
         Ok(Ok(response)) => (
             RuntimeEvent::AgentRemember(AgentRememberEvent::Completed {
                 pane_id,
+                observation_id,
                 response: Box::new(response),
             }),
             true,
@@ -1539,6 +1533,11 @@ fn remember_worker_event(
         Ok(Err(error)) => (
             RuntimeEvent::AgentRemember(AgentRememberEvent::Failed {
                 pane_id,
+                observation_id,
+                usage: error
+                    .provider_output_limit_state()
+                    .map(|state| state.usage)
+                    .unwrap_or_default(),
                 kind: provider_worker_error_kind(&error).to_string(),
                 message: error.message().to_string(),
                 provider_failure_json: error.provider_failure_json().map(str::to_string),
@@ -1549,6 +1548,8 @@ fn remember_worker_event(
         Err(error) => (
             RuntimeEvent::AgentRemember(AgentRememberEvent::Failed {
                 pane_id,
+                observation_id,
+                usage: Default::default(),
                 kind: "invalid_state".to_string(),
                 message: format!("provider worker join failed: {error}"),
                 provider_failure_json: None,
@@ -2091,6 +2092,7 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
                 ProviderErrorRetryClass::OutputLimit
             ) =>
         {
+            let prior_usage = error.provider_incurred_usage();
             request = runtime_agent_compaction_request_with_output_limit_retry(
                 request,
                 model_profile,
@@ -2114,7 +2116,8 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
                     provider.api_compatibility(),
                     provider_options,
                     stream,
-                )?;
+                )
+                .map_err(|error| MezError::from(error).with_provider_incurred_usage(prior_usage))?;
                 if estimate.exceeds_explicit_cap(cap) {
                     return Err(MezError::invalid_state(format!(
                         "compaction output-limit retry exceeds configured input cap: estimated_input_tokens={} max_input_tokens={cap}",
@@ -2122,10 +2125,20 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
                     ))
                     .with_provider_failure_json(
                         r#"{"error":{"code":"context_length_exceeded"}}"#,
-                    ));
+                    ).with_provider_incurred_usage(prior_usage));
                 }
             }
-            provider.send_request_async(&request).await
+            match provider.send_request_async(&request).await {
+                Ok(mut response) => {
+                    response.usage.add_assign(prior_usage);
+                    Ok(response)
+                }
+                Err(error) => {
+                    let mut total = prior_usage;
+                    total.add_assign(error.provider_incurred_usage());
+                    Err(error.with_provider_incurred_usage(total))
+                }
+            }
         }
         Err(error) => Err(error),
     }
@@ -2166,6 +2179,145 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A paid cutoff followed by success, another cutoff or ordinary failure
+    /// retains every reported counter through worker events and exact auxiliary
+    /// settlement. Duplicate delivery cannot charge the retained owner twice.
+    #[tokio::test]
+    async fn compactor_output_limit_retry_conserves_incurred_usage() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct RetryProvider {
+            calls: AtomicUsize,
+            outcome: u8,
+        }
+        impl AsyncModelProvider for RetryProvider {
+            fn provider_id(&self) -> &str {
+                "fixture"
+            }
+            fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+                mez_agent::ProviderApiCompatibility::OpenAiResponses
+            }
+            fn send_request_async<'a>(
+                &'a self,
+                _request: &'a ModelRequest,
+            ) -> std::pin::Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>
+            {
+                Box::pin(async move {
+                    let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+                    if first || self.outcome == 1 {
+                        let usage = mez_agent::ModelTokenUsage {
+                            input_tokens: if first { 17 } else { 11 },
+                            output_tokens: 3,
+                            ..Default::default()
+                        };
+                        return Err(MezError::invalid_state("paid cutoff")
+                            .with_provider_failure_json(r#"{"error":{"code":"max_tokens"}}"#)
+                            .with_provider_output_limit_state(mez_agent::ProviderOutputLimitState::new(
+                                "fixture", "openai-responses", "max_tokens", None, "", 0, 0, usage,
+                                mez_agent::ProviderOutputLimitContinuationDisposition::ContinueVisibleText)));
+                    }
+                    if self.outcome == 2 {
+                        return Err(MezError::invalid_state("ordinary failure"));
+                    }
+                    Ok(ModelResponse {
+                        provider: "fixture".into(),
+                        model: "model".into(),
+                        raw_text: "summary".into(),
+                        usage: mez_agent::ModelTokenUsage {
+                            input_tokens: 11,
+                            output_tokens: 2,
+                            ..Default::default()
+                        },
+                        latest_request_usage: None,
+                        quota_usage: Vec::new(),
+                        action_batch: None,
+                        provider_transcript_events: Vec::new(),
+                    })
+                })
+            }
+        }
+        for (outcome, expected) in [(0, 28), (1, 28), (2, 17)] {
+            let provider = RetryProvider {
+                calls: AtomicUsize::new(0),
+                outcome,
+            };
+            let profile = ModelProfile {
+                provider: "fixture".into(),
+                model: "model".into(),
+                ..Default::default()
+            };
+            let request = mez_agent::session_title::session_title_request(
+                &profile,
+                "agent-%1",
+                &mez_agent::session_title::SessionTitleGenerationInputs {
+                    objective: Some("compact source"),
+                    ..Default::default()
+                },
+                mez_agent::AllowedActionSet::say_only(),
+            );
+            let result = runtime_send_compaction_request_with_output_limit_retry(
+                &provider,
+                request.clone(),
+                &profile,
+                false,
+                &Default::default(),
+                false,
+            )
+            .await;
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+            let (RuntimeEvent::AgentCompaction(event), _) =
+                compaction_worker_event("%1".into(), 1, Ok(result))
+            else {
+                panic!("compaction event");
+            };
+            let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+            service
+                .agent_shell_store_mut()
+                .enter_or_resume("%1")
+                .unwrap();
+            let conversation = service
+                .agent_shell_store()
+                .get("%1")
+                .unwrap()
+                .session_id
+                .clone();
+            service.claim_agent_compaction_task_state(
+                "%1",
+                crate::runtime::RuntimeAgentCompactionTask {
+                    task_generation: 1,
+                    accounting_origin: crate::storage::token_usage::AccountingOrigin::Unattributed,
+                    compaction_epoch: 1,
+                    pane_id: "%1".into(),
+                    conversation_id: conversation.clone(),
+                    source: "fixture".into(),
+                    transcript_entries: 0,
+                    compacted_through_sequence: None,
+                    frozen_compaction_rows: Vec::new(),
+                    retained_transcript_entries: 0,
+                    summarized_entries: 0,
+                    model_profile_name: "fixture".into(),
+                    model_profile: profile,
+                    request,
+                    preserve_summary_output_budget: false,
+                    manual_retry_source: None,
+                    manual_final_retry: None,
+                    candidate_context: None,
+                    resume_turn_id: None,
+                    target: crate::runtime::RuntimeAgentCompactionTarget::Conversation,
+                    conversation_chunks: None,
+                    compaction_request_shape: None,
+                },
+            );
+            service.cancel_current_agent_compaction_task("%1");
+            service
+                .apply_agent_compaction_transition(event.clone())
+                .unwrap();
+            service.apply_agent_compaction_transition(event).unwrap();
+            let total = service.agent_token_usage_for_conversation(&conversation);
+            assert_eq!(total.values().next().unwrap().input_tokens, expected);
+            assert!(service.agent_latest_request_usage(&conversation).is_none());
+        }
+    }
 
     /// The observed title worker preserves normalized incurred usage even when
     /// sanitization rejects the response. Neither branch exposes rejected text,
@@ -2484,7 +2636,12 @@ mod tests {
                 Box::pin(async move {
                     self.0.fetch_add(1, Ordering::SeqCst);
                     Err(MezError::invalid_state("provider output exhausted")
-                        .with_provider_failure_json(r#"{"error":{"code":"max_tokens"}}"#))
+                        .with_provider_failure_json(r#"{"error":{"code":"max_tokens"}}"#)
+                        .with_provider_output_limit_state(mez_agent::ProviderOutputLimitState::new(
+                            "openai", "openai-responses", "max_tokens", None, "", 0, 0,
+                            mez_agent::ModelTokenUsage { input_tokens: 17, output_tokens: 3, ..Default::default() },
+                            mez_agent::ProviderOutputLimitContinuationDisposition::ContinueVisibleText,
+                        )))
                 })
             }
         }
@@ -2549,6 +2706,15 @@ mod tests {
             ProviderErrorRetryClass::ContextLimit
         );
         assert_eq!(provider.0.load(Ordering::SeqCst), 1);
+        let (RuntimeEvent::AgentCompaction(AgentCompactionEvent::Failed { usage, .. }), _) =
+            compaction_worker_event("%1".into(), 1, Ok(Err(error)))
+        else {
+            panic!("failure event");
+        };
+        assert_eq!(
+            usage.input_tokens, 17,
+            "preflight rejection must retain earlier paid expense"
+        );
     }
 
     /// A plan-derived compaction output ceiling is frozen across provider
