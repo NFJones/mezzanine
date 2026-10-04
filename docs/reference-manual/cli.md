@@ -157,6 +157,16 @@ leaves the observer suspended. Explicit confirmation activates the replacement;
 losing its result does not undo an accepted activation command. Actual
 extension IPC, private launcher delivery and installation remain unfinished.
 
+The internal inherited-stream bridge connects content-free observer facts to
+coordinator ingress. The launcher supplies a connected same-user Unix stream,
+session and epoch; none is selected by a callback payload. Exact JSON lifecycle
+frames are limited to 1,024 bytes, with a 250 ms total partial-frame deadline
+and no idle-silence timeout. The JavaScript sink bounds buffered writes to
+32 KiB and stops accepting telemetry after backpressure or error without
+changing vendor decisions. Daemon capabilities never cross this observer link.
+The launcher retains session lifetime separately from observer stream closure.
+Private launcher delivery and installable extension wiring remain unfinished.
+
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.

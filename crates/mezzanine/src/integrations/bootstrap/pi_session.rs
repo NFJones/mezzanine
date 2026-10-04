@@ -78,6 +78,11 @@ fn session_valid(session: &str) -> bool {
 }
 
 impl Ingress {
+    /// Wakes an inherited observer bridge when its session worker releases input.
+    pub(super) async fn closed(&self) {
+        self.0.closed().await;
+    }
+
     /// Attempts one callback admission without awaiting IPC. Full/closed ingress
     /// loses telemetry explicitly; callers must not alter vendor decisions.
     pub(crate) fn observe(&self, epoch: u64, session: &str, fact: Observation) -> Result<()> {

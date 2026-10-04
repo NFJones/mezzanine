@@ -432,6 +432,67 @@ async fn pi_session_abandoned_reload_proposals_do_not_activate() {
     );
 }
 
+/// Inherited callback-stream facts pass through strict parsing and the real
+/// coordinator before restricted daemon delivery. Stream EOF is kept separate
+/// from launcher lifetime so an accepted quit can settle without replay.
+#[tokio::test(flavor = "current_thread")]
+async fn pi_session_inherited_stream_delivers_ordered_lifecycle() {
+    let mut fixture = Fixture::new();
+    let (ingress, inputs) = channel();
+    let launcher = ingress.clone();
+    let (_stop, cancellation) = watch::channel(false);
+    let (stream, mut writer) = tokio::net::UnixStream::pair().unwrap();
+    let bridge = super::super::pi_ipc::serve(stream, "bound", 1, ingress, cancellation.clone());
+    let worker = run_with_clock(
+        &mut fixture.owner,
+        &fixture.transport,
+        "Pi",
+        inputs,
+        cancellation,
+        || Some(100),
+    );
+    let producer = async {
+        let frames = b"{\"type\":\"agent_start\"}\n{\"type\":\"agent_before_settle\",\"outcome\":\"completed\"}\n{\"type\":\"agent_settled\"}\n{\"type\":\"session_shutdown\",\"reason\":\"quit\"}\n";
+        for chunk in frames.chunks(11) {
+            writer.write_all(chunk).await.unwrap();
+            tokio::task::yield_now().await;
+        }
+        writer.shutdown().await.unwrap();
+    };
+    let server = async {
+        let (mut stream, _) = request(&fixture.listener).await;
+        reply(&mut stream, serde_json::json!({"registered":true,"agent_id":"agent","generation":1,"expires_at_unix_seconds":160})).await;
+        for (sequence, state) in [(1, "running"), (2, "complete")] {
+            let (mut stream, value) = request(&fixture.listener).await;
+            assert_eq!(value["method"], "agent/external/presentation");
+            assert_eq!(value["params"]["sequence"], sequence);
+            assert_eq!(value["params"]["state"], state);
+            reply(
+                &mut stream,
+                serde_json::json!({"sequence":sequence,"changed":true}),
+            )
+            .await;
+        }
+        let (mut stream, value) = request(&fixture.listener).await;
+        assert_eq!(value["method"], "agent/external/deregister");
+        reply(
+            &mut stream,
+            serde_json::json!({"retired":true,"changed":true}),
+        )
+        .await;
+    };
+    let (result, bridge_result, (), ()) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(worker, bridge, producer, server)
+        })
+        .await
+        .unwrap();
+    result.unwrap();
+    bridge_result.unwrap();
+    drop(launcher);
+    assert!(fixture.owner.pending().is_none());
+}
+
 /// Missing acknowledgments and explicit cancellation preserve the original
 /// pending report. Neither path reconnects automatically or fabricates success.
 #[tokio::test(flavor = "current_thread")]

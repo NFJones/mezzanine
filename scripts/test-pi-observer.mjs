@@ -2,6 +2,44 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createPiObserver } from "../crates/mezzanine/src/integrations/bootstrap/pi_observer.mjs";
+import { EventEmitter } from "node:events";
+import { createObserverStreamSink } from "../crates/mezzanine/src/integrations/bootstrap/pi_observer_stream.mjs";
+
+test("stream sink forwards only facts and disables writes after backpressure", () => {
+  const stream = new EventEmitter();
+  const frames = [];
+  stream.writableLength = 0;
+  stream.write = (frame) => { frames.push(frame); return frames.length < 2; };
+  const sink = createObserverStreamSink(stream, "bound");
+  assert.equal(sink.enqueue({ session: "other", event: { type: "agent_start" } }), false);
+  assert.equal(sink.enqueue({ session: "bound", event: { type: "agent_start", prompt: "PRIVATE" } }), true);
+  assert.equal(sink.enqueue({ session: "bound", event: { type: "agent_settled", outcome: "PRIVATE" } }), true);
+  assert.equal(sink.enqueue({ session: "bound", event: { type: "agent_start" } }), false);
+  assert.deepEqual(frames, ['{"type":"agent_start"}\n', '{"type":"agent_settled"}\n']);
+  sink.dispose();
+  stream.emit("error", new Error("PRIVATE"));
+  stream.emit("close");
+  sink.releaseAfterClose();
+  assert.equal(stream.listenerCount("error"), 0);
+});
+
+test("stream sink errors and finite write budget never affect vendor results", () => {
+  for (const mode of ["full", "throw", "closed"]) {
+    const stream = new EventEmitter();
+    let writes = 0;
+    stream.writableLength = mode === "full" ? 32768 : 0;
+    stream.write = () => { writes++; throw new Error("PRIVATE"); };
+    const sink = createObserverStreamSink(stream, "bound");
+    if (mode === "closed") stream.emit("close");
+    const { handlers, ctx } = fixture(sink.enqueue);
+    assert.equal(handlers.get("agent_start")({ type: "agent_start", prompt: "PRIVATE" }, ctx), undefined);
+    assert.equal(handlers.get("agent_start")({ type: "agent_start" }, ctx), undefined);
+    assert.equal(writes, mode === "throw" ? 1 : 0);
+    stream.emit("error", new Error("PRIVATE"));
+    stream.emit("close");
+    sink.releaseAfterClose();
+  }
+});
 
 function fixture(enqueue) {
   const handlers = new Map();

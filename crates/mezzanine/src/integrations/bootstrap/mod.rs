@@ -29,6 +29,11 @@ pub(crate) mod opencode;
 pub(crate) mod pi;
 #[allow(
     dead_code,
+    reason = "Pi observer IPC awaits private launcher integration"
+)]
+pub(crate) mod pi_ipc;
+#[allow(
+    dead_code,
     reason = "Pi launch-owned sequencing awaits privately bound transport"
 )]
 pub(crate) mod pi_owner;

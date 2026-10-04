@@ -326,6 +326,15 @@ Closure MUST fence registration and issued delivery without draining buffered
 facts. Reload proposals MUST NOT activate an observer until explicit confirmation
 is accepted; losing the confirmation result does not undo an accepted command.
 This integration does not itself provide private launch or vendor IPC.
+The inherited Pi observer-stream bridge MUST bind session and observer epoch
+outside callback payloads and authenticate its same-user Unix peer. Only exact
+allowlisted lifecycle JSON frames may enter coordinator ingress, bounded to
+1,024 bytes each with a non-resetting 250 ms partial-frame deadline. Clean idle
+silence remains allowed. Callback writers MUST bound buffered bytes, remain
+neutral on backpressure/errors, and never expose daemon capabilities or routing.
+Stream teardown releases only observer ownership; the launcher separately owns
+the session lifetime and reload confirmation. This bridge does not certify
+private launch delivery, installed extensions or vendor usage accounting.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow
