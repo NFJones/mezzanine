@@ -5887,8 +5887,12 @@ The existing ordered aggregate prompt MUST bind all joined receipt IDs to its
 producer-assigned event sequence, including interrupted-context remapping.
 Pre-history retries MUST preserve IDs; repeated completion MUST NOT create a
 second turn or overwrite transferred receipts. Failed or stale history work
-MUST retain bounded not-sent evidence without replay. Restart persistence,
-queued teardown recovery and pending-log promotion remain unfinished.
+MUST retain bounded not-sent evidence without replay. Queued or claimed history
+commands MUST retain receipt ownership on the actor; cancellation and shutdown
+MUST settle that ownership without a worker reply. Late callbacks MUST NOT
+reconstruct receipts after transfer, settlement or bounded evidence eviction.
+Restart persistence, pre-history compaction-queue teardown and pending-log
+promotion remain unfinished.
 Guidance submitted to a retained blocked turn MUST remain on that turn rather
 than create a second queued task. Acceptance MUST NOT change scheduler wait or
 blocked ownership, remove human dispatch inhibition, grant approval or wake a

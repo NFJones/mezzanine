@@ -1452,7 +1452,14 @@ impl RuntimeSessionService {
         } else {
             session.transcript_entries
         };
+        self.check_deferred_history_owner_capacity(&steering_receipts)?;
         let claim_generation = self.begin_agent_command_claim(pane_id, &conversation_id)?;
+        self.retain_deferred_history_receipts(
+            pane_id,
+            &conversation_id,
+            claim_generation,
+            &steering_receipts,
+        );
         let history_work = self.prepare_runtime_agent_prompt_history_work(pane_id);
         #[cfg(test)]
         let (prompt_history_preparation_started, prompt_history_preparation_release) =

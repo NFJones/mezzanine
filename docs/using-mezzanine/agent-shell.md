@@ -67,9 +67,11 @@ acknowledges only the exact included user events; preparation, auxiliary request
 and rejected claims do not. This is not proof that a remote model read the input.
 Manual-compaction submissions retain separate occurrence IDs through history
 preparation and bind together to the existing ordered aggregate prompt event.
-History failure retains not-sent evidence without retrying input. Pending-tail
-labels, queued teardown recovery and restart persistence remain unfinished;
-the current visible prompt echo remains.
+History failure retains not-sent evidence without retrying input. Queued or
+claimed history cancellation settles actor-owned receipts without waiting for
+the worker; late callbacks cannot recreate discarded receipt evidence.
+Pending-tail labels, pre-history compaction-queue teardown and restart
+persistence remain unfinished; the current visible prompt echo remains.
 Guidance to an already retained blocked task stays on that task; it does not
 resume a human pause, grant approval, wake a mail-only wait or queue a second turn.
 

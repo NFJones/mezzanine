@@ -551,6 +551,8 @@ pub(crate) struct RuntimeAgentComponent {
     steering_receipts: BTreeMap<String, steering::Receipts>,
     /// Terminal pre-turn receipt evidence, fenced by exact history command owner.
     settled_deferred_steering: BTreeMap<(String, String, u64), Vec<steering::Receipt>>,
+    /// Exact actor-owned receipts while a history command is queued or claimed.
+    pending_deferred_steering: BTreeMap<(String, String, u64), Vec<steering::Receipt>>,
     /// Authenticated plain-text prompts accepted during manual compaction.
     agent_compaction_steering: BTreeMap<String, Vec<steering::Deferred>>,
     /// Model-backed compaction tasks waiting for provider dispatch.
@@ -950,6 +952,7 @@ impl RuntimeAgentComponent {
             return false;
         }
         lifecycle.phase = phase;
+        self.finish_deferred_steering_command(pane_id, conversation_id, command_id, phase);
         true
     }
 
@@ -987,6 +990,14 @@ impl RuntimeAgentComponent {
             return false;
         }
         lifecycle.phase = RuntimeAgentCommandLifecyclePhase::Cancelled;
+        let conversation = lifecycle.conversation_id.clone();
+        let command = lifecycle.command_id;
+        self.finish_deferred_steering_command(
+            pane_id,
+            &conversation,
+            command,
+            RuntimeAgentCommandLifecyclePhase::Cancelled,
+        );
         true
     }
 
@@ -1010,6 +1021,12 @@ impl RuntimeAgentComponent {
             self.pending_status_reports
                 .remove(&(pane_id.to_string(), command_id));
             lifecycle.phase = RuntimeAgentCommandLifecyclePhase::Cancelled;
+            self.finish_deferred_steering_command(
+                pane_id,
+                conversation_id,
+                command_id,
+                RuntimeAgentCommandLifecyclePhase::Cancelled,
+            );
             return true;
         }
         false
@@ -1024,6 +1041,19 @@ impl RuntimeAgentComponent {
                 lifecycle.phase = RuntimeAgentCommandLifecyclePhase::Cancelled;
                 count = count.saturating_add(1);
             }
+        }
+        let owners = self
+            .pending_deferred_steering
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for (pane, conversation, command) in owners {
+            self.finish_deferred_steering_command(
+                &pane,
+                &conversation,
+                command,
+                RuntimeAgentCommandLifecyclePhase::Cancelled,
+            );
         }
         count
     }

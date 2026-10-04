@@ -119,45 +119,44 @@ impl Receipts {
 }
 
 impl RuntimeSessionService {
+    /// Rejects excess history receipt ownership before creating a command.
+    pub(crate) fn check_deferred_history_owner_capacity(&self, entries: &[Receipt]) -> Result<()> {
+        if !entries.is_empty() && self.agent.pending_deferred_steering.len() >= OWNER_CAPACITY {
+            return Err(MezError::invalid_state(
+                "deferred steering owners exhausted",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Retains the actor's exact accepted copy before dispatch leaves the actor.
+    pub(crate) fn retain_deferred_history_receipts(
+        &mut self,
+        pane: &str,
+        conversation: &str,
+        command: u64,
+        entries: &[Receipt],
+    ) {
+        if !entries.is_empty() {
+            self.agent.pending_deferred_steering.insert(
+                (pane.into(), conversation.into(), command),
+                entries.to_vec(),
+            );
+        }
+    }
+
     /// Settles exact pre-turn occurrences once without changing transferred IDs.
     /// Bounded terminal evidence is not a queue and cannot redispatch input.
     pub(crate) fn settle_deferred_history_receipts(
         &mut self,
         dispatch: &crate::runtime::RuntimeAgentPromptHistoryDispatch,
     ) {
-        let key = (
-            dispatch.pane_id.clone(),
-            dispatch.conversation_id.clone(),
+        self.agent.finish_deferred_steering_command(
+            &dispatch.pane_id,
+            &dispatch.conversation_id,
             dispatch.claim_generation,
+            crate::runtime::RuntimeAgentCommandLifecyclePhase::Failed,
         );
-        if dispatch.steering_receipts.is_empty()
-            || self.agent.settled_deferred_steering.contains_key(&key)
-        {
-            return;
-        }
-        let transferred: BTreeSet<_> = self
-            .agent
-            .steering_receipts
-            .values()
-            .flat_map(|owner| owner.entries.iter().map(|entry| entry.id.as_str()))
-            .collect();
-        let entries: Vec<_> = dispatch
-            .steering_receipts
-            .iter()
-            .filter(|entry| !transferred.contains(entry.id.as_str()))
-            .map(|entry| {
-                let mut settled = entry.clone();
-                settled.status = Status::NotSent;
-                settled
-            })
-            .collect();
-        if entries.is_empty() {
-            return;
-        }
-        if self.agent.settled_deferred_steering.len() >= OWNER_CAPACITY {
-            self.agent.settled_deferred_steering.pop_first();
-        }
-        self.agent.settled_deferred_steering.insert(key, entries);
     }
 
     /// Exposes exact terminal pre-turn evidence for regression fixtures.
@@ -369,3 +368,39 @@ impl RuntimeSessionService {
 
 #[cfg(test)]
 mod tests;
+
+impl super::RuntimeAgentComponent {
+    /// Releases only an actor-retained command copy. Late callbacks cannot
+    /// recreate evidence after transfer, settlement or bounded eviction.
+    pub(super) fn finish_deferred_steering_command(
+        &mut self,
+        pane: &str,
+        conversation: &str,
+        command: u64,
+        phase: crate::runtime::RuntimeAgentCommandLifecyclePhase,
+    ) {
+        let key = (pane.into(), conversation.into(), command);
+        let Some(mut entries) = self.pending_deferred_steering.remove(&key) else {
+            return;
+        };
+        if phase == crate::runtime::RuntimeAgentCommandLifecyclePhase::Completed {
+            return;
+        }
+        let transferred: BTreeSet<_> = self
+            .steering_receipts
+            .values()
+            .flat_map(|owner| owner.entries.iter().map(|entry| entry.id.as_str()))
+            .collect();
+        entries.retain(|entry| !transferred.contains(entry.id.as_str()));
+        if entries.is_empty() {
+            return;
+        }
+        for entry in &mut entries {
+            entry.status = Status::NotSent;
+        }
+        if self.settled_deferred_steering.len() >= OWNER_CAPACITY {
+            self.settled_deferred_steering.pop_first();
+        }
+        self.settled_deferred_steering.insert(key, entries);
+    }
+}

@@ -2,6 +2,71 @@
 
 use super::*;
 
+/// Queued and claimed history cancellation settles accepted occurrences on the
+/// actor without a worker reply. Late callbacks cannot recreate evidence after
+/// terminal retention eviction or disturb a replacement command owner.
+#[test]
+fn steering_receipts_history_cancellation_is_actor_owned() {
+    for claimed in [false, true] {
+        for shutdown in [false, true] {
+            let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+            let primary = service
+                .attach_primary(
+                    "primary",
+                    true,
+                    mez_mux::layout::Size::new(80, 24).unwrap(),
+                    120,
+                )
+                .unwrap();
+            service
+                .agent_shell_store_mut()
+                .enter_or_resume("%1")
+                .unwrap();
+            service.mark_agent_compacting_for_tests("%1", 1);
+            service
+                .execute_agent_shell_command(&primary, "accepted guidance")
+                .unwrap();
+            service
+                .execute_agent_shell_command(&primary, "/stop")
+                .unwrap();
+            let dispatch = service.take_pending_agent_prompt_history().remove(0);
+            if claimed {
+                assert!(service.claim_agent_prompt_history_preparation(&dispatch));
+            }
+            if shutdown {
+                service.agent.cancel_all_agent_commands();
+            } else {
+                assert!(service.agent.cancel_agent_command("%1"));
+            }
+            let receipts = service.settled_deferred_receipts_for_tests(&dispatch);
+            assert_eq!(receipts.len(), 1);
+            assert_eq!(receipts[0].id, dispatch.steering_receipts[0].id);
+            assert_eq!(receipts[0].status, Status::NotSent);
+            assert!(service.agent.pending_deferred_steering.is_empty());
+            service.agent.settled_deferred_steering.clear();
+            let replacement = service
+                .begin_agent_command_claim("%1", &dispatch.conversation_id)
+                .unwrap();
+            assert!(replacement > dispatch.claim_generation);
+            assert!(
+                !service
+                    .complete_agent_prompt_history_preparation(
+                        &dispatch,
+                        Err(MezError::invalid_state("late worker failure"))
+                    )
+                    .unwrap()
+            );
+            assert!(
+                service
+                    .settled_deferred_receipts_for_tests(&dispatch)
+                    .is_empty()
+            );
+            assert!(service.agent_command_is_active("%1"));
+            assert!(service.agent_turn_ledger().turns().is_empty());
+        }
+    }
+}
+
 /// Failed history preparation settles the exact accepted occurrences once,
 /// without a canonical turn, input replay, or ordinary admission evidence.
 #[test]
