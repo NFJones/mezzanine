@@ -92,7 +92,17 @@ model = "invalid-model"
         .unwrap(),
     );
     service.acknowledge_admitted_steering(&dispatch);
+    dispatch.sandbox_failure_assessment_request = dispatch.macro_judge_request.take();
+    service.acknowledge_admitted_steering(&dispatch);
+    dispatch.sandbox_failure_assessment_request = None;
     dispatch.macro_judge_request = None;
+    let original_turn = dispatch.turn.clone();
+    dispatch.turn.conversation_id = "foreign-conversation".into();
+    service.acknowledge_admitted_steering(&dispatch);
+    dispatch.turn = original_turn.clone();
+    dispatch.turn.agent_id = "foreign-agent".into();
+    service.acknowledge_admitted_steering(&dispatch);
+    dispatch.turn = original_turn;
     let original_context = dispatch.context.clone();
     dispatch.context =
         mez_agent::PreparedModelContext::new(mez_agent::AgentContext::empty()).unwrap();
@@ -164,6 +174,17 @@ model = "invalid-model"
     let receipts = exit.service.steering_receipts_for_tests(&task.turn_id);
     assert_eq!(receipts.len(), 1);
     assert_eq!(format!("{:?}", receipts[0].status), "Admitted(1)");
+    // A newer equal-text occurrence is not consumed by the earlier snapshot.
+    exit.service
+        .execute_agent_shell_command(&primary, "claim receipt")
+        .unwrap();
+    dispatch.claim_generation = 1;
+    exit.service.acknowledge_admitted_steering(&dispatch);
+    let receipts = exit.service.steering_receipts_for_tests(&task.turn_id);
+    assert_eq!(receipts.len(), 2);
+    assert_ne!(receipts[0].id, receipts[1].id);
+    assert_eq!(format!("{:?}", receipts[0].status), "Admitted(1)");
+    assert_eq!(format!("{:?}", receipts[1].status), "Pending");
     assert_eq!(
         exit.service
             .agent_turn_ledger()
