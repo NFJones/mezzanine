@@ -287,7 +287,8 @@ fn semantic_apply_patch_native_resolver_handles_symlink_after_missing_parent() {
 
     assert!(
         output.status.success(),
-        "{}",
+        "resolver status={} stdout={actual:?} stderr={}",
+        output.status,
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(actual.trim_end(), expected.to_string_lossy());
