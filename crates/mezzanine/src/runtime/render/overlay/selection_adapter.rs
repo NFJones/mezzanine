@@ -139,7 +139,8 @@ pub(super) fn render_record_browser_overlay_matching(
     let registers_row_actions = prompt_selection.is_some()
         || (!record_browser.browser.is_detail_view()
             && record_browser.browser.records().iter().any(|record| {
-                record_browser_open_target(record).is_some() || record_browser.command == "resume"
+                record_browser_open_target(record).is_some()
+                    || matches!(record_browser.command.as_str(), "resume" | "choose-window")
             }));
     let terminal_width = if registers_row_actions {
         runtime_command_overlay_available_width(terminal_width, true)
@@ -251,7 +252,7 @@ fn record_browser_layout_content(
         let Some(record) = browser.records().get(range.row) else {
             continue;
         };
-        let Some(target) = (command == "list-personalities")
+        let Some(target) = matches!(command, "list-personalities" | "choose-window")
             .then(|| OverlayActionTarget::RecordBrowserSelect {
                 record_id: record.id.clone(),
             })

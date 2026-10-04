@@ -3578,21 +3578,25 @@ use mez_mux::render::{
     wrap_rich_text_line_to_width_with_source_ranges_hard,
 };
 #[cfg(test)]
+pub(crate) use overlay::OverlayActionTarget;
+#[cfg(test)]
 pub(crate) use overlay::RuntimeCommandDisplayOverlayContent;
 pub(in crate::runtime) use overlay::default_runtime_agent_prompt_input;
 pub(crate) use overlay::runtime_display_field_text;
 use overlay::{
     OverlayActionRegistry, agent_shell_mcp_display_state_name,
-    runtime_command_display_overlay_content, runtime_command_display_should_open_overlay,
-    runtime_pane_agent_selector_rendition, runtime_pane_agent_status_selector_layout,
-    runtime_primary_prompt_input, runtime_selector_line,
+    runtime_command_display_should_open_overlay, runtime_pane_agent_selector_rendition,
+    runtime_pane_agent_status_selector_layout, runtime_primary_prompt_input, runtime_selector_line,
 };
 pub(crate) use overlay::{
     RuntimeAgentShellDisplayOutput, runtime_agent_shell_display_output,
     runtime_agent_shell_visibility,
 };
 #[cfg(test)]
-use overlay::{runtime_agent_shell_markdown_overlay_content, runtime_human_readable_display_lines};
+use overlay::{
+    runtime_agent_shell_markdown_overlay_content, runtime_command_display_overlay_content,
+    runtime_human_readable_display_lines,
+};
 pub(in crate::runtime) use presentation::AgentTerminalPresentationStyle;
 pub(crate) use presentation::agent_action_execution_display_header;
 #[cfg(test)]

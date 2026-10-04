@@ -161,6 +161,11 @@ impl RuntimeSessionService {
         active_index: usize,
     ) -> Result<Option<RecordBrowser>> {
         let browser = match source {
+            RuntimeRecordBrowserOverlaySource::TerminalWindows { .. } => {
+                return Err(MezError::invalid_state(
+                    "terminal catalog records cannot be deleted",
+                ));
+            }
             RuntimeRecordBrowserOverlaySource::Approvals => {
                 return Err(MezError::invalid_state(
                     "approval browser records cannot be deleted",
@@ -475,6 +480,9 @@ impl RuntimeSessionService {
         source: &RuntimeRecordBrowserOverlaySource,
     ) -> Result<RecordBrowser> {
         match source {
+            RuntimeRecordBrowserOverlaySource::TerminalWindows { .. } => {
+                self.terminal_window_record_browser()
+            }
             RuntimeRecordBrowserOverlaySource::Approvals => self.approval_record_browser(),
             RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory,
@@ -712,6 +720,7 @@ impl RuntimeSessionService {
         source: &RuntimeRecordBrowserOverlaySource,
     ) -> RuntimeRecordBrowserOverlaySource {
         match source {
+            RuntimeRecordBrowserOverlaySource::TerminalWindows { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Approvals => source.clone(),
             RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory,
@@ -876,6 +885,7 @@ impl RuntimeSessionService {
     ) -> Result<RuntimeRecordBrowserOverlaySource> {
         let value = value.trim();
         match source {
+            RuntimeRecordBrowserOverlaySource::TerminalWindows { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Approvals => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory,
@@ -1355,6 +1365,9 @@ fn set_record_browser_scope_indicator(
     source: &RuntimeRecordBrowserOverlaySource,
 ) {
     let indicator = match source {
+        RuntimeRecordBrowserOverlaySource::TerminalWindows { group_id, .. } => {
+            format!("window group {group_id}")
+        }
         RuntimeRecordBrowserOverlaySource::Approvals => "live session".to_string(),
         RuntimeRecordBrowserOverlaySource::SavedSessions { directory, .. } => directory
             .clone()

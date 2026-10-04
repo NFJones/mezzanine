@@ -2,6 +2,273 @@
 
 use super::*;
 
+/// A configured command binding must use the same typed browser handoff as
+/// prompt submission, preserving attached execution report effects.
+#[test]
+fn runtime_terminal_record_browser_configured_binding_mounts() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .create_window_with_pane_process(&primary, "work", false, None)
+        .unwrap();
+    let mut config = TerminalClientLoopConfig::default();
+    config.command_bindings.insert(
+        mez_mux::input::KeyChord::new(mez_mux::input::KeyCode::Char('x')),
+        "choose-window".into(),
+    );
+    let action = crate::host::terminal::route_client_input(b"\x01x", &config).unwrap();
+    assert!(matches!(
+        action,
+        TerminalClientLoopAction::ExecuteCommand(_)
+    ));
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![action],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(report.mux_actions_applied, 1);
+    assert!(report.registry_persistence_required);
+    assert!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .is_some()
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Explicit chooser focus must preserve zen focus-label feedback and its
+/// receipt contract even though overlay input bypasses ordinary mux wrappers.
+#[test]
+fn runtime_terminal_record_browser_activation_preserves_zen_feedback() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .create_window_with_pane_process(&primary, "work", false, None)
+        .unwrap();
+    service.set_terminal_zen_mode_for_tests(true);
+    service
+        .execute_attached_display_command(&primary, "choose-window")
+        .unwrap();
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"\x1b[B\r".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(service.session().active_window().unwrap().name, "work");
+    let response: serde_json::Value = serde_json::from_str(&service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"zen-view","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#, &primary)).unwrap();
+    assert_eq!(
+        response["result"]["presentation_ids"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Normal command-prompt submission mounts the typed chooser. Later sequence
+/// output replaces it rather than reusing a stale handoff; plain RPC execution
+/// retains textual output without installing interactive state.
+#[test]
+fn runtime_terminal_record_browser_prompt_and_sequence_ownership() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .create_window_with_pane_process(&primary, "work", false, None)
+        .unwrap();
+    let output = service
+        .execute_terminal_command(&primary, "choose-window")
+        .unwrap();
+    assert!(output.contains("choose-window"));
+    assert!(service.primary_display_overlay().is_none());
+    service.enter_primary_command_prompt("").unwrap();
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"choose-window\r".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .record_browser
+            .is_some()
+    );
+    service
+        .execute_attached_display_command(&primary, "choose-window; list-windows")
+        .unwrap();
+    assert!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .record_browser
+            .is_none()
+    );
+    service
+        .execute_attached_display_command(&primary, "choose-window")
+        .unwrap();
+    assert!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .record_browser
+            .is_some()
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Search and refresh cannot activate hidden records or retained stale actions.
+/// A second primary keeps its own overlay, and Enter uses the same stable ID
+/// as mouse activation without creating an agent shell session.
+#[test]
+fn runtime_terminal_record_browser_filters_refreshes_and_isolates_clients() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(35, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .create_window_with_pane_process(&primary, "work 界", false, None)
+        .unwrap();
+    let original = service.session().active_window().unwrap().id.clone();
+    service
+        .execute_attached_display_command(&primary, "choose-window")
+        .unwrap();
+    let stale = service.primary_display_overlay().unwrap().selections[0].action_id;
+    let input = |service: &mut RuntimeSessionService, bytes: &[u8]| {
+        service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(bytes.to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+    };
+    input(&mut service, b"/absent\r");
+    input(&mut service, b"\r");
+    assert_eq!(service.session().active_window().unwrap().id, original);
+    assert!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .selections
+            .is_empty()
+    );
+    input(&mut service, b"r");
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .search_query
+            .as_deref(),
+        Some("absent")
+    );
+    assert!(
+        service
+            .execute_primary_display_overlay_action(&primary, stale)
+            .unwrap()
+    );
+    assert_eq!(service.session().active_window().unwrap().id, original);
+    let other = service
+        .attach_primary("other", true, Size::new(35, 12).unwrap(), 121)
+        .unwrap();
+    service
+        .prepare_client_render(&other, ClientViewRole::Primary)
+        .unwrap();
+    assert!(service.primary_display_overlay().is_none());
+    service
+        .prepare_client_render(&primary, ClientViewRole::Primary)
+        .unwrap();
+    assert!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .record_browser
+            .is_some()
+    );
+    input(&mut service, b"/work\r");
+    input(&mut service, b"r");
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .search_query
+            .as_deref(),
+        Some("work")
+    );
+    input(&mut service, b"\r");
+    assert!(service.primary_display_overlay().is_none());
+    assert_eq!(service.session().active_window().unwrap().name, "work 界");
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Terminal chooser commands must mount retained browser state without an agent
+/// session. Navigation is inert and explicit selection alone changes focus.
+#[test]
+fn runtime_terminal_record_browser_mounts_from_attached_command() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(35, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .create_window_with_pane_process(&primary, "work", false, None)
+        .unwrap();
+    let original = service.session().active_window().unwrap().id.clone();
+    service
+        .execute_attached_display_command(&primary, "choose-window")
+        .unwrap();
+    assert!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .record_browser
+            .is_some()
+    );
+    assert!(service.agent_shell_store().get("%1").is_none());
+    assert_eq!(service.session().active_window().unwrap().id, original);
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that command display output is owned by runtime state instead of a
 /// nested terminal loop. The modal overlay must render through the normal
 /// primary client view, consume user input while active, and clear on Escape or
@@ -762,7 +1029,7 @@ fn runtime_primary_display_overlay_executes_selectable_command_rows() {
     let work_index = service
         .primary_display_overlay_action_targets()
         .iter()
-        .position(|target| target.terminal_command_line().as_deref() == Some("select-window -t @2"))
+        .position(|target| matches!(target, crate::runtime::render::OverlayActionTarget::RecordBrowserSelect { record_id } if record_id == "@2"))
         .expect("work window row should advertise a selectable action");
     let work_selection = overlay
         .selections
@@ -824,7 +1091,7 @@ fn runtime_primary_display_overlay_rejects_stale_and_unknown_action_identities()
             .primary_display_overlay_action_targets()
             .iter()
             .position(|target| {
-                target.terminal_command_line().as_deref() == Some("select-window -t @2")
+                matches!(target, crate::runtime::render::OverlayActionTarget::RecordBrowserSelect { record_id } if record_id == "@2")
             })?;
         overlay
             .selections
@@ -902,7 +1169,7 @@ fn runtime_primary_display_overlay_action_requires_attached_primary_client() {
                 .primary_display_overlay_action_targets()
                 .iter()
                 .position(|target| {
-                    target.terminal_command_line().as_deref() == Some("select-window -t @2")
+                    matches!(target, crate::runtime::render::OverlayActionTarget::RecordBrowserSelect { record_id } if record_id == "@2")
                 })?;
             overlay.selections.get(index)
         })

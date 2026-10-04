@@ -116,6 +116,12 @@ When a search has no matching rows, Enter, copy, edit, delete and other
 record-operation keys do nothing; search, filters, save and dismissal remain
 available. Search for a matching row before operating on it.
 
+Selection-style terminal browsers use their source-specific Enter label rather
+than opening detail: `choose-window` uses Enter to focus and `r` to refresh its
+in-memory catalog. Keyboard and identifier-cell mouse activation select the same
+stable record ID. Refresh preserves search and retires old clickable identities;
+navigation, searching and dismissal do not change focus.
+
 ## Inspect effective bindings
 
 Run `list-keys` in the command prompt or press `Ctrl+A ?`. This shows active

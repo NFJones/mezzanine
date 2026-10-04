@@ -155,7 +155,6 @@ impl OverlayActionRegistry {
     }
 
     /// Returns the generation whose positions are currently valid.
-    #[cfg(test)]
     pub(crate) fn current_generation(&self) -> u32 {
         self.generation
     }

@@ -13,7 +13,7 @@ use super::{
     agent_display_lines_are_error, agent_display_lines_are_low_level_status,
     agent_prompt_error_display_lines, agent_shell_mcp_display_state_name, current_unix_millis,
     default_runtime_agent_prompt_input, runtime_agent_shell_display_output,
-    runtime_agent_shell_visibility, runtime_command_display_overlay_content,
+    runtime_agent_shell_visibility,
 };
 use crate::runtime::service_state::{RuntimeLiveOverlaySource, RuntimeRecordBrowserOverlayState};
 use mez_mux::readline::{ReadlineDecodedInput, ReadlineHistoryEntry, readline_input_is_ctrl_v};
@@ -149,21 +149,9 @@ impl RuntimeSessionService {
                                 queue_for_adapter,
                             )?;
                         }
-                        match self
-                            .execute_terminal_command(primary_client_id, &command)
-                            .and_then(|body| {
-                                runtime_command_display_overlay_content(
-                                    &body,
-                                    &self.presentation.settings.ui_theme,
-                                    usize::from(self.session.authoritative_size.columns),
-                                    self.presentation.settings.terminal_agent_wrap_column_cap,
-                                )
-                            }) {
-                            Ok(content) => {
-                                if self.require_live().is_ok() {
-                                    self.present_runtime_command_display_content(content)?;
-                                }
-                            }
+                        match self.execute_and_present_terminal_command(primary_client_id, &command)
+                        {
+                            Ok(_) => {}
                             Err(error) => {
                                 self.show_primary_display_overlay(vec![format!(
                                     "error: {error} - press Esc to return"
@@ -190,21 +178,9 @@ impl RuntimeSessionService {
                                 queue_for_adapter,
                             )?;
                         }
-                        match self
-                            .execute_terminal_command(primary_client_id, &command)
-                            .and_then(|body| {
-                                runtime_command_display_overlay_content(
-                                    &body,
-                                    &self.presentation.settings.ui_theme,
-                                    usize::from(self.session.authoritative_size.columns),
-                                    self.presentation.settings.terminal_agent_wrap_column_cap,
-                                )
-                            }) {
-                            Ok(content) => {
-                                if self.require_live().is_ok() {
-                                    self.present_runtime_command_display_content(content)?;
-                                }
-                            }
+                        match self.execute_and_present_terminal_command(primary_client_id, &command)
+                        {
+                            Ok(_) => {}
                             Err(error) => {
                                 self.show_primary_display_overlay(vec![format!(
                                     "error: {error} - press Esc to return"

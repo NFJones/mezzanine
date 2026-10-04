@@ -906,7 +906,7 @@ impl RuntimeSessionService {
                     }
                 }
                 TerminalClientLoopAction::ExecuteCommand(command) => {
-                    match self.execute_terminal_command(primary_client_id, command) {
+                    match self.execute_and_present_terminal_command(primary_client_id, command) {
                         Ok(output) => {
                             report.registry_persistence_required = true;
                             self.append_primary_client_event(

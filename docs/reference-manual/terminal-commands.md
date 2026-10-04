@@ -83,6 +83,16 @@ The implementation also accepts `choose-window` for an interactive window
 picker and `move-window -t INDEX` to reindex the current window; these are not
 listed in the baseline catalog above.
 
+In an attached command prompt or command binding, `choose-window` uses the shared
+retained record browser. Arrow navigation and search are inert; Enter or an
+identifier-cell click focuses the selected stable window ID and dismisses only
+after successful activation. `r` refreshes the in-memory catalog, preserving
+search and selected ID where possible. Removed targets leave the browser open
+with an error. Each primary owns its browser independently; observers cannot
+activate it. Plain control/text output remains available without mounting a
+browser. A sequence with multiple display outcomes uses ordinary combined output
+rather than attaching one chooser to unrelated rows.
+
 ## Selected command contracts
 
 The following commands have behavior or safety boundaries that are useful to

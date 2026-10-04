@@ -12,14 +12,16 @@ mod product_content;
 mod record_adapter;
 mod selection_adapter;
 mod service;
+mod terminal_browser;
 
 pub(crate) use action_registry::OverlayActionRegistry;
 #[cfg(test)]
+pub(crate) use action_registry::OverlayActionTarget;
+pub(crate) use display_content::runtime_command_display_should_open_overlay;
+#[cfg(test)]
 pub(crate) use display_content::{
-    RuntimeCommandDisplayOverlayContent, runtime_human_readable_display_lines,
-};
-pub(crate) use display_content::{
-    runtime_command_display_overlay_content, runtime_command_display_should_open_overlay,
+    RuntimeCommandDisplayOverlayContent, runtime_command_display_overlay_content,
+    runtime_human_readable_display_lines,
 };
 #[cfg(test)]
 pub(crate) use product_content::runtime_agent_shell_markdown_overlay_content;

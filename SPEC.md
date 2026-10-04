@@ -9977,6 +9977,14 @@ The baseline command capabilities are:
   Enter and record-operation keys MUST require a visible eligible row: a
   zero-match search MUST NOT activate the retained hidden cursor. Search, scope
   controls, save and dismissal MUST remain usable without a selected row.
+  Terminal selection browsers MUST mount through a typed command-outcome handoff
+  bound to the invoking primary and overlay generation, never reconstructed
+  authority from rendered Markdown. Keyboard and mouse activation MUST share
+  stable-ID source-owned semantics, separate from agent slash-command dispatch.
+  The attached `choose-window` consumer MUST use inert navigation, explicit focus
+  activation, and in-memory refresh preserving search and selected identity where
+  possible. Successful focus dismisses; stale targets leave an actionable error.
+  Ordinary detail browsers and noninteractive command output MUST remain intact.
 - `/remember`: Ask the active model to generate durable persistent-memory
   records. Without arguments, it MUST derive a small bounded set of memory
   candidates from the current pane context. With arguments, it MUST treat the

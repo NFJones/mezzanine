@@ -8,7 +8,7 @@
 use super::{
     EventKind, GroupFocusTarget, MezError, MuxAction, PaneNavigationDirection, PasteBufferTarget,
     Result, RuntimeSessionService, SplitDirection, WindowFocusTarget, json_escape,
-    key_chord_input_bytes, pane_navigation_direction, runtime_command_display_overlay_content,
+    key_chord_input_bytes, pane_navigation_direction,
 };
 
 impl RuntimeSessionService {
@@ -190,7 +190,7 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         command: &str,
     ) -> Result<()> {
-        let output = self.execute_terminal_command(primary_client_id, command)?;
+        let output = self.execute_and_present_terminal_command(primary_client_id, command)?;
         let output_excerpt = output.chars().take(384).collect::<String>();
         let truncated = output_excerpt.len() < output.len();
         self.append_primary_client_event(
@@ -203,13 +203,7 @@ impl RuntimeSessionService {
                 truncated
             ),
         )?;
-        let content = runtime_command_display_overlay_content(
-            &output,
-            &self.presentation.settings.ui_theme,
-            usize::from(self.session.authoritative_size.columns),
-            self.presentation.settings.terminal_agent_wrap_column_cap,
-        )?;
-        self.present_runtime_command_display_content(content)
+        Ok(())
     }
 
     /// Runs the swap active pane with neighbor operation for this subsystem.

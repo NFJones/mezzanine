@@ -107,6 +107,8 @@ pub(crate) type RuntimeRecordBrowserOverlayFrame =
 /// Query context retained for one backend-specific record-browser overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeRecordBrowserOverlaySource {
+    /// In-memory terminal selection, bound to the invoking client and group.
+    TerminalWindows { client_id: String, group_id: String },
     /// Live session-wide pending approval queue.
     Approvals,
     /// Durable saved agent conversations displayed by bare `/resume`.

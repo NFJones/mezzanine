@@ -498,17 +498,7 @@ impl RuntimeSessionService {
         command: &str,
     ) -> Result<bool> {
         self.presentation.primary_display_overlay = None;
-        let content = self
-            .execute_terminal_command(primary_client_id, command)
-            .and_then(|body| {
-                runtime_command_display_overlay_content(
-                    &body,
-                    &self.presentation.settings.ui_theme,
-                    usize::from(self.session.authoritative_size.columns),
-                    self.presentation.settings.terminal_agent_wrap_column_cap,
-                )
-            })?;
-        self.present_runtime_command_display_content(content)?;
+        self.execute_and_present_terminal_command(primary_client_id, command)?;
         Ok(true)
     }
 
@@ -736,6 +726,16 @@ impl RuntimeSessionService {
                 terminal_width,
                 prose_width,
             )));
+        }
+        if input == b"r"
+            && matches!(
+                record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::TerminalWindows { .. })
+            )
+        {
+            return self
+                .refresh_terminal_window_browser(primary_client_id)
+                .map(Some);
         }
         if input == b"u"
             && matches!(
@@ -1156,6 +1156,24 @@ impl RuntimeSessionService {
         }
         let active_index =
             record_browser_active_index(overlay, record_browser.browser.active_index());
+        if matches!(selector_input_action(input), SelectorInputAction::Select)
+            && let Some(RuntimeRecordBrowserOverlaySource::TerminalWindows {
+                client_id,
+                group_id,
+            }) = record_browser.source.clone()
+        {
+            let mut selected = record_browser.browser.clone();
+            selected.set_active_index(active_index);
+            let outcome = selected
+                .apply_action(mez_mux::record_browser::RecordBrowserAction::SubmitActive)?;
+            let mez_mux::record_browser::RecordBrowserOutcome::SelectionSubmitted { id } = outcome
+            else {
+                return Ok(Some(false));
+            };
+            return self
+                .activate_terminal_window_selection(primary_client_id, &client_id, &group_id, &id)
+                .map(Some);
+        }
         if matches!(selector_input_action(input), SelectorInputAction::Select)
             && matches!(
                 record_browser.source,
