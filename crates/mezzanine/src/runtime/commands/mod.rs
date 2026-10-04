@@ -1502,16 +1502,17 @@ impl RuntimeSessionService {
         }
         let steering = self.take_agent_compaction_steering(pane_id);
         let Some(session) = self.agent_shell_store().get(pane_id) else {
+            self.agent
+                .settle_compaction_steering_entries(pane_id, steering);
             return Ok(false);
         };
         let conversation_id = session.session_id.clone();
         let compaction_epoch = self.agent_compaction_epoch(pane_id);
-        let steering = steering
-            .into_iter()
-            .filter(|entry| {
-                entry.conversation == conversation_id && entry.epoch == compaction_epoch
-            })
-            .collect::<Vec<_>>();
+        let (steering, stale): (Vec<_>, Vec<_>) = steering.into_iter().partition(|entry| {
+            entry.conversation == conversation_id && entry.epoch == compaction_epoch
+        });
+        self.agent
+            .settle_compaction_steering_entries(pane_id, stale);
         let Some(first) = steering.first() else {
             return Ok(false);
         };

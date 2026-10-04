@@ -1169,7 +1169,7 @@ impl RuntimeSessionService {
         if let Some(AgentShellCommandOutcome::Mutated { command, .. }) = outcome.as_ref()
             && matches!(command.as_str(), "new" | "clear")
         {
-            let _ = self.take_agent_compaction_steering(&pane_id);
+            self.discard_agent_compaction_steering(&pane_id);
             self.agent.cancel_agent_command(&pane_id);
             if let Some(conversation_id) = replaced_conversation_id.as_deref() {
                 self.clear_agent_conversation_provider_request_chain(conversation_id);

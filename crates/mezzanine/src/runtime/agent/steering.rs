@@ -119,6 +119,12 @@ impl Receipts {
 }
 
 impl RuntimeSessionService {
+    /// Consumes pre-history occurrences without replaying accepted guidance.
+    pub(crate) fn discard_agent_compaction_steering(&mut self, pane: &str) {
+        let entries = self.take_agent_compaction_steering(pane);
+        self.agent.settle_compaction_steering_entries(pane, entries);
+    }
+
     /// Rejects excess history receipt ownership before creating a command.
     pub(crate) fn check_deferred_history_owner_capacity(&self, entries: &[Receipt]) -> Result<()> {
         if !entries.is_empty() && self.agent.pending_deferred_steering.len() >= OWNER_CAPACITY {
@@ -370,6 +376,28 @@ impl RuntimeSessionService {
 mod tests;
 
 impl super::RuntimeAgentComponent {
+    /// Retains bounded terminal evidence for consumed pre-history queue owners.
+    /// Taking the queue is the ownership fence; this operation cannot replay it.
+    pub(crate) fn settle_compaction_steering_entries(
+        &mut self,
+        pane: &str,
+        entries: Vec<Deferred>,
+    ) {
+        for mut entry in entries {
+            let key = (pane.to_string(), entry.conversation, entry.epoch);
+            if !self.settled_compaction_steering.contains_key(&key)
+                && self.settled_compaction_steering.len() >= OWNER_CAPACITY
+            {
+                self.settled_compaction_steering.pop_first();
+            }
+            entry.receipt.status = Status::NotSent;
+            let retained = self.settled_compaction_steering.entry(key).or_default();
+            if retained.len() < CAPACITY {
+                retained.push(entry.receipt);
+            }
+        }
+    }
+
     /// Releases only an actor-retained command copy. Late callbacks cannot
     /// recreate evidence after transfer, settlement or bounded eviction.
     pub(super) fn finish_deferred_steering_command(

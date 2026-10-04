@@ -2,6 +2,89 @@
 
 use super::*;
 
+/// Pre-history discard, stale epoch filtering and shutdown all consume the
+/// actor's accepted queue and retain exact not-sent occurrence evidence. None
+/// may start a turn, join the input again or lose its independent display source.
+#[test]
+fn steering_receipts_compaction_queue_teardown_preserves_occurrences() {
+    for mode in ["discard", "stale", "shutdown"] {
+        let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+        let primary = service
+            .attach_primary(
+                "primary",
+                true,
+                mez_mux::layout::Size::new(80, 24).unwrap(),
+                120,
+            )
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        let conversation = service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        let epoch = service.agent_compaction_epoch("%1");
+        let queued_epoch = if mode == "stale" { epoch + 1 } else { epoch };
+        for display in ["first display", "second display"] {
+            service
+                .queue_agent_compaction_steering(
+                    "%1",
+                    primary.clone(),
+                    conversation.clone(),
+                    queued_epoch,
+                    "same".into(),
+                    display.into(),
+                )
+                .unwrap();
+        }
+        let ids = service.agent.agent_compaction_steering["%1"]
+            .iter()
+            .map(|entry| entry.receipt.id.clone())
+            .collect::<Vec<_>>();
+        match mode {
+            "discard" => service.discard_agent_compaction_steering("%1"),
+            "stale" => assert!(!service.resume_agent_compaction_steering("%1").unwrap()),
+            _ => {
+                service.agent.cancel_all_agent_commands();
+            }
+        }
+        assert!(service.take_agent_compaction_steering("%1").is_empty());
+        let settled =
+            &service.agent.settled_compaction_steering[&("%1".into(), conversation, queued_epoch)];
+        assert_eq!(
+            settled
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect::<Vec<_>>(),
+            ids
+        );
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(settled[1].display, "second display");
+        assert!(
+            settled
+                .iter()
+                .all(|entry| entry.status == Status::NotSent && entry.sequence == 0)
+        );
+        assert!(service.agent_turn_ledger().turns().is_empty());
+        assert!(service.take_pending_agent_prompt_history().is_empty());
+        assert!(service.pending_agent_provider_tasks().is_empty());
+        service.discard_agent_compaction_steering("%1");
+        assert_eq!(
+            service
+                .agent
+                .settled_compaction_steering
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+            2
+        );
+    }
+}
+
 /// Queued and claimed history cancellation settles accepted occurrences on the
 /// actor without a worker reply. Late callbacks cannot recreate evidence after
 /// terminal retention eviction or disturb a replacement command owner.

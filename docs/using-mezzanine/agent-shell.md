@@ -70,8 +70,9 @@ preparation and bind together to the existing ordered aggregate prompt event.
 History failure retains not-sent evidence without retrying input. Queued or
 claimed history cancellation settles actor-owned receipts without waiting for
 the worker; late callbacks cannot recreate discarded receipt evidence.
-Pending-tail labels, pre-history compaction-queue teardown and restart
-persistence remain unfinished; the current visible prompt echo remains.
+Pre-history compaction queue teardown retains exact not-sent occurrences without
+replaying input. Pending-tail labels and restart persistence remain unfinished;
+the current visible prompt echo remains.
 Guidance to an already retained blocked task stays on that task; it does not
 resume a human pause, grant approval, wake a mail-only wait or queue a second turn.
 

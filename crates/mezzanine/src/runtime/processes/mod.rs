@@ -4836,7 +4836,7 @@ impl RuntimeSessionService {
         }
         self.abort_external_editor_session(pane_id)?;
         self.cancel_current_agent_compaction_task(pane_id);
-        let _ = self.take_agent_compaction_steering(pane_id);
+        self.discard_agent_compaction_steering(pane_id);
         self.agent.cancel_agent_command(pane_id);
         self.presentation.remove_completion_attention(pane_id);
         self.presentation.remove_agent_presentation_state(pane_id);

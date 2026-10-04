@@ -555,6 +555,8 @@ pub(crate) struct RuntimeAgentComponent {
     pending_deferred_steering: BTreeMap<(String, String, u64), Vec<steering::Receipt>>,
     /// Authenticated plain-text prompts accepted during manual compaction.
     agent_compaction_steering: BTreeMap<String, Vec<steering::Deferred>>,
+    /// Bounded terminal evidence for pre-history compaction occurrences.
+    settled_compaction_steering: BTreeMap<(String, String, u64), Vec<steering::Receipt>>,
     /// Model-backed compaction tasks waiting for provider dispatch.
     pending_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
     /// In-flight compaction tasks retained by pane and generation until each
@@ -1054,6 +1056,10 @@ impl RuntimeAgentComponent {
                 command,
                 RuntimeAgentCommandLifecyclePhase::Cancelled,
             );
+        }
+        let queued = std::mem::take(&mut self.agent_compaction_steering);
+        for (pane, entries) in queued {
+            self.settle_compaction_steering_entries(&pane, entries);
         }
         count
     }

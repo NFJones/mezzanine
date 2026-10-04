@@ -719,7 +719,7 @@ impl RuntimeSessionService {
                     .map(|membership| membership.scope_id()),
             )?;
             if conversation_replaced {
-                let _ = self.take_agent_compaction_steering(pane_id);
+                self.discard_agent_compaction_steering(pane_id);
                 self.clear_received_peer_message_presentations_for_conversation(
                     pane_id,
                     &previous_session.session_id,
