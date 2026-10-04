@@ -707,6 +707,13 @@ Pane templates support `session.id`, `window.id`, `window.index`, `pane.id`,
 | `theme.aliases.<alias>` | map value | see below | Alias to `#rgb` or `#rrggbb`. |
 | `theme.colors.<slot>` | map value | see below | UI color slot set to a hex color or alias. |
 
+`set-theme` validates and stages complete aliases/color slots before persistence.
+A precommit write failure leaves live layers unchanged. If publication is already
+confirmed, later apply/event failure remains an error but reports actual persisted
+and effective state; live reconciliation does not replay the write. Unknown write
+outcomes are not reported as unchanged. The agent `theme.active` action uses the
+same boundary and retains partial-effect evidence on failure.
+
 Default aliases:
 
 | Alias | Default declaration | Description |

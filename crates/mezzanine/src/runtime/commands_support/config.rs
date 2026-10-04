@@ -390,13 +390,92 @@ pub(crate) fn runtime_set_theme_command(
     let definition = runtime_theme_definition_for_selection(service, theme)?;
     let mutations = runtime_theme_config_mutations(theme, &definition)?;
     let persist_plan = runtime_plan_theme_persistence(service, &mutations)?;
-    let live_plan = runtime_apply_theme_live_override(service, &mutations)?;
-    let persist_report = runtime_persist_theme_plan(service, persist_plan)?;
-    let report = service.apply_runtime_config_layers()?;
-    service.append_lifecycle_event(
+    let previous_layers = service.integration.config_layers().to_vec();
+    let live_plan = runtime_plan_theme_live_override(service, &mutations)?;
+    // Preserve the outgoing immutable catalog while the old policy is still
+    // installed. Neither a committed write nor recovery may bypass this gate.
+    service.preserve_outgoing_agent_action_catalogs()?;
+    #[cfg(test)]
+    if service.integration.take_theme_selection_fault("persist") {
+        return Err(MezError::config("injected theme persistence failure"));
+    }
+    let persist_report = match runtime_persist_theme_plan(service, persist_plan.as_ref()) {
+        Ok(report) => report,
+        Err(error) => {
+            // The atomic writer may fail after rename (for example chmod).
+            // Read the exact destination before claiming that nothing changed;
+            // never overwrite a concurrent writer to manufacture rollback.
+            let Some(plan) = persist_plan.as_ref() else {
+                return Err(error);
+            };
+            return match fs::read_to_string(&plan.path) {
+                Ok(text) if text == plan.text => {
+                    runtime_store_primary_config_text(
+                        service,
+                        plan.path.clone(),
+                        plan.format,
+                        text,
+                    );
+                    runtime_store_live_override_plan(service, &live_plan.text);
+                    Err(runtime_theme_committed_failure(
+                        service,
+                        "persistence",
+                        error,
+                    ))
+                }
+                Ok(text) if text == plan.previous_text => Err(error),
+                _ => Err(MezError::config(format!(
+                    "theme selection persistence outcome unknown; runtime unchanged; no write replay: {error}"
+                )).with_config_mutation_failure(crate::error::ConfigMutationFailureEvidence {
+                    persisted: None, live_state: "unchanged", effective_theme: service.ui_theme().name.clone(),
+                })),
+            };
+        }
+    };
+    runtime_store_live_override_plan(service, &live_plan.text);
+    let application = runtime_apply_selected_theme(service);
+    let report = match application {
+        Ok(report) => report,
+        Err(error) if persist_report.persisted => {
+            return Err(runtime_theme_committed_failure(
+                service,
+                "runtime_apply",
+                error,
+            ));
+        }
+        Err(error) => {
+            service.integration.replace_config_layers(previous_layers);
+            return match service.restore_runtime_config_layers_without_catalog_freeze() {
+                Ok(_) => Err(error),
+                Err(restore) => Err(MezError::config(format!(
+                    "theme selection unpersisted apply failed: {error}; runtime restoration failed: {restore}"
+                ))),
+            };
+        }
+    };
+    #[cfg(test)]
+    if service.integration.take_theme_selection_fault("event") {
+        return Err(MezError::config(format!(
+            "theme selection applied; persisted={}; event publication failed: injected theme event failure",
+            persist_report.persisted
+        )).with_config_mutation_failure(crate::error::ConfigMutationFailureEvidence {
+            persisted: Some(persist_report.persisted), live_state: "applied", effective_theme: service.ui_theme().name.clone(),
+        }));
+    }
+    if let Err(error) = service.append_lifecycle_event(
         EventKind::ConfigChanged,
         runtime_config_apply_event_payload("terminal/command:set-theme", &report),
-    )?;
+    ) {
+        return Err(MezError::config(format!(
+            "theme selection applied; persisted={}; event publication failed: {error}",
+            persist_report.persisted
+        ))
+        .with_config_mutation_failure(crate::error::ConfigMutationFailureEvidence {
+            persisted: Some(persist_report.persisted),
+            live_state: "applied",
+            effective_theme: service.ui_theme().name.clone(),
+        }));
+    }
     let persisted_path = persist_report
         .path
         .as_ref()
@@ -432,6 +511,8 @@ struct RuntimeConfigMutationBatch {
 struct RuntimeThemePersistencePlan {
     /// Primary config file to rewrite.
     path: PathBuf,
+    /// Exact precommit text, used only to classify a failed writer's boundary.
+    previous_text: String,
     /// Config format inferred from the primary file extension.
     format: ConfigFormat,
     /// Final validated primary config text.
@@ -583,6 +664,16 @@ fn runtime_apply_theme_live_override(
     service: &mut RuntimeSessionService,
     mutations: &[ConfigMutation],
 ) -> Result<RuntimeConfigMutationBatch> {
+    let batch = runtime_plan_theme_live_override(service, mutations)?;
+    runtime_store_live_override_plan(service, &batch.text);
+    Ok(batch)
+}
+
+/// Validates candidate live text without installing any override.
+fn runtime_plan_theme_live_override(
+    service: &RuntimeSessionService,
+    mutations: &[ConfigMutation],
+) -> Result<RuntimeConfigMutationBatch> {
     let current_text = service
         .integration
         .config_layers()
@@ -593,14 +684,12 @@ fn runtime_apply_theme_live_override(
         })
         .map(|layer| layer.text.as_str())
         .unwrap_or("");
-    let batch = runtime_plan_config_mutations(
+    runtime_plan_config_mutations(
         ConfigFormat::Toml,
         current_text,
         ConfigScope::LiveOverride,
         mutations,
-    )?;
-    runtime_store_live_override_plan(service, &batch.text);
-    Ok(batch)
+    )
 }
 
 /// Plans a persisted primary-config update for a selected theme.
@@ -616,6 +705,7 @@ fn runtime_plan_theme_persistence(
     let batch = runtime_plan_config_mutations(format, &text, ConfigScope::Primary, mutations)?;
     Ok(Some(RuntimeThemePersistencePlan {
         path,
+        previous_text: text,
         format,
         text: batch.text,
         changed: batch.changed,
@@ -627,7 +717,7 @@ fn runtime_plan_theme_persistence(
 /// layer text into the live runtime service.
 fn runtime_persist_theme_plan(
     service: &mut RuntimeSessionService,
-    plan: Option<RuntimeThemePersistencePlan>,
+    plan: Option<&RuntimeThemePersistencePlan>,
 ) -> Result<RuntimeThemePersistenceReport> {
     let Some(plan) = plan else {
         return Ok(RuntimeThemePersistenceReport {
@@ -641,12 +731,51 @@ fn runtime_persist_theme_plan(
     if plan.changed {
         persist_config_text(&plan.path, ConfigScope::Primary, &plan.text)?;
     }
+    #[cfg(test)]
+    if service.integration.take_theme_selection_fault("post_write") {
+        return Err(MezError::config("injected theme post-write failure"));
+    }
     runtime_store_primary_config_text(service, plan.path.clone(), plan.format, plan.text.clone());
     Ok(RuntimeThemePersistenceReport {
         persisted: true,
         changed: plan.changed,
         reload_required: plan.reload_required,
-        path: Some(plan.path),
+        path: Some(plan.path.clone()),
+    })
+}
+
+/// Applies candidate live configuration with a task-local test fault boundary.
+fn runtime_apply_selected_theme(
+    service: &mut RuntimeSessionService,
+) -> Result<crate::runtime::RuntimeConfigApplyReport> {
+    #[cfg(test)]
+    if service.integration.take_theme_selection_fault("apply") {
+        return Err(MezError::config("injected theme runtime apply failure"));
+    }
+    service.apply_runtime_config_layers()
+}
+
+/// Reconciles committed configuration without retrying the durable mutation.
+fn runtime_theme_committed_failure(
+    service: &mut RuntimeSessionService,
+    phase: &str,
+    error: MezError,
+) -> MezError {
+    let reconciliation = service.apply_runtime_config_layers();
+    let live_state = if reconciliation.is_ok() {
+        "reconciled"
+    } else {
+        "reconciliation_failed"
+    };
+    let runtime = match reconciliation {
+        Ok(_) => "reconciled".to_string(),
+        Err(error) => format!("reconciliation_failed:{error}"),
+    };
+    MezError::config(format!(
+        "theme selection partial outcome: phase={phase}; persisted=true; runtime={runtime}; effective_theme={}; no write replay; original={error}",
+        service.ui_theme().name
+    )).with_config_mutation_failure(crate::error::ConfigMutationFailureEvidence {
+        persisted: Some(true), live_state, effective_theme: service.ui_theme().name.clone(),
     })
 }
 

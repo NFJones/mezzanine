@@ -816,6 +816,24 @@ impl RuntimeSessionService {
                     signature,
                     error.message(),
                 ));
+                if let Some(evidence) = error.config_mutation_failure() {
+                    let mut payload: serde_json::Value = serde_json::from_str(
+                        result.structured_content_json.as_deref().unwrap_or("{}"),
+                    )
+                    .map_err(|error| {
+                        MezError::invalid_state(format!("theme failure evidence encoding: {error}"))
+                    })?;
+                    let change = &mut payload["config_change"];
+                    change["validation"] = serde_json::json!({"state":"succeeded"});
+                    change["changed"] = serde_json::Value::Null;
+                    change["persistence"] = serde_json::json!({"state": match evidence.persisted {
+                        Some(true) => "persisted", Some(false) => "not_persisted", None => "unknown",
+                    }});
+                    change["live_application"] = serde_json::json!({"state":evidence.live_state});
+                    change["effective_theme"] = serde_json::json!(evidence.effective_theme);
+                    change["automatic_replay"] = serde_json::json!("forbidden");
+                    result.structured_content_json = Some(payload.to_string());
+                }
                 Ok(result)
             }
         }

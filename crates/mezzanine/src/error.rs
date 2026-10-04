@@ -501,6 +501,17 @@ pub enum MezErrorKind {
     NotImplemented,
 }
 
+/// Confirmed or uncertain configuration effects retained across a failed operation.
+#[derive(Debug)]
+pub(crate) struct ConfigMutationFailureEvidence {
+    /// Durable destination outcome; absence means it could not be established.
+    pub(crate) persisted: Option<bool>,
+    /// Live settlement classification, independent of operation success.
+    pub(crate) live_state: &'static str,
+    /// Actual effective theme after reconciliation, not the requested selector.
+    pub(crate) effective_theme: String,
+}
+
 /// Carries Mez Error state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -547,6 +558,8 @@ pub struct MezError {
     pane_backend_failure: bool,
     /// Bounded native sandbox lifecycle diagnostics, separate from provider errors.
     sandbox_lifecycle_failure: Option<Box<crate::security::sandbox::SandboxLifecycleFailure>>,
+    /// Typed partial config effects; diagnostics alone never determine settlement.
+    config_mutation_failure: Option<Box<ConfigMutationFailureEvidence>>,
 }
 
 impl MezError {
@@ -560,6 +573,7 @@ impl MezError {
             kind,
             message: message.into(),
             io_kind: None,
+            config_mutation_failure: None,
             provider_raw_text: None,
             provider_failure_json: None,
             provider_output_limit_state: None,
@@ -595,6 +609,20 @@ impl MezError {
     /// on duplicated control-flow logic.
     pub fn config(message: impl Into<String>) -> Self {
         Self::new(MezErrorKind::Config, message)
+    }
+
+    /// Attaches config effect evidence without authorizing automatic replay.
+    pub(crate) fn with_config_mutation_failure(
+        mut self,
+        evidence: ConfigMutationFailureEvidence,
+    ) -> Self {
+        self.config_mutation_failure = Some(Box::new(evidence));
+        self
+    }
+
+    /// Returns configuration settlement evidence independently of diagnostics.
+    pub(crate) fn config_mutation_failure(&self) -> Option<&ConfigMutationFailureEvidence> {
+        self.config_mutation_failure.as_deref()
     }
 
     /// Runs the conflict operation for this subsystem.
@@ -770,6 +798,7 @@ impl From<io::Error> for MezError {
             kind: MezErrorKind::Io,
             message: error.to_string(),
             io_kind: Some(error.kind()),
+            config_mutation_failure: None,
             provider_raw_text: None,
             provider_failure_json: None,
             provider_output_limit_state: None,

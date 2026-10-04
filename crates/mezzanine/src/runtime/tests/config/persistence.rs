@@ -3,6 +3,204 @@
 use super::*;
 use mez_mux::input::{TerminalInputClassification, classify_terminal_input};
 
+/// A committed theme must not adopt broader on-disk action policy after the
+/// outgoing conversation catalog fails its durable checkpoint. Paid/persisted
+/// theme work must not become a reason to bypass immutable action authority.
+#[test]
+fn runtime_theme_selection_catalog_checkpoint_failure_cannot_broaden_actions() {
+    let root = temp_root("theme-catalog-freeze");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    let narrow = "[agents]\nenabled_actions = [\"say\"]\n";
+    fs::write(&path, narrow).unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".into(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: narrow.into(),
+        }])
+        .unwrap();
+    let store = AgentTranscriptStore::new(root.join("transcripts"));
+    service.set_agent_transcript_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    fs::write(
+        &path,
+        "[agents]\nenabled_actions = [\"say\", \"shell_command\"]\n",
+    )
+    .unwrap();
+    store.fail_next_agent_session_metadata_write();
+    assert!(
+        service
+            .execute_terminal_command(&primary, "set-theme dracula")
+            .is_err()
+    );
+    let captured = service
+        .capture_agent_session_allowed_actions_for_pane("%1")
+        .unwrap();
+    assert_eq!(captured, mez_agent::AllowedActionSet::say_only());
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// The real private-config writer rejects a symlink destination. That rejection
+/// must preserve the original file and live layers, without a latent theme override.
+#[test]
+fn runtime_theme_selection_writer_rejection_preserves_state() {
+    let root = temp_root("theme-writer-rejection");
+    fs::create_dir_all(&root).unwrap();
+    let target = root.join("target.toml");
+    let path = root.join("config.toml");
+    let text = "# preserve target\n[history]\nlines = 9\n";
+    fs::write(&target, text).unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".into(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: text.into(),
+        }])
+        .unwrap();
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    let layers = service.integration.config_layers().to_vec();
+    let theme = service.ui_theme().clone();
+    let error = service
+        .execute_terminal_command(&primary, "set-theme dracula")
+        .unwrap_err();
+    assert!(error.message().contains("symlink"), "{error}");
+    assert_eq!(service.integration.config_layers(), layers);
+    assert_eq!(service.ui_theme(), &theme);
+    assert_eq!(fs::read_to_string(&target).unwrap(), text);
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A postcommit apply or event failure remains an error even when the selected
+/// theme is already durable and reconciled. Never report an unchanged outcome
+/// or replay the write; preserve unrelated authored settings.
+#[test]
+fn runtime_theme_selection_committed_failure_reports_actual_state() {
+    for phase in ["post_write", "apply", "event"] {
+        let root = temp_root("theme-committed-failure");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        let text = "# authored settings\n[history]\nlines = 9\n";
+        fs::write(&path, text).unwrap();
+        let mut service = test_runtime_service();
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service
+            .replace_config_layers(vec![ConfigLayer {
+                name: "primary".into(),
+                path: Some(path.clone()),
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: text.into(),
+            }])
+            .unwrap();
+        service.integration.set_theme_selection_fault(phase);
+        let error = service
+            .execute_terminal_command(&primary, "set-theme dracula")
+            .unwrap_err();
+        assert!(error.message().contains("persisted=true"), "{error}");
+        assert!(error.message().contains("injected theme"), "{error}");
+        assert_eq!(service.ui_theme().name, "dracula");
+        let persisted = fs::read_to_string(&path).unwrap();
+        assert!(persisted.contains("# authored settings"));
+        assert!(persisted.contains("active = \"dracula\""));
+        assert_eq!(service.terminal_history_limit(), 9);
+        assert_eq!(
+            service
+                .integration
+                .config_layers()
+                .iter()
+                .find(|layer| layer.path.as_ref() == Some(&path))
+                .unwrap()
+                .text,
+            persisted
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// Without a persistence destination a failed live apply restores the complete
+/// previous layer set and effective theme; it cannot leave a latent override.
+#[test]
+fn runtime_theme_selection_unpersisted_apply_failure_restores_state() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let layers = service.integration.config_layers().to_vec();
+    let theme = service.ui_theme().clone();
+    service.integration.set_theme_selection_fault("apply");
+    assert!(
+        service
+            .execute_terminal_command(&primary, "set-theme dracula")
+            .is_err()
+    );
+    assert_eq!(service.integration.config_layers(), layers);
+    assert_eq!(service.ui_theme(), &theme);
+}
+
+/// A dedicated set-theme precommit failure must not leave candidate overrides
+/// hidden in live layers, ready to apply during a later unrelated reload.
+#[test]
+fn runtime_theme_selection_precommit_failure_restores_layers() {
+    let root = temp_root("theme-precommit");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    let text = "# authored settings\n[history]\nlines = 9\n";
+    fs::write(&path, text).unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".into(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: text.into(),
+        }])
+        .unwrap();
+    let before = service.integration.config_layers().to_vec();
+    let theme = service.ui_theme().clone();
+    service.integration.set_theme_selection_fault("persist");
+    assert!(
+        service
+            .execute_terminal_command(&primary, "set-theme dracula")
+            .is_err()
+    );
+    assert_eq!(service.integration.config_layers(), before);
+    assert_eq!(service.ui_theme(), &theme);
+    assert_eq!(fs::read_to_string(path).unwrap(), text);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// A later successful accounting append and query recovery cannot prove that
 /// an earlier failed write was recovered. Keep its bounded gap diagnostic even
 /// if another diagnostic or repository attachment occurs in between.

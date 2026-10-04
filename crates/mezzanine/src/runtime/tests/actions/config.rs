@@ -3,6 +3,60 @@
 use super::*;
 use crate::runtime::ActiveTurnSleepInhibition;
 
+/// A failed postcommit theme action must report persisted/applied evidence,
+/// not the generic failed-validation/not-applied shape. The action stays failed
+/// so the original error is visible and must not authorize automatic replay.
+#[test]
+fn runtime_config_change_theme_partial_failure_retains_effect_evidence() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let root = temp_root("theme-action-partial");
+    service.set_config_root(root.clone());
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "theme-partial".into(),
+        conversation_id: "conversation-1".into(),
+        agent_id: "agent-%1".into(),
+        pane_id: "%1".into(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".into(),
+        model_profile: "default".into(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        initial_capability: None,
+        state: AgentTurnState::Running,
+    };
+    let action = mez_agent::AgentAction {
+        id: "theme-partial".into(),
+        payload: mez_agent::AgentActionPayload::ConfigChange {
+            setting_path: "theme.active".into(),
+            operation: "set".into(),
+            value: Some("dracula".into()),
+        },
+    };
+    service.integration.set_theme_selection_fault("apply");
+    let result = service
+        .execute_config_change_action_for_turn(&turn, &action, &primary, "approved")
+        .unwrap();
+    assert_eq!(result.status, ActionStatus::Failed);
+    assert_eq!(service.ui_theme().name, "dracula");
+    let evidence: serde_json::Value =
+        serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        evidence["config_change"]["persistence"]["state"],
+        "persisted"
+    );
+    assert_eq!(
+        evidence["config_change"]["live_application"]["state"],
+        "reconciled"
+    );
+    assert_eq!(evidence["config_change"]["automatic_replay"], "forbidden");
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies runtime-owned config changes render with the same stylized
 /// normal-mode action line as other non-shell actions.
 ///

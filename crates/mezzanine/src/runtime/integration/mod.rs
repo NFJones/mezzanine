@@ -59,6 +59,9 @@ pub(crate) struct RuntimeIntegrationComponent {
     remote_trust_store: Option<RemoteTrustStore>,
     remote_endpoint_addr: tokio::sync::watch::Sender<Option<iroh::EndpointAddr>>,
     remote_iroh_diagnostics: Option<RuntimeIrohDiagnostics>,
+    /// One-shot dedicated theme settlement fault, isolated to this fixture.
+    #[cfg(test)]
+    theme_selection_fault: Option<&'static str>,
     #[cfg(test)]
     config_reload_preparation_started: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
@@ -100,6 +103,8 @@ impl RuntimeIntegrationComponent {
             remote_endpoint_addr,
             remote_iroh_diagnostics: None,
             #[cfg(test)]
+            theme_selection_fault: None,
+            #[cfg(test)]
             config_reload_preparation_started: None,
             #[cfg(test)]
             config_reload_preparation_release: None,
@@ -139,6 +144,22 @@ impl RuntimeIntegrationComponent {
     /// Replaces every active configuration layer atomically.
     pub(crate) fn replace_config_layers(&mut self, layers: Vec<ConfigLayer>) {
         self.config_layers = layers;
+    }
+
+    /// Arms one dedicated theme phase failure without global fixture state.
+    #[cfg(test)]
+    pub(crate) fn set_theme_selection_fault(&mut self, phase: &'static str) {
+        self.theme_selection_fault = Some(phase);
+    }
+
+    /// Consumes the fault only at its exact phase.
+    #[cfg(test)]
+    pub(crate) fn take_theme_selection_fault(&mut self, phase: &str) -> bool {
+        if self.theme_selection_fault != Some(phase) {
+            return false;
+        }
+        self.theme_selection_fault = None;
+        true
     }
 
     /// Installs a deterministic asynchronous reload probe for actor tests.

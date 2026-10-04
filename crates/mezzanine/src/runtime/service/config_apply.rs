@@ -104,6 +104,13 @@ impl RuntimeSessionService {
         self.apply_runtime_config_layers_async().await
     }
 
+    /// Preserves outgoing conversation authority before a separately committed
+    /// configuration operation adopts candidate layers. Failure prevents adoption.
+    pub(crate) fn preserve_outgoing_agent_action_catalogs(&mut self) -> Result<()> {
+        self.freeze_unbound_agent_session_action_catalogs()
+            .map(|_| ())
+    }
+
     /// Freezes every runtime-created session that has not yet issued a model request.
     ///
     /// Agent shell storage deliberately has no runtime configuration dependency.

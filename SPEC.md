@@ -4772,7 +4772,13 @@ slots into the live configuration layer, and MUST persist the same selected
 theme table into the primary user config so future launches see the same
 palette. `set-option theme.active <name>` MUST remain an equivalent lower-level
 live configuration mutation for immediate rendering, but it is not required to
-persist the selected theme to disk. A successful change to the resolved theme
+persist the selected theme to disk. Dedicated theme selection MUST NOT install
+candidate live overrides before persistence succeeds. A failure after confirmed
+disk publication MUST retain the original error, reconcile live state without
+replaying the write, and report persisted/effective state explicitly rather than
+claiming no effects. Uncertain publication MUST remain uncertain. Failed agent
+theme results MUST carry typed partial-effect evidence and forbid automatic replay.
+A successful change to the resolved theme
 or another retained-cell or layout-affecting presentation setting MUST queue an
 immediate full redraw for every attached client. Equivalent resolved settings
 MUST NOT queue a redraw. This redraw MUST restyle Mezzanine-owned surfaces and
