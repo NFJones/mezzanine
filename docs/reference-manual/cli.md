@@ -73,6 +73,13 @@ common engine, not any vendor release. Vendor adapter tasks must supply reviewed
 release-specific artifacts, private launch binding, neutral responses and recovery
 guidance before installation is enabled.
 
+The Codex `0.160.0` component currently projects bounded main-session lifecycle
+identifiers from its released hook schemas. It discards prompt/transcript/tool
+content and child-context events, and does not infer token usage. This pure
+component does not deliver launch capabilities, renew idle leases, install hooks,
+or certify a live Codex process. Its release reference is
+`openai/codex` tag `rust-v0.160.0`, `codex-rs/hooks/schema/generated`.
+
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.

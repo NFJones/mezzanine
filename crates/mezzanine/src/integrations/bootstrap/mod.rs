@@ -9,6 +9,11 @@
 
 #[allow(
     dead_code,
+    reason = "pinned projection awaits launch-bound vendor qualification"
+)]
+pub(crate) mod codex;
+#[allow(
+    dead_code,
     reason = "release-qualified vendor adapters consume the common installer"
 )]
 pub(crate) mod installer;
