@@ -1,7 +1,7 @@
 //! Runtime tests for agent compaction behavior.
 
 use super::*;
-use crate::runtime::current_unix_seconds;
+use crate::runtime::{current_unix_seconds, execute_runtime_agent_prompt_history_work};
 use mez_agent::messaging::{Envelope, MessageScope};
 
 /// Valid legacy history after a durable range must continue as private
@@ -6203,6 +6203,50 @@ fn runtime_manual_compaction_queues_steering_and_blocks_conversation_mutation() 
     );
     assert!(service.agent_command_is_active("%1"));
     assert!(service.take_agent_compaction_steering("%1").is_empty());
+    assert_eq!(resumed[0].steering_receipts.len(), 2);
+    let ids = resumed[0]
+        .steering_receipts
+        .iter()
+        .map(|receipt| receipt.id.clone())
+        .collect::<Vec<_>>();
+    assert_ne!(ids[0], ids[1]);
+    assert!(service.claim_agent_prompt_history_preparation(&resumed[0]));
+    let history = execute_runtime_agent_prompt_history_work(resumed[0].history_work.clone());
+    assert!(
+        service
+            .complete_agent_prompt_history_preparation(&resumed[0], history)
+            .unwrap()
+    );
+    assert!(
+        !service
+            .complete_agent_prompt_history_preparation(
+                &resumed[0],
+                execute_runtime_agent_prompt_history_work(resumed[0].history_work.clone())
+            )
+            .unwrap()
+    );
+    let receipts = service.steering_receipts_for_tests("turn-1");
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|receipt| receipt.id.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    assert_eq!(receipts[0].sequence, receipts[1].sequence);
+    assert!(receipts[0].sequence > 0);
+    let event = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .chronology()
+        .iter()
+        .find(|event| event.sequence().get() == receipts[0].sequence)
+        .unwrap();
+    assert_eq!(
+        event.block().content,
+        "first steering prompt\n\nsecond steering prompt"
+    );
 }
 
 /// Verifies cancelling a real queued compaction releases manual steering on
@@ -6316,13 +6360,16 @@ fn runtime_manual_compaction_steering_does_not_cross_conversation_rebind() {
         .unwrap()
         .session_id
         .clone();
-    service.queue_agent_compaction_steering(
-        "%1",
-        primary.clone(),
-        original_conversation.clone(),
-        service.agent_compaction_epoch("%1"),
-        "private old-conversation instruction".to_string(),
-    );
+    service
+        .queue_agent_compaction_steering(
+            "%1",
+            primary.clone(),
+            original_conversation.clone(),
+            service.agent_compaction_epoch("%1"),
+            "private old-conversation instruction".to_string(),
+            "private old-conversation instruction".to_string(),
+        )
+        .unwrap();
 
     let rebound = service
         .execute_agent_shell_command(&primary, "/new")

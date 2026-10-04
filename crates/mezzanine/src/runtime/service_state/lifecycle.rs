@@ -591,6 +591,8 @@ pub(crate) struct RuntimeAgentPromptHistoryDispatch {
     pub claim_generation: u64,
     /// User prompt committed only after history preparation succeeds.
     pub prompt: String,
+    /// Exact accepted occurrences, bound together to the aggregated prompt event.
+    pub steering_receipts: Vec<crate::runtime::agent::RuntimeSteeringReceipt>,
     /// Immutable compact-memory and durable-transcript worker inputs.
     pub history_work: crate::runtime::control::RuntimeAgentPromptHistoryWork,
     /// Test-only notification emitted when the worker begins preparation.

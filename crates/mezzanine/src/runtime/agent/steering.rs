@@ -5,7 +5,8 @@
 //! Admission uses exact prepared user-event sequences, never text or high-water
 //! guesses. Auxiliary requests cannot acknowledge receipts. Terminal cleanup
 //! settles unconsumed receipts without replaying input or effects. This initial
-//! owner does not cover manual-compaction queues, persistence or log promotion.
+//! owner carries manual-compaction occurrences through history claims, but does
+//! not implement restart persistence or log promotion.
 
 use std::collections::BTreeSet;
 
@@ -43,6 +44,28 @@ pub(crate) struct Receipt {
     pub(crate) display: String,
     /// Local admission or terminal-unconsumed evidence.
     pub(crate) status: Status,
+}
+
+/// Accepted manual-compaction occurrence and its immutable pre-turn owner.
+#[derive(Debug, Clone)]
+pub(crate) struct Deferred {
+    pub(crate) client: mez_core::ids::ClientId,
+    pub(crate) conversation: String,
+    pub(crate) epoch: u64,
+    pub(crate) receipt: Receipt,
+}
+
+impl Receipt {
+    /// Captures a distinct occurrence before canonical binding (sequence zero).
+    pub(super) fn deferred(input: String, display: String) -> Self {
+        Self {
+            id: crate::storage::token_usage::new_token_usage_event_id(),
+            sequence: 0,
+            input,
+            display,
+            status: Status::Pending,
+        }
+    }
 }
 
 /// One immutable turn/conversation/pane owner and its acceptance-ordered receipts.
@@ -96,6 +119,114 @@ impl Receipts {
 }
 
 impl RuntimeSessionService {
+    /// Settles exact pre-turn occurrences once without changing transferred IDs.
+    /// Bounded terminal evidence is not a queue and cannot redispatch input.
+    pub(crate) fn settle_deferred_history_receipts(
+        &mut self,
+        dispatch: &crate::runtime::RuntimeAgentPromptHistoryDispatch,
+    ) {
+        let key = (
+            dispatch.pane_id.clone(),
+            dispatch.conversation_id.clone(),
+            dispatch.claim_generation,
+        );
+        if dispatch.steering_receipts.is_empty()
+            || self.agent.settled_deferred_steering.contains_key(&key)
+        {
+            return;
+        }
+        let transferred: BTreeSet<_> = self
+            .agent
+            .steering_receipts
+            .values()
+            .flat_map(|owner| owner.entries.iter().map(|entry| entry.id.as_str()))
+            .collect();
+        let entries: Vec<_> = dispatch
+            .steering_receipts
+            .iter()
+            .filter(|entry| !transferred.contains(entry.id.as_str()))
+            .map(|entry| {
+                let mut settled = entry.clone();
+                settled.status = Status::NotSent;
+                settled
+            })
+            .collect();
+        if entries.is_empty() {
+            return;
+        }
+        if self.agent.settled_deferred_steering.len() >= OWNER_CAPACITY {
+            self.agent.settled_deferred_steering.pop_first();
+        }
+        self.agent.settled_deferred_steering.insert(key, entries);
+    }
+
+    /// Exposes exact terminal pre-turn evidence for regression fixtures.
+    #[cfg(test)]
+    pub(crate) fn settled_deferred_receipts_for_tests(
+        &self,
+        dispatch: &crate::runtime::RuntimeAgentPromptHistoryDispatch,
+    ) -> &[Receipt] {
+        self.agent
+            .settled_deferred_steering
+            .get(&(
+                dispatch.pane_id.clone(),
+                dispatch.conversation_id.clone(),
+                dispatch.claim_generation,
+            ))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Validates the aggregate receipt budget before committing a new turn.
+    pub(crate) fn check_deferred_steering_receipts(
+        &mut self,
+        turn: &AgentTurnRecord,
+        sequence: u64,
+        entries: &[Receipt],
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let bytes = entries.iter().fold(0usize, |bytes, entry| {
+            bytes
+                .saturating_add(entry.input.len())
+                .saturating_add(entry.display.len())
+        });
+        if entries.len() > CAPACITY
+            || bytes > SOURCE_CAPACITY
+            || sequence == 0
+            || self.agent.steering_receipts.contains_key(&turn.turn_id)
+        {
+            return Err(MezError::invalid_state(
+                "deferred steering receipt budget or owner unavailable",
+            ));
+        }
+        self.check_steering_receipt_capacity(turn, "", "")
+    }
+
+    /// Transfers prevalidated occurrence identities to the aggregate event.
+    /// The actor calls this immediately after turn commit, without interleaving.
+    pub(crate) fn bind_deferred_steering_receipts(
+        &mut self,
+        turn: &AgentTurnRecord,
+        sequence: u64,
+        mut entries: Vec<Receipt>,
+    ) {
+        if entries.is_empty() {
+            return;
+        }
+        for entry in &mut entries {
+            entry.sequence = sequence;
+        }
+        self.agent.steering_receipts.insert(
+            turn.turn_id.clone(),
+            Receipts {
+                turn: turn.clone(),
+                entries,
+                terminal: false,
+            },
+        );
+    }
+
     /// Checks finite receipt capacity before canonical input is committed.
     pub(crate) fn check_steering_receipt_capacity(
         &mut self,

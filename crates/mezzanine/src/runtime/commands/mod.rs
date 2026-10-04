@@ -1391,7 +1391,7 @@ impl RuntimeSessionService {
             cooperation_mode,
             initial_capability,
             initial_model_selection,
-            history,
+            (history, Vec::new()),
         )
     }
 
@@ -1405,6 +1405,22 @@ impl RuntimeSessionService {
         primary_client_id: mez_core::ids::ClientId,
         pane_id: &str,
         prompt: &str,
+    ) -> Result<()> {
+        self.begin_agent_prompt_history_with_receipts(
+            primary_client_id,
+            pane_id,
+            prompt,
+            Vec::new(),
+        )
+    }
+
+    /// Carries accepted compaction occurrences through the exact history claim.
+    fn begin_agent_prompt_history_with_receipts(
+        &mut self,
+        primary_client_id: mez_core::ids::ClientId,
+        pane_id: &str,
+        prompt: &str,
+        steering_receipts: Vec<crate::runtime::agent::RuntimeSteeringReceipt>,
     ) -> Result<()> {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self
@@ -1441,6 +1457,12 @@ impl RuntimeSessionService {
         #[cfg(test)]
         let (prompt_history_preparation_started, prompt_history_preparation_release) =
             self.integration.prompt_history_preparation_probe();
+        // Once queued, this exact command owns the receipts. Optional display
+        // failure must not return them to the compaction queue for duplication.
+        let _ = self.append_agent_status_text_to_terminal_buffer(
+            pane_id,
+            "agent: preparing conversation history",
+        );
         self.presentation.push_pending_agent_prompt_history(
             crate::runtime::RuntimeAgentPromptHistoryDispatch {
                 primary_client_id,
@@ -1451,6 +1473,7 @@ impl RuntimeSessionService {
                 transcript_entries,
                 claim_generation,
                 prompt: prompt.to_string(),
+                steering_receipts,
                 history_work,
                 #[cfg(test)]
                 prompt_history_preparation_started,
@@ -1458,10 +1481,7 @@ impl RuntimeSessionService {
                 prompt_history_preparation_release,
             },
         );
-        self.append_agent_status_text_to_terminal_buffer(
-            pane_id,
-            "agent: preparing conversation history",
-        )
+        Ok(())
     }
 
     /// Resumes authenticated prompts retained while manual compaction owned a pane.
@@ -1481,31 +1501,26 @@ impl RuntimeSessionService {
         let compaction_epoch = self.agent_compaction_epoch(pane_id);
         let steering = steering
             .into_iter()
-            .filter(|(_, _, queued_conversation_id, queued_epoch)| {
-                queued_conversation_id == &conversation_id && *queued_epoch == compaction_epoch
+            .filter(|entry| {
+                entry.conversation == conversation_id && entry.epoch == compaction_epoch
             })
             .collect::<Vec<_>>();
-        let Some((primary_client_id, _, _, _)) = steering.first() else {
+        let Some(first) = steering.first() else {
             return Ok(false);
         };
-        let primary_client_id = primary_client_id.clone();
+        let primary_client_id = first.client.clone();
         let prompt = steering
             .iter()
-            .map(|(_, prompt, _, _)| prompt.as_str())
+            .map(|entry| entry.receipt.input.as_str())
             .collect::<Vec<_>>()
             .join("\n\n");
-        if let Err(error) =
-            self.begin_agent_prompt_history_preparation(primary_client_id, pane_id, &prompt)
-        {
-            for (client_id, prompt, queued_conversation_id, queued_epoch) in steering {
-                self.queue_agent_compaction_steering(
-                    pane_id,
-                    client_id,
-                    queued_conversation_id,
-                    queued_epoch,
-                    prompt,
-                );
-            }
+        if let Err(error) = self.begin_agent_prompt_history_with_receipts(
+            primary_client_id,
+            pane_id,
+            &prompt,
+            steering.iter().map(|entry| entry.receipt.clone()).collect(),
+        ) {
+            self.restore_agent_compaction_steering(pane_id, steering);
             return Err(error);
         }
         Ok(true)
@@ -1531,6 +1546,7 @@ impl RuntimeSessionService {
             && self.agent_compaction_epoch(&dispatch.pane_id) == dispatch.compaction_epoch
             && !self.agent_is_compacting(&dispatch.pane_id);
         if !current {
+            self.settle_deferred_history_receipts(dispatch);
             self.agent.cancel_matching_agent_command(
                 &dispatch.pane_id,
                 &dispatch.conversation_id,
@@ -1538,19 +1554,12 @@ impl RuntimeSessionService {
             );
             return false;
         }
-        let claimed = self.agent.claim_agent_command(
+        // Duplicate claims leave the first worker's exact ownership intact.
+        self.agent.claim_agent_command(
             &dispatch.pane_id,
             &dispatch.conversation_id,
             dispatch.claim_generation,
-        );
-        if !claimed {
-            self.agent.cancel_matching_agent_command(
-                &dispatch.pane_id,
-                &dispatch.conversation_id,
-                dispatch.claim_generation,
-            );
-        }
-        claimed
+        )
     }
 
     /// Commits one worker-prepared prompt history epoch when its admission fence remains current.
@@ -1579,6 +1588,7 @@ impl RuntimeSessionService {
                 dispatch.claim_generation,
             )
         {
+            self.settle_deferred_history_receipts(dispatch);
             self.agent.cancel_matching_agent_command(
                 &dispatch.pane_id,
                 &dispatch.conversation_id,
@@ -1589,6 +1599,7 @@ impl RuntimeSessionService {
         let history = match history {
             Ok(history) => history,
             Err(error) => {
+                self.settle_deferred_history_receipts(dispatch);
                 self.agent.settle_agent_command(
                     &dispatch.pane_id,
                     &dispatch.conversation_id,
@@ -1611,7 +1622,7 @@ impl RuntimeSessionService {
             None,
             None,
             None,
-            history,
+            (history, dispatch.steering_receipts.clone()),
         );
         self.agent.settle_agent_command(
             &dispatch.pane_id,
@@ -1624,6 +1635,7 @@ impl RuntimeSessionService {
             },
         );
         if let Err(error) = &result {
+            self.settle_deferred_history_receipts(dispatch);
             let _ = self.append_agent_error_text_to_terminal_buffer(
                 &dispatch.pane_id,
                 &format!(
@@ -1647,10 +1659,15 @@ impl RuntimeSessionService {
         cooperation_mode: Option<String>,
         initial_capability: Option<mez_agent::AgentCapability>,
         initial_model_selection: Option<mez_agent::AutoSizingSelection>,
-        history: crate::runtime::control::RuntimeAgentTranscriptContext,
+        history: (
+            crate::runtime::control::RuntimeAgentTranscriptContext,
+            Vec<crate::runtime::agent::RuntimeSteeringReceipt>,
+        ),
     ) -> Result<RuntimeAgentPromptTurnStart> {
+        let (history, receipts) = history;
         let crate::runtime::control::RuntimeAgentPromptContext {
             context,
+            prompt_sequence,
             delivered_message_sequence,
             delivered_messages,
             imported_history_sequence_high_water,
@@ -1686,13 +1703,18 @@ impl RuntimeSessionService {
             ));
         };
         self.publish_prepared_runtime_agent_objective(&agent_id, objective.as_deref());
-        let (context, continued_interrupted_turn, active_imported_history_sequence_high_water) =
-            self.prepare_interrupted_agent_continuation_context(
-                &agent_id,
-                &conversation_id,
-                fresh_context,
-                imported_history_sequence_high_water,
-            )?;
+        let (
+            context,
+            continued_interrupted_turn,
+            active_imported_history_sequence_high_water,
+            prompt_sequence,
+        ) = self.prepare_interrupted_agent_continuation_context(
+            &agent_id,
+            &conversation_id,
+            fresh_context,
+            imported_history_sequence_high_water,
+            prompt_sequence,
+        )?;
         context.validate_placement_order()?;
         let turn_id = self.next_agent_turn_id();
         let context_blocks = context.blocks().len();
@@ -1736,7 +1758,9 @@ impl RuntimeSessionService {
                 "injected peer-message user-turn pre-commit failure",
             ));
         }
+        self.check_deferred_steering_receipts(&turn, prompt_sequence.get(), &receipts)?;
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
+        self.bind_deferred_steering_receipts(&turn, prompt_sequence.get(), receipts);
         self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
         self.append_agent_trace_turn_event(
             pane_id,

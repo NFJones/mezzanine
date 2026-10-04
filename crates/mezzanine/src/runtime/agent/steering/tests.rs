@@ -2,6 +2,126 @@
 
 use super::*;
 
+/// Failed history preparation settles the exact accepted occurrences once,
+/// without a canonical turn, input replay, or ordinary admission evidence.
+#[test]
+fn steering_receipts_deferred_history_failure_is_not_sent_once() {
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let primary = service
+        .attach_primary(
+            "primary",
+            true,
+            mez_mux::layout::Size::new(80, 24).unwrap(),
+            120,
+        )
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.mark_agent_compacting_for_tests("%1", 1);
+    for _ in 0..2 {
+        service
+            .execute_agent_shell_command(&primary, "same")
+            .unwrap();
+    }
+    service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    let dispatch = service.take_pending_agent_prompt_history().remove(0);
+    assert!(service.claim_agent_prompt_history_preparation(&dispatch));
+    assert!(!service.claim_agent_prompt_history_preparation(&dispatch));
+    assert!(
+        service
+            .settled_deferred_receipts_for_tests(&dispatch)
+            .is_empty()
+    );
+    assert!(
+        service
+            .complete_agent_prompt_history_preparation(
+                &dispatch,
+                Err(MezError::invalid_state("fixture history failure"))
+            )
+            .is_err()
+    );
+    assert!(
+        !service
+            .complete_agent_prompt_history_preparation(
+                &dispatch,
+                Err(MezError::invalid_state("duplicate failure"))
+            )
+            .unwrap()
+    );
+    let receipts = service.settled_deferred_receipts_for_tests(&dispatch);
+    assert_eq!(receipts.len(), 2);
+    assert_ne!(receipts[0].id, receipts[1].id);
+    assert_eq!(receipts[0].id, dispatch.steering_receipts[0].id);
+    assert!(
+        receipts
+            .iter()
+            .all(|entry| entry.status == Status::NotSent && entry.sequence == 0)
+    );
+    assert!(service.agent_turn_ledger().turns().is_empty());
+    assert!(service.pending_agent_provider_tasks().is_empty());
+}
+
+/// Producer-assigned prompt identity survives equal historical content and
+/// interrupted-context reconstruction. Binding must use the newly appended
+/// occurrence, never the earlier equal-text event or a snapshot high-water.
+#[test]
+fn steering_receipts_prompt_identity_tracks_interrupted_remapping() {
+    let (mut service, turn) = fixture();
+    service
+        .inject_agent_steering_with_display("%1", "same", "same")
+        .unwrap();
+    let previous = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service.retain_interrupted_agent_continuation(&turn);
+    let history = service.runtime_agent_history_epoch_context("%1").unwrap();
+    let prepared = service
+        .agent_context_for_pane_prompt_with_history("%1", "same", true, history)
+        .unwrap();
+    let event = prepared
+        .context
+        .chronology()
+        .iter()
+        .find(|event| event.sequence() == prepared.prompt_sequence)
+        .unwrap();
+    assert_eq!(event.block().content, "same");
+    assert_eq!(
+        event.semantic_kind(),
+        mez_agent::ContextSemanticKind::UserEvent
+    );
+    let (context, continued, _, sequence) = service
+        .prepare_interrupted_agent_continuation_context(
+            &turn.agent_id,
+            &turn.conversation_id,
+            prepared.context,
+            prepared.imported_history_sequence_high_water,
+            prepared.prompt_sequence,
+        )
+        .unwrap();
+    assert!(continued);
+    assert!(sequence.get() > previous);
+    let event = context
+        .chronology()
+        .iter()
+        .find(|event| event.sequence() == sequence)
+        .unwrap();
+    assert_eq!(event.block().content, "same");
+    assert_eq!(
+        context
+            .chronology()
+            .iter()
+            .filter(|event| event.block().content == "same")
+            .count(),
+        2
+    );
+}
+
 /// Creates a normal active turn without a provider or daemon process.
 fn fixture() -> (RuntimeSessionService, AgentTurnRecord) {
     let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();

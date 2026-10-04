@@ -5881,8 +5881,14 @@ claim generation. Preparing or recording a claim, rejected leases and auxiliary
 requests MUST NOT acknowledge input. Admission means local dispatch, not proof
 of remote receipt or cognition. Terminal cleanup MUST settle unconsumed receipts
 without replay. Receipt/source retention MUST be finite; exhaustion MUST reject
-before canonical insertion. This initial ledger does not cover manual-compaction
-queues, restart persistence or pending-log promotion.
+before canonical insertion. Manual-compaction submissions MUST retain distinct
+occurrence IDs and independent display sources through history preparation.
+The existing ordered aggregate prompt MUST bind all joined receipt IDs to its
+producer-assigned event sequence, including interrupted-context remapping.
+Pre-history retries MUST preserve IDs; repeated completion MUST NOT create a
+second turn or overwrite transferred receipts. Failed or stale history work
+MUST retain bounded not-sent evidence without replay. Restart persistence,
+queued teardown recovery and pending-log promotion remain unfinished.
 Guidance submitted to a retained blocked turn MUST remain on that turn rather
 than create a second queued task. Acceptance MUST NOT change scheduler wait or
 blocked ownership, remove human dispatch inhibition, grant approval or wake a

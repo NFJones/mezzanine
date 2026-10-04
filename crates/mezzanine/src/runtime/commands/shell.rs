@@ -571,7 +571,8 @@ impl RuntimeSessionService {
                 conversation_id,
                 self.agent_compaction_epoch(&pane_id),
                 input.to_string(),
-            );
+                display_input.to_string(),
+            )?;
             return Ok(runtime_agent_shell_deferred_command_response_json(
                 &pane_id,
                 input,

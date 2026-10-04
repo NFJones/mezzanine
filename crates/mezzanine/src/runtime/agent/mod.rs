@@ -242,6 +242,7 @@ mod shell_state;
 mod skills;
 mod startup;
 mod steering;
+pub(crate) use steering::Receipt as RuntimeSteeringReceipt;
 mod subagents;
 mod trace;
 mod turn_state;
@@ -548,9 +549,10 @@ pub(crate) struct RuntimeAgentComponent {
     agent_compaction_epochs: BTreeMap<String, u64>,
     /// Bounded exact steering receipts retained through terminal settlement.
     steering_receipts: BTreeMap<String, steering::Receipts>,
+    /// Terminal pre-turn receipt evidence, fenced by exact history command owner.
+    settled_deferred_steering: BTreeMap<(String, String, u64), Vec<steering::Receipt>>,
     /// Authenticated plain-text prompts accepted during manual compaction.
-    agent_compaction_steering:
-        BTreeMap<String, Vec<(mez_core::ids::ClientId, String, String, u64)>>,
+    agent_compaction_steering: BTreeMap<String, Vec<steering::Deferred>>,
     /// Model-backed compaction tasks waiting for provider dispatch.
     pending_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
     /// In-flight compaction tasks retained by pane and generation until each
@@ -1898,20 +1900,27 @@ impl RuntimeSessionService {
         conversation_id: &str,
         fresh: AgentContext,
         imported_history_sequence_high_water: u64,
-    ) -> Result<(AgentContext, bool, u64)> {
+        prompt_sequence: mez_agent::ContextEventSequence,
+    ) -> Result<(AgentContext, bool, u64, mez_agent::ContextEventSequence)> {
         let Some(continuation) = self
             .agent
             .interrupted_agent_continuations
             .get(agent_id)
             .filter(|continuation| continuation.conversation_id == conversation_id)
         else {
-            return Ok((fresh, false, imported_history_sequence_high_water));
+            return Ok((
+                fresh,
+                false,
+                imported_history_sequence_high_water,
+                prompt_sequence,
+            ));
         };
 
         let mut resumed = continuation.context.clone();
         resumed.archive_active_user_prompt()?;
         resumed.replace_stable_slots(fresh.stable_slots().to_vec())?;
         resumed.set_metadata(fresh.metadata().clone());
+        let mut remapped_prompt = None;
         for event in fresh
             .chronology()
             .iter()
@@ -1938,7 +1947,11 @@ impl RuntimeSessionService {
                     if block.source == ContextSourceKind::UserInstruction
                         && block.label == "user prompt" =>
                 {
-                    resumed.append_user_event(block.label.clone(), block.content.clone())?;
+                    let sequence =
+                        resumed.append_user_event(block.label.clone(), block.content.clone())?;
+                    if event.sequence() == prompt_sequence {
+                        remapped_prompt = Some(sequence);
+                    }
                 }
                 semantic => {
                     return Err(MezError::invalid_state(format!(
@@ -1953,6 +1966,9 @@ impl RuntimeSessionService {
             resumed,
             true,
             continuation.imported_history_sequence_high_water,
+            remapped_prompt.ok_or_else(|| {
+                MezError::invalid_state("continued prompt event identity unavailable")
+            })?,
         ))
     }
 
@@ -2585,19 +2601,57 @@ impl RuntimeSessionService {
         conversation_id: String,
         compaction_epoch: u64,
         prompt: String,
+        display: String,
+    ) -> Result<()> {
+        let entries = self.agent.agent_compaction_steering.get(pane_id);
+        let bytes = entries.map_or(0, |entries| {
+            entries.iter().fold(0usize, |bytes, entry| {
+                bytes
+                    .saturating_add(entry.receipt.input.len())
+                    .saturating_add(entry.receipt.display.len())
+            })
+        });
+        if entries.is_some_and(|entries| entries.len() >= 128)
+            || bytes
+                .saturating_add(prompt.len())
+                .saturating_add(display.len())
+                > 1024 * 1024
+        {
+            return Err(MezError::invalid_state(
+                "deferred steering receipt budget exhausted",
+            ));
+        }
+        self.agent
+            .agent_compaction_steering
+            .entry(pane_id.to_string())
+            .or_default()
+            .push(steering::Deferred {
+                client: primary_client_id,
+                conversation: conversation_id,
+                epoch: compaction_epoch,
+                receipt: steering::Receipt::deferred(prompt, display),
+            });
+        Ok(())
+    }
+
+    /// Restores the same occurrences after a failed pre-history admission.
+    pub(crate) fn restore_agent_compaction_steering(
+        &mut self,
+        pane_id: &str,
+        entries: Vec<steering::Deferred>,
     ) {
         self.agent
             .agent_compaction_steering
             .entry(pane_id.to_string())
             .or_default()
-            .push((primary_client_id, prompt, conversation_id, compaction_epoch));
+            .extend(entries);
     }
 
     /// Takes prompts retained during compaction in their accepted order.
     pub(crate) fn take_agent_compaction_steering(
         &mut self,
         pane_id: &str,
-    ) -> Vec<(mez_core::ids::ClientId, String, String, u64)> {
+    ) -> Vec<steering::Deferred> {
         self.agent
             .agent_compaction_steering
             .remove(pane_id)
@@ -2616,8 +2670,10 @@ impl RuntimeSessionService {
             .get(pane_id)
             .into_iter()
             .flatten()
-            .filter(|(_, _, owner, epoch)| owner == conversation_id && *epoch == compaction_epoch)
-            .map(|(_, prompt, _, _)| prompt.clone())
+            .filter(|entry| {
+                entry.conversation == conversation_id && entry.epoch == compaction_epoch
+            })
+            .map(|entry| entry.receipt.input.clone())
             .collect()
     }
 

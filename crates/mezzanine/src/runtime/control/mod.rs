@@ -121,6 +121,8 @@ const AGENT_PLAN_MODE_DISABLED_CONTEXT: &str = "[plan-only mode]\nstate=disabled
 pub(super) struct RuntimeAgentPromptContext {
     /// Complete durable context assembled for the new turn.
     pub(super) context: AgentContext,
+    /// Producer-assigned identity of this exact prompt occurrence.
+    pub(super) prompt_sequence: mez_agent::ContextEventSequence,
     /// Highest unread local-message sequence included in the context.
     pub(super) delivered_message_sequence: Option<mez_agent::messaging::MessageSequence>,
     /// Received deliveries whose pane presentation follows a successful commit.
@@ -430,6 +432,10 @@ impl RuntimeSessionService {
                 },
             );
         }
+        let prompt_index = mez_agent::context_placement_insertion_index(
+            &blocks,
+            mez_agent::ContextPlacement::ConversationAppend,
+        );
         insert_context_block_by_placement(
             &mut blocks,
             ContextBlock::user_event("user prompt", prompt),
@@ -458,8 +464,13 @@ impl RuntimeSessionService {
             .checked_sub(1)
             .and_then(|index| context.chronology().get(index))
             .map_or(0, |event| event.sequence().get());
+        let prompt_sequence = context
+            .metadata_for_block(prompt_index)
+            .and_then(|metadata| metadata.event_sequence())
+            .ok_or_else(|| MezError::invalid_state("prompt event identity unavailable"))?;
         Ok(RuntimeAgentPromptContext {
             context,
+            prompt_sequence,
             delivered_message_sequence,
             delivered_messages,
             imported_history_sequence_high_water,

@@ -65,8 +65,11 @@ Internally, ordinary running-turn steering now has distinct occurrence receipts
 separate from its immediate canonical insertion. Local ordinary request admission
 acknowledges only the exact included user events; preparation, auxiliary requests
 and rejected claims do not. This is not proof that a remote model read the input.
-The receipt component does not yet provide pending-tail labels, manual-compaction
-receipt recovery or restart persistence; the current visible prompt echo remains.
+Manual-compaction submissions retain separate occurrence IDs through history
+preparation and bind together to the existing ordered aggregate prompt event.
+History failure retains not-sent evidence without retrying input. Pending-tail
+labels, queued teardown recovery and restart persistence remain unfinished;
+the current visible prompt echo remains.
 Guidance to an already retained blocked task stays on that task; it does not
 resume a human pause, grant approval, wake a mail-only wait or queue a second turn.
 
