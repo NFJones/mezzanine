@@ -2,6 +2,86 @@
 
 use super::*;
 
+/// Pending occurrences take precedence over bounded terminal recovery history.
+/// Duplicate actor copies project once, while excessive pending pressure rejects
+/// the checkpoint without dropping accepted source or creating execution work.
+#[test]
+fn steering_recovery_projection_preserves_pending_and_deduplicates_transfer() {
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "initial").unwrap();
+    service
+        .inject_agent_steering_with_display("%1", "model input", "pending display")
+        .unwrap();
+    let conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let occurrence = service.steering_receipts_for_tests(&started.turn_id)[0].clone();
+    service.retain_deferred_history_receipts(
+        "%1",
+        &conversation,
+        7,
+        std::slice::from_ref(&occurrence),
+    );
+    let terminal = (0..STEERING_RECOVERY_ENTRIES)
+        .map(|index| SteeringRecoveryReceipt {
+            id: format!("terminal-{index}"),
+            turn_id: None,
+            event_sequence: None,
+            display: "historical display".into(),
+            status: SteeringRecoveryStatus::NotSent,
+        })
+        .collect::<Vec<_>>();
+    service
+        .restore_steering_recovery("%1", &conversation, &terminal)
+        .unwrap();
+    let projected = service
+        .steering_recovery_checkpoint("%1", &conversation)
+        .unwrap();
+    assert_eq!(projected.len(), STEERING_RECOVERY_ENTRIES);
+    assert_eq!(projected[0].id, occurrence.id);
+    assert_eq!(
+        projected[0].turn_id.as_deref(),
+        Some(started.turn_id.as_str())
+    );
+    assert_eq!(projected[0].status, SteeringRecoveryStatus::Pending);
+    assert_eq!(
+        projected
+            .iter()
+            .filter(|entry| entry.id == occurrence.id)
+            .count(),
+        1
+    );
+    let overflow = (0..STEERING_RECOVERY_ENTRIES)
+        .map(|index| {
+            let mut entry = super::super::Receipt::deferred("input".into(), "display".into(), None);
+            entry.id = format!("pending-{index}");
+            entry
+        })
+        .collect::<Vec<_>>();
+    service.retain_deferred_history_receipts("%1", &conversation, 8, &overflow);
+    assert!(
+        service
+            .steering_recovery_checkpoint("%1", &conversation)
+            .is_err()
+    );
+    assert_eq!(
+        service.steering_receipts_for_tests(&started.turn_id)[0],
+        occurrence
+    );
+    assert_eq!(
+        service.agent.pending_deferred_steering[&("%1".into(), conversation, 8)].len(),
+        STEERING_RECOVERY_ENTRIES
+    );
+    assert_eq!(service.agent_turn_ledger().turns().len(), 1);
+}
+
 /// Deferred terminal evidence is published at persistence drain in both direct
 /// and adapter modes. A failed direct publication retains the dirty fence for
 /// a later drain, without recreating a command or resubmitting accepted input.
