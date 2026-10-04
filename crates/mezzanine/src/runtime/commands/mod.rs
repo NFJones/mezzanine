@@ -1412,6 +1412,7 @@ impl RuntimeSessionService {
             prompt,
             Vec::new(),
         )
+        .map(|_| ())
     }
 
     /// Carries accepted compaction occurrences through the exact history claim.
@@ -1421,7 +1422,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         prompt: &str,
         steering_receipts: Vec<crate::runtime::agent::RuntimeSteeringReceipt>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self
             .pending_project_trust_requests_for_agent_work()
@@ -1452,6 +1453,11 @@ impl RuntimeSessionService {
         } else {
             session.transcript_entries
         };
+        if !self.deferred_steering_roots_are_current(pane_id, &steering_receipts) {
+            // Terminal rejection, distinct from retryable trust/hook/capacity
+            // errors: the caller must settle rather than restore these IDs.
+            return Ok(false);
+        }
         self.check_deferred_history_owner_capacity(&steering_receipts)?;
         let claim_generation = self.begin_agent_command_claim(pane_id, &conversation_id)?;
         self.retain_deferred_history_receipts(
@@ -1488,7 +1494,7 @@ impl RuntimeSessionService {
                 prompt_history_preparation_release,
             },
         );
-        Ok(())
+        Ok(true)
     }
 
     /// Resumes authenticated prompts retained while manual compaction owned a pane.
@@ -1509,7 +1515,12 @@ impl RuntimeSessionService {
         let conversation_id = session.session_id.clone();
         let compaction_epoch = self.agent_compaction_epoch(pane_id);
         let (steering, stale): (Vec<_>, Vec<_>) = steering.into_iter().partition(|entry| {
-            entry.conversation == conversation_id && entry.epoch == compaction_epoch
+            entry.conversation == conversation_id
+                && entry.epoch == compaction_epoch
+                && self.deferred_steering_roots_are_current(
+                    pane_id,
+                    std::slice::from_ref(&entry.receipt),
+                )
         });
         self.agent
             .settle_compaction_steering_entries(pane_id, stale);
@@ -1522,16 +1533,23 @@ impl RuntimeSessionService {
             .map(|entry| entry.receipt.input.as_str())
             .collect::<Vec<_>>()
             .join("\n\n");
-        if let Err(error) = self.begin_agent_prompt_history_with_receipts(
+        match self.begin_agent_prompt_history_with_receipts(
             primary_client_id,
             pane_id,
             &prompt,
             steering.iter().map(|entry| entry.receipt.clone()).collect(),
         ) {
-            self.restore_agent_compaction_steering(pane_id, steering);
-            return Err(error);
+            Ok(true) => Ok(true),
+            Ok(false) => {
+                self.agent
+                    .settle_compaction_steering_entries(pane_id, steering);
+                Ok(false)
+            }
+            Err(error) => {
+                self.restore_agent_compaction_steering(pane_id, steering);
+                Err(error)
+            }
         }
-        Ok(true)
     }
 
     /// Claims a queued prompt-history preparation while its actor snapshot remains current.
@@ -1552,7 +1570,11 @@ impl RuntimeSessionService {
             && transcript_entries == Some(dispatch.transcript_entries)
             && self.session.config_generation == dispatch.config_generation
             && self.agent_compaction_epoch(&dispatch.pane_id) == dispatch.compaction_epoch
-            && !self.agent_is_compacting(&dispatch.pane_id);
+            && !self.agent_is_compacting(&dispatch.pane_id)
+            && self.deferred_steering_roots_are_current(
+                &dispatch.pane_id,
+                &dispatch.steering_receipts,
+            );
         if !current {
             self.settle_deferred_history_receipts(dispatch);
             self.agent.cancel_matching_agent_command(
@@ -1590,6 +1612,8 @@ impl RuntimeSessionService {
             || self.session.config_generation != dispatch.config_generation
             || self.agent_compaction_epoch(&dispatch.pane_id) != dispatch.compaction_epoch
             || self.agent_is_compacting(&dispatch.pane_id)
+            || !self
+                .deferred_steering_roots_are_current(&dispatch.pane_id, &dispatch.steering_receipts)
             || !self.agent.agent_command_is_claimed(
                 &dispatch.pane_id,
                 &dispatch.conversation_id,

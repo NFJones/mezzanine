@@ -44,6 +44,8 @@ pub(crate) struct Receipt {
     pub(crate) display: String,
     /// Local admission or terminal-unconsumed evidence.
     pub(crate) status: Status,
+    /// Original root identity, retained unchanged through deferred history work.
+    process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
 }
 
 /// Accepted manual-compaction occurrence and its immutable pre-turn owner.
@@ -57,13 +59,18 @@ pub(crate) struct Deferred {
 
 impl Receipt {
     /// Captures a distinct occurrence before canonical binding (sequence zero).
-    pub(super) fn deferred(input: String, display: String) -> Self {
+    pub(super) fn deferred(
+        input: String,
+        display: String,
+        process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
+    ) -> Self {
         Self {
             id: crate::storage::token_usage::new_token_usage_event_id(),
             sequence: 0,
             input,
             display,
             status: Status::Pending,
+            process,
         }
     }
 }
@@ -126,7 +133,7 @@ impl Receipts {
 
 impl RuntimeSessionService {
     /// Captures an existing root, never treating its unreadable identity as absent.
-    fn steering_process_binding(
+    pub(in crate::runtime) fn steering_process_binding(
         &self,
         pane: &str,
     ) -> Result<Option<crate::runtime::processes::RuntimePaneProcessIdentity>> {
@@ -163,6 +170,23 @@ impl RuntimeSessionService {
     pub(crate) fn discard_agent_compaction_steering(&mut self, pane: &str) {
         let entries = self.take_agent_compaction_steering(pane);
         self.agent.settle_compaction_steering_entries(pane, entries);
+    }
+
+    /// Revalidates original receipt roots without granting fresh binding.
+    pub(crate) fn deferred_steering_roots_are_current(
+        &self,
+        pane: &str,
+        entries: &[Receipt],
+    ) -> bool {
+        if entries.is_empty() {
+            return true;
+        }
+        let Ok(current) = self.steering_process_binding(pane) else {
+            return false;
+        };
+        entries
+            .iter()
+            .all(|entry| Self::steering_process_matches(entry.process.as_ref(), current.as_ref()))
     }
 
     /// Rejects excess history receipt ownership before creating a command.
@@ -231,6 +255,11 @@ impl RuntimeSessionService {
         if entries.is_empty() {
             return Ok(());
         }
+        if !self.deferred_steering_roots_are_current(&turn.pane_id, entries) {
+            return Err(MezError::conflict(
+                "deferred steering pane incarnation changed",
+            ));
+        }
         let bytes = entries.iter().fold(0usize, |bytes, entry| {
             bytes
                 .saturating_add(entry.input.len())
@@ -245,7 +274,23 @@ impl RuntimeSessionService {
                 "deferred steering receipt budget or owner unavailable",
             ));
         }
-        self.check_steering_receipt_capacity(turn, "", "")
+        self.check_steering_receipt_capacity(turn, "", "")?;
+        // Capacity reservation observes the kernel again. Actor serialization
+        // cannot prevent replacement between those observations; never adopt
+        // that replacement as the originating receipt's owner.
+        let original = entries[0].process.as_ref();
+        let matches = self
+            .agent
+            .steering_receipts
+            .get(&turn.turn_id)
+            .is_some_and(|owner| Self::steering_process_matches(original, owner.process.as_ref()));
+        if !matches {
+            self.agent.steering_receipts.remove(&turn.turn_id);
+            return Err(MezError::conflict(
+                "deferred steering pane incarnation changed",
+            ));
+        }
+        Ok(())
     }
 
     /// Transfers prevalidated occurrence identities to the aggregate event.
@@ -352,6 +397,7 @@ impl RuntimeSessionService {
                 input: input.into(),
                 display: display.into(),
                 status: Status::Pending,
+                process: owner.process.clone(),
             });
         }
     }

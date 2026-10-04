@@ -2,6 +2,182 @@
 
 use super::*;
 
+/// Kernel identity can change between observations within one actor turn.
+/// Final transfer must not reserve a replacement-root owner, and failed root
+/// admission must settle rather than restore the original queue as pending.
+#[test]
+fn steering_receipts_successive_root_observations_cannot_rebind_or_restore() {
+    use crate::runtime::processes::{
+        RuntimePaneProcessIdentityInjection as Injection, RuntimePaneProcessIdentityUnavailable,
+    };
+    for phase in ["transfer", "admission-replaced", "admission-unavailable"] {
+        let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+        let primary = service
+            .attach_primary(
+                "primary",
+                true,
+                mez_mux::layout::Size::new(80, 24).unwrap(),
+                120,
+            )
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service.start_initial_pane_process(Some("cat")).unwrap();
+        let conversation = service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        let epoch = service.agent_compaction_epoch("%1");
+        service
+            .queue_agent_compaction_steering(
+                "%1",
+                primary,
+                conversation.clone(),
+                epoch,
+                "accepted".into(),
+                "display".into(),
+            )
+            .unwrap();
+        let entry = service.agent.agent_compaction_steering["%1"][0].clone();
+        let original = entry.receipt.process.as_ref().unwrap();
+        let identity = |start_token| Injection::Identity {
+            role: original.role,
+            generation: original.generation,
+            process_id: original.process_id,
+            start_token,
+            executable_path: original.executable_path.clone(),
+            live_start_token: None,
+        };
+        service.inject_pane_process_identity_for_tests("%1", identity(original.start_token));
+        service.inject_pane_process_identity_for_tests(
+            "%1",
+            if phase == "admission-unavailable" {
+                Injection::Unavailable(RuntimePaneProcessIdentityUnavailable::ExecutableUnreadable)
+            } else {
+                identity(original.start_token + 1)
+            },
+        );
+        if phase == "transfer" {
+            let turn = AgentTurnRecord {
+                turn_id: "transfer-test".into(),
+                conversation_id: conversation,
+                agent_id: "agent-%1".into(),
+                pane_id: "%1".into(),
+                trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+                started_at_unix_seconds: 1,
+                deadline_at_unix_millis: 0,
+                policy_profile: "runtime".into(),
+                model_profile: "default".into(),
+                parent_turn_id: None,
+                state: mez_agent::AgentTurnState::Queued,
+                cooperation_mode: None,
+                initial_capability: None,
+            };
+            let result = service.check_deferred_steering_receipts(&turn, 1, &[entry.receipt]);
+            service.terminate_all_pane_processes().unwrap();
+            assert!(result.is_err());
+            assert!(!service.agent.steering_receipts.contains_key(&turn.turn_id));
+        } else {
+            let result = service.resume_agent_compaction_steering("%1");
+            service.terminate_all_pane_processes().unwrap();
+            assert!(result.is_ok_and(|started| !started));
+            assert!(service.take_agent_compaction_steering("%1").is_empty());
+            let settled =
+                &service.agent.settled_compaction_steering[&("%1".into(), conversation, epoch)];
+            assert_eq!(settled[0].id, entry.receipt.id);
+            assert_eq!(settled[0].status, Status::NotSent);
+            assert!(service.take_pending_agent_prompt_history().is_empty());
+        }
+    }
+}
+
+/// Deferred guidance keeps its original root through queue release, history
+/// claim and completion. A replacement must settle the same not-sent occurrence
+/// without a new turn, even if conversation and command ownership still match.
+#[test]
+fn steering_receipts_deferred_root_replacement_fences_each_transition() {
+    use crate::runtime::processes::RuntimePaneProcessIdentityInjection;
+    for phase in ["queue", "claim", "complete", "unstarted"] {
+        let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+        let primary = service
+            .attach_primary(
+                "primary",
+                true,
+                mez_mux::layout::Size::new(80, 24).unwrap(),
+                120,
+            )
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        if phase != "unstarted" {
+            service.start_initial_pane_process(Some("cat")).unwrap();
+        }
+        service.mark_agent_compacting_for_tests("%1", 1);
+        service
+            .execute_agent_shell_command(&primary, "accepted guidance")
+            .unwrap();
+        let entry = service.agent.agent_compaction_steering["%1"][0].clone();
+        let replacement = entry.receipt.process.as_ref().map(|original| {
+            RuntimePaneProcessIdentityInjection::Identity {
+                role: original.role,
+                generation: original.generation,
+                process_id: original.process_id,
+                start_token: original.start_token + 1,
+                executable_path: original.executable_path.clone(),
+                live_start_token: None,
+            }
+        });
+        if phase == "queue" {
+            service.inject_pane_process_identity_for_tests("%1", replacement.unwrap());
+            service
+                .execute_agent_shell_command(&primary, "/stop")
+                .unwrap();
+            assert!(service.take_pending_agent_prompt_history().is_empty());
+            let settled = &service.agent.settled_compaction_steering
+                [&("%1".into(), entry.conversation, entry.epoch)];
+            assert_eq!(settled[0].id, entry.receipt.id);
+            assert_eq!(settled[0].status, Status::NotSent);
+        } else {
+            service
+                .execute_agent_shell_command(&primary, "/stop")
+                .unwrap();
+            let dispatch = service.take_pending_agent_prompt_history().remove(0);
+            if phase == "complete" {
+                assert!(service.claim_agent_prompt_history_preparation(&dispatch));
+            }
+            if phase == "unstarted" {
+                service.start_initial_pane_process(Some("cat")).unwrap();
+            } else {
+                service.inject_pane_process_identity_for_tests("%1", replacement.unwrap());
+            }
+            if phase == "complete" {
+                let history = crate::runtime::execute_runtime_agent_prompt_history_work(
+                    dispatch.history_work.clone(),
+                );
+                assert!(
+                    !service
+                        .complete_agent_prompt_history_preparation(&dispatch, history)
+                        .unwrap()
+                );
+            } else {
+                assert!(!service.claim_agent_prompt_history_preparation(&dispatch));
+            }
+            let settled = service.settled_deferred_receipts_for_tests(&dispatch);
+            assert_eq!(settled[0].id, entry.receipt.id);
+            assert_eq!(settled[0].status, Status::NotSent);
+        }
+        assert!(service.agent_turn_ledger().turns().is_empty());
+        assert!(service.pending_agent_provider_tasks().is_empty());
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
 /// A readable foreground fallback cannot establish an unreadable pane root.
 /// Reject the first occurrence before reserving an owner or inserting input.
 #[test]

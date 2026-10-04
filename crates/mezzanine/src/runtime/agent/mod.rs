@@ -2639,6 +2639,7 @@ impl RuntimeSessionService {
         prompt: String,
         display: String,
     ) -> Result<()> {
+        let process = self.steering_process_binding(pane_id)?;
         let entries = self.agent.agent_compaction_steering.get(pane_id);
         let bytes = entries.map_or(0, |entries| {
             entries.iter().fold(0usize, |bytes, entry| {
@@ -2665,7 +2666,7 @@ impl RuntimeSessionService {
                 client: primary_client_id,
                 conversation: conversation_id,
                 epoch: compaction_epoch,
-                receipt: steering::Receipt::deferred(prompt, display),
+                receipt: steering::Receipt::deferred(prompt, display, process),
             });
         Ok(())
     }

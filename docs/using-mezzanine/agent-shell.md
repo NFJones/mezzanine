@@ -75,6 +75,8 @@ replaying input. Pending-tail labels and restart persistence remain unfinished;
 the current visible prompt echo remains.
 Ordinary receipt ownership also checks the existing pane process incarnation;
 replacement or unreadable root identity cannot acknowledge earlier guidance.
+Deferred compaction receipts preserve that original binding through history
+preparation; a replacement settles the occurrence as not sent, without replay.
 Guidance to an already retained blocked task stays on that task; it does not
 resume a human pause, grant approval, wake a mail-only wait or queue a second turn.
 

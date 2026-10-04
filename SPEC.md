@@ -5900,6 +5900,10 @@ existing pane process incarnation. Unreadable identity for an existing root MUST
 reject acceptance; replacement MUST NOT acknowledge old receipts. An in-place
 exec alone does not replace the kernel incarnation. A layout-only pane without
 a started root carries no process binding and cannot match a later live root.
+Deferred compaction receipts MUST retain their original root binding through
+queue release, history claim, completion and canonical transfer. A changed or
+unavailable root MUST settle the original occurrence as not sent rather than
+rebinding it to a replacement process or creating a new turn.
 Guidance submitted to a retained blocked turn MUST remain on that turn rather
 than create a second queued task. Acceptance MUST NOT change scheduler wait or
 blocked ownership, remove human dispatch inhibition, grant approval or wake a
