@@ -4454,14 +4454,67 @@ fn runtime_bubblewrap_probe_timeout_allows_reprobe_after_readiness_recovery() {
     );
 }
 
-/// Resolves and caches the configured project root as maximum authority.
+/// Verifies the maximum-authority fixture caches the exact primary request,
+/// including Seatbelt's platform toolchain reads. This needs no PTY: dispatch
+/// must find authority under the same request identity used by the resolver,
+/// rather than a reduced project-only request that silently misses the cache.
+#[cfg(target_os = "macos")]
+#[test]
+fn runtime_seatbelt_maximum_authority_fixture_caches_exact_primary_request() {
+    let root = temp_root("runtime-seatbelt-exact-primary-authority");
+    fs::create_dir_all(&root).unwrap();
+    let mut service = test_runtime_service();
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "seatbelt",
+                "read_scopes": ["."],
+                "write_scopes": ["."],
+                "network_policy": "deny",
+                "env_whitelist": [],
+                "seatbelt": {
+                    "executable": "/usr/bin/sandbox-exec",
+                    "unavailable": "fail",
+                    "network": "isolated",
+                    "environment": "minimal"
+                }
+            }
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    let request = service
+        .primary_path_resolution_request("%1")
+        .unwrap()
+        .unwrap();
+    assert!(request.read_scopes.len() > 1);
+    assert!(
+        service
+            .path_scopes_for_pane_request("%1", &request)
+            .unwrap()
+            .is_none()
+    );
+
+    cache_path_resolution_maximum(&mut service, &root);
+
+    assert!(
+        service
+            .path_scopes_for_pane_request("%1", &request)
+            .unwrap()
+            .is_some()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Resolves and caches the exact configured primary authority, including
+/// platform toolchain reads, under the production resolver request identity.
 fn cache_path_resolution_maximum(service: &mut RuntimeSessionService, root: &Path) {
-    let request = mez_agent::shell::PanePathResolutionRequest::new(
-        vec![".".to_string()],
-        vec![".".to_string()],
-        Vec::new(),
-    )
-    .unwrap();
+    let request = service
+        .primary_path_resolution_request("%1")
+        .unwrap()
+        .expect("configured primary authority should require path resolution");
     let command = mez_agent::shell::pane_path_resolution_command(
         &request,
         mez_agent::ShellClassification::PosixSh,

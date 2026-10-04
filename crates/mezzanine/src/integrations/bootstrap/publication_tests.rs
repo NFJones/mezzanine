@@ -1,7 +1,9 @@
 //! Owned publication recovery and filesystem admission regressions.
 
 use super::publication::*;
+use std::ffi::CString;
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
 /// Uses a unique explicit private root, independent of process cwd/environment.
@@ -62,14 +64,9 @@ fn bootstrap_publication_refuses_unsafe_nodes_and_conflicting_preimages() {
     assert!(publisher.read("linked").is_err());
     symlink(&root, root.join("alias")).unwrap();
     assert!(publisher.read("alias/ordinary").is_err());
-    rustix::fs::mknodat(
-        &publisher.directory,
-        "pipe",
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        0,
-    )
-    .unwrap();
+    let fifo = CString::new(root.join("pipe").as_os_str().as_bytes()).unwrap();
+    // SAFETY: fifo is a NUL-terminated path in our unique private directory.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
     assert!(publisher.read("pipe").is_err());
     fs::hard_link(root.join("ordinary"), root.join("hardlink")).unwrap();
     assert!(publisher.read("hardlink").is_err());
