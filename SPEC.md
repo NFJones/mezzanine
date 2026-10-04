@@ -5895,6 +5895,11 @@ Pre-history compaction queues MUST settle exact not-sent receipt evidence when
 discarded on conversation replacement, pane removal, stale epoch or shutdown.
 Teardown MUST consume queue ownership without rejoining or redispatching input.
 Restart persistence and pending-log promotion remain unfinished.
+Ordinary-turn receipt acceptance and admission MUST retain and revalidate the
+existing pane process incarnation. Unreadable identity for an existing root MUST
+reject acceptance; replacement MUST NOT acknowledge old receipts. An in-place
+exec alone does not replace the kernel incarnation. A layout-only pane without
+a started root carries no process binding and cannot match a later live root.
 Guidance submitted to a retained blocked turn MUST remain on that turn rather
 than create a second queued task. Acceptance MUST NOT change scheduler wait or
 blocked ownership, remove human dispatch inhibition, grant approval or wake a

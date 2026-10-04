@@ -72,6 +72,8 @@ impl Receipt {
 #[derive(Debug)]
 pub(crate) struct Receipts {
     turn: AgentTurnRecord,
+    /// Exact process at acceptance; absent only when no live root has started.
+    process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
     entries: Vec<Receipt>,
     /// Terminal ownership, not merely absence of pending entries, permits eviction.
     terminal: bool,
@@ -79,9 +81,13 @@ pub(crate) struct Receipts {
 
 impl Receipts {
     /// Captures one actor-owned turn; no filesystem, clocks or model work occurs.
-    fn new(turn: &AgentTurnRecord) -> Self {
+    fn new(
+        turn: &AgentTurnRecord,
+        process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
+    ) -> Self {
         Self {
             turn: turn.clone(),
+            process,
             entries: Vec::new(),
             terminal: false,
         }
@@ -119,6 +125,40 @@ impl Receipts {
 }
 
 impl RuntimeSessionService {
+    /// Captures an existing root, never treating its unreadable identity as absent.
+    fn steering_process_binding(
+        &self,
+        pane: &str,
+    ) -> Result<Option<crate::runtime::processes::RuntimePaneProcessIdentity>> {
+        let (_, descriptor) = super::runtime_pane_by_id(&self.session, pane)?;
+        if descriptor.live && self.primary_pid_for_live_pane_process(pane).is_some() {
+            let identity = self
+                .pane_process_identity(pane)
+                .map_err(|_| MezError::conflict("steering pane incarnation unavailable"))?;
+            if identity.role != crate::runtime::processes::RuntimePaneProcessRole::AdapterOwnedRoot
+            {
+                return Err(MezError::conflict(
+                    "steering pane root incarnation unavailable",
+                ));
+            }
+            Ok(Some(identity))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Requires equal kernel process incarnation, ignoring an in-place exec.
+    fn steering_process_matches(
+        original: Option<&crate::runtime::processes::RuntimePaneProcessIdentity>,
+        current: Option<&crate::runtime::processes::RuntimePaneProcessIdentity>,
+    ) -> bool {
+        match (original, current) {
+            (Some(original), Some(current)) => original.same_incarnation(current),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
     /// Consumes pre-history occurrences without replaying accepted guidance.
     pub(crate) fn discard_agent_compaction_steering(&mut self, pane: &str) {
         let entries = self.take_agent_compaction_steering(pane);
@@ -222,14 +262,10 @@ impl RuntimeSessionService {
         for entry in &mut entries {
             entry.sequence = sequence;
         }
-        self.agent.steering_receipts.insert(
-            turn.turn_id.clone(),
-            Receipts {
-                turn: turn.clone(),
-                entries,
-                terminal: false,
-            },
-        );
+        // Capacity validation installed the exact empty owner before turn commit.
+        if let Some(owner) = self.agent.steering_receipts.get_mut(&turn.turn_id) {
+            owner.entries = entries;
+        }
     }
 
     /// Checks finite receipt capacity before canonical input is committed.
@@ -239,6 +275,17 @@ impl RuntimeSessionService {
         input: &str,
         display: &str,
     ) -> Result<()> {
+        let process = self.steering_process_binding(&turn.pane_id)?;
+        if self
+            .agent
+            .steering_receipts
+            .get(&turn.turn_id)
+            .is_some_and(|owner| {
+                !Self::steering_process_matches(owner.process.as_ref(), process.as_ref())
+            })
+        {
+            return Err(MezError::conflict("steering pane incarnation changed"));
+        }
         if !self.agent.steering_receipts.contains_key(&turn.turn_id)
             && self.agent.steering_receipts.len() >= OWNER_CAPACITY
         {
@@ -283,6 +330,10 @@ impl RuntimeSessionService {
                 "steering receipt capacity or owner unavailable",
             ));
         }
+        self.agent
+            .steering_receipts
+            .entry(turn.turn_id.clone())
+            .or_insert_with(|| Receipts::new(turn, process));
         Ok(())
     }
 
@@ -294,18 +345,15 @@ impl RuntimeSessionService {
         input: &str,
         display: &str,
     ) {
-        self.agent
-            .steering_receipts
-            .entry(turn.turn_id.clone())
-            .or_insert_with(|| Receipts::new(turn))
-            .entries
-            .push(Receipt {
+        if let Some(owner) = self.agent.steering_receipts.get_mut(&turn.turn_id) {
+            owner.entries.push(Receipt {
                 id: crate::storage::token_usage::new_token_usage_event_id(),
                 sequence,
                 input: input.into(),
                 display: display.into(),
                 status: Status::Pending,
             });
+        }
     }
 
     /// Records local ordinary dispatch admission after the actor lease succeeds.
@@ -338,6 +386,9 @@ impl RuntimeSessionService {
         {
             return;
         }
+        let Ok(process) = self.steering_process_binding(&dispatch.turn.pane_id) else {
+            return;
+        };
         let context = dispatch.context.durable();
         let sequences = (0..context.blocks().len())
             .filter_map(|index| {
@@ -350,6 +401,7 @@ impl RuntimeSessionService {
             .collect();
         if let Some(owner) = self.agent.steering_receipts.get_mut(&dispatch.turn.turn_id)
             && owner.belongs_to(&dispatch.turn)
+            && Self::steering_process_matches(owner.process.as_ref(), process.as_ref())
         {
             owner.admit(dispatch.claim_generation, &sequences);
         }

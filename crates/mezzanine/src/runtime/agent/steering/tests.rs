@@ -2,6 +2,90 @@
 
 use super::*;
 
+/// A readable foreground fallback cannot establish an unreadable pane root.
+/// Reject the first occurrence before reserving an owner or inserting input.
+#[test]
+fn steering_receipts_foreground_fallback_cannot_bind_root() {
+    use crate::runtime::processes::{RuntimePaneProcessIdentityInjection, RuntimePaneProcessRole};
+    let (mut service, turn) = fixture();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let before = service.agent_turn_contexts()[&turn.turn_id].clone();
+    service.inject_pane_process_identity_for_tests(
+        "%1",
+        RuntimePaneProcessIdentityInjection::Identity {
+            role: RuntimePaneProcessRole::ForegroundProcessGroupLeader,
+            generation: None,
+            process_id: 12345,
+            start_token: 1,
+            executable_path: "/bin/sh".into(),
+            live_start_token: None,
+        },
+    );
+    let rejected = service
+        .inject_agent_steering_with_display("%1", "must reject", "display")
+        .is_err();
+    service.terminate_all_pane_processes().unwrap();
+    assert!(rejected);
+    assert_eq!(service.agent_turn_contexts()[&turn.turn_id], before);
+    assert!(!service.agent.steering_receipts.contains_key(&turn.turn_id));
+}
+
+/// An existing root must remain the same kernel incarnation between accepted
+/// guidance occurrences. Replacement and unreadable evidence reject before
+/// chronology changes; an in-place executable change is not a new incarnation.
+#[test]
+fn steering_receipts_existing_root_replacement_rejects_before_insertion() {
+    use crate::runtime::processes::{
+        RuntimePaneProcessIdentityInjection, RuntimePaneProcessIdentityUnavailable,
+    };
+    let (mut service, turn) = fixture();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .inject_agent_steering_with_display("%1", "accepted", "display")
+        .unwrap();
+    let original = service.agent.steering_receipts[&turn.turn_id]
+        .process
+        .clone()
+        .unwrap();
+    let mut exec = original.clone();
+    exec.executable_path = "/different/in-place-executable".into();
+    assert!(RuntimeSessionService::steering_process_matches(
+        Some(&original),
+        Some(&exec)
+    ));
+    let before = service.agent_turn_contexts()[&turn.turn_id].clone();
+    service.inject_pane_process_identity_for_tests(
+        "%1",
+        RuntimePaneProcessIdentityInjection::Identity {
+            role: original.role,
+            generation: original.generation,
+            process_id: original.process_id,
+            start_token: original.start_token + 1,
+            executable_path: original.executable_path.clone(),
+            live_start_token: None,
+        },
+    );
+    assert!(
+        service
+            .inject_agent_steering_with_display("%1", "replaced", "replaced")
+            .is_err()
+    );
+    service.inject_pane_process_identity_for_tests(
+        "%1",
+        RuntimePaneProcessIdentityInjection::Unavailable(
+            RuntimePaneProcessIdentityUnavailable::ExecutableUnreadable,
+        ),
+    );
+    assert!(
+        service
+            .inject_agent_steering_with_display("%1", "unreadable", "unreadable")
+            .is_err()
+    );
+    assert_eq!(service.agent_turn_contexts()[&turn.turn_id], before);
+    assert_eq!(service.steering_receipts_for_tests(&turn.turn_id).len(), 1);
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Pre-history discard, stale epoch filtering and shutdown all consume the
 /// actor's accepted queue and retain exact not-sent occurrence evidence. None
 /// may start a turn, join the input again or lose its independent display source.

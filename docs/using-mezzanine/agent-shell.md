@@ -73,6 +73,8 @@ the worker; late callbacks cannot recreate discarded receipt evidence.
 Pre-history compaction queue teardown retains exact not-sent occurrences without
 replaying input. Pending-tail labels and restart persistence remain unfinished;
 the current visible prompt echo remains.
+Ordinary receipt ownership also checks the existing pane process incarnation;
+replacement or unreadable root identity cannot acknowledge earlier guidance.
 Guidance to an already retained blocked task stays on that task; it does not
 resume a human pause, grant approval, wake a mail-only wait or queue a second turn.
 
