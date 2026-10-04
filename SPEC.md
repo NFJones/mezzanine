@@ -281,6 +281,13 @@ MUST replay without new expense; changed counters, model or completion time MUST
 conflict, not create a new charged stream. Partial snapshots and callback-local
 revision numbers MUST NOT establish consumed usage. This component alone MUST
 NOT enable a certified plugin manifest or claim live vendor conformance.
+The pinned Pi lifecycle projection MUST require an explicitly bound context
+session and discard callback content/paths. `agent_end` and `turn_end` MUST NOT
+prove final settlement; `agent_before_settle` outcomes remain provisional until
+`agent_settled`, which MUST NOT fabricate success when outcome is unavailable.
+UI prompts indicate input wait, not approval authority. Reload/new/resume/fork
+teardown MUST NOT imply process death or authorize capability rebinding. This
+component alone MUST NOT certify or install a Pi extension or imply token coverage.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow

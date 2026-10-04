@@ -60,7 +60,7 @@ daemon; add
 ### Harness bootstrap
 
 `mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
-accepts `claude`, `codex`, `copilot`, `opencode`, and `cursor` as research
+accepts `claude`, `codex`, `copilot`, `opencode`, `cursor`, and `pi` as research
 candidates, not certified integrations. The default or `--plan` inspects a plan;
 `--check` checks owned state. Explicit `--apply`, `--uninstall`, and `--recover`
 are separate intents. The command is daemon-free and does not perform socket
@@ -99,6 +99,17 @@ This component does not
 install a plugin, bind a shared server, deliver credentials or certify live usage.
 Release references are `anomalyco/opencode` tag `v1.17.13`,
 `packages/schema/src/v1/session.ts` and `packages/opencode/src/session/session.ts`.
+
+The Pi coding-agent `1.0.2` component projects content-free lifecycle facts only
+for an explicitly bound context session. `agent_end` and `turn_end` are not final
+settlement; `agent_before_settle` supplies only a provisional outcome, and
+`agent_settled` reports final settlement without inventing a successful outcome.
+Extension UI prompts indicate input wait, not automatic approval wait. Shutdown
+reasons distinguish quit from reload/new/resume/fork, not prove process death.
+This component does not install an extension, deliver credentials, renew leases,
+rebind sessions or certify live usage. Sources are the installed
+`@earendil-works/pi-coding-agent` `1.0.2` extension declarations and agent-session
+producer. Pi work is independent of the retired Gemini harness, not its replacement.
 
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is

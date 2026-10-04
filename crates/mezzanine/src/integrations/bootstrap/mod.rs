@@ -24,6 +24,11 @@ pub(crate) mod installer;
 pub(crate) mod opencode;
 #[allow(
     dead_code,
+    reason = "pinned lifecycle projection awaits private Pi launch qualification"
+)]
+pub(crate) mod pi;
+#[allow(
+    dead_code,
     reason = "release-qualified vendor adapters consume the common installer"
 )]
 mod publication;

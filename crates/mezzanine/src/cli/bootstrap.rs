@@ -10,7 +10,7 @@ use super::{Args, CliOutputFormat, MezError, PathBuf, Result, Write};
 #[derive(Debug, Clone, Args)]
 pub(super) struct BootstrapCliArgs {
     /// Harness whose compiled adapter should be consulted.
-    #[arg(value_parser = ["claude", "codex", "copilot", "opencode", "cursor"])]
+    #[arg(value_parser = ["claude", "codex", "copilot", "opencode", "cursor", "pi"])]
     harness: String,
     /// Exact vendor release; no shell-based executable discovery is performed.
     #[arg(long)]
@@ -136,6 +136,26 @@ fn run_with_manifest<W: Write>(
 mod tests {
     use super::*;
     use clap::Parser;
+
+    /// Pi is a research candidate only: planning reports unavailable support
+    /// and mutation fails before root access until a full adapter is certified.
+    #[test]
+    fn bootstrap_pi_candidate_is_not_installation_certification() {
+        #[derive(Parser)]
+        struct Fixture {
+            #[command(flatten)]
+            args: BootstrapCliArgs,
+        }
+        let parsed = Fixture::try_parse_from(["fixture", "pi", "--plan"]).unwrap();
+        let mut output = Vec::new();
+        run(parsed.args, CliOutputFormat::Json, &mut output).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(value["supported"], false);
+        let parsed =
+            Fixture::try_parse_from(["fixture", "pi", "--root", "/missing/pi/root", "--apply"])
+                .unwrap();
+        assert!(run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).is_err());
+    }
 
     /// Every retired-harness intent fails during argument admission, before
     /// root access or daemon work. Other candidates remain inspectable.
