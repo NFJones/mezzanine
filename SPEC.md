@@ -8568,6 +8568,11 @@ MUST expand symlinks before interpreting subsequent parent traversal, bound
 expansion, and distinguish missing entries from permission/I/O errors. A live
 root PID/start token, compatible effective credentials and cwd identity MUST
 be revalidated without selecting a shell or forwarding environment values.
+Linux credential evidence MUST include complete effective/filesystem UID/GID
+tuples and an explicit supplementary-group list from one bounded kernel
+snapshot. Distinct FSUID/FSGID MUST fail closed; daemon evidence MUST describe
+the actual calling worker thread rather than only its process group leader.
+Darwin target groups MUST NOT be inferred from matching UID/GID or daemon groups.
 Existing file snapshots MUST be bounded and reject nonregular objects before
 consumption, including nonblocking opens to prevent special-node swaps from
 blocking reads. Current scopes and captured ancestry/object/preimage evidence

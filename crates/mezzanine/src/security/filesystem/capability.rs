@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 
 use mez_agent::permissions::{PathResolutionStatus, PathScopes};
 use mez_mux::process::{
-    ProcessCredentials, current_working_directory_for_pid, process_credentials_for_pid,
+    ProcessCredentials, current_working_directory_for_pid, filesystem_credentials_for_pid,
     process_start_token_for_pid,
 };
 use rustix::fs::{
@@ -110,7 +110,7 @@ fn normalized_credentials(pid: u32) -> Result<ProcessCredentials> {
     // groups for another PID. That approximation cannot authorize daemon-side
     // filesystem access. Only our own process has independently known groups.
     require_exact_group_evidence(!cfg!(target_os = "macos") || pid == std::process::id())?;
-    let mut credentials = process_credentials_for_pid(pid)
+    let mut credentials = filesystem_credentials_for_pid(pid)
         .ok_or_else(|| MezError::invalid_state("native filesystem credentials unavailable"))?;
     credentials.supplementary_group_ids.sort_unstable();
     credentials.supplementary_group_ids.dedup();

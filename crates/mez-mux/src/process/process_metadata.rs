@@ -447,6 +447,103 @@ pub struct ProcessCredentials {
     pub supplementary_group_ids: Vec<u32>,
 }
 
+/// Parses one complete Linux status snapshot for filesystem admission.
+/// Missing/duplicate fields, malformed tuples and filesystem/effective ID
+/// differences fail closed. Real/saved IDs are parsed but do not grant access.
+#[cfg(any(target_os = "linux", test))]
+fn parse_linux_filesystem_credentials(status: &str) -> Option<ProcessCredentials> {
+    fn ids(value: &str) -> Option<[u32; 4]> {
+        let values = value
+            .split_whitespace()
+            .map(str::parse)
+            .collect::<Result<Vec<u32>, _>>()
+            .ok()?;
+        values.try_into().ok()
+    }
+    if status.len() > 64 * 1024 {
+        return None;
+    }
+    let mut uid = None;
+    let mut gid = None;
+    let mut groups = None;
+    for line in status.lines() {
+        if let Some(value) = line.strip_prefix("Uid:") {
+            if uid.is_some() {
+                return None;
+            }
+            uid = Some(ids(value)?);
+        } else if let Some(value) = line.strip_prefix("Gid:") {
+            if gid.is_some() {
+                return None;
+            }
+            gid = Some(ids(value)?);
+        } else if let Some(value) = line.strip_prefix("Groups:") {
+            if groups.is_some() {
+                return None;
+            }
+            groups = Some(
+                value
+                    .split_whitespace()
+                    .map(str::parse)
+                    .collect::<Result<Vec<u32>, _>>()
+                    .ok()?,
+            );
+        }
+    }
+    let uid = uid?;
+    let gid = gid?;
+    if uid[1] != uid[3] || gid[1] != gid[3] {
+        return None;
+    }
+    let mut groups = groups?;
+    groups.retain(|group| *group != gid[1]);
+    groups.sort_unstable();
+    groups.dedup();
+    Some(ProcessCredentials {
+        user_id: uid[1],
+        primary_group_id: gid[1],
+        supplementary_group_ids: groups,
+    })
+}
+
+/// Returns exact supported filesystem credentials without changing identity.
+/// Linux reads one bounded procfs snapshot, rejecting distinct FSUID/FSGID;
+/// requesting this process observes the calling thread, not the group leader.
+/// Darwin admits only this process because target supplementary groups cannot
+/// be independently observed by the existing libproc reader. Other hosts fail
+/// closed. PID lifetime/cwd and authority revalidation remain caller-owned.
+pub fn filesystem_credentials_for_pid(pid: u32) -> Option<ProcessCredentials> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Read;
+
+        let path = if pid == std::process::id() {
+            "/proc/thread-self/status".to_string()
+        } else {
+            format!("/proc/{pid}/status")
+        };
+        let mut status = String::new();
+        std::fs::File::open(path)
+            .ok()?
+            .take(64 * 1024 + 1)
+            .read_to_string(&mut status)
+            .ok()?;
+        parse_linux_filesystem_credentials(&status)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if pid != std::process::id() {
+            return None;
+        }
+        process_credentials_for_pid(pid)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 /// Returns the procfs process credentials for `pid` when available.
 #[cfg(target_os = "linux")]
 pub fn process_credentials_for_pid(pid: u32) -> Option<ProcessCredentials> {
@@ -539,6 +636,64 @@ pub fn process_credentials_for_pid(_pid: u32) -> Option<ProcessCredentials> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Filesystem admission requires all four UID/GID slots and an explicit
+    /// group list from one snapshot. Effective identity alone must not accept
+    /// missing, duplicated, malformed or different filesystem credentials.
+    #[test]
+    fn filesystem_credentials_require_complete_matching_procfs_evidence() {
+        let status = "Name:\tfixture\nUid:\t1000 1000 1000 1000\nGid:\t100 100 100 100\nGroups:\t100 200 200\n";
+        let credentials = parse_linux_filesystem_credentials(status).unwrap();
+        assert_eq!(credentials.user_id, 1000);
+        assert_eq!(credentials.primary_group_id, 100);
+        assert_eq!(credentials.supplementary_group_ids, vec![200]);
+        for invalid in [
+            status.replace("Groups:\t100 200 200\n", ""),
+            status.replace("1000 1000 1000 1000", "1000 1000 1000 1001"),
+            status.replace("100 100 100 100", "100 100 100 101"),
+            status.replace("1000 1000 1000 1000", "1000 1000"),
+            status.replace("1000 1000 1000 1000", "1000 1000 1000 1000 1000"),
+            status.replace("Groups:\t100 200 200", "Groups:\t100 invalid"),
+            format!("{status}Uid:\t1000 1000 1000 1000\n"),
+            format!("{status}Groups:\t\n"),
+            format!("{status}Gid:\t100 100 100 100\n"),
+            status.replace("Uid:\t1000 1000 1000 1000\n", ""),
+            status.replace("Gid:\t100 100 100 100\n", ""),
+            format!("{status}{}", "x".repeat(64 * 1024)),
+        ] {
+            assert!(parse_linux_filesystem_credentials(&invalid).is_none());
+        }
+        let empty_groups = status.replace("Groups:\t100 200 200", "Groups:\t");
+        assert!(
+            parse_linux_filesystem_credentials(&empty_groups)
+                .unwrap()
+                .supplementary_group_ids
+                .is_empty()
+        );
+    }
+
+    /// The daemon-side observation must describe the calling worker thread.
+    /// A real nonleader thread compares the public reader to its thread-self
+    /// kernel snapshot without changing any process or thread credentials.
+    /// An unavailable target cannot fall back to daemon evidence.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn filesystem_credentials_observe_live_calling_thread() {
+        std::thread::spawn(|| {
+            // SAFETY: gettid takes no arguments and has no side effects.
+            let tid = unsafe { libc::syscall(libc::SYS_gettid) };
+            assert_ne!(tid as u32, std::process::id());
+            let status = std::fs::read_to_string("/proc/thread-self/status").unwrap();
+            let expected = parse_linux_filesystem_credentials(&status).unwrap();
+            assert_eq!(
+                filesystem_credentials_for_pid(std::process::id()),
+                Some(expected)
+            );
+            assert!(filesystem_credentials_for_pid(u32::MAX).is_none());
+        })
+        .join()
+        .unwrap();
+    }
 
     /// Verifies the stat parser isolates field 22 even when the command name
     /// contains spaces and parentheses, which shift naive whitespace splits.

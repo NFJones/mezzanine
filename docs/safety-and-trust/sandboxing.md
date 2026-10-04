@@ -51,6 +51,12 @@ commit fencing, or cancellation protections for today's patches. See the
 [migration contract](../../SPEC.md#process-free-semantic-adapter-contract-and-migration)
 for the planned behavior.
 
+The existing primitive credential guard rejects incomplete Linux kernel
+evidence and distinct FSUID/FSGID, and observes the calling daemon thread.
+Darwin access to another process remains rejected until its supplementary
+groups can be independently verified; matching UID/GID is insufficient.
+These guards do not enable production process-free patch dispatch.
+
 ## Grant filesystem access narrowly
 
 `permissions.read_scopes` and `permissions.write_scopes` define user filesystem

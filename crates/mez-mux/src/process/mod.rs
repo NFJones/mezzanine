@@ -47,6 +47,8 @@ pub use pane::{
     write_pty_fd_nonblocking_io,
 };
 #[doc(hidden)]
+pub use process_metadata::filesystem_credentials_for_pid;
+#[doc(hidden)]
 pub use process_metadata::{
     ProcessCredentials, ProcessInstanceIdentity, ProcessInstanceIdentityUnavailable,
     RawEnvironmentEntry, current_working_directory_for_pid, process_credentials_for_pid,
