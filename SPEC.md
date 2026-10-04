@@ -316,6 +316,16 @@ for integer-second rounding and reply latency. Delayed, expired or inconsistent
 acknowledgments MUST NOT revive availability. Cancellation, worker drop or failure
 MUST clear local publication without retry, implicit rebind or claims of remote
 nonexecution. This worker alone MUST NOT enable an installed or certified adapter.
+The internal Pi session worker MUST bound callback ingress and preserve neutral
+vendor behavior under pressure. It MUST gate ordered lifecycle delivery on an
+acknowledged current lease and poll renewal during delivery without detached
+tasks. Old observer epochs MUST remain inert; reload attachment MUST be explicit
+and same-session. Failed or cancelled delivery MUST retain exact pending owner
+evidence without replay. Callback-channel closure MUST end worker ownership.
+Closure MUST fence registration and issued delivery without draining buffered
+facts. Reload proposals MUST NOT activate an observer until explicit confirmation
+is accepted; losing the confirmation result does not undo an accepted command.
+This integration does not itself provide private launch or vendor IPC.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow

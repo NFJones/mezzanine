@@ -166,7 +166,7 @@ impl CapabilityTransport {
     /// Sends only this transport's originating owner's pending head. Failed or
     /// lost replies preserve original work; no retry or effect reconstruction.
     pub(crate) async fn deliver_next(&self, owner: &mut LifecycleOwner) -> Result<bool> {
-        if owner.transport_binding() != (self.session.as_str(), self.owner.as_str()) {
+        if !self.belongs_to(owner) {
             return Err(unavailable());
         }
         let Some(delivery) = owner.pending().cloned() else {
@@ -177,6 +177,11 @@ impl CapabilityTransport {
             return Err(unavailable());
         }
         Ok(true)
+    }
+
+    /// Checks exact reducer incarnation before registration or worker startup.
+    pub(super) fn belongs_to(&self, owner: &LifecycleOwner) -> bool {
+        owner.transport_binding() == (self.session.as_str(), self.owner.as_str())
     }
 
     /// Sends one retained lifecycle delivery after immutable owner validation.

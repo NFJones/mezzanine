@@ -33,6 +33,11 @@ impl ActiveLease {
         Instant::now() < self.expires
     }
 
+    /// Returns the conservative expiry for bounding an already-issued delivery.
+    pub(super) fn deadline(&self) -> Instant {
+        self.expires
+    }
+
     /// Converts a bounded future UTC acknowledgment into conservative monotonic
     /// evidence. The request-start anchor prevents reply latency extending it.
     fn accept(
@@ -84,7 +89,7 @@ fn unavailable() -> MezError {
 
 /// Waits for explicit cancellation or loss of launcher ownership. False updates
 /// do not cancel, and closure is terminal rather than a busy ready branch.
-async fn cancelled(stop: &mut watch::Receiver<bool>) {
+pub(super) async fn cancelled(stop: &mut watch::Receiver<bool>) {
     loop {
         if *stop.borrow_and_update() || stop.changed().await.is_err() {
             return;
@@ -112,7 +117,7 @@ pub(crate) async fn run(
 
 /// Shares production scheduling with a per-worker test clock, never global time
 /// or credential mutation. One cancellation selection owns every exchange.
-async fn run_with_clock(
+pub(super) async fn run_with_clock(
     transport: &CapabilityTransport,
     name: &str,
     status: watch::Sender<Option<ActiveLease>>,

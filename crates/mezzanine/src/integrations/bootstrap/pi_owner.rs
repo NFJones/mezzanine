@@ -98,8 +98,13 @@ impl LifecycleOwner {
 
     /// Attaches an explicitly replaced observer to the same authorized session.
     /// Session replacement requires a distinct externally authorized owner.
+    pub(crate) fn can_attach_after_reload(&self, session: &str) -> bool {
+        !self.retired && self.suspended && session == self.session
+    }
+
+    /// Activates a same-session replacement after explicit worker confirmation.
     pub(crate) fn attach_after_reload(&mut self, session: &str) -> Result<u64> {
-        if self.retired || !self.suspended || session != self.session {
+        if !self.can_attach_after_reload(session) {
             return Err(MezError::conflict("Pi observer replacement unavailable"));
         }
         self.suspended = false;

@@ -144,6 +144,19 @@ renewal reply is not proof that no remote renewal occurred.
 Private launch delivery, worker/extension integration and installation remain
 unfinished; these components do not enable a certified manifest.
 
+The internal session coordinator combines lifecycle delivery and idle renewal
+without spawning detached tasks. Callback ingress is nonblocking and limited to
+32 typed observations or explicit reload-attachment requests. Presentation waits
+for acknowledged registration and stays bounded by the current conservative
+lease; renewal continues while delivery is pending. Old epochs are ignored,
+same-session reload attachment is explicit, and cancellation or failed replies
+preserve pending report identity. Closing ingress ends worker ownership. Actual
+closure fences registration and outstanding delivery without draining buffered
+facts. Reload attachment first offers a proposal; an unread or dropped proposal
+leaves the observer suspended. Explicit confirmation activates the replacement;
+losing its result does not undo an accepted activation command. Actual
+extension IPC, private launcher delivery and installation remain unfinished.
+
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.

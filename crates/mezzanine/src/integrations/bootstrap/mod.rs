@@ -39,6 +39,11 @@ pub(crate) mod pi_owner;
 pub(crate) mod pi_renewal;
 #[allow(
     dead_code,
+    reason = "Pi session worker awaits private launcher and observer IPC integration"
+)]
+pub(crate) mod pi_session;
+#[allow(
+    dead_code,
     reason = "Pi capability transport awaits private launcher integration"
 )]
 pub(crate) mod pi_transport;
