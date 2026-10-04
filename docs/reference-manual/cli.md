@@ -135,8 +135,14 @@ owner; it cannot initialize a primary, mint authority or rebind a session.
 Each exchange has one 500 ms deadline and strict reply bounds. Matching typed
 acknowledgments consume only the original pending head; lost/failed replies
 retain exact work without automatic retries. Errors omit tokens and peer content.
-Private launch delivery, idle-renewal scheduling and extension installation remain
-unfinished; this transport component does not enable a certified manifest.
+The internal renewal worker registers once and renews independently of callback
+traffic at half its conservatively observed remaining lease. It requires the same
+registration identity and increasing server expiry; a monotonic expiry fence
+accounts for reply latency and integer-second rounding. Failure, cancellation or
+worker drop clears local availability without automatic retry or rebind. A lost
+renewal reply is not proof that no remote renewal occurred.
+Private launch delivery, worker/extension integration and installation remain
+unfinished; these components do not enable a certified manifest.
 
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is

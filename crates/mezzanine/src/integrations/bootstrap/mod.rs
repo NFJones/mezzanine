@@ -34,6 +34,11 @@ pub(crate) mod pi;
 pub(crate) mod pi_owner;
 #[allow(
     dead_code,
+    reason = "Pi renewal ownership awaits private launcher integration"
+)]
+pub(crate) mod pi_renewal;
+#[allow(
+    dead_code,
     reason = "Pi capability transport awaits private launcher integration"
 )]
 pub(crate) mod pi_transport;

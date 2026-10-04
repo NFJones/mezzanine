@@ -309,6 +309,13 @@ matching typed acknowledgment may consume the originating owner's pending
 head; failed or lost replies MUST retain exact work without automatic retry.
 Credentials and peer payloads MUST NOT appear in diagnostics. This transport
 component alone MUST NOT certify private delivery, idle renewal or installation.
+The internal Pi renewal worker MUST register once and schedule renewal independently
+of observer activity. Lease publication MUST retain exact registration identity,
+strictly increasing server expiry and a conservative monotonic fence accounting
+for integer-second rounding and reply latency. Delayed, expired or inconsistent
+acknowledgments MUST NOT revive availability. Cancellation, worker drop or failure
+MUST clear local publication without retry, implicit rebind or claims of remote
+nonexecution. This worker alone MUST NOT enable an installed or certified adapter.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow
