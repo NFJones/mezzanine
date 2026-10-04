@@ -241,6 +241,7 @@ mod shell_dispatch;
 mod shell_state;
 mod skills;
 mod startup;
+mod steering;
 mod subagents;
 mod trace;
 mod turn_state;
@@ -545,6 +546,8 @@ pub(crate) struct RuntimeAgentComponent {
     /// Monotonic compaction epoch used to invalidate prompt history captured
     /// before a compaction operation began.
     agent_compaction_epochs: BTreeMap<String, u64>,
+    /// Bounded exact steering receipts retained through terminal settlement.
+    steering_receipts: BTreeMap<String, steering::Receipts>,
     /// Authenticated plain-text prompts accepted during manual compaction.
     agent_compaction_steering:
         BTreeMap<String, Vec<(mez_core::ids::ClientId, String, String, u64)>>,

@@ -5873,6 +5873,16 @@ the comparison baseline without blocking provider dispatch. Subsequent valid
 requests and user prompts MUST remain usable without clearing the conversation.
 
 Direct user prompts and mid-turn steering MUST be exact `UserEvent` chronology.
+The internal ordinary-turn steering receipt ledger MUST assign distinct stable
+occurrence IDs and retain exact input and independent display source. It MUST
+acknowledge only exact prepared user-event sequences after successful local
+ordinary task-claim admission, fenced by current conversation, turn, agent and
+claim generation. Preparing or recording a claim, rejected leases and auxiliary
+requests MUST NOT acknowledge input. Admission means local dispatch, not proof
+of remote receipt or cognition. Terminal cleanup MUST settle unconsumed receipts
+without replay. Receipt/source retention MUST be finite; exhaustion MUST reject
+before canonical insertion. This initial ledger does not cover manual-compaction
+queues, restart persistence or pending-log promotion.
 The initial prompt MUST be appended once before the assistant actions and
 evidence it causes. Steering MUST be appended at the exact boundary where it is
 received, without synthetic timestamps, turn ids, precedence prose, or a late

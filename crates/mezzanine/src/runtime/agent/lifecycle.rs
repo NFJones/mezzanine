@@ -216,6 +216,7 @@ impl RuntimeSessionService {
     /// share this operation so provider claims, approvals, action bookkeeping,
     /// and retained execution context cannot outlive any terminal ledger path.
     fn clear_terminal_agent_turn_runtime_state(&mut self, turn_id: &str) {
+        self.settle_steering_receipts(turn_id);
         self.retire_cancelled_mcp_leases_for_turn(turn_id);
         self.agent
             .human_pauses

@@ -61,6 +61,13 @@ input until the task reaches a terminal state. Non-slash text submitted while
 a task runs steers that task rather than starting another turn. Prose is not
 an approval decision.
 
+Internally, ordinary running-turn steering now has distinct occurrence receipts
+separate from its immediate canonical insertion. Local ordinary request admission
+acknowledges only the exact included user events; preparation, auxiliary requests
+and rejected claims do not. This is not proof that a remote model read the input.
+The receipt component does not yet provide pending-tail labels, manual-compaction
+receipt recovery or restart persistence; the current visible prompt echo remains.
+
 After interruption, the next non-slash prompt continues from retained user,
 assistant, tool, and steering context. It adds guidance without restarting
 cancelled actions or processes. Use `/new` when you want an independent task

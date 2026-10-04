@@ -2168,6 +2168,7 @@ impl AsyncRuntimeSessionActor {
                             return Ok(None);
                         }
                         self.queue_deferred_pane_io_side_effects_from_service()?;
+                        self.service.acknowledge_admitted_steering(&dispatch);
                         Ok(Some(dispatch))
                     } else {
                         self.queue_deferred_pane_io_side_effects_from_service()?;

@@ -1136,7 +1136,7 @@ impl RuntimeSessionService {
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(outcome))
                 } else {
                     if let Some(turn_id) =
-                        self.inject_agent_steering_for_running_turn(&pane_id, input)?
+                        self.inject_agent_steering_with_display(&pane_id, input, display_input)?
                     {
                         let visibility = self.agent_shell_visibility_for_pane(&pane_id)?;
                         let steer_outcome = AgentShellCommandOutcome::Mutated {

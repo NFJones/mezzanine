@@ -1221,10 +1221,21 @@ impl RuntimeSessionService {
     /// discards any older provider generation whose consumed event high-water
     /// mark predates this event. The visible agent prompt has already logged the
     /// submitted user text before this helper runs.
+    #[cfg(test)]
     pub(super) fn inject_agent_steering_for_running_turn(
         &mut self,
         pane_id: &str,
         input: &str,
+    ) -> Result<Option<String>> {
+        self.inject_agent_steering_with_display(pane_id, input, input)
+    }
+
+    /// Commits exact steering and retains its independent display source.
+    pub(super) fn inject_agent_steering_with_display(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+        display: &str,
     ) -> Result<Option<String>> {
         let Some(turn_id) = self
             .agent_shell_store()
@@ -1251,6 +1262,7 @@ impl RuntimeSessionService {
             input: input.to_string(),
             submitted_at_unix_seconds: current_unix_seconds(),
         };
+        self.check_steering_receipt_capacity(&turn, input, display)?;
         let context = self
             .agent_turn_contexts_mut()
             .get_mut(&turn.turn_id)
@@ -1268,6 +1280,7 @@ impl RuntimeSessionService {
                 mez_agent::agent_turn_steering_context_content(&steering),
             )
             .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        self.retain_steering_receipt(&turn, sequence.get(), input, display);
         self.append_agent_status_text_to_terminal_buffer(
             pane_id,
             &format!(

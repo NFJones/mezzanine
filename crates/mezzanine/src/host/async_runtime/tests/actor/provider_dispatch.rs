@@ -51,9 +51,12 @@ model = "invalid-model"
         .execute_agent_shell_command(&primary, "exercise claim failure")
         .unwrap();
     assert!(start.contains(r#""state":"running""#), "{start}");
+    service
+        .execute_agent_shell_command(&primary, "claim receipt")
+        .unwrap();
     let task = service.pending_agent_provider_tasks().remove(0);
     let agent_id = AgentId::opaque(task.agent_id.clone()).unwrap();
-    let dispatch = service
+    let mut dispatch = service
         .claim_configured_agent_provider_task(&agent_id, &task.turn_id)
         .unwrap()
         .unwrap_or_else(|| {
@@ -67,6 +70,41 @@ model = "invalid-model"
     service
         .record_claimed_agent_provider_task(&dispatch, 1, 30_000)
         .unwrap();
+    // Recording/preparing a claim alone cannot acknowledge accepted steering.
+    service.acknowledge_admitted_steering(&dispatch);
+    assert_eq!(
+        format!(
+            "{:?}",
+            service.steering_receipts_for_tests(&task.turn_id)[0].status
+        ),
+        "Pending"
+    );
+    dispatch.claim_generation = 2;
+    service.acknowledge_admitted_steering(&dispatch);
+    dispatch.claim_generation = 1;
+    dispatch.macro_judge_request = Some(
+        crate::integrations::agent::context::assemble_model_request(
+            &dispatch.model_profile,
+            dispatch.provider.api_compatibility(),
+            &dispatch.turn,
+            dispatch.context.durable(),
+        )
+        .unwrap(),
+    );
+    service.acknowledge_admitted_steering(&dispatch);
+    dispatch.macro_judge_request = None;
+    let original_context = dispatch.context.clone();
+    dispatch.context =
+        mez_agent::PreparedModelContext::new(mez_agent::AgentContext::empty()).unwrap();
+    service.acknowledge_admitted_steering(&dispatch);
+    dispatch.context = original_context;
+    assert_eq!(
+        format!(
+            "{:?}",
+            service.steering_receipts_for_tests(&task.turn_id)[0].status
+        ),
+        "Pending"
+    );
     let (context, _) = service
         .prepare_agent_turn_model_context(
             &dispatch.turn,
@@ -123,6 +161,9 @@ model = "invalid-model"
     };
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.service.agent_scheduler().snapshot().running, 1);
+    let receipts = exit.service.steering_receipts_for_tests(&task.turn_id);
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(format!("{:?}", receipts[0].status), "Admitted(1)");
     assert_eq!(
         exit.service
             .agent_turn_ledger()
@@ -218,6 +259,9 @@ model = "invalid-model"
         .execute_agent_shell_command(&primary, "exercise saturated claim")
         .unwrap();
     assert!(start.contains(r#""state":"running""#), "{start}");
+    service
+        .execute_agent_shell_command(&primary, "rejected receipt")
+        .unwrap();
     let task = service.pending_agent_provider_tasks().remove(0);
     let agent_id = AgentId::opaque(task.agent_id.clone()).unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
@@ -260,6 +304,9 @@ model = "invalid-model"
             .state,
         mez_agent::AgentTurnState::Failed
     );
+    let receipts = exit.service.steering_receipts_for_tests(&task.turn_id);
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(format!("{:?}", receipts[0].status), "NotSent");
 }
 
 /// Presentation pressure must not enqueue registry persistence or prevent a
