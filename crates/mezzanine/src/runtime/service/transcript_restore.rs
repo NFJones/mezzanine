@@ -463,6 +463,7 @@ impl RuntimeSessionService {
                     &conversation_id,
                     prepared_objective.as_deref(),
                 )?;
+                self.hydrate_composer_title(&conversation_id);
                 self.set_agent_planning_enabled(&pane_id, metadata.planning_enabled);
                 self.set_agent_response_style(&pane_id, metadata.response_style.clone());
                 self.set_agent_routing_override(&pane_id, metadata.routing_enabled);

@@ -1943,6 +1943,7 @@ impl RuntimeSessionService {
         conversation_id: &str,
         objective: Option<&str>,
     ) -> bool {
+        self.note_composer_objective(conversation_id, objective);
         if self.runtime_agent_conversation_is_ephemeral(conversation_id) {
             return false;
         }

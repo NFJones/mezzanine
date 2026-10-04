@@ -105,6 +105,11 @@ New and forked conversations allocate a new identity. This is separate from
 the generated conversation title and canonical agent ID. The pane frame projects
 the identity only while agent mode is visible; explicit pane/window titles remain
 authoritative, and hiding reveals the underlying shell/program title again.
+At comfortable composer geometry, unfocused/read-only panes show their resolved
+conversation title instead of `agent draft`; focused panes retain editing labels.
+Manual names and the existing session-title policy determine this inert label.
+Long titles are ellipsized to available cells without hiding live status. Title
+rendering uses retained metadata, not catalog reads or provider requests.
 `/status [--extended] [--project | --all-projects]` accepts either flag order.
 Without scope flags it retains overall totals.
 Every token table includes Harness, Provider and Model; native calls use `mez`.

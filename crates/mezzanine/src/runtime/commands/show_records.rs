@@ -318,6 +318,7 @@ impl RuntimeSessionService {
             .cloned_transcript_store()
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
         store.clear_session_name(record_id)?;
+        self.set_composer_manual_title(record_id, None);
         self.invalidate_agent_prompt_selector_extra_candidates();
         Ok(())
     }

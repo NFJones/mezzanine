@@ -1245,6 +1245,7 @@ impl RuntimeSessionService {
             .mirror_session_generated_title(conversation_id, title, current_unix_seconds())
             .unwrap_or(false);
         if changed {
+            self.set_composer_generated_title(conversation_id, title);
             self.invalidate_agent_prompt_selector_extra_candidates();
             let _ = self.refresh_saved_session_overlay_after_title_change();
         }

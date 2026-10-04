@@ -59,6 +59,69 @@ fn view_at_tick(
         .unwrap()
 }
 
+/// Long read-only titles are clipped before status assembly at grapheme/cell
+/// boundaries. The title stays static across animation ticks and draft bytes,
+/// cursor geometry and the visible live status remain unchanged.
+#[test]
+fn composer_read_only_title_reserves_status_and_preserves_graphemes() {
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
+    prompt.buffer.insert_text("Exact draft 雪");
+    for title in [
+        "LongUnbrokenTitle".repeat(8),
+        "雪".repeat(70),
+        "e\u{301}".repeat(70),
+        "👩‍💻".repeat(35),
+    ] {
+        let context = AgentComposerContext {
+            session_title: Some(title.clone()),
+            ..Default::default()
+        };
+        let size = Size::new(64, 24).unwrap();
+        let first = view_at_tick(size, &prompt, context.clone(), ClientViewRole::Observer, 0);
+        let later = view_at_tick(size, &prompt, context, ClientViewRole::Observer, 720);
+        let row = first
+            .lines
+            .iter()
+            .position(|line| line.contains("executing"))
+            .unwrap();
+        let bounded = crate::session_title::bound_session_title(&title).unwrap();
+        let budget = 64 - 6 - "executing (12s)".len();
+        assert_eq!(
+            first.lines[row].contains('…'),
+            mez_terminal::active_terminal_text_width(&bounded) > budget,
+            "{}",
+            first.lines[row]
+        );
+        assert!(
+            first.lines[row].contains("executing (12s"),
+            "{}",
+            first.lines[row]
+        );
+        assert_eq!(
+            unicode_width::UnicodeWidthStr::width(first.lines[row].as_str()),
+            64
+        );
+        assert_eq!(first.lines, later.lines);
+        let status_start = unicode_width::UnicodeWidthStr::width(
+            &first.lines[row][..first.lines[row].find("executing").unwrap()],
+        );
+        let rendition = |spans: &[mez_terminal::TerminalStyleSpan], column| {
+            spans
+                .iter()
+                .rev()
+                .find(|span| column >= span.start && column < span.start + span.length)
+                .map(|span| span.rendition)
+        };
+        for column in 0..status_start {
+            assert_eq!(
+                rendition(&first.line_style_spans[row], column),
+                rendition(&later.line_style_spans[row], column)
+            );
+        }
+        assert_eq!(prompt.buffer.line(), "Exact draft 雪");
+    }
+}
+
 /// Product guidance is lowercase while case-sensitive draft bytes remain exact.
 #[test]
 fn composer_lowercase_guidance_preserves_draft_case() {

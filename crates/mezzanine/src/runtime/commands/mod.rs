@@ -1847,6 +1847,7 @@ impl RuntimeSessionService {
                 json_escape(&model_profile_name)
             ),
         )?;
+        self.note_composer_prompt(&conversation_id, prompt);
         Ok(RuntimeAgentPromptTurnStart {
             turn_id,
             agent_id,

@@ -655,6 +655,8 @@ pub struct TerminalPaneFrameContext<Prompt = (), DisplayLines = Vec<String>> {
 pub struct AgentComposerContext {
     /// This projection cannot accept input (observer or unfocused pane).
     pub read_only: bool,
+    /// Resolved inert conversation title, distinct from agent identity and pane title.
+    pub session_title: Option<String>,
     /// Ordinary prose submitted now guides an active task rather than starting one.
     pub guides_active_task: bool,
     /// Escape currently interrupts before readline decoding.

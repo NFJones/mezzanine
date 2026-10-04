@@ -224,6 +224,7 @@ pub(crate) use provider_execution::execute_agent_provider_persistence_work;
 pub(crate) use provider_execution::{
     ProviderFailureRecoveryDecision, decide_provider_failure_recovery,
 };
+mod composer_titles;
 mod provider_tasks;
 mod routed_workflow;
 mod sandbox_assessment;
@@ -577,6 +578,8 @@ pub(crate) struct RuntimeAgentComponent {
     session_title_accounting_limit: Option<usize>,
     /// Bounded per-conversation title attempts, in-flight marker, and retirement.
     session_title_tasks: session_titles::RuntimeSessionTitleTasks,
+    /// Live conversation-owned title inputs, never read from storage during rendering.
+    composer_titles: BTreeMap<String, composer_titles::ComposerTitleInputs>,
     /// Cumulative provider token usage keyed by conversation and model.
     agent_token_usage_by_conversation:
         BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
@@ -3635,7 +3638,23 @@ impl RuntimeSessionService {
         &mut self,
         policy: crate::session_title::SessionTitlePolicy,
     ) {
+        let before = self
+            .agent_shell_store()
+            .sessions()
+            .map(|session| {
+                (
+                    session.pane_id.clone(),
+                    self.composer_session_title(&session.pane_id),
+                )
+            })
+            .collect::<Vec<_>>();
         self.agent.agent_session_title_policy = policy;
+        let panes = before
+            .into_iter()
+            .filter(|(pane, title)| *title != self.composer_session_title(pane))
+            .map(|(pane, _)| pane)
+            .collect::<Vec<_>>();
+        self.invalidate_composer_title_projections(&panes);
     }
 
     /// Returns how many peer-message turns one agent has started.

@@ -3270,6 +3270,12 @@ a display-only help row around the existing input surface. The header rule MUST
 fill the allocated pane width, independent of the prose wrapping cap, without
 crossing split dividers. Static decoration MUST use foreground-only dim
 thinking-log styling; the active status label retains its wave overlay.
+Unfocused/read-only composers MUST use their own resolved conversation title
+when available, falling back to `agent draft`. This is not agent identity or a
+pane/window rename. Title inputs MUST be retained at lifecycle boundaries;
+rendering, focus and animation MUST NOT read catalogs or schedule providers.
+Titles MUST be sanitized and cell-budgeted at grapheme boundaries before header
+assembly, reserving status/time and deriving wave offsets from the final label.
 The context MUST
 distinguish idle `ask mez`, a running turn accepting steering (`guide this task`),
 slash-command drafts, pending approval review, history search and discarded

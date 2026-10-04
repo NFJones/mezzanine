@@ -8,6 +8,159 @@ use crate::session_title::SessionTitlePolicy;
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use mez_core::ids::ClientId;
 
+/// Compound resume must restore every retained source, not just the objective,
+/// when authority restoration fails after temporarily binding another session.
+#[test]
+fn runtime_composer_failed_resume_restores_all_title_inputs() {
+    let (mut service, store, primary, conversation) =
+        title_ready_service("composer-resume-rollback");
+    service.note_composer_prompt(&conversation, "First Source");
+    service.note_composer_prompt(&conversation, "Latest Source");
+    service.note_composer_objective(&conversation, Some("Objective Source"));
+    service.set_composer_generated_title(&conversation, "Generated Source");
+    service
+        .execute_agent_shell_command(&primary, "/name-session Manual Source")
+        .unwrap();
+    append_user_prompt(&store, "composer-target", "Target prompt");
+    service.fail_next_agent_resume_after_authority_restore_for_tests();
+    let error = service
+        .execute_agent_shell_resume_command("%1", "/resume composer-target")
+        .unwrap_err();
+    assert!(
+        error.message().contains("post-authority restoration"),
+        "{error}"
+    );
+    assert_eq!(
+        service.composer_session_title("%1").as_deref(),
+        Some("Manual Source")
+    );
+    service.set_composer_manual_title(&conversation, None);
+    for (policy, title) in [
+        (SessionTitlePolicy::Generated, "Generated Source"),
+        (SessionTitlePolicy::FirstPrompt, "First Source"),
+        (SessionTitlePolicy::LastPrompt, "Latest Source"),
+    ] {
+        service.set_agent_session_title_policy(policy);
+        assert_eq!(service.composer_session_title("%1").as_deref(), Some(title));
+    }
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// The saved-browser clear operation updates all live conversation projections
+/// immediately and queues redraw for an unfocused owning pane.
+#[test]
+fn runtime_composer_saved_browser_clear_refreshes_live_title() {
+    let (mut service, _store, primary, conversation) =
+        title_ready_service("composer-browser-clear");
+    service.note_composer_prompt(&conversation, "Derived Source");
+    service
+        .execute_agent_shell_command(&primary, "/name-session Manual Source")
+        .unwrap();
+    split_title_conversation(&mut service, &primary);
+    service.drain_deferred_effects_transition();
+    service.clear_saved_session_name(&conversation).unwrap();
+    assert_eq!(
+        service.composer_session_title("%1").as_deref(),
+        Some("Derived Source")
+    );
+    assert!(service.drain_deferred_effects_transition().side_effects.iter().any(|effect|
+        matches!(effect, RuntimeSideEffect::RenderClient { client_id, .. } if client_id == &primary)));
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Title policy and manual names resolve from retained conversation inputs.
+/// Clearing a name restores the policy source, failed hydration keeps the prior
+/// title, and replacing a binding cannot expose the previous occupant's label.
+#[test]
+fn runtime_composer_title_policy_clear_and_replacement_are_conversation_owned() {
+    let (mut service, store, primary, conversation) =
+        title_ready_service("composer-title-lifecycle");
+    service.note_composer_prompt(&conversation, "First Prompt Case");
+    service.note_composer_prompt(&conversation, "Latest Prompt Case");
+    service.note_composer_objective(&conversation, Some("Objective Case"));
+    service.set_composer_generated_title(&conversation, "Generated Case");
+    assert_eq!(
+        service.composer_session_title("%1").as_deref(),
+        Some("Generated Case")
+    );
+    service.set_agent_session_title_policy(SessionTitlePolicy::LastPrompt);
+    assert_eq!(
+        service.composer_session_title("%1").as_deref(),
+        Some("Latest Prompt Case")
+    );
+    service
+        .execute_agent_shell_command(&primary, "/name-session Manual Case")
+        .unwrap();
+    assert_eq!(
+        service.composer_session_title("%1").as_deref(),
+        Some("Manual Case")
+    );
+    service
+        .execute_agent_shell_command(&primary, "/name-session --clear")
+        .unwrap();
+    assert_eq!(
+        service.composer_session_title("%1").as_deref(),
+        Some("Latest Prompt Case")
+    );
+    service.set_agent_session_title_policy(SessionTitlePolicy::Objective);
+    assert_eq!(
+        service.composer_session_title("%1").as_deref(),
+        Some("Objective Case")
+    );
+    // An unavailable store must not turn rendering into a read or erase cache.
+    fs::remove_dir_all(store.root()).unwrap();
+    fs::write(store.root(), "not a catalog directory").unwrap();
+    service.hydrate_composer_title(&conversation);
+    assert_eq!(
+        service.composer_session_title("%1").as_deref(),
+        Some("Objective Case")
+    );
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "replacement-title", 0)
+        .unwrap();
+    assert!(service.composer_session_title("%1").is_none());
+    fs::remove_file(store.root()).unwrap();
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// An unfocused composer shows its own resolved conversation title rather than
+/// agent identity or a generic draft label. Focused editing remains unchanged.
+#[test]
+fn runtime_composer_unfocused_header_uses_conversation_title() {
+    let (mut service, _store, primary, _) = title_ready_service("composer-session-title");
+    service
+        .execute_agent_shell_command(&primary, "/name-session Case Sensitive Session")
+        .unwrap();
+    let (_pane, _) = split_title_conversation(&mut service, &primary);
+    let size = Size::new(180, 30).unwrap();
+    service
+        .apply_primary_client_resize_event(&primary, size)
+        .unwrap();
+    let shown = service
+        .render_client_view(
+            mez_mux::presentation::ClientViewRole::Primary,
+            size,
+            &crate::host::terminal::TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        shown
+            .lines
+            .iter()
+            .any(|line| line.contains("── Case Sensitive Session")),
+        "{:?}",
+        shown.lines
+    );
+    assert!(
+        shown.lines.iter().any(|line| line.contains("ask mez")),
+        "{:?}",
+        shown.lines
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Expiring an issued request may queue a retry, but deferring that unissued
 /// retry at capacity must preserve the original owner's late accounting evidence.
 #[test]

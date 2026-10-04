@@ -467,6 +467,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("transcript persistence is unavailable"))?;
         if name == "--clear" {
             let cleared = store.clear_session_name(&conversation_id)?;
+            self.set_composer_manual_title(&conversation_id, None);
             if cleared {
                 self.invalidate_agent_prompt_selector_extra_candidates();
             }
@@ -486,6 +487,7 @@ impl RuntimeSessionService {
             directory,
             ephemeral,
         )?;
+        self.set_composer_manual_title(&conversation_id, Some(&named.name));
         self.invalidate_agent_prompt_selector_extra_candidates();
         Ok(AgentShellCommandOutcome::Mutated {
             command: "name-session".to_string(),
@@ -565,6 +567,7 @@ impl RuntimeSessionService {
             resume_directory_available,
             mut projection,
         } = prepared_read;
+        let composer_title_metadata = saved.clone();
         let summary = saved.summary;
         let conversation_kind = saved.conversation_kind;
         let resume_directory = runtime_resume_directory_from_summary(&summary)
@@ -589,6 +592,7 @@ impl RuntimeSessionService {
             .cloned()
             .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
         let previous_primary_names = self.snapshot_primary_agent_names();
+        let previous_composer_titles = self.snapshot_composer_titles();
         let previous_agent_screen = self
             .agent_pane_screen_state(pane_id)
             .map(|state| (state.conversation_id().to_string(), state.screen().clone()));
@@ -847,6 +851,7 @@ impl RuntimeSessionService {
         let (session_id, transcript_entries, visibility) = match resume_result {
             Ok(result) => result,
             Err(error) => {
+                self.restore_composer_titles(previous_composer_titles.clone());
                 self.restore_primary_agent_names(previous_primary_names);
                 self.agent_shell_store_mut()
                     .restore_session(pane_id, previous_session.clone())?;
@@ -946,6 +951,7 @@ impl RuntimeSessionService {
                     &previous_session.session_id,
                     previous_objective.as_deref(),
                 );
+                self.restore_composer_titles(previous_composer_titles);
                 store.save_agent_session_metadata(
                     self.session.id.as_str(),
                     &previous_checkpoint_records,
@@ -953,6 +959,7 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
+        self.install_composer_saved_title(&composer_title_metadata);
         Ok(AgentShellCommandOutcome::Mutated {
             command: "resume".to_string(),
             body: format!(

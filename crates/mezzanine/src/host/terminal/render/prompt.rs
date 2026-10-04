@@ -864,6 +864,14 @@ pub(super) fn render_agent_prompt_block(
     let mut decoration_rows = Vec::new();
     if comfortable && let Some(composer) = composer {
         let (label, help) = agent_composer_help(&prompt, composer);
+        let label = if composer.read_only {
+            let title = composer.session_title.as_deref().unwrap_or(label);
+            let reserved =
+                6_usize.saturating_add(live_footer.map(terminal_text_width).unwrap_or(0));
+            composer_title_label(title, width.saturating_sub(reserved))
+        } else {
+            label.to_string()
+        };
         let header = live_footer.map_or_else(
             || format!("── {label} ──"),
             |status| format!("── {label} · {status}"),
@@ -911,9 +919,32 @@ pub(super) fn render_agent_prompt_block(
     }
 }
 
-/// Derives display-only help from actual readline precedence and runtime facts.
-/// Selectors cycle on Tab; Enter still submits. Reverse search accepts a match
-/// without submission; active-turn Escape always interrupts before readline.
+/// Sanitizes and ellipsizes inert title text at terminal grapheme boundaries.
+/// Budget excludes the header prefix, separators and retained live status.
+fn composer_title_label(title: &str, budget: usize) -> String {
+    let title = crate::session_title::bound_session_title(title).unwrap_or_default();
+    if terminal_text_width(&title) <= budget {
+        return title;
+    }
+    let ellipsis = "…";
+    let available = budget.saturating_sub(terminal_text_width(ellipsis));
+    if budget < terminal_text_width(ellipsis) {
+        return String::new();
+    }
+    let mut clipped = String::new();
+    let mut used = 0_usize;
+    for grapheme in terminal_graphemes(&title) {
+        let cells = terminal_grapheme_width(grapheme);
+        if used.saturating_add(cells) > available {
+            break;
+        }
+        clipped.push_str(grapheme);
+        used = used.saturating_add(cells);
+    }
+    format!("{}{ellipsis}", clipped.trim_end())
+}
+
+/// Derives editing help independently of the inert read-only title label.
 fn agent_composer_help(
     prompt: &ReadlinePrompt,
     context: &mez_mux::presentation::AgentComposerContext,

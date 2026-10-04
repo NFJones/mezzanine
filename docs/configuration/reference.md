@@ -957,6 +957,12 @@ description.
 | `agents.name_mode` | string | `"nonhuman"` | Prospective display-name allocation mode for primary and child agents: `nonhuman`, `human`, or `literal`. Reloading or a live config change affects only new identities and never renames existing lineage or persisted conversations. Schema 100 migrates the former `agents.subagent_name_mode` key, preferring an authored new key. Canonical agent IDs and authority remain unchanged. |
 | `agents.max_depth` | integer | `2` | Maximum subagent tree depth. |
 
+The same resolved conversation title labels unfocused/read-only composer headers
+at comfortable geometry. Manual names retain precedence; unavailable titles fall
+back to `agent draft`. The label is distinct from `agents.name_mode` identities
+and pane/window titles, and is cell-truncated without changing draft bytes or
+requesting another generated title during rendering or focus changes.
+
 ### `agents.auto_sizing`
 
 Before provider authentication, every model-profile selector defaults to

@@ -4853,6 +4853,7 @@ impl RuntimeSessionService {
         }
         self.settle_dead_pane_managed_shell_ownership(pane_id);
         self.agent_shell_store_mut().remove_session(pane_id);
+        self.prune_composer_titles();
         self.integration.remove_pane_permission_override(pane_id);
         self.clear_agent_subshell_state(pane_id);
         self.clear_agent_subshell_shell_identity(pane_id);

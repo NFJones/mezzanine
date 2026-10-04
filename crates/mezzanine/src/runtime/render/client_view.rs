@@ -1152,6 +1152,7 @@ impl RuntimeSessionService {
             });
         mez_mux::presentation::AgentComposerContext {
             read_only: false,
+            session_title: self.composer_session_title(pane_id),
             guides_active_task: self
                 .agent_shell_store()
                 .get(pane_id)
