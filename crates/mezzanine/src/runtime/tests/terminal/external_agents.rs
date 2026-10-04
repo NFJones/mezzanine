@@ -6,6 +6,94 @@
 
 use super::*;
 
+/// Pi lifecycle transport consumes an explicitly primary-issued capability over
+/// real Unix IPC, without attaching a client or minting authority itself. Each
+/// matching acknowledgment settles one exact owner report through production
+/// ingress; register/renew/retire preserve the runtime's client membership.
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_pi_transport_round_trips_capability_only_lifecycle() {
+    use crate::host::async_runtime::{
+        AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
+        serve_async_runtime_control_connection,
+    };
+    use crate::integrations::bootstrap::{
+        pi::Observation, pi_owner::LifecycleOwner, pi_transport::CapabilityTransport,
+    };
+    let root = temp_root("runtime-pi-transport");
+    fs::create_dir_all(&root).unwrap();
+    let socket = fs::canonicalize(&root).unwrap().join("control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let launch: serde_json::Value = serde_json::from_str(&service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"launch","method":"agent/external/launch","params":{"pane_id":"%1","harness":"pi","version":"1.0.2"}}"#, &primary,
+    )).unwrap();
+    let mut owner = LifecycleOwner::new("bound").unwrap();
+    let transport = CapabilityTransport::new(
+        &socket,
+        secrecy::SecretString::from(
+            launch["result"]["launch_token"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        ),
+        launch["result"]["generation"].as_u64().unwrap(),
+        &owner,
+    )
+    .unwrap();
+    let clients_before = service.session().clients().len();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let client = async {
+        let registered = transport.register("Pi fixture").await.unwrap();
+        assert_eq!(
+            registered.agent_id,
+            transport.renew().await.unwrap().agent_id
+        );
+        owner.observe(1, "bound", Observation::Running).unwrap();
+        assert!(transport.deliver_next(&mut owner).await.unwrap());
+        assert!(owner.pending().is_none());
+        owner
+            .observe(1, "bound", Observation::SessionShutdown { reason: "quit" })
+            .unwrap();
+        assert!(transport.deliver_next(&mut owner).await.unwrap());
+        assert!(owner.pending().is_none());
+    };
+    let server = async {
+        for _ in 0..4 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut connection = ControlConnectionState::new(true, false);
+            serve_async_runtime_control_connection(
+                &mut stream,
+                &handle,
+                &mut connection,
+                AsyncRuntimeControlConnectionConfig::new(
+                    65536,
+                    crate::runtime::current_effective_uid(),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert!(!connection.initialized());
+            assert!(connection.caller_client_id().is_none());
+        }
+        handle.shutdown().await.unwrap();
+    };
+    let ((), (), mut exit) = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        tokio::join!(client, server, actor.run())
+    })
+    .await
+    .unwrap();
+    assert_eq!(exit.service.session().clients().len(), clients_before);
+    assert!(exit.service.external_agent_rows().is_empty());
+    exit.service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Canonical retired harness launch is rejected before capability allocation.
 /// Rejection cannot consume a launch generation or create an identity; valid
 /// other-harness launches retain their existing behavior.

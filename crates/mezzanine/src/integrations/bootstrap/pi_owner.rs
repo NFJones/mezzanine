@@ -90,6 +90,12 @@ impl LifecycleOwner {
         self.observer
     }
 
+    /// Returns immutable reducer binding for its privately supplied transport.
+    /// Neither spelling nor incarnation is a registration credential.
+    pub(crate) fn transport_binding(&self) -> (&str, &str) {
+        (&self.session, &self.incarnation)
+    }
+
     /// Attaches an explicitly replaced observer to the same authorized session.
     /// Session replacement requires a distinct externally authorized owner.
     pub(crate) fn attach_after_reload(&mut self, session: &str) -> Result<u64> {

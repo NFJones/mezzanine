@@ -302,6 +302,13 @@ outcomes MUST NOT publish terminal presentation before settlement, and duplicate
 settlement MUST NOT erase its accepted outcome. Reload replacement stays bound
 to the same session; a new session requires separately authorized ownership.
 These reducer guarantees alone MUST NOT imply working transport or renewal.
+The Pi capability-only Unix transport MUST consume explicitly supplied private
+authority without initializing a primary or minting a launch. One 500 ms total
+deadline MUST cover connect, write and strict bounded reply decoding. Only a
+matching typed acknowledgment may consume the originating owner's pending
+head; failed or lost replies MUST retain exact work without automatic retry.
+Credentials and peer payloads MUST NOT appear in diagnostics. This transport
+component alone MUST NOT certify private delivery, idle renewal or installation.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow

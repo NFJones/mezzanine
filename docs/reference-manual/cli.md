@@ -128,6 +128,16 @@ success before settlement, and repeated settlement preserves its accepted
 outcome. Queue/counter exhaustion is explicit and leaves accepted state intact.
 The reducer has no transport, credentials, renewal timer or installation authority.
 
+The internal Pi capability-only transport supports restricted registration,
+renewal, presentation and retirement over same-user-authenticated Unix IPC. It
+requires an explicitly supplied private capability and originating lifecycle
+owner; it cannot initialize a primary, mint authority or rebind a session.
+Each exchange has one 500 ms deadline and strict reply bounds. Matching typed
+acknowledgments consume only the original pending head; lost/failed replies
+retain exact work without automatic retries. Errors omit tokens and peer content.
+Private launch delivery, idle-renewal scheduling and extension installation remain
+unfinished; this transport component does not enable a certified manifest.
+
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.
