@@ -1,4 +1,9 @@
 //! Async-runtime tests owned by terminal loop behavior.
+//!
+//! Fake-I/O routing fixtures use paused Tokio time so unrelated test threads
+//! cannot turn CPU scheduling delays into operation timeouts. Dedicated stalled
+//! readiness and accepted-mutation tests preserve the real deadline contract;
+//! wall-clock responsiveness is measured separately by the release-load harness.
 
 use super::super::*;
 
@@ -825,7 +830,9 @@ async fn async_attached_terminal_loop_keeps_mixed_sgr_input_frame_fenced() {
 /// overlay state instead of a private prompt-error acknowledgement loop. This
 /// keeps the async loop non-blocking even when no acknowledgement input is
 /// available in the current batch.
-#[tokio::test(flavor = "current_thread")]
+/// Virtual time makes the hang guard independent of other test threads' CPU
+/// load; this fixture validates error routing, not end-to-end wall-clock latency.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_loop_routes_runtime_errors_to_actor_overlay() {
     let mut service = test_service();
     let primary = service
@@ -1093,7 +1100,7 @@ async fn async_attached_terminal_loop_runs_actor_owned_command_prompt() {
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_loop_routes_agent_shell_input_non_modally() {
     let mut service = test_service();
     let primary = service
@@ -1238,7 +1245,7 @@ async fn async_attached_terminal_loop_routes_agent_shell_input_non_modally() {
 /// frame in the same attached-terminal loop pass. Without this refresh, the
 /// submitted prompt text stayed visible until a later agent state change caused
 /// the next render, which made queued follow-up prompts feel blocked.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_loop_clears_agent_prompt_on_submit() {
     let mut service = test_service();
     let primary = service
@@ -1434,7 +1441,7 @@ async fn async_attached_terminal_loop_full_redraws_after_agent_prompt_exit() {
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_loop_renders_observer_without_applying_input() {
     let (service, observer) = test_service_with_observer();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
@@ -1579,7 +1586,7 @@ async fn async_attached_terminal_loop_schedules_render_timers_after_direct_flush
 /// The prompt submission only records the dispatch, so the ingress that applied
 /// the input must convert it into `DispatchAgentCommand`; without that the
 /// command acknowledges in flight and no worker ever claims it.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_loop_drains_deferred_agent_command_effects() {
     let mut service = test_service();
     let primary = service

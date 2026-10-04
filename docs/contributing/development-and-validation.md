@@ -146,6 +146,13 @@ overlay. The report never serializes record titles, metadata, or bodies. Use
 identical worker counts and fixture sizes when comparing artifacts; the sample
 is a regression signal, not a portable latency budget.
 
+Fake-I/O attached-terminal routing tests use paused Tokio time to isolate
+correctness from other test threads' CPU scheduling. Dedicated timeout tests
+still verify the 250 ms per-operation deadline and accepted-input noncancellation.
+An end-to-end loop can contain multiple awaited operations; that deadline is not
+a whole-loop wall-clock SLA. Use controlled release-load measurements for
+responsiveness qualification, not an oversubscribed debug test harness.
+
 Run platform-specific shell and PTY changes on both Linux and macOS when
 available. To reproduce the macOS CI shape, run the full test suite serially.
 
