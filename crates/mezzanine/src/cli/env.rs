@@ -49,6 +49,8 @@ pub(super) enum SocketSelection {
 /// and agent slash commands intentionally use separate parsers.
 #[derive(Debug, Clone, Subcommand)]
 pub(super) enum CliCommand {
+    /// Plans or reconciles release-qualified harness hooks; never installs vendor binaries.
+    Bootstrap(super::bootstrap::BootstrapCliArgs),
     /// Forwards one normalized observational event from bounded stdin; never initializes a client.
     HarnessEvent,
     /// Manages Mezzanine configuration.

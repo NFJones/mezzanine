@@ -258,6 +258,15 @@ auxiliary commands, forward arbitrary vendor payloads or retry effects. It MUST
 use same-user Unix peer authentication, finite input/exchange deadlines and
 neutral output on telemetry failure. Vendor normalization, private launch-token
 delivery and renewable-lease scheduling remain explicit adapter responsibilities.
+The common `mez bootstrap <harness>` installer MUST admit only compiled,
+release-qualified manifests. Research candidates MUST NOT imply certification or
+authorize guessed hooks. Planning/checking MUST be distinct from explicit apply,
+uninstall and recovery, with no daemon dependency or credential installation.
+Owned-file and exact-JSON-entry receipts MUST protect unrelated settings;
+edited ownership MUST conflict. Publication MUST retain bounded recovery intent
+before changing destinations, reject symlink/special-node traversal, and never
+claim whole-install atomicity or external-writer CAS. Vendor adapters remain
+responsible for released schema qualification and observational launch binding.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow

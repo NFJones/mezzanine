@@ -83,6 +83,8 @@ mod attach;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod auth;
+/// Owns daemon-free admission for certified harness installation.
+mod bootstrap;
 /// Exposes the config module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

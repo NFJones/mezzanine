@@ -57,6 +57,31 @@ daemon; add
 
 ## Foreground service options
 
+### Harness bootstrap
+
+`mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
+accepts `claude`, `codex`, `gemini`, `copilot`, `opencode`, and `cursor` as research
+candidates, not certified integrations. The default or `--plan` inspects a plan;
+`--check` checks owned state. Explicit `--apply`, `--uninstall`, and `--recover`
+are separate intents. The command is daemon-free and does not perform socket
+cleanup, vendor executable discovery, credential installation or hook-trust bypass.
+
+**No released vendor adapter is currently certified in the compiled registry.**
+Candidate plans report `supported=false` and unavailable lifecycle/usage;
+mutation requests fail before touching the root. Test-only manifests qualify the
+common engine, not any vendor release. Vendor adapter tasks must supply reviewed
+release-specific artifacts, private launch binding, neutral responses and recovery
+guidance before installation is enabled.
+
+The common engine owns exact whole files or exact object entries in strict JSON.
+Edited ownership conflicts rather than overwriting user changes. Repeat is
+byte-stable; uninstall removes owned entries rather than restoring stale backups.
+Strict-JSON changes may reformat surrounding whitespace; JSONC/TOML are not
+silently converted. Publication uses no-follow directory handles, bounded regular
+files, a cooperating-installer lock, exact preimages and a private forward-recovery
+journal. A partial transaction remains explicit; recovery refuses foreign edits.
+Final check plus rename is not atomic CAS against arbitrary external writers.
+
 ### Normalized observational hook helper
 
 `mez -S /absolute/control.sock harness-event` reads one JSON envelope from stdin:

@@ -164,7 +164,7 @@ async fn run_with_inner<W: Write, E: Write>(
     if invocation.control_target.is_unix()
         && !matches!(
             invocation.command.as_ref(),
-            Some(CliCommand::Sandbox(_) | CliCommand::HarnessEvent)
+            Some(CliCommand::Sandbox(_) | CliCommand::HarnessEvent | CliCommand::Bootstrap(_))
         )
     {
         cleanup_startup_stale_socket_files(&invocation, env.runtime.uid)?;
@@ -248,6 +248,9 @@ async fn run_with_inner<W: Write, E: Write>(
         }
         Some(CliCommand::HarnessEvent) => {
             super::harness_event::run(&socket_selection, stdout).await?;
+        }
+        Some(CliCommand::Bootstrap(args)) => {
+            super::bootstrap::run(args, output_format, stdout)?;
         }
         Some(CliCommand::Version) => write!(stdout, "{}", super::render_cli_version()?)?,
         Some(CliCommand::Completion(args)) => {

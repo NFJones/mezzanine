@@ -4,6 +4,7 @@
 //! assets, and filesystem discovery over lower provider-independent contracts.
 
 pub(crate) mod agent;
+pub(crate) mod bootstrap;
 pub(crate) mod hooks;
 pub(crate) mod macros;
 pub(crate) mod mcp;
