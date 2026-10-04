@@ -6,6 +6,31 @@
 
 use super::*;
 
+/// Canonical retired harness launch is rejected before capability allocation.
+/// Rejection cannot consume a launch generation or create an identity; valid
+/// other-harness launches retain their existing behavior.
+#[test]
+fn runtime_external_retired_gemini_cannot_allocate_launch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"retired","method":"agent/external/launch","params":{"pane_id":"%1","harness":"gemini","version":"fixture"}}"#, &primary,
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert!(response.get("error").is_some());
+    assert!(response.to_string().contains("retired"));
+    assert!(service.external_agent_rows().is_empty());
+    let accepted = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"active","method":"agent/external/launch","params":{"pane_id":"%1","harness":"codex","version":"fixture"}}"#, &primary,
+    );
+    let accepted: serde_json::Value = serde_json::from_str(&accepted).unwrap();
+    assert_eq!(accepted["result"]["generation"], 1);
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Retiring an observational registration must preserve shared pane, window and
 /// session traffic, including acceptance receipts used to deduplicate retries.
 #[test]

@@ -539,6 +539,12 @@ launcher must deliver the token privately; do not put it in argv, logs or config
 Launch issuance deliberately bypasses the generic request replay cache. A lost
 issuance reply requires a new capability; the unused binding expires.
 
+The exact canonical harness `gemini` is retired: new launch and usage admission
+are rejected before capability or accounting-work allocation. Existing expense,
+history and replay tombstones are not deleted or relabelled. Provider names and
+Gemini-named models under native or other harnesses are unaffected. Retirement
+does not filter completion of already-admitted work or install a replacement.
+
 Hooks use fresh authenticated Unix connections **without** `control/initialize`:
 
 - `agent/external/register`: `launch_token`, `generation`, `external_session_id`,

@@ -267,6 +267,14 @@ edited ownership MUST conflict. Publication MUST retain bounded recovery intent
 before changing destinations, reject symlink/special-node traversal, and never
 claim whole-install atomicity or external-writer CAS. Vendor adapters remain
 responsible for released schema qualification and observational launch binding.
+The canonical external harness `gemini` is retired without a replacement.
+Bootstrap MUST reject all Gemini intents before root access; new launch,
+runtime usage and direct external-ledger admission MUST reject that exact
+harness before allocating authority or accounting work. Historical expense,
+category coverage, project attribution and replay guards MUST remain intact.
+Independent Google/Gemini provider/model accounting under native or other
+harnesses MUST remain supported. Retirement MUST NOT delete vendor/user files,
+relabel history, synthesize fallback usage or filter already-admitted completion.
 The pinned OpenCode completed-message projection MUST bind an explicit session
 and use one immutable message-scoped delta stream. Identical completed snapshots
 MUST replay without new expense; changed counters, model or completion time MUST

@@ -5,6 +5,7 @@
 
 pub(crate) mod agent;
 pub(crate) mod bootstrap;
+pub(crate) mod harness_policy;
 pub(crate) mod hooks;
 pub(crate) mod macros;
 pub(crate) mod mcp;

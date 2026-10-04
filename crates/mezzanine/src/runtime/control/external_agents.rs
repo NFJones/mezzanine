@@ -122,6 +122,7 @@ impl RuntimeSessionService {
             ));
         }
         let version = text(&params, "version", 128)?;
+        crate::integrations::harness_policy::require_active_external_harness(&harness)?;
         self.refresh_project_trust_store_from_disk_if_changed()?;
         self.reconcile_external_agent_registrations();
         let process = self

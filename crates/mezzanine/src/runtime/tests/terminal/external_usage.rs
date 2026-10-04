@@ -8,6 +8,39 @@ use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionAct
 use crate::runtime::current_unix_seconds;
 use crate::storage::token_usage::TokenUsageStore;
 
+/// A retired legacy binding cannot reserve new usage work. Reports admitted
+/// before the binding changes still settle their frozen provenance once; the
+/// admission guard must not erase incurred expense at completion.
+#[test]
+fn runtime_external_retired_gemini_rejects_legacy_binding_without_reservation() {
+    let (mut service, connection, params, store) = fixture();
+    let request = crate::control::parse_json_rpc_request(
+        &serde_json::json!({"jsonrpc":"2.0","id":"usage","method":"agent/external/usage","params":params}).to_string(),
+    ).unwrap();
+    let work = service
+        .prepare_external_usage(&request, &connection)
+        .unwrap();
+    let before = service.external_usage_reservation_counts_for_tests();
+    service.set_external_binding_harness_for_tests("gemini");
+    let error = service
+        .prepare_external_usage(&request, &connection)
+        .unwrap_err();
+    assert!(error.message().contains("retired"));
+    assert_eq!(
+        service.external_usage_reservation_counts_for_tests(),
+        before
+    );
+    assert_eq!(external_ledger_input(&store), 0);
+    let commit = work.store.ingest_external(&work.report, work.now).unwrap();
+    service.complete_external_usage(work, Ok(commit));
+    assert_eq!(external_ledger_input(&store), 10);
+    assert_eq!(
+        service.external_usage_reservation_counts_for_tests(),
+        (0, 0)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// External-only status remains observational and must not allocate a native
 /// conversation merely to inspect usage or reset its pane-view baseline.
 #[test]

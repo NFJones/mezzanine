@@ -78,6 +78,21 @@ pub(crate) struct ExternalUsageWork {
 }
 
 impl RuntimeSessionService {
+    /// Seeds historical binding provenance for forward-retirement tests only.
+    #[cfg(test)]
+    pub(crate) fn set_external_binding_harness_for_tests(&mut self, harness: &str) {
+        for binding in self.control.external_agents_mut().bindings.values_mut() {
+            binding.harness = harness.to_string();
+        }
+    }
+
+    /// Reports worker and stream reservations without exposing credentials.
+    #[cfg(test)]
+    pub(crate) fn external_usage_reservation_counts_for_tests(&self) -> (usize, usize) {
+        let usage = &self.control.external_agents().usage;
+        (usage.pending.len(), usage.reservations.len())
+    }
+
     /// Sets a bounded projection limit for deterministic capacity regressions.
     #[cfg(test)]
     pub(crate) fn set_external_usage_stream_limit_for_tests(&mut self, limit: usize) {
@@ -130,6 +145,7 @@ impl RuntimeSessionService {
                         == Some(binding.generation)
             })
             .ok_or_else(|| MezError::forbidden("external launch capability unavailable"))?;
+        crate::integrations::harness_policy::require_active_external_harness(&binding.harness)?;
         let session = super::external_agents::text(&params, "external_session_id", 128)?;
         if binding
             .registration

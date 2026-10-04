@@ -213,6 +213,7 @@ impl TokenUsageStore {
         report: &ExternalUsageReport,
         now: u64,
     ) -> Result<ExternalUsageCommit> {
+        crate::integrations::harness_policy::require_active_external_harness(&report.harness)?;
         report.counters.validate()?;
         for field in [
             &report.owner,

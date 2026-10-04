@@ -10,7 +10,7 @@ use super::{Args, CliOutputFormat, MezError, PathBuf, Result, Write};
 #[derive(Debug, Clone, Args)]
 pub(super) struct BootstrapCliArgs {
     /// Harness whose compiled adapter should be consulted.
-    #[arg(value_parser = ["claude", "codex", "gemini", "copilot", "opencode", "cursor"])]
+    #[arg(value_parser = ["claude", "codex", "copilot", "opencode", "cursor"])]
     harness: String,
     /// Exact vendor release; no shell-based executable discovery is performed.
     #[arg(long)]
@@ -136,6 +136,33 @@ fn run_with_manifest<W: Write>(
 mod tests {
     use super::*;
     use clap::Parser;
+
+    /// Every retired-harness intent fails during argument admission, before
+    /// root access or daemon work. Other candidates remain inspectable.
+    #[test]
+    fn bootstrap_retired_gemini_rejects_every_intent() {
+        #[derive(Parser)]
+        struct Fixture {
+            #[command(flatten)]
+            args: BootstrapCliArgs,
+        }
+        for flag in ["--plan", "--check", "--apply", "--uninstall", "--recover"] {
+            assert!(
+                Fixture::try_parse_from([
+                    "fixture",
+                    "gemini",
+                    "--root",
+                    "/missing/retired/root",
+                    flag,
+                ])
+                .is_err()
+            );
+        }
+        assert!(Fixture::try_parse_from(["fixture", "gemini"]).is_err());
+        for harness in ["claude", "codex", "copilot", "opencode", "cursor"] {
+            assert!(Fixture::try_parse_from(["fixture", harness, "--plan"]).is_ok());
+        }
+    }
 
     /// Compiled fixture admission drives plan, apply, repeat and uninstall without
     /// daemon access. The fixture is not advertised as a certified vendor release.

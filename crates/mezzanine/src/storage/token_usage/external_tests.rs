@@ -6,6 +6,89 @@
 use super::*;
 use mez_agent::ModelTokenUsageKey;
 
+/// Retirement blocks fresh and replay admission, not historical decoding.
+/// A seeded old ledger keeps expense, optional coverage and replay tombstones;
+/// Gemini-named providers/models under other harnesses remain accepted.
+#[test]
+fn external_retired_gemini_preserves_history_and_other_providers() {
+    let (fresh, mut rejected) = fixture();
+    rejected.harness = "gemini".into();
+    for (mode, baseline) in [
+        ("delta", false),
+        ("cumulative", false),
+        ("cumulative", true),
+    ] {
+        rejected.mode = mode.into();
+        rejected.baseline = baseline;
+        assert!(fresh.ingest_external(&rejected, 100).is_err());
+    }
+    assert!(!fresh.path().exists());
+    let (store, mut report) = fixture();
+    report.project = Some(AccountingProjectId::from_stored(new_token_usage_event_id()).unwrap());
+    report.model = ModelTokenUsageKey::new("google", "gemini-fixture");
+    store.ingest_external(&report, 100).unwrap();
+    let connection = rusqlite::Connection::open(store.path()).unwrap();
+    connection.execute_batch("UPDATE token_usage_events SET harness='gemini'; UPDATE external_usage_streams SET harness='gemini';").unwrap();
+    drop(connection);
+    report.harness = "gemini".into();
+    let reopened = TokenUsageStore::new(store.path());
+    let before = reopened
+        .history_snapshot(100, &[1], &TokenHistoryScope::default())
+        .unwrap();
+    for (mode, baseline) in [
+        ("delta", false),
+        ("cumulative", false),
+        ("cumulative", true),
+    ] {
+        report.mode = mode.into();
+        report.baseline = baseline;
+        assert!(reopened.ingest_external(&report, 100).is_err());
+    }
+    let after = reopened
+        .history_snapshot(100, &[1], &TokenHistoryScope::default())
+        .unwrap();
+    assert_eq!(before.windows, after.windows);
+    let (key, usage) = after.windows[&1].iter().next().unwrap();
+    assert_eq!(key.harness, "gemini");
+    assert_eq!(key.project, report.project);
+    assert_eq!(usage.usage.input_tokens, 10);
+    assert_eq!(usage.usage.cached_input_tokens, Some(3));
+    let connection = rusqlite::Connection::open(store.path()).unwrap();
+    for table in ["external_usage_streams", "external_usage_receipts"] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+    report.harness = "opencode".into();
+    report.epoch = "other-source".into();
+    report.mode = "delta".into();
+    report.baseline = false;
+    assert!(reopened.ingest_external(&report, 100).unwrap().applied);
+    report.harness = "codex".into();
+    report.epoch = "gemini-provider".into();
+    report.model.provider = "gemini".into();
+    assert!(reopened.ingest_external(&report, 100).unwrap().applied);
+    let native = TokenUsageEvent {
+        id: "native-gemini-model".into(),
+        project: report.project.clone(),
+        observed_at_unix_seconds: 100,
+        model: report.model.clone(),
+        usage: mez_agent::ModelTokenUsage {
+            input_tokens: 7,
+            ..Default::default()
+        },
+    };
+    reopened.append(&native).unwrap();
+    assert_eq!(
+        reopened.aggregate_windows(100, &[1]).unwrap()[&1][&report.model].input_tokens,
+        7
+    );
+    std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+}
+
 /// Current-schema connections must remain readable while another connection
 /// owns a WAL writer. Schema inspection is not a migration and must not acquire
 /// a second writer lock merely to read committed accounting state.

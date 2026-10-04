@@ -60,11 +60,17 @@ daemon; add
 ### Harness bootstrap
 
 `mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
-accepts `claude`, `codex`, `gemini`, `copilot`, `opencode`, and `cursor` as research
+accepts `claude`, `codex`, `copilot`, `opencode`, and `cursor` as research
 candidates, not certified integrations. The default or `--plan` inspects a plan;
 `--check` checks owned state. Explicit `--apply`, `--uninstall`, and `--recover`
 are separate intents. The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
+
+The Gemini external harness is retired, with no replacement. Every Gemini
+bootstrap intent is rejected before root access. New canonical `gemini` launch
+and external usage admission are also rejected. Historical expense and replay
+guards remain intact; independent Google/Gemini provider and model usage under
+native or other harnesses is unaffected. No vendor files or user hooks are removed.
 
 **No released vendor adapter is currently certified in the compiled registry.**
 Candidate plans report `supported=false` and unavailable lifecycle/usage;
