@@ -1346,6 +1346,137 @@ fn compaction_epoch_rejects_oversized_encoded_summary_before_publication() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A later unwritable sidecar must not prevent restoration of an earlier name
+/// Concurrent checkpoint contenders cannot erase the winning immutable identity
+/// or catalog when their conflicting candidate fails. Ordered retained locks
+/// serialize the capture/commit/rollback interval rather than just each write.
+#[test]
+fn primary_agent_identity_concurrent_checkpoint_preserves_winner() {
+    let root = temp_root("primary-identity-concurrent");
+    let store = AgentTranscriptStore::new(root.clone());
+    let barrier = Arc::new(Barrier::new(2));
+    let workers = ["first-name", "second-name"].map(|name| {
+        let store = store.clone();
+        let barrier = barrier.clone();
+        thread::spawn(move || {
+            let mut record = agent_session_metadata("$names", "shared-root");
+            record.primary_display_name = Some(name.into());
+            record.allowed_actions = Some(mez_agent::AllowedActionSet::say_only());
+            barrier.wait();
+            (
+                name,
+                store.save_agent_session_metadata_checkpoint("$names", &[record]),
+            )
+        })
+    });
+    let outcomes = workers.map(|worker| worker.join().unwrap());
+    assert_eq!(
+        outcomes.iter().filter(|(_, result)| result.is_ok()).count(),
+        1
+    );
+    let winner = outcomes
+        .iter()
+        .find(|(_, result)| result.is_ok())
+        .unwrap()
+        .0;
+    assert_eq!(
+        store
+            .conversation_primary_display_name("shared-root")
+            .unwrap()
+            .as_deref(),
+        Some(winner)
+    );
+    assert_eq!(
+        store.conversation_allowed_actions("shared-root").unwrap(),
+        Some(mez_agent::AllowedActionSet::say_only())
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A later unwritable sidecar must not prevent restoration of an earlier name
+/// and catalog. The failing record already owns an equal catalog, so failure
+/// occurs in the name phase rather than before name publication begins.
+#[test]
+fn primary_agent_identity_checkpoint_restores_earlier_sidecars_on_failure() {
+    let root = temp_root("primary-identity-multiple-failure");
+    let store = AgentTranscriptStore::new(root.clone());
+    let actions = mez_agent::AllowedActionSet::say_only();
+    store
+        .save_conversation_allowed_actions("second", Some(actions.clone()))
+        .unwrap();
+    fs::create_dir(root.join("second/.metadata.json.tmp")).unwrap();
+    let mut first = agent_session_metadata("$names", "first");
+    first.primary_display_name = Some("first-name".into());
+    first.allowed_actions = Some(actions.clone());
+    let mut second = agent_session_metadata("$names", "second");
+    second.primary_display_name = Some("second-name".into());
+    second.allowed_actions = Some(actions.clone());
+    assert!(
+        store
+            .save_agent_session_metadata_checkpoint("$names", &[first, second])
+            .is_err()
+    );
+    assert!(
+        store
+            .conversation_primary_display_name("first")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .conversation_allowed_actions("first")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store.conversation_allowed_actions("second").unwrap(),
+        Some(actions)
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Failed compound metadata publication must restore newly captured identities,
+/// while later successful publication remains first-write/equality-only.
+#[test]
+fn primary_agent_identity_checkpoint_rolls_back_and_preserves_capture() {
+    let root = temp_root("primary-identity-checkpoint");
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut record = agent_session_metadata("$names", "named-root");
+    record.primary_display_name = Some("reserved-name".to_string());
+    store.fail_next_agent_session_metadata_write();
+    assert!(
+        store
+            .save_agent_session_metadata_checkpoint("$names", &[record.clone()])
+            .is_err()
+    );
+    assert!(
+        store
+            .conversation_primary_display_name("named-root")
+            .unwrap()
+            .is_none()
+    );
+    store
+        .save_agent_session_metadata_checkpoint("$names", &[record.clone()])
+        .unwrap();
+    assert_eq!(
+        store
+            .conversation_primary_display_name("named-root")
+            .unwrap()
+            .as_deref(),
+        Some("reserved-name")
+    );
+    assert!(
+        store
+            .save_conversation_primary_display_name("named-root", "replacement")
+            .is_err()
+    );
+    assert_eq!(
+        decode_agent_session_metadata(&encode_agent_session_metadata(&record).unwrap()).unwrap(),
+        record
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Builds minimal valid active-session metadata for persistence and migration tests.
 fn agent_session_metadata(
     mezzanine_session_id: &str,
@@ -1355,6 +1486,7 @@ fn agent_session_metadata(
         mezzanine_session_id: mezzanine_session_id.to_string(),
         pane_id: "%1".to_string(),
         conversation_id: conversation_id.to_string(),
+        primary_display_name: None,
         prompt_cache_lineage_id: format!("lineage-{conversation_id}"),
         visibility: "visible".to_string(),
         running_turn_id: None,
@@ -1874,7 +2006,7 @@ fn transcript_store_persists_user_objective_without_overwriting_kind() {
             .unwrap()
     );
     let metadata = fs::read_to_string(root.join("source").join("metadata.json")).unwrap();
-    assert!(metadata.contains("\"version\":3"));
+    assert!(metadata.contains("\"version\":4"));
     assert!(metadata.contains("\"conversation_kind\":\"root\""));
     assert!(store.delete("source").unwrap());
     assert!(!root.join("source").join("metadata.json").exists());
@@ -4119,7 +4251,9 @@ fn transcript_store_exports_prompt_history_without_creating_the_store() {
 fn agent_session_metadata_decoder_accepts_pre_pane_identity_rows() {
     let metadata = agent_session_metadata("$legacy", "legacy-conversation");
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    let (pre_partition_row, partitions) = encoded
+    let (pre_name_row, name) = encoded.rsplit_once('\t').unwrap();
+    assert!(name.is_empty());
+    let (pre_partition_row, partitions) = pre_name_row
         .rsplit_once('\t')
         .expect("current metadata rows include project partitions");
     assert_eq!(partitions, "[]");
@@ -4129,7 +4263,7 @@ fn agent_session_metadata_decoder_accepts_pre_pane_identity_rows() {
     assert!(appended_field.is_empty());
 
     let legacy_row = legacy_row.replacen(
-        "mez-agent-session-metadata/2",
+        "mez-agent-session-metadata/3",
         "mez-agent-session-metadata/1",
         1,
     );
@@ -4158,7 +4292,7 @@ fn agent_session_metadata_round_trips_project_partitions() {
         usage,
     }];
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    assert!(encoded.starts_with("mez-agent-session-metadata/2\t"));
+    assert!(encoded.starts_with("mez-agent-session-metadata/3\t"));
     assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
     metadata.project_token_usage[0].usage.input_tokens += 1;
     assert!(encode_agent_session_metadata(&metadata).is_err());

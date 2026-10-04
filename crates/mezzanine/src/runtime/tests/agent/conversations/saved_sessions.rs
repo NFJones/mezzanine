@@ -3482,6 +3482,7 @@ fn runtime_resume_objective_metadata_failure_restores_prior_binding_and_identity
                 mezzanine_session_id: mezzanine_session_id.clone(),
                 pane_id: "%9".to_string(),
                 conversation_id: "resume-target".to_string(),
+                primary_display_name: None,
                 prompt_cache_lineage_id: "target-lineage".to_string(),
                 visibility: "visible".to_string(),
                 running_turn_id: None,

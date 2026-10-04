@@ -149,6 +149,7 @@ impl RuntimeSessionService {
                 "agent shell session not found for pane",
             ));
         }
+        self.ensure_primary_agent_name(pane_id)?;
         if let Some(snapshot) = self
             .agent_shell_store()
             .get(pane_id)

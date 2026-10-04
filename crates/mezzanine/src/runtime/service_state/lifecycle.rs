@@ -443,6 +443,8 @@ pub(crate) struct RuntimeDirectResumeProjection {
 pub(crate) struct RuntimeDirectResumeRead {
     /// Conversation selected by the direct resume argument.
     pub(crate) conversation_id: String,
+    /// Durable primary identity read off actor; absent for legacy roots.
+    pub(crate) primary_display_name: Option<String>,
     /// Saved-session catalog and summary state used by the actor commit.
     pub(crate) saved: crate::storage::transcript::SavedAgentSession,
     /// Durable child lineage required before restoring a subagent session.

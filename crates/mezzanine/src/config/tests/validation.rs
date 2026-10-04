@@ -967,18 +967,9 @@ fn validates_agent_peer_message_log_mode_values() {
 #[test]
 fn validates_agent_subagent_name_mode_values() {
     for (format, text) in [
-        (
-            ConfigFormat::Toml,
-            "[agents]\nsubagent_name_mode = \"nonhuman\"\n",
-        ),
-        (
-            ConfigFormat::Json,
-            r#"{"agents":{"subagent_name_mode":"human"}}"#,
-        ),
-        (
-            ConfigFormat::Yaml,
-            "agents:\n  subagent_name_mode: literal\n",
-        ),
+        (ConfigFormat::Toml, "[agents]\nname_mode = \"nonhuman\"\n"),
+        (ConfigFormat::Json, r#"{"agents":{"name_mode":"human"}}"#),
+        (ConfigFormat::Yaml, "agents:\n  name_mode: literal\n"),
     ] {
         let validation = validate_config_text(format, text, ConfigScope::Primary);
 
@@ -989,18 +980,12 @@ fn validates_agent_subagent_name_mode_values() {
         );
     }
     for (format, text) in [
-        (
-            ConfigFormat::Toml,
-            "[agents]\nsubagent_name_mode = \"robot\"\n",
-        ),
-        (
-            ConfigFormat::Toml,
-            "[agents]\nsubagent_name_mode = \"Human\"\n",
-        ),
-        (ConfigFormat::Toml, "[agents]\nsubagent_name_mode = 3\n"),
-        (ConfigFormat::Toml, "[agents]\nsubagent_name_mode = \"\"\n"),
-        (ConfigFormat::Json, r#"{"agents":{"subagent_name_mode":3}}"#),
-        (ConfigFormat::Yaml, "agents:\n  subagent_name_mode: robot\n"),
+        (ConfigFormat::Toml, "[agents]\nname_mode = \"robot\"\n"),
+        (ConfigFormat::Toml, "[agents]\nname_mode = \"Human\"\n"),
+        (ConfigFormat::Toml, "[agents]\nname_mode = 3\n"),
+        (ConfigFormat::Toml, "[agents]\nname_mode = \"\"\n"),
+        (ConfigFormat::Json, r#"{"agents":{"name_mode":3}}"#),
+        (ConfigFormat::Yaml, "agents:\n  name_mode: robot\n"),
     ] {
         let validation = validate_config_text(format, text, ConfigScope::Primary);
 
@@ -1009,9 +994,8 @@ fn validates_agent_subagent_name_mode_values() {
             "accepted subagent name mode {format:?}: {text}"
         );
         assert!(validation.diagnostics.iter().any(|diagnostic| {
-            diagnostic.path == "agents.subagent_name_mode"
-                && diagnostic.message
-                    == "agents.subagent_name_mode must be nonhuman, human, or literal"
+            diagnostic.path == "agents.name_mode"
+                && diagnostic.message == "agents.name_mode must be nonhuman, human, or literal"
         }));
     }
 }

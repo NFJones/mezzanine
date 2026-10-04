@@ -1115,7 +1115,8 @@ exits. A window title MAY be derived from the active pane
 title while the window uses a generated or default name; an explicit non-default
 window name MUST remain stable until a later user or agent rename replaces it.
 While a durable user-owned root agent shell is `Visible` or
-`HidePendingTaskCompletion`, its pane frame MUST display `mez` in place of the
+`HidePendingTaskCompletion`, its pane frame MUST display its conversation-owned
+generated agent identity in place of the
 ordinary pane title unless that pane title has explicit provenance. This is a
 temporary presentation override only: it MUST NOT change the stored pane title
 or title provenance, and automatic or program title updates MUST remain
@@ -3648,7 +3649,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 99 is the current implemented configuration schema version for this
+schema version 100 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -3681,6 +3682,9 @@ host settings. Current-schema layers MUST reject that removed setting.
 The `98 -> 99` migration MUST advance only the version, preserving absent
 discovery policy and authored action allowlists. Schema 99 adds primary-user
 `skills.discovery` and `skills.overrides.<name>.discovery` optional booleans.
+The `99 -> 100` migration MUST rename `agents.subagent_name_mode` to
+`agents.name_mode`, preserving an authored canonical value when both exist and
+removing the obsolete key in TOML (including inline tables), JSON and YAML.
 
 The `90 -> 91` migration MUST advance only the schema version. It MUST preserve
 configured and omitted `frames.window.pills.<name>.foreground`,
@@ -4766,10 +4770,10 @@ The `agents` table MUST support `default_provider`, `default_model_profile`,
 `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_queued_turns`, `max_queued_bytes`,
 `max_root_subagents`, `max_subagents_per_subagent`,
-`max_subagent_panes_per_window`, `subagent_wait_policy`, `subagent_name_mode`, and `max_depth`.
-`agents.subagent_name_mode` MUST be exactly one of `nonhuman`, `human`, or
+`max_subagent_panes_per_window`, `subagent_wait_policy`, `name_mode`, and `max_depth`.
+`agents.name_mode` MUST be exactly one of `nonhuman`, `human`, or
 `literal`, and MUST default to `nonhuman`. It selects presentation-only
-display-name allocation for subagents created after the effective configuration
+display-name allocation for primary and child agents created after the effective configuration
 is loaded or reloaded; it MUST NOT rename existing agents or persisted
 conversations, affect canonical agent IDs, identity, routing, authority, or
 delegation limits, or itself require a particular name corpus or allocator.
@@ -9040,14 +9044,25 @@ same window group as the controlling pane. Subagent spawn MUST NOT focus that
 window or otherwise move the primary user's active window or pane.
 
 Each spawned subagent MUST receive a human-readable display name according to
-the prospective `agents.subagent_name_mode` policy in effect when it is
+the prospective `agents.name_mode` policy in effect when it is
 spawned. Product-generated nonhuman and human display names MUST be lowercase
 ASCII; literal names retain the canonical agent id. The display name MUST be
-unique among currently active subagents ignoring ASCII case when the subagent
+unique among reserved primary and child identities ignoring ASCII case when the subagent
 is spawned. Existing live or persisted names MUST NOT be renamed by a policy
 change. The canonical agent id MUST remain the stable protocol
 identity, and protocol responses and parent coordination messages that expose a
 display name MUST also expose the canonical agent id.
+
+Primary root agents MUST receive a conversation-owned name from the same
+allocator on activation, separately from child delegation lineage. Hidden and
+suspended identities remain reserved. Legacy roots backfill only on activation,
+not saved-session browsing. Restore MUST reserve persisted root and child names
+before allocating legacy identities. Same-conversation resume/rebind retains the
+name, including literal names; new/forked conversations allocate a new identity.
+Restored duplicates remain unchanged and canonical IDs disambiguate them.
+Conversation metadata v4 and active-binding metadata v3 retain primary identity;
+legacy formats remain readable. Failed compound checkpoints and resume must not
+leave a new durable identity or reservation behind.
 
 Subagent pane titles MUST be set to the spawned subagent's display name.
 Generated subagent window names MUST compactly reflect the display names of the

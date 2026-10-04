@@ -86,6 +86,13 @@ does not make the conversation eligible for deletion.
 
 Use `/help` for available commands, `/status` for the pane's active model,
 policy, context, and token state, and `/approval` for approval controls.
+Primary agents receive a conversation-owned generated identity under
+`agents.name_mode`, shared with child naming. Hidden conversations retain their
+names; resume and restart preserve them even when the current policy changes.
+New and forked conversations allocate a new identity. This is separate from
+the generated conversation title and canonical agent ID. The pane frame projects
+the identity only while agent mode is visible; explicit pane/window titles remain
+authoritative, and hiding reveals the underlying shell/program title again.
 `/status [--extended] [--project | --all-projects]` accepts either flag order.
 Without scope flags it retains overall totals. `--project` takes no path and
 selects the invoking pane's eligible accounting project; missing evidence is

@@ -19,6 +19,8 @@ pub struct AgentSessionMetadata {
     pub pane_id: String,
     /// Durable conversation identity bound to the pane.
     pub conversation_id: String,
+    /// Immutable primary display identity; absent for legacy or child bindings.
+    pub primary_display_name: Option<String>,
     /// Stable prompt-cache lineage identity for provider routing continuity.
     pub prompt_cache_lineage_id: String,
     /// Agent shell visibility name.
@@ -104,6 +106,15 @@ impl AgentSessionMetadata {
         validate_required("mezzanine session id", &self.mezzanine_session_id)?;
         validate_required("pane id", &self.pane_id)?;
         validate_conversation_id(&self.conversation_id)?;
+        if let Some(name) = &self.primary_display_name
+            && (name.is_empty()
+                || name.len() > 128
+                || name.chars().any(|ch| ch.is_control() || ch.is_whitespace()))
+        {
+            return Err(TranscriptContractError::new(
+                "invalid primary agent display identity",
+            ));
+        }
         validate_required("prompt cache lineage id", &self.prompt_cache_lineage_id)?;
         validate_agent_visibility(&self.visibility)?;
         if let Some(turn_id) = self.running_turn_id.as_deref() {

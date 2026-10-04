@@ -504,7 +504,7 @@ pub(in crate::control) fn agent_state_json_with_shell_session_and_model_profile(
         "idle"
     };
     format!(
-        r#"{{"id":"agent-{}","version":1,"session_id":"{}","pane_id":"{}","status":"{}","visible":{},"conversation_id":"{}","model_profile":"{}","cooperation_mode":"user-directed","read_scopes":[],"write_scopes":[],"last_turn_id":{},"transcript_entries":{}}}"#,
+        r#"{{"id":"agent-{}","version":1,"session_id":"{}","pane_id":"{}","status":"{}","visible":{},"conversation_id":"{}","model_profile":"{}","cooperation_mode":"user-directed","read_scopes":[],"write_scopes":[],"last_turn_id":{},"transcript_entries":{},"display_name":{}}}"#,
         json_escape(pane.id.as_str()),
         json_escape(session_id),
         json_escape(pane.id.as_str()),
@@ -513,7 +513,8 @@ pub(in crate::control) fn agent_state_json_with_shell_session_and_model_profile(
         json_escape(&agent_session.session_id),
         json_escape(model_profile),
         json_optional_string(agent_session.running_turn_id.as_deref()),
-        agent_session.transcript_entries
+        agent_session.transcript_entries,
+        json_optional_string(agent_session.display_name.as_deref())
     )
 }
 

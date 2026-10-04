@@ -1013,6 +1013,12 @@ fn runtime_agent_loop_ephemeral_modes_restore_parent_projection() {
             .unwrap()
             .session_id
             .clone();
+        service.ensure_primary_agent_name(&pane_id).unwrap();
+        let parent_name = service
+            .primary_agent_display_name(&pane_id)
+            .unwrap()
+            .to_string();
+        let parent_names = service.snapshot_primary_agent_names();
         transcript_store
             .save_user_objective(&parent_conversation, Some("Restore the parent objective"))
             .unwrap();
@@ -1059,6 +1065,11 @@ fn runtime_agent_loop_ephemeral_modes_restore_parent_projection() {
             parent_conversation
         );
         assert_eq!(service.agent_pane_screen(&pane_id).unwrap(), &parent_screen);
+        assert_eq!(
+            service.primary_agent_display_name(&pane_id),
+            Some(parent_name.as_str())
+        );
+        assert_eq!(service.snapshot_primary_agent_names(), parent_names);
         let agent_id = mez_core::ids::AgentId::opaque(format!("agent-{pane_id}")).unwrap();
         assert_eq!(
             service

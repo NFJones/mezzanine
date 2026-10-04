@@ -219,6 +219,29 @@ impl RuntimeSessionService {
         pane_id: &str,
         runtime_owned: bool,
     ) -> Result<String> {
+        let previous_name = self
+            .agent_shell_store()
+            .get(pane_id)
+            .and_then(|session| session.display_name.clone());
+        let previous_names = self.snapshot_primary_agent_names();
+        let result = self.enter_agent_mode_for_pane_with_identity(pane_id, runtime_owned);
+        if result.is_err() {
+            // Entry can have other settled effects; this restores only the new
+            // presentation identity and its allocation reservation.
+            if self.agent_shell_store().get(pane_id).is_some() {
+                self.install_primary_agent_name(pane_id, previous_name)?;
+            }
+            self.restore_primary_agent_names(previous_names);
+        }
+        result
+    }
+
+    /// Performs entry effects while the caller retains primary-name rollback state.
+    fn enter_agent_mode_for_pane_with_identity(
+        &mut self,
+        pane_id: &str,
+        runtime_owned: bool,
+    ) -> Result<String> {
         if runtime_owned && self.runtime_agent_surface_startup(pane_id).is_none() {
             return Err(MezError::invalid_state(
                 "runtime-owned agent pane is missing its startup owner",

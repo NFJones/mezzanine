@@ -1134,6 +1134,12 @@ impl RuntimeSessionService {
         }
         self.subagent_lineage(agent_id)
             .map(|lineage| mez_agent::agent_list_bounded_text(lineage.display_name.trim()))
+            .or_else(|| {
+                agent_id
+                    .strip_prefix("agent-")
+                    .and_then(|pane| self.primary_agent_display_name(pane))
+                    .map(mez_agent::agent_list_bounded_text)
+            })
             .map(|display_name| display_name.trim().to_string())
             .filter(|display_name| !display_name.is_empty())
             .unwrap_or_else(|| agent_id.to_string())

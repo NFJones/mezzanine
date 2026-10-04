@@ -1637,6 +1637,7 @@ fn runtime_agent_session_restore_does_not_narrow_configured_approval_default() {
                 mezzanine_session_id: mezzanine_session_id.clone(),
                 pane_id: "%1".to_string(),
                 conversation_id: "legacy-ask".to_string(),
+                primary_display_name: None,
                 prompt_cache_lineage_id: "lineage-legacy-ask".to_string(),
                 visibility: "visible".to_string(),
                 running_turn_id: None,

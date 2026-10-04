@@ -133,8 +133,8 @@ should be assumed to exist.
 Custom profiles can select a model and narrow permissions, MCP access,
 environment, cooperation mode, and filesystem scopes. See the
 [configuration reference](../configuration/reference.md). The prospective
-`agents.subagent_name_mode` setting chooses `nonhuman` (default), `human`, or
-`literal` display names; changing it does not rename existing children or alter
+`agents.name_mode` setting chooses `nonhuman` (default), `human`, or
+`literal` display names for primary and child agents; changing it does not rename existing identities or alter
 their canonical identities.
 
 ## Use routed loops sparingly

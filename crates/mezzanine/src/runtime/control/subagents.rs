@@ -504,7 +504,7 @@ impl RuntimeSessionService {
     }
 
     /// Resolves a display name for one newly-created child agent.
-    fn resolve_subagent_display_name(&self, child_agent_id: &str) -> String {
+    pub(crate) fn resolve_subagent_display_name(&self, child_agent_id: &str) -> String {
         self.resolve_subagent_display_name_with_rng(child_agent_id, &mut rand::rng())
     }
 

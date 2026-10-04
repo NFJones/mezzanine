@@ -34,7 +34,9 @@ const LEGACY_PROMPT_HISTORY_VERSION: &str = "mez-agent-prompt-history/1";
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/2";
+const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/3";
+/// Metadata with project partitions but without primary display identities.
+const PROJECT_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/2";
 /// Metadata before project partitions; old expense remains unattributed.
 const LEGACY_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/1";
 /// Defines the AGENT PRESENTATION VERSION const used by this subsystem.
@@ -431,6 +433,7 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
                 "project accounting metadata encoding failed: {error}"
             ))
         })?,
+        metadata.primary_display_name.clone().unwrap_or_default(),
     ]
     .into_iter()
     .map(|field| escape_field(&field))
@@ -447,7 +450,11 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
     let current = fields
         .first()
         .is_some_and(|version| version == AGENT_SESSION_METADATA_VERSION);
-    if !((current && fields.len() == 33)
+    let project_version = fields
+        .first()
+        .is_some_and(|version| version == PROJECT_AGENT_SESSION_METADATA_VERSION);
+    if !((current && fields.len() == 34)
+        || (project_version && fields.len() == 33)
         || (legacy
             && (fields.len() == 11
                 || fields.len() == 12
@@ -588,6 +595,7 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         mezzanine_session_id: fields[1].clone(),
         pane_id: fields[2].clone(),
         conversation_id: fields[3].clone(),
+        primary_display_name: fields.get(33).filter(|value| !value.is_empty()).cloned(),
         prompt_cache_lineage_id,
         visibility: fields[visibility_index].clone(),
         running_turn_id: (!fields[running_turn_index].is_empty())
@@ -626,7 +634,7 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
             .map(|value| decode_token_usage_by_model(value))
             .transpose()?
             .unwrap_or_default(),
-        project_token_usage: if current {
+        project_token_usage: if current || project_version {
             serde_json::from_str(&fields[32]).map_err(|error| {
                 MezError::invalid_args(format!("project accounting metadata is invalid: {error}"))
             })?

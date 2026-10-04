@@ -234,6 +234,7 @@ mod session_titles;
 /// Exposes bounded generated-title state for crate-level tests.
 #[cfg(test)]
 pub(crate) use session_titles::{SessionTitleDenial, session_title_task_id};
+mod names;
 mod shell_dispatch;
 mod shell_state;
 mod skills;
@@ -477,6 +478,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_observed_input_compaction_turns: BTreeSet<String>,
     /// Turns whose automatic routing decision has already been applied.
     agent_turn_routing_applied: BTreeSet<String>,
+    /// Names reserved by activated roots, including hidden/suspended conversations.
+    primary_agent_names: BTreeMap<String, String>,
     /// Current-turn eligible winners selected through successful model discovery.
     skill_discovery_receipts: BTreeMap<String, Vec<skills::SkillSelectionReceipt>>,
     /// Successful model-selected loads, independent of arbitrary context text.
@@ -1281,6 +1284,7 @@ impl RuntimeSessionService {
             .values()
             .filter(|lineage| !lineage.display_name.trim().is_empty())
             .map(|lineage| lineage.display_name.clone())
+            .chain(self.agent.primary_agent_names.values().cloned())
             .collect()
     }
 

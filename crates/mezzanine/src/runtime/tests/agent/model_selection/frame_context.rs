@@ -89,7 +89,10 @@ fn runtime_frame_context_reports_running_agent_provider_model_name() {
     let pane_context = config.frame_context.panes.get(&pane_id).unwrap();
 
     assert_eq!(pane_context.agent_status.as_deref(), Some("thinking"));
-    assert_eq!(pane_context.agent_name.as_deref(), Some("manager"));
+    assert_eq!(
+        pane_context.agent_name.as_deref(),
+        service.primary_agent_display_name(&pane_id)
+    );
     assert_eq!(pane_context.agent_model.as_deref(), Some("gpt-work"));
     assert_eq!(pane_context.agent_reasoning.as_deref(), Some("high"));
     assert_eq!(pane_context.agent_context_usage, None);

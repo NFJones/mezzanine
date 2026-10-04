@@ -196,6 +196,9 @@ impl RuntimeSessionService {
                 "capabilities": capabilities,
                 "status": presence.get(&agent_id).copied(),
                 "objective": identity.objective.as_deref().map(agent_list_bounded_text),
+                "display_name": self.subagent_lineage(&agent_id).map(|lineage| lineage.display_name.as_str())
+                    .or_else(|| agent_id.strip_prefix("agent-").and_then(|pane| self.primary_agent_display_name(pane)))
+                    .map(agent_list_bounded_text),
                 "persistent": persistent.is_some(),
                 "parent_agent_id": persistent
                     .map(|record| agent_list_bounded_text(&record.parent_agent_id)),
@@ -249,6 +252,7 @@ impl RuntimeSessionService {
             "agent_id": agent_list_bounded_text(&turn.agent_id),
             "kind": self.runtime_agent_kind(&turn.agent_id).as_str(),
             "is_self": true,
+            "display_name": self.primary_agent_display_name(&turn.pane_id).map(agent_list_bounded_text),
             "role": "agent",
             "pane_id": agent_list_bounded_text(&turn.pane_id),
             "window_id": self

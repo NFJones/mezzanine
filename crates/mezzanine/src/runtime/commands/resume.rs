@@ -122,6 +122,7 @@ pub(crate) fn read_direct_resume(
     Ok(crate::runtime::RuntimeDirectResumeRead {
         prepared_objective: store.effective_persisted_objective(&conversation_id)?,
         restored_model_identity: store.conversation_model_identity(&conversation_id)?,
+        primary_display_name: store.conversation_primary_display_name(&conversation_id)?,
         presentation_entries,
         presentation_lock,
         conversation_id,
@@ -549,6 +550,7 @@ impl RuntimeSessionService {
     ) -> Result<AgentShellCommandOutcome> {
         let RuntimeDirectResumeRead {
             conversation_id,
+            primary_display_name,
             saved,
             subagent_lineage,
             entries,
@@ -586,6 +588,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+        let previous_primary_names = self.snapshot_primary_agent_names();
         let previous_agent_screen = self
             .agent_pane_screen_state(pane_id)
             .map(|state| (state.conversation_id().to_string(), state.screen().clone()));
@@ -778,13 +781,13 @@ impl RuntimeSessionService {
                 prepared_objective.as_deref(),
             )?;
             self.commit_prepared_agent_resume_state(pane_id, &session_id, prepared_resume_state)?;
+            self.install_primary_agent_name(pane_id, primary_display_name.clone())?;
             if let Some(allowed_actions) = allowed_actions {
                 self.agent_shell_store_mut()
                     .restore_allowed_actions(pane_id, allowed_actions)?;
             } else if !has_projection {
                 self.restore_agent_conversation_allowed_actions(pane_id, &session_id)?;
             }
-            self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
             if let Some(lineage) = subagent_lineage.clone() {
                 if conversation_replaced
                     || !self.subagent_lineage_has_live_parent_authority(&agent_id)
@@ -803,6 +806,7 @@ impl RuntimeSessionService {
             } else {
                 self.remove_subagent_authority_state(&agent_id);
             }
+            self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
             if conversation_replaced {
                 let overrides = self.integration.model_profile_overrides_mut();
                 overrides.agent_profiles.remove(&agent_id);
@@ -843,6 +847,7 @@ impl RuntimeSessionService {
         let (session_id, transcript_entries, visibility) = match resume_result {
             Ok(result) => result,
             Err(error) => {
+                self.restore_primary_agent_names(previous_primary_names);
                 self.agent_shell_store_mut()
                     .restore_session(pane_id, previous_session.clone())?;
                 self.rebind_runtime_message_project_scope(
@@ -1493,6 +1498,7 @@ impl RuntimeSessionService {
             .unwrap_or_else(Self::runtime_new_agent_conversation_id);
         let copied_shell_mode = self.agent_shell_mode_override(pane_id);
         let startup_mode = copied_shell_mode.unwrap_or_else(|| self.agent_default_shell_mode());
+        let previous_primary_names = self.snapshot_primary_agent_names();
         let started = self.split_pane_in_window_with_process(
             primary_client_id,
             &source_descriptor.window_id,
@@ -1551,6 +1557,7 @@ impl RuntimeSessionService {
         let (session_id, transcript_entries, visibility) = match setup_result {
             Ok(result) => result,
             Err(error) => {
+                self.restore_primary_agent_names(previous_primary_names);
                 let pane_cleanup = self.dispatch_runtime_pane_close(
                     primary_client_id,
                     &format!(

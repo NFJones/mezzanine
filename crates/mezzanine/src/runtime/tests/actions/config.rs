@@ -167,7 +167,7 @@ fn runtime_config_change_updates_subagent_name_mode_transactionally() {
     let invalid = mez_agent::AgentAction {
         id: "config-subagent-name-mode-invalid".to_string(),
         payload: mez_agent::AgentActionPayload::ConfigChange {
-            setting_path: "agents.subagent_name_mode".to_string(),
+            setting_path: "agents.name_mode".to_string(),
             operation: "set".to_string(),
             value: Some("robot".to_string()),
         },
@@ -175,7 +175,7 @@ fn runtime_config_change_updates_subagent_name_mode_transactionally() {
     let reset = mez_agent::AgentAction {
         id: "config-subagent-name-mode-reset".to_string(),
         payload: mez_agent::AgentActionPayload::ConfigChange {
-            setting_path: "agents.subagent_name_mode".to_string(),
+            setting_path: "agents.name_mode".to_string(),
             operation: "reset".to_string(),
             value: None,
         },
@@ -192,7 +192,7 @@ fn runtime_config_change_updates_subagent_name_mode_transactionally() {
         let set = mez_agent::AgentAction {
             id: format!("config-subagent-name-mode-set-{mode}"),
             payload: mez_agent::AgentActionPayload::ConfigChange {
-                setting_path: "agents.subagent_name_mode".to_string(),
+                setting_path: "agents.name_mode".to_string(),
                 operation: "set".to_string(),
                 value: Some(mode.to_string()),
             },
@@ -214,7 +214,7 @@ fn runtime_config_change_updates_subagent_name_mode_transactionally() {
     );
     let config_text = fs::read_to_string(config_root.join("config.toml")).unwrap();
     assert!(
-        config_text.contains("subagent_name_mode = \"literal\""),
+        config_text.contains("name_mode = \"literal\""),
         "{config_text}"
     );
     assert!(!config_text.contains("robot"), "{config_text}");
@@ -228,7 +228,7 @@ fn runtime_config_change_updates_subagent_name_mode_transactionally() {
         crate::runtime::config::SubagentNameMode::Nonhuman
     );
     let config_text = fs::read_to_string(config_root.join("config.toml")).unwrap();
-    assert!(!config_text.contains("subagent_name_mode"), "{config_text}");
+    assert!(!config_text.contains("name_mode"), "{config_text}");
     let _ = fs::remove_dir_all(config_root);
 }
 

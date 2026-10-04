@@ -160,6 +160,18 @@ impl RuntimeSessionService {
         store.recover_append_receipts()?;
         let session_id = self.session.id.as_str().to_string();
         let records = store.load_agent_session_metadata(&session_id)?;
+        // Reserve every restored name before backfilling any legacy root.
+        for record in &records {
+            if let Some(name) = store
+                .conversation_primary_display_name(&record.conversation_id)?
+                .or_else(|| record.primary_display_name.clone())
+            {
+                self.reserve_primary_agent_name(&record.conversation_id, &name);
+            }
+            if let Some(lineage) = store.conversation_subagent_lineage(&record.conversation_id)? {
+                self.reserve_primary_agent_name(&record.conversation_id, &lineage.display_name);
+            }
+        }
         let restored_bindings = records
             .iter()
             .filter(|record| runtime_pane_by_id(&self.session, &record.pane_id).is_ok())
@@ -299,6 +311,9 @@ impl RuntimeSessionService {
                 pane_id: pane_id.clone(),
                 project_scope: target_project_scope.clone(),
                 conversation_kind,
+                display_name: store
+                    .conversation_primary_display_name(&conversation_id)?
+                    .or_else(|| metadata.primary_display_name.clone()),
                 prompt_cache_lineage_id: metadata.prompt_cache_lineage_id.clone(),
                 visibility,
                 running_turn_id: None,
@@ -597,6 +612,18 @@ impl RuntimeSessionService {
             )?;
         }
         if restored > 0 {
+            let root_panes = self
+                .agent_shell_store()
+                .sessions()
+                .filter(|session| {
+                    !session.ephemeral
+                        && session.conversation_kind == mez_agent::AgentConversationKind::Root
+                })
+                .map(|session| session.pane_id.clone())
+                .collect::<Vec<_>>();
+            for pane in root_panes {
+                self.ensure_primary_agent_name(&pane)?;
+            }
             self.checkpoint_agent_session_metadata()?;
         }
         Ok(restored)
@@ -723,6 +750,11 @@ impl RuntimeSessionService {
                     mezzanine_session_id: mezzanine_session_id.clone(),
                     pane_id: session.pane_id.clone(),
                     conversation_id: conversation_id.clone(),
+                    primary_display_name: if session.ephemeral {
+                        fallback_parent.and_then(|state| state.parent_display_name.clone())
+                    } else {
+                        session.display_name.clone()
+                    },
                     prompt_cache_lineage_id: session.prompt_cache_lineage_id.clone(),
                     visibility: agent_shell_visibility_json_name(session.visibility).to_string(),
                     running_turn_id: session.running_turn_id.clone(),

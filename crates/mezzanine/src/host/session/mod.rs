@@ -1064,6 +1064,7 @@ mod tests {
                         mezzanine_session_id: mezzanine_session_id.clone(),
                         pane_id: bound_pane_id.clone(),
                         conversation_id: "restored-agent-bound".to_string(),
+                        primary_display_name: None,
                         prompt_cache_lineage_id: "lineage-restored-agent-bound".to_string(),
                         visibility: "visible".to_string(),
                         running_turn_id: None,

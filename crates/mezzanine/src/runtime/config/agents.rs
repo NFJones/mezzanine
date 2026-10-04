@@ -622,18 +622,18 @@ pub(crate) fn runtime_subagent_name_mode_from_config(root: &Value) -> Result<Sub
     let Some(agents) = runtime_json_object(root, "agents") else {
         return Ok(SubagentNameMode::default());
     };
-    let Some(value) = agents.get("subagent_name_mode") else {
+    let Some(value) = agents.get("name_mode") else {
         return Ok(SubagentNameMode::default());
     };
     let value = runtime_json_string(Some(value)).ok_or_else(|| {
         MezError::config(format!(
-            "agents.subagent_name_mode must be {}, human, or literal",
+            "agents.name_mode must be {}, human, or literal",
             SubagentNameMode::Nonhuman.name()
         ))
     })?;
     SubagentNameMode::parse(value).ok_or_else(|| {
         MezError::config(format!(
-            "agents.subagent_name_mode must be {}, human, or literal",
+            "agents.name_mode must be {}, human, or literal",
             SubagentNameMode::Nonhuman.name()
         ))
     })

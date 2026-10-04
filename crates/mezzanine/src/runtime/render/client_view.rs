@@ -2181,7 +2181,7 @@ impl RuntimeSessionService {
                     )
                     && !pane.title_source.is_explicit()
             })
-            .map(|_| "mez".to_string())
+            .and_then(|session| session.display_name.clone())
     }
 
     /// Resolves one pane's diagnostic status projection through the same
@@ -2228,6 +2228,12 @@ impl RuntimeSessionService {
             .and_then(|lineage| {
                 let display_name = lineage.display_name.trim();
                 (!display_name.is_empty()).then(|| display_name.to_string())
+            })
+            .or_else(|| {
+                agent_id
+                    .strip_prefix("agent-")
+                    .and_then(|pane| self.primary_agent_display_name(pane))
+                    .map(str::to_string)
             })
             .unwrap_or_else(|| ROOT_AGENT_DISPLAY_NAME.to_string())
     }

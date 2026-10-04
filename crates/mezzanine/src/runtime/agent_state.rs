@@ -566,6 +566,8 @@ pub struct RuntimeAgentLoopState {
     /// session boundary. The controller retains this parent snapshot so
     /// restoring the durable conversation never recaptures live configuration.
     pub parent_allowed_actions: mez_agent::AllowedActionSet,
+    /// Frozen parent identity restored without allocating an ephemeral name.
+    pub parent_display_name: Option<String>,
     /// Prompt-cache lineage to retain while rebinding forked loop iterations.
     pub parent_prompt_cache_lineage_id: Option<String>,
     /// One-based work iteration currently being evaluated or executed.

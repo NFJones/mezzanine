@@ -7,7 +7,10 @@ use super::ops::{
     copy_json_default_if_absent, parse_json_compatible_config, remove_json_path,
     set_json_path_value, set_toml_path_item,
 };
-use super::{ConfigFormat, DEFAULT_CONFIG_TOML, MezError, Result};
+use super::{ConfigFormat, MezError, Result};
+
+/// Historical v95 naming default, independent of later schema renames.
+const V95_NAMING_DEFAULT: &str = "[agents]\nsubagent_name_mode = \"nonhuman\"\n";
 
 /// Removes retired outbound peer marker colors and advances one document to v95.
 pub(super) fn migrate_v94_to_v95(format: ConfigFormat, text: &str) -> Result<String> {
@@ -16,7 +19,7 @@ pub(super) fn migrate_v94_to_v95(format: ConfigFormat, text: &str) -> Result<Str
             let mut document = text
                 .parse::<toml_edit::DocumentMut>()
                 .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
-            let defaults = DEFAULT_CONFIG_TOML
+            let defaults = V95_NAMING_DEFAULT
                 .parse::<toml_edit::DocumentMut>()
                 .map_err(|error| {
                     MezError::config(format!("invalid default TOML config: {error}"))
@@ -28,7 +31,7 @@ pub(super) fn migrate_v94_to_v95(format: ConfigFormat, text: &str) -> Result<Str
         }
         ConfigFormat::Yaml | ConfigFormat::Json => {
             let mut document = parse_json_compatible_config(format, text)?;
-            let defaults = toml::from_str::<toml::Value>(DEFAULT_CONFIG_TOML).map_err(|error| {
+            let defaults = toml::from_str::<toml::Value>(V95_NAMING_DEFAULT).map_err(|error| {
                 MezError::config(format!("invalid default TOML config: {error}"))
             })?;
             let defaults = serde_json::to_value(defaults).map_err(|error| {

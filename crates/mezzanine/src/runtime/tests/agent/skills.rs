@@ -1433,6 +1433,8 @@ fn runtime_agent_shell_failed_resume_preserves_claimed_deferred_work() {
         .unwrap()
         .unwrap();
 
+    let previous_names = service.snapshot_primary_agent_names();
+    let previous_name = service.primary_agent_display_name("%1").map(str::to_string);
     service.fail_next_agent_resume_after_authority_restore_for_tests();
     let error = service
         .execute_agent_shell_resume_command("%1", "/resume resume-rollback-target")
@@ -1440,6 +1442,11 @@ fn runtime_agent_shell_failed_resume_preserves_claimed_deferred_work() {
     assert!(
         error.message().contains("post-authority restoration"),
         "{error}"
+    );
+    assert_eq!(service.snapshot_primary_agent_names(), previous_names);
+    assert_eq!(
+        service.primary_agent_display_name("%1"),
+        previous_name.as_deref()
     );
     assert_eq!(
         service

@@ -746,7 +746,7 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "max_subagents_per_subagent",
     "max_subagent_panes_per_window",
     "subagent_wait_policy",
-    "subagent_name_mode",
+    "name_mode",
     "max_depth",
 ];
 

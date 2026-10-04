@@ -157,7 +157,7 @@ fn skill_discovery_migration_leaves_policy_absent_and_actions_unchanged() {
     ] {
         let migrated = migrate_config_text(format, text).unwrap();
         let root = crate::config::parse_config_json_value(format, &migrated.text).unwrap();
-        assert_eq!(root["version"], 99);
+        assert_eq!(root["version"], CURRENT_CONFIG_SCHEMA_VERSION);
         assert!(root.get("skills").is_none());
         assert_eq!(
             root["agents"]["enabled_actions"],

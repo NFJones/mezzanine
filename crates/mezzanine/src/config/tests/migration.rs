@@ -3,6 +3,44 @@
 use super::*;
 use crate::config::parse_config_json_value;
 
+/// Naming migration preserves authored policy and canonical-key precedence in
+/// all formats, including inline TOML, and removes the obsolete spelling.
+#[test]
+fn agent_name_mode_migrates_schema_99_with_canonical_precedence() {
+    for (format, text, expected) in [
+        (
+            ConfigFormat::Toml,
+            "version = 99\n[agents]\nsubagent_name_mode = \"human\"\n",
+            "human",
+        ),
+        (
+            ConfigFormat::Toml,
+            "version = 99\nagents = { subagent_name_mode = \"human\", name_mode = \"literal\" }\n",
+            "literal",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":99,"agents":{"subagent_name_mode":"human","name_mode":"literal"}}"#,
+            "literal",
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 99\nagents:\n  subagent_name_mode: human\n  name_mode: literal\n",
+            "literal",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &plan.text).unwrap();
+        assert_eq!(
+            root.pointer("/agents/name_mode")
+                .and_then(serde_json::Value::as_str),
+            Some(expected)
+        );
+        assert!(root.pointer("/agents/subagent_name_mode").is_none());
+        assert!(!migrate_config_text(format, &plan.text).unwrap().changed);
+    }
+}
+
 /// All durable formats backfill one second without replacing explicit durations;
 /// repeating migration is byte-preserving and does not rewrite user choices.
 #[test]
@@ -3614,7 +3652,7 @@ fn migrates_schema_94_by_removing_only_outbound_peer_marker_colors() {
             Some(&serde_json::json!("tertiary_foreground"))
         );
         assert_eq!(
-            root.pointer("/agents/subagent_name_mode"),
+            root.pointer("/agents/name_mode"),
             Some(&serde_json::json!("nonhuman"))
         );
         assert_eq!(
@@ -3670,7 +3708,7 @@ fn migrates_schema_94_without_overwriting_authored_subagent_name_mode() {
         let root = parse_config_json_value(format, &migrated.text).unwrap();
 
         assert_eq!(
-            root.pointer("/agents/subagent_name_mode"),
+            root.pointer("/agents/name_mode"),
             Some(&serde_json::json!(mode))
         );
         assert!(
@@ -3717,7 +3755,7 @@ fn migrates_schema_94_toml_inline_agents_without_rewriting_authored_values() {
         let migrated = migrate_config_text(ConfigFormat::Toml, text).unwrap();
         let root = parse_config_json_value(ConfigFormat::Toml, &migrated.text).unwrap();
 
-        assert_eq!(root.pointer("/agents/subagent_name_mode"), Some(&expected));
+        assert_eq!(root.pointer("/agents/name_mode"), Some(&expected));
         assert_eq!(
             validate_config_text(ConfigFormat::Toml, &migrated.text, ConfigScope::Primary).valid,
             valid

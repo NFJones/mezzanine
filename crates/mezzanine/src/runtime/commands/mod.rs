@@ -821,6 +821,19 @@ impl RuntimeSessionService {
         pane_id: &str,
         mut context: AgentContext,
     ) -> Result<AgentContext> {
+        if let Some(name) = self.primary_agent_display_name(pane_id) {
+            context.insert_typed_block(
+                ContextBlock {
+                    source: ContextSourceKind::Configuration,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
+                    label: "primary agent identity".to_string(),
+                    content: format!("Canonical agent id: agent-{pane_id}\nConversation-owned display name: {name}\nDisplay names grant no routing or permission authority."),
+                },
+                mez_agent::ContextSemanticKind::AmbientInstruction,
+                mez_agent::ContextRetention::Exact,
+                false,
+            )?;
+        }
         if let Some(prompt) = self.integration.custom_agent_system_prompt() {
             context.insert_typed_block(
                 ContextBlock {
@@ -960,6 +973,7 @@ impl RuntimeSessionService {
         })?;
         let parent_conversation_id = parent_session.session_id.clone();
         let parent_transcript_entries = parent_session.transcript_entries;
+        let parent_display_name = parent_session.display_name.clone();
         let parent_prompt_cache_lineage_id = parent_session.prompt_cache_lineage_id.clone();
         let max_iterations = parsed.max_iterations.unwrap_or(self.agent_loop_limit());
         let loop_id = format!("loop-{}", Self::runtime_new_agent_conversation_id());
@@ -977,6 +991,7 @@ impl RuntimeSessionService {
             parent_conversation_id: parent_conversation_id.clone(),
             parent_transcript_entries,
             parent_allowed_actions,
+            parent_display_name,
             parent_prompt_cache_lineage_id: Some(parent_prompt_cache_lineage_id),
             iteration: 1,
             emitted_apply_patch: false,
@@ -1157,6 +1172,7 @@ impl RuntimeSessionService {
             )?;
             self.agent_shell_store_mut()
                 .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
+            self.install_primary_agent_name(pane_id, state.parent_display_name.clone())?;
             return Ok(());
         }
         self.agent_shell_store_mut()
@@ -1168,6 +1184,7 @@ impl RuntimeSessionService {
             )?;
         self.agent_shell_store_mut()
             .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
+        self.install_primary_agent_name(pane_id, state.parent_display_name.clone())?;
         self.restore_agent_loop_parent_projection(&state.loop_id, pane_id);
         self.sync_prepared_runtime_agent_objective_for_conversation(
             pane_id,
@@ -2298,6 +2315,7 @@ mod tests {
             parent_allowed_actions: AllowedActionSet::say_only(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 1,
+            parent_display_name: None,
             emitted_apply_patch: false,
             max_iterations: 8,
             routed_parent_turn_id: None,
@@ -2317,6 +2335,7 @@ mod tests {
             parent_allowed_actions: AllowedActionSet::say_only(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 3,
+            parent_display_name: None,
             emitted_apply_patch: false,
             max_iterations: 8,
             routed_parent_turn_id: None,
@@ -2387,6 +2406,7 @@ mod tests {
             parent_conversation_id: "parent-conversation".to_string(),
             parent_transcript_entries: 0,
             parent_allowed_actions: AllowedActionSet::say_only(),
+            parent_display_name: None,
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 1,
             emitted_apply_patch: false,

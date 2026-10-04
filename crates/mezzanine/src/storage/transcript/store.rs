@@ -95,7 +95,7 @@ const SESSION_SUMMARY_FILE_NAME: &str = "summary.json";
 /// Defines the versioned durable conversation classification sidecar.
 const SESSION_METADATA_FILE_NAME: &str = "metadata.json";
 /// Current per-conversation metadata schema version.
-const SESSION_METADATA_VERSION: u64 = 3;
+const SESSION_METADATA_VERSION: u64 = 4;
 /// Versioned authoritative summary and replay-boundary sidecar.
 const COMPACTION_EPOCH_FILE_NAME: &str = "compaction-epoch.json";
 /// Maximum encoded size accepted for one durable compaction epoch.
@@ -220,6 +220,9 @@ fn validate_compaction_range_sources(
 struct ConversationMetadata {
     version: u64,
     conversation_kind: String,
+    /// Immutable primary display identity; legacy roots backfill on activation only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    primary_display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     user_objective: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -287,6 +290,16 @@ pub(crate) struct AgentModelProfileSelection {
 /// Rejects incomplete child sidecars while preserving true legacy root
 /// conversations, which predate every child-contract field.
 fn validate_conversation_metadata_contract(metadata: &ConversationMetadata) -> Result<()> {
+    if let Some(name) = metadata.primary_display_name.as_deref()
+        && (metadata.conversation_kind != "root"
+            || name.is_empty()
+            || name.len() > 128
+            || name.chars().any(|ch| ch.is_control() || ch.is_whitespace()))
+    {
+        return Err(MezError::invalid_args(
+            "invalid primary agent display identity",
+        ));
+    }
     if let Some(profile) = metadata.agent_model_profile.as_deref() {
         if profile.trim().is_empty() {
             return Err(MezError::invalid_args(
@@ -1683,6 +1696,39 @@ impl AgentTranscriptStore {
     }
 
     /// Loads the immutable action catalog owned by one durable conversation.
+    /// Reads a primary identity without allocating during saved-session browsing.
+    pub(crate) fn conversation_primary_display_name(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .read_conversation_metadata(conversation_id)?
+            .primary_display_name)
+    }
+
+    /// Captures one immutable primary identity under the conversation mutation lock.
+    #[cfg(test)]
+    pub(crate) fn save_conversation_primary_display_name(
+        &self,
+        conversation_id: &str,
+        name: &str,
+    ) -> Result<()> {
+        let _lock = self.acquire_conversation_lock(conversation_id)?;
+        let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+        if let Some(current) = &metadata.primary_display_name {
+            if current == name {
+                return Ok(());
+            }
+            return Err(MezError::invalid_state(
+                "primary agent identity cannot be overwritten",
+            ));
+        }
+        metadata.primary_display_name = Some(name.to_string());
+        validate_conversation_metadata_contract(&metadata)?;
+        self.write_conversation_metadata_locked(conversation_id, &metadata)
+    }
+
+    /// Loads the immutable action catalog owned by one durable conversation.
     ///
     /// Legacy conversation metadata has no catalog and returns `None`, letting
     /// the runtime capture the configured catalog at its next session boundary.
@@ -1701,6 +1747,7 @@ impl AgentTranscriptStore {
     /// replaceable pane binding, so inactive conversations retain their own
     /// catalog through later checkpoints and resumes. A catalog may be written
     /// exactly once; subsequent writes must be byte-for-byte equivalent.
+    #[cfg(test)]
     pub fn save_conversation_allowed_actions(
         &self,
         conversation_id: &str,
@@ -3491,45 +3538,92 @@ impl AgentTranscriptStore {
         Ok(records.len())
     }
 
-    /// Atomically persists captured action catalogs with the active session
-    /// metadata checkpoint, restoring newly captured catalogs if the metadata
-    /// replacement cannot be committed.
+    /// Persists immutable identities/catalogs with the active binding checkpoint.
+    /// Sorted conversation locks remain owned through capture, commit and rollback,
+    /// so another writer cannot have its committed identity erased by restoration.
+    /// Every successfully changed sidecar is restored after failure; rollback
+    /// errors are accumulated rather than abandoning other recoverable records.
     pub fn save_agent_session_metadata_checkpoint(
         &self,
         mezzanine_session_id: &str,
         records: &[AgentSessionMetadata],
     ) -> Result<usize> {
-        let previous_catalogs = records
+        let ids = records
             .iter()
-            .filter_map(|record| {
-                record.allowed_actions.as_ref().map(|_| {
-                    self.conversation_allowed_actions(&record.conversation_id)
-                        .map(|catalog| (record.conversation_id.clone(), catalog))
-                })
-            })
+            .map(|record| record.conversation_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let _locks = ids
+            .iter()
+            .map(|id| self.acquire_conversation_lock(id))
             .collect::<Result<Vec<_>>>()?;
-        for record in records {
-            if let Some(allowed_actions) = record.allowed_actions.clone()
-                && let Err(error) = self.save_conversation_allowed_actions(
-                    &record.conversation_id,
-                    Some(allowed_actions),
-                )
-            {
-                for (conversation_id, previous_catalog) in previous_catalogs.iter().rev() {
-                    let _ = self.restore_conversation_allowed_actions(
-                        conversation_id,
-                        previous_catalog.clone(),
-                    );
+        let mut changed = Vec::<(String, PathBuf, Option<Vec<u8>>)>::new();
+        let commit = (|| -> Result<usize> {
+            for record in records {
+                record.validate()?;
+                let mut metadata =
+                    self.read_conversation_metadata_locked(&record.conversation_id)?;
+                let mut update = false;
+                if let Some(actions) = &record.allowed_actions {
+                    match &metadata.allowed_actions {
+                        Some(current) if current != actions => {
+                            return Err(MezError::invalid_state(
+                                "conversation action catalog cannot be overwritten after capture",
+                            ));
+                        }
+                        None => {
+                            metadata.allowed_actions = Some(actions.clone());
+                            update = true;
+                        }
+                        Some(_) => {}
+                    }
                 }
-                return Err(error);
+                if let Some(name) = &record.primary_display_name {
+                    match &metadata.primary_display_name {
+                        Some(current) if current != name => {
+                            return Err(MezError::invalid_state(
+                                "primary agent identity cannot be overwritten",
+                            ));
+                        }
+                        None => {
+                            metadata.primary_display_name = Some(name.clone());
+                            update = true;
+                        }
+                        Some(_) => {}
+                    }
+                }
+                if update {
+                    validate_conversation_metadata_contract(&metadata)?;
+                    let path = self.conversation_metadata_path_for(&record.conversation_id)?;
+                    let previous = match std_fs::read(&path) {
+                        Ok(bytes) => Some(bytes),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(error) => return Err(error.into()),
+                    };
+                    self.write_conversation_metadata_locked(&record.conversation_id, &metadata)?;
+                    changed.push((record.conversation_id.clone(), path, previous));
+                }
             }
-        }
-        if let Err(error) = self.save_agent_session_metadata(mezzanine_session_id, records) {
-            for (conversation_id, previous_catalog) in previous_catalogs.iter().rev() {
-                let _ = self.restore_conversation_allowed_actions(
-                    conversation_id,
-                    previous_catalog.clone(),
-                );
+            self.save_agent_session_metadata(mezzanine_session_id, records)
+        })();
+        if let Err(error) = commit {
+            let mut failures = Vec::new();
+            for (id, path, previous) in changed.iter().rev() {
+                if let Err(rollback) = self.restore_conversation_metadata_snapshot_locked(
+                    id,
+                    path,
+                    previous.as_deref(),
+                ) {
+                    failures.push(format!("{id}: {rollback}"));
+                }
+            }
+            if !failures.is_empty() {
+                return Err(MezError::new(
+                    error.kind(),
+                    format!(
+                        "checkpoint failed: {error}; sidecar rollback incomplete: {}",
+                        failures.join("; ")
+                    ),
+                ));
             }
             return Err(error);
         }
@@ -4300,6 +4394,7 @@ impl AgentTranscriptStore {
             return Ok(ConversationMetadata {
                 version: SESSION_METADATA_VERSION,
                 conversation_kind: "root".to_string(),
+                primary_display_name: None,
                 user_objective: None,
                 parent_objective: None,
                 parent_conversation_id: None,
@@ -4317,7 +4412,7 @@ impl AgentTranscriptStore {
             MezError::invalid_args(format!("conversation metadata decode failed: {error}"))
         })?;
         match metadata.version {
-            1 | 2 | SESSION_METADATA_VERSION => {}
+            1 | 2 | 3 | SESSION_METADATA_VERSION => {}
             _ => {
                 return Err(MezError::invalid_args(
                     "unsupported conversation metadata version",

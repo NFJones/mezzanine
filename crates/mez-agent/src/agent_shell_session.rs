@@ -183,6 +183,8 @@ pub struct AgentShellSession {
     pub project_scope: Option<crate::messaging::ProjectMembership>,
     /// Durable origin classification for this conversation.
     pub conversation_kind: AgentConversationKind,
+    /// Conversation-owned primary identity, independent of child delegation lineage.
+    pub display_name: Option<String>,
     /// Stores the prompt-cache lineage id value for this data structure.
     ///
     /// The lineage remains stable across resume or inherited fork flows so
@@ -303,6 +305,7 @@ impl AgentShellStore {
                     pane_id: pane_id.clone(),
                     project_scope: None,
                     conversation_kind: AgentConversationKind::Root,
+                    display_name: None,
                     prompt_cache_lineage_id: new_agent_session_uuid(),
                     visibility: AgentShellVisibility::Hidden,
                     running_turn_id: None,
@@ -692,6 +695,7 @@ impl AgentShellStore {
         }
         session.session_id = conversation_id;
         session.allowed_actions = None;
+        session.display_name = None;
         if let Some(lineage_id) = prompt_cache_lineage_id {
             validate_agent_shell_required("prompt cache lineage id", &lineage_id)?;
             session.prompt_cache_lineage_id = lineage_id;
@@ -783,6 +787,7 @@ impl AgentShellStore {
                 pane_id: pane_id.to_string(),
                 project_scope: None,
                 conversation_kind: AgentConversationKind::Root,
+                display_name: None,
                 prompt_cache_lineage_id: new_agent_session_uuid(),
                 visibility: AgentShellVisibility::Visible,
                 running_turn_id: None,

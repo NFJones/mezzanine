@@ -892,7 +892,7 @@ fn runtime_config_reload_applies_prospective_subagent_name_mode() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[agents]\nsubagent_name_mode = \"literal\"\n".to_string(),
+            text: "[agents]\nname_mode = \"literal\"\n".to_string(),
         }])
         .unwrap();
     assert_eq!(
@@ -913,13 +913,13 @@ fn runtime_config_reload_applies_prospective_subagent_name_mode() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[agents]\nsubagent_name_mode = \"robot\"\n".to_string(),
+            text: "[agents]\nname_mode = \"robot\"\n".to_string(),
         }])
         .unwrap_err();
     assert!(
         error
             .message()
-            .contains("agents.subagent_name_mode must be nonhuman, human, or literal"),
+            .contains("agents.name_mode must be nonhuman, human, or literal"),
         "{error}"
     );
     assert_eq!(
@@ -946,9 +946,7 @@ fn runtime_config_reload_from_disk_rolls_back_invalid_subagent_name_mode() {
     let path = root.join("config.toml");
     fs::write(
         &path,
-        format!(
-            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[agents]\nsubagent_name_mode = \"literal\"\n"
-        ),
+        format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[agents]\nname_mode = \"literal\"\n"),
     )
     .unwrap();
     service
@@ -968,9 +966,7 @@ fn runtime_config_reload_from_disk_rolls_back_invalid_subagent_name_mode() {
 
     fs::write(
         &path,
-        format!(
-            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[agents]\nsubagent_name_mode = \"robot\"\n"
-        ),
+        format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[agents]\nname_mode = \"robot\"\n"),
     )
     .unwrap();
     let response = service.dispatch_runtime_control_body(
@@ -980,7 +976,7 @@ fn runtime_config_reload_from_disk_rolls_back_invalid_subagent_name_mode() {
 
     assert!(response.contains(r#""error""#), "{response}");
     assert!(
-        response.contains("agents.subagent_name_mode must be nonhuman, human, or literal"),
+        response.contains("agents.name_mode must be nonhuman, human, or literal"),
         "{response}"
     );
     assert_eq!(
@@ -1013,7 +1009,7 @@ fn runtime_subagent_name_mode_parser_defaults_and_rejects_invalid_values() {
         ("human", crate::runtime::config::SubagentNameMode::Human),
         ("literal", crate::runtime::config::SubagentNameMode::Literal),
     ] {
-        let root = serde_json::json!({"agents": {"subagent_name_mode": value}});
+        let root = serde_json::json!({"agents": {"name_mode": value}});
         assert_eq!(
             crate::runtime::config::runtime_subagent_name_mode_from_config(&root).unwrap(),
             expected
@@ -1024,12 +1020,12 @@ fn runtime_subagent_name_mode_parser_defaults_and_rejects_invalid_values() {
         serde_json::json!(7),
         serde_json::json!(false),
     ] {
-        let root = serde_json::json!({"agents": {"subagent_name_mode": value}});
+        let root = serde_json::json!({"agents": {"name_mode": value}});
         let error =
             crate::runtime::config::runtime_subagent_name_mode_from_config(&root).unwrap_err();
         assert_eq!(
             error.message(),
-            "agents.subagent_name_mode must be nonhuman, human, or literal"
+            "agents.name_mode must be nonhuman, human, or literal"
         );
     }
 }

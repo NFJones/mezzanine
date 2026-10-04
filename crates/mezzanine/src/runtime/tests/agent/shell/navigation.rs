@@ -3,6 +3,126 @@
 use super::*;
 use crate::runtime::processes::RuntimePaneEnvironmentAuthority;
 
+/// A primary identity survives restart and rebind despite a different current
+/// naming policy. A new conversation receives a distinct name, while the old
+/// conversation keeps its hidden reservation and durable identity.
+#[test]
+fn runtime_primary_agent_name_survives_restart_and_rebind() {
+    let root = temp_root("primary-name-restart");
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .capture_agent_session_allowed_actions_for_pane("%1")
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+    let conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let name = service
+        .primary_agent_display_name("%1")
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        store
+            .conversation_primary_display_name(&conversation)
+            .unwrap()
+            .as_deref(),
+        Some(name.as_str())
+    );
+    service
+        .agent_shell_store_mut()
+        .start_new_conversation("%1")
+        .unwrap();
+    service
+        .capture_agent_session_allowed_actions_for_pane("%1")
+        .unwrap();
+    assert_ne!(
+        service.primary_agent_display_name("%1"),
+        Some(name.as_str())
+    );
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", &conversation, 0)
+        .unwrap();
+    service.ensure_primary_agent_name("%1").unwrap();
+    assert_eq!(
+        service.primary_agent_display_name("%1"),
+        Some(name.as_str())
+    );
+    service.checkpoint_agent_session_metadata().unwrap();
+    let mut restored = test_runtime_service();
+    restored.set_agent_transcript_store(store);
+    restored.set_subagent_name_mode(crate::runtime::config::SubagentNameMode::Literal);
+    assert_eq!(
+        restored
+            .restore_agent_sessions_from_transcript_store()
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        restored.primary_agent_display_name("%1"),
+        Some(name.as_str())
+    );
+    restored.agent_shell_store_mut().request_exit("%1").unwrap();
+    assert!(restored.active_subagent_display_names().contains(&name));
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Rejected entry must not publish a new identity or consume a name reservation.
+/// The compound checkpoint also restores the newly written conversation sidecar.
+#[test]
+fn runtime_primary_agent_failed_entry_restores_name_reservations() {
+    let mut service = test_runtime_service();
+    let root = temp_root("primary-name-failed-entry");
+    let store = AgentTranscriptStore::new(root.clone());
+    service.set_agent_transcript_store(store.clone());
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let reservations = service.snapshot_primary_agent_names();
+    store.fail_next_agent_session_metadata_write();
+    assert!(service.enter_agent_mode_for_pane("%1").is_err());
+    let session = service.agent_shell_store().get("%1").unwrap();
+    assert!(session.display_name.is_none());
+    assert_eq!(service.snapshot_primary_agent_names(), reservations);
+    assert!(
+        store
+            .conversation_primary_display_name(&session.session_id)
+            .unwrap()
+            .is_none()
+    );
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Primary identity follows the configured allocator rather than a hardcoded
+/// title. Its projection is temporary and cannot pin or overwrite shell titles.
+#[test]
+fn runtime_primary_agent_uses_literal_identity_in_title_projection() {
+    let mut service = test_runtime_service();
+    service.set_subagent_name_mode(crate::runtime::config::SubagentNameMode::Literal);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_title_override
+            .as_deref(),
+        Some("agent-%1")
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies native agent entry derives its context from the pane root process
 /// without starting or waiting for pane-shell bootstrap work.
 ///
@@ -40,7 +160,7 @@ fn runtime_native_agent_shell_entry_uses_only_root_process_inspection() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a user-owned root agent surface temporarily displays `mez` without
+/// Verifies a user-owned root agent surface temporarily displays its identity without
 /// changing the pane's saved title or provenance, and that hiding restores the
 /// ordinary title while explicit names continue to take precedence.
 #[test]
@@ -59,11 +179,15 @@ fn runtime_root_agent_title_override_is_temporary_and_preserves_explicit_names()
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     let frame = service.terminal_frame_context();
+    let name = service
+        .primary_agent_display_name("%1")
+        .unwrap()
+        .to_string();
     assert_eq!(
         frame.panes["%1"].pane_title_override.as_deref(),
-        Some("mez")
+        Some(name.as_str())
     );
-    assert_eq!(frame.windows[0].title, "mez");
+    assert_eq!(frame.windows[0].title, name);
     assert_eq!(
         service.session.pane_title_state("%1").unwrap(),
         (
@@ -80,7 +204,7 @@ fn runtime_root_agent_title_override_is_temporary_and_preserves_explicit_names()
         service.terminal_frame_context().panes["%1"]
             .pane_title_override
             .as_deref(),
-        Some("mez"),
+        Some(name.as_str()),
         "program title updates remain underneath the active agent default"
     );
     assert_eq!(
@@ -95,7 +219,7 @@ fn runtime_root_agent_title_override_is_temporary_and_preserves_explicit_names()
         service.terminal_frame_context().panes["%1"]
             .pane_title_override
             .as_deref(),
-        Some("mez"),
+        Some(name.as_str()),
         "the title remains agent-owned until hide actually completes"
     );
     service.agent_shell_store_mut().request_exit("%1").unwrap();
@@ -121,7 +245,7 @@ fn runtime_root_agent_title_override_is_temporary_and_preserves_explicit_names()
         service.terminal_frame_context().panes["%1"]
             .pane_title_override
             .as_deref(),
-        Some("mez"),
+        Some(name.as_str()),
         "re-entering the root agent surface reapplies the temporary title"
     );
 
@@ -227,7 +351,7 @@ fn runtime_root_agent_title_does_not_override_matching_window_names() {
     let frame = service.terminal_frame_context();
     assert_eq!(
         frame.panes["%1"].pane_title_override.as_deref(),
-        Some("mez")
+        service.primary_agent_display_name("%1")
     );
     assert_eq!(frame.windows[0].title, "work");
 
