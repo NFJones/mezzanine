@@ -129,6 +129,92 @@ pub(crate) fn normalize(
 mod tests {
     use super::*;
 
+    /// Explicit offline qualification uses the installed pinned loader/runner,
+    /// not a provider or user extension discovery. Package-independent observer
+    /// assertions run first; actual runner facts must then match the Rust owner.
+    /// Ordinary workspace tests require neither Node nor vendor installation.
+    #[test]
+    #[ignore = "explicit trusted Pi 1.0.2 package and Node >=22.19.0 required"]
+    fn pi_lifecycle_released_loader_observations_match_rust_projection() {
+        let node = std::path::PathBuf::from(
+            std::env::var_os("MEZ_PI_NODE").expect("explicit MEZ_PI_NODE required"),
+        );
+        let package = std::path::PathBuf::from(
+            std::env::var_os("MEZ_PI_PACKAGE").expect("explicit MEZ_PI_PACKAGE required"),
+        );
+        assert!(node.is_absolute() && package.is_absolute());
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        let home = std::env::temp_dir().join(format!(
+            "mez-pi-offline-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir(&home).unwrap();
+        let run = |script: &str, test: bool| {
+            let mut command = std::process::Command::new(&node);
+            command
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", node.parent().unwrap())
+                .current_dir(repository);
+            if test {
+                command.arg("--test");
+            }
+            command.arg(repository.join(script));
+            if !test {
+                command.arg(&package);
+            }
+            command.output().unwrap()
+        };
+        let unit = run("scripts/test-pi-observer.mjs", true);
+        assert!(
+            unit.status.success(),
+            "offline observer test failed: {}",
+            unit.status
+        );
+        let output = run("scripts/qualify-pi-observer.mjs", false);
+        std::fs::remove_dir_all(home).unwrap();
+        assert!(
+            output.status.success(),
+            "released loader fixture failed: {}",
+            output.status
+        );
+        assert!(output.stderr.is_empty());
+        assert!(output.stdout.len() < 64 * 1024);
+        let facts: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+        let actual = facts
+            .iter()
+            .map(|fact| {
+                let session = fact["session"].as_str().unwrap();
+                normalize(
+                    RELEASE,
+                    "bound",
+                    session,
+                    &serde_json::to_vec(&fact["event"]).unwrap(),
+                )
+                .unwrap()
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                Observation::SessionStarted { reason: "startup" },
+                Observation::Running,
+                Observation::InputWait,
+                Observation::InputEnded,
+                Observation::CandidateOutcome {
+                    outcome: "completed"
+                },
+                Observation::Settled,
+                Observation::SessionShutdown { reason: "reload" },
+            ]
+        );
+    }
+
     /// Released callback facts preserve provisional/final boundaries while all
     /// prompt, answer, tool, transcript-path and context fields remain discarded.
     #[test]

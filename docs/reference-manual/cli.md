@@ -111,6 +111,15 @@ rebind sessions or certify live usage. Sources are the installed
 `@earendil-works/pi-coding-agent` `1.0.2` extension declarations and agent-session
 producer. Pi work is independent of the retired Gemini harness, not its replacement.
 
+Offline callback qualification is available with explicit trusted local paths:
+`MEZ_PI_NODE=/absolute/node MEZ_PI_PACKAGE=/absolute/pi-coding-agent timeout 180s cargo test -p mezzanine --lib --quiet pi_lifecycle_released_loader -- --ignored`.
+This runs only the transport-free observer through the pinned package's inline
+extension loader and runner, then checks emitted facts against the Rust projector.
+It uses an empty child environment and temporary home, does not discover user
+extensions, request credentials, start providers or install configuration, and
+does not certify private launch delivery, renewal, reload rebinding or accounting.
+Package-independent tests also run via `timeout 120s node --test scripts/test-pi-observer.mjs`.
+
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.

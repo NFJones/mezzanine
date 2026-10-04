@@ -288,6 +288,12 @@ prove final settlement; `agent_before_settle` outcomes remain provisional until
 UI prompts indicate input wait, not approval authority. Reload/new/resume/fork
 teardown MUST NOT imply process death or authorize capability rebinding. This
 component alone MUST NOT certify or install a Pi extension or imply token coverage.
+The transport-free Pi observer MUST only register allowlisted callbacks during
+factory loading. It MUST forward newly allocated inert facts to a caller-owned
+synchronous bounded queue, retain neutral callback results on telemetry loss,
+and obtain the session from each current callback context. Offline released
+loader/runner qualification MUST remain distinct from private launch, renewal,
+session rebinding, live provider usage and certified-manifest acceptance.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow
