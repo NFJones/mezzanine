@@ -235,7 +235,9 @@ fn runtime_external_usage_capacity_preserves_existing_stream_admission() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Creates a registered, capability-only telemetry owner and private usage store.
+/// Creates a registered, capability-only telemetry owner and initialized private
+/// usage store, matching host session startup before concurrent ingress begins.
+/// Fresh-store and migration contention remain covered by storage-owned tests.
 fn fixture() -> (
     RuntimeSessionService,
     ControlConnectionState,
@@ -248,6 +250,7 @@ fn fixture() -> (
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
     let store = TokenUsageStore::new(temp_root("external-usage-ingress").join("usage.sqlite"));
+    store.initialize(current_unix_seconds()).unwrap();
     service.set_token_usage_store(store.clone());
     let launch: serde_json::Value = serde_json::from_str(&service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"launch","method":"agent/external/launch","params":{"pane_id":"%1","harness":"codex","version":"fixture"}}"#, &primary,
@@ -284,6 +287,11 @@ fn fixture() -> (
 #[tokio::test(flavor = "current_thread")]
 async fn runtime_external_usage_worker_gate_preserves_actor_and_lost_reply() {
     let (mut service, connection, params, store) = fixture();
+    assert_eq!(
+        external_ledger_input(&store),
+        0,
+        "startup must not charge usage"
+    );
     let started = std::sync::Arc::new(tokio::sync::Notify::new());
     let release = std::sync::Arc::new(tokio::sync::Notify::new());
     service.gate_external_usage_worker_for_tests(started.clone(), release.clone());
