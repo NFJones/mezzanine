@@ -605,6 +605,11 @@ accounting. Reports must be within the 91-day horizon and not future-dated;
 pruned old sequences cannot become new deltas. High-water checkpoint tombstones
 remain after raw events and receipts are pruned.
 
+Concurrent first opens may contend while enabling SQLite WAL. The ledger retries
+only that idempotent setup step within a finite contention budget, before usage
+transactions begin. It does not automatically replay accounting transactions;
+persistent contention returns an explicit error and leaves replay identity intact.
+
 SQLite schema v2 migrates legacy rows to harness `mez` without counter backfill.
 The ledger stores harness/model counters and opaque stream identities, not prompt,
 transcript or pane paths. Native latest-request samples remain separate. Pane

@@ -335,7 +335,8 @@ async fn runtime_external_usage_worker_gate_preserves_actor_and_lost_reply() {
     let (body, _) = crate::control::decode_control_frame(&response.output, 8192).unwrap();
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&body).unwrap()["result"]["durable"],
-        true
+        true,
+        "external usage retry response: {body}"
     );
     handle.shutdown().await.unwrap();
     let mut exit = actor_task.await.unwrap();

@@ -231,10 +231,49 @@ impl TokenUsageStore {
     }
 }
 
+/// Enables WAL before writer admission. SQLite can reject concurrent journal
+/// mode changes without invoking its busy handler, so retry only this idempotent
+/// setup operation within the ordinary connection contention budget. No usage
+/// transaction or committed observation is replayed by this owner.
+fn initialize_wal(connection: &Connection) -> Result<()> {
+    let started = std::time::Instant::now();
+    let budget = Duration::from_millis(250);
+    loop {
+        let result = connection.query_row("PRAGMA journal_mode = WAL", [], |row| {
+            row.get::<_, String>(0)
+        });
+        match result {
+            Ok(mode) if mode.eq_ignore_ascii_case("wal") => return Ok(()),
+            Ok(_) => return Err(MezError::invalid_state("token usage WAL mode unavailable")),
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if matches!(
+                    error.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) && started.elapsed() < budget =>
+            {
+                std::thread::sleep(
+                    Duration::from_millis(2).min(budget.saturating_sub(started.elapsed())),
+                );
+            }
+            Err(error) => {
+                return Err(MezError::invalid_state(format!(
+                    "token usage WAL initialization failed: {error}"
+                )));
+            }
+        }
+    }
+}
+
+/// Migrates schema transactionally after bounded WAL setup succeeds.
 fn initialize_schema(connection: &Connection) -> Result<()> {
-    connection.execute_batch("PRAGMA journal_mode = WAL;")?;
+    initialize_wal(connection)?;
     let transaction =
-        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)?;
+        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| {
+                MezError::invalid_state(format!(
+                    "token usage schema writer admission failed: {error}"
+                ))
+            })?;
     let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     match version {
         0 => {

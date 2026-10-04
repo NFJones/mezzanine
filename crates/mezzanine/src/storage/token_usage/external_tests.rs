@@ -6,6 +6,54 @@
 use super::*;
 use mez_agent::ModelTokenUsageKey;
 
+/// Persistent setup contention fails within a finite budget before any usage
+/// transaction begins. An explicit retry after the lock clears commits once;
+/// the setup retry loop must never duplicate a checkpoint or delta.
+#[test]
+fn external_wal_setup_contention_is_bounded_and_retry_safe() {
+    let (store, report) = fixture();
+    std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+    let blocker = rusqlite::Connection::open(store.path()).unwrap();
+    blocker
+        .execute_batch("CREATE TABLE fixture(value INTEGER); BEGIN EXCLUSIVE;")
+        .unwrap();
+    let started = std::time::Instant::now();
+    let error = store.ingest_external(&report, 100).unwrap_err();
+    assert!(error.message().contains("WAL initialization"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    blocker.execute_batch("ROLLBACK;").unwrap();
+    assert!(store.ingest_external(&report, 100).unwrap().applied);
+    assert!(!store.ingest_external(&report, 100).unwrap().applied);
+}
+
+/// Concurrent identical reports opening a fresh store must settle one durable
+/// delta and one replay, including schema/WAL initialization. Both workers own
+/// separate connections and begin together, as lost-reply ingress permits.
+#[test]
+fn external_concurrent_fresh_store_replay_conserves_delta() {
+    for _ in 0..20 {
+        let (store, report) = fixture();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let workers = (0..2)
+            .map(|_| {
+                let store = store.clone();
+                let report = report.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.ingest_external(&report, 100)
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|commit| commit.applied).count(), 1);
+        assert_eq!(results[0].totals, results[1].totals);
+    }
+}
+
 /// Legacy status queries must not merge external same-model expense or display
 /// missing external reasoning as a known zero while harness-aware status is pending.
 #[test]
