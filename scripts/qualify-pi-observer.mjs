@@ -9,7 +9,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createPiObserver } from "../crates/mezzanine/src/integrations/bootstrap/pi_observer.mjs";
+import { EventEmitter } from "node:events";
+import { createPiStreamExtension } from "../crates/mezzanine/src/integrations/bootstrap/pi_extension.mjs";
 
 assert.equal(process.argv.length, 3, "explicit trusted Pi package root required");
 const root = resolve(process.argv[2]);
@@ -24,11 +25,23 @@ const { ExtensionRunner } = await load("extensions/runner.js");
 const { createEventBus } = await load("event-bus.js");
 const observations = [];
 const runtime = createExtensionRuntime();
+let opened = 0;
+let closed = 0;
+const stream = new EventEmitter();
+stream.writableLength = 0;
+stream.write = (frame) => {
+  observations.push({ session: "bound", event: JSON.parse(frame) });
+  return true;
+};
 const extension = await loadExtensionFromFactory(
-  createPiObserver("bound", (item) => observations.push(item)),
+  createPiStreamExtension("bound", () => {
+    opened++;
+    return { stream, close() { closed++; stream.emit("close"); } };
+  }),
   process.cwd(), createEventBus(), runtime,
 );
 assert.equal(observations.length, 0);
+assert.equal(opened, 0, "factory loading must not open session resources");
 for (const key of ["tools", "commands", "flags", "shortcuts"]) assert.equal(extension[key].size, 0);
 let session = "bound";
 const runner = new ExtensionRunner([extension], runtime, process.cwd(), { getSessionId: () => session }, {});
@@ -54,6 +67,9 @@ await runner.emit({ type: "session_shutdown", reason: "reload", targetSessionFil
 runner.invalidate();
 await runner.emit({ type: "agent_start" });
 assert.equal(observations.length, 7);
+assert.equal(opened, 1);
+assert.equal(closed, 1);
+assert.equal(stream.listenerCount("error"), 0);
 assert.equal(errors.length, 0);
 assert.equal(JSON.stringify(observations).includes("PRIVATE"), false);
 process.stdout.write(JSON.stringify(observations) + "\n");

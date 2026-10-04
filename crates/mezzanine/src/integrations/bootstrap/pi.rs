@@ -175,6 +175,12 @@ mod tests {
             "offline observer test failed: {}",
             unit.status
         );
+        let extension_unit = run("scripts/test-pi-extension.mjs", true);
+        assert!(
+            extension_unit.status.success(),
+            "offline extension wiring test failed: {}",
+            extension_unit.status
+        );
         let output = run("scripts/qualify-pi-observer.mjs", false);
         std::fs::remove_dir_all(home).unwrap();
         assert!(

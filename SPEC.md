@@ -335,6 +335,12 @@ neutral on backpressure/errors, and never expose daemon capabilities or routing.
 Stream teardown releases only observer ownership; the launcher separately owns
 the session lifetime and reload confirmation. This bridge does not certify
 private launch delivery, installed extensions or vendor usage accounting.
+Pi session-scoped extension wiring MUST register callbacks without opening
+resources during factory loading. Only a matching bound session-start callback
+may invoke its launcher-supplied channel opener, at most once per instance.
+Shutdown MUST forward its inert fact before idempotent channel cleanup; failed
+opening or stale context MUST remain neutral without automatic reconnect or
+session rebinding. Injectable wiring alone MUST NOT activate a certified manifest.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow

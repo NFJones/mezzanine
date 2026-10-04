@@ -167,6 +167,14 @@ changing vendor decisions. Daemon capabilities never cross this observer link.
 The launcher retains session lifetime separately from observer stream closure.
 Private launcher delivery and installable extension wiring remain unfinished.
 
+The injectable Pi extension factory wires the observer to its stream sink only
+at session start. Factory loading opens no resources; a matching context session
+can open its explicitly supplied channel once, and shutdown forwards an inert
+teardown fact before idempotent cleanup. Failures remain neutral without retry or
+automatic rebinding. Offline tests exercise this wiring through the installed
+Pi 1.0.2 loader/runner; actual private launcher delivery, installation and
+supported-platform certification remain unfinished.
+
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.
