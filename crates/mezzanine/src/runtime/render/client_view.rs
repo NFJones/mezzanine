@@ -2246,6 +2246,9 @@ impl RuntimeSessionService {
 
     /// Returns the pane-frame status for an agent turn.
     fn runtime_agent_frame_status(&self, turn: &AgentTurnRecord) -> &'static str {
+        if let Some(status) = self.agent_human_pause_status(&turn.pane_id) {
+            return status;
+        }
         if turn.state == AgentTurnState::Queued
             && !self.agent_surface_allows_scheduler_start(&turn.pane_id)
         {

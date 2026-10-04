@@ -5,6 +5,527 @@
 
 use super::*;
 
+/// Issued pane-shell completion, including a failed command, must retain the
+/// paused task and accepted output rather than launching post hooks or ending it.
+#[test]
+fn runtime_human_pause_managed_settlement_retains_task_without_post_hook() {
+    for exit_code in [0, 2] {
+        let mut service = test_runtime_service();
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service.start_initial_pane_process(None).unwrap();
+        wait_until_primary_shell_foreground(&mut service, "%1");
+        mark_test_pane_ready(&mut service, "%1");
+        service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Pane));
+        service.permission_policy_mut().set_approval_bypass(true);
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service
+            .execute_agent_shell_command(&primary, "retain managed settlement")
+            .unwrap();
+        service.remove_pending_agent_provider_task("turn-1");
+        let provider = RuntimeBatchProvider {
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".into(),
+                model: "test".into(),
+                raw_text: "managed pause".into(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    rationale: "managed pause fixture".into(),
+                    actions: vec![mez_agent::AgentAction {
+                        id: "managed-issued".into(),
+                        payload: mez_agent::AgentActionPayload::ShellCommand {
+                            summary: "Managed fixture".into(),
+                            command: "printf managed-output".into(),
+                            interactive: false,
+                            stateful: false,
+                            timeout_ms: Some(5000),
+                        },
+                    }],
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+        };
+        service
+            .execute_agent_turn_with_provider(
+                "turn-1",
+                &provider,
+                runtime_model_profile("runtime-batch", "test"),
+            )
+            .unwrap();
+        let marker = service.running_shell_transactions_for_tests().iter().find_map(|(marker, transaction)|
+            matches!(&transaction.kind, RunningShellTransactionKind::AgentAction { action_id } if action_id == "managed-issued").then(|| marker.clone())).unwrap();
+        service.use_hook_effect_adapter();
+        service.replace_config_layers(vec![ConfigLayer {
+            name: "primary".into(), path: None, format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+            text: "[hooks.post]\nevent = \"post_shell_command\"\nprogram = \"/missing/absolute/post\"\n".into(),
+        }]).unwrap();
+        let target = service
+            .capture_agent_lifecycle_target(&primary, "%1")
+            .unwrap();
+        let generation = service
+            .pause_agent_lifecycle_target(&primary, &target)
+            .unwrap();
+        let transaction = service
+            .running_shell_transactions_mut_for_tests()
+            .get_mut(&marker)
+            .unwrap();
+        transaction.observed_output_preview = "managed-output\n".into();
+        transaction.observed_output_bytes = transaction.observed_output_preview.len();
+        service
+            .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
+            .unwrap();
+        service
+            .observe_agent_shell_transaction_end(
+                "%1", &marker, "turn-1", "agent-%1", "%1", exit_code,
+            )
+            .unwrap();
+        assert_eq!(service.agent_human_pause_status("%1"), Some("paused"));
+        assert_eq!(
+            service.agent_turn_ledger().turn("turn-1").unwrap().state,
+            AgentTurnState::Blocked
+        );
+        assert!(
+            service
+                .drain_program_hook_transition()
+                .side_effects
+                .is_empty()
+        );
+        let execution = service.agent_turn_executions().get("turn-1").unwrap();
+        assert!(execution.action_results[0].is_terminal());
+        let target = service
+            .capture_agent_lifecycle_target(&primary, "%1")
+            .unwrap();
+        assert!(
+            service
+                .resume_agent_lifecycle_target(&primary, &target, generation)
+                .unwrap()
+        );
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
+/// Idle inhibition retains later user work in the queue, without manufacturing
+/// a task for an empty idle resume or letting normal admission remove the gate.
+#[test]
+fn runtime_human_pause_idle_admission_waits_for_explicit_resume() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "register owner")
+        .unwrap();
+    service.stop_agent_turn_for_pane("%1").unwrap();
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    let generation = service
+        .pause_agent_lifecycle_target(&primary, &target)
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "queued while idle paused")
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Queued
+    );
+    assert_eq!(service.agent_human_pause_status("%1"), Some("paused"));
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    assert!(
+        service
+            .resume_agent_lifecycle_target(&primary, &target, generation)
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    assert_eq!(
+        runtime_prepared_context_for_turn(&service, &started.turn_id)
+            .blocks()
+            .iter()
+            .filter(|block| block.label.starts_with("human resume "))
+            .count(),
+        1
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// An already issued provider response settles its usage and chronology while
+/// pause prevents the returned action candidate from reaching a shell worker.
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_human_pause_accepts_provider_completion_without_dispatch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "retain provider response")
+        .unwrap();
+    let turn = service.agent_turn_ledger().turn("turn-1").unwrap().clone();
+    service
+        .record_claimed_agent_provider_generation_for_tests("turn-1", 1)
+        .unwrap();
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    let generation = service
+        .pause_agent_lifecycle_target(&primary, &target)
+        .unwrap();
+    assert_eq!(service.agent_human_pause_status("%1"), Some("pausing"));
+    let action = mez_agent::AgentAction {
+        id: "candidate".into(),
+        payload: mez_agent::AgentActionPayload::Wait,
+    };
+    let mut request = runtime_model_request_fixture("turn-1");
+    request.allowed_actions = service
+        .capture_agent_session_allowed_actions_for_pane("%1")
+        .unwrap();
+    let response = mez_agent::ModelResponse {
+        provider: "runtime-batch".into(),
+        model: "test".into(),
+        raw_text: "retained candidate".into(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: Some(mez_agent::MaapBatch {
+            rationale: "retain work".into(),
+            actions: vec![action.clone()],
+        }),
+        provider_transcript_events: Vec::new(),
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request,
+        response,
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            Vec::new(),
+            None,
+        )],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    assert!(
+        service
+            .apply_agent_provider_completed_event(
+                &AgentId::opaque(turn.agent_id).unwrap(),
+                "turn-1",
+                execution
+            )
+            .await
+            .unwrap()
+    );
+    assert!(service.pending_native_shell_actions().is_empty());
+    assert_eq!(service.agent_human_pause_status("%1"), Some("paused"));
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    assert!(
+        service
+            .resume_agent_lifecycle_target(&primary, &target, generation)
+            .unwrap()
+    );
+    assert!(service.pending_native_shell_actions().is_empty());
+    assert_eq!(
+        service.agent_turn_ledger().turn("turn-1").unwrap().state,
+        AgentTurnState::Running
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == "turn-1")
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Failed fair-capacity admission leaves human inhibition and chronology intact;
+/// a later successful resume must append exactly one trusted continuation.
+#[test]
+fn runtime_human_pause_resume_queue_failure_is_retry_safe() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "retain this task")
+        .unwrap();
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    let generation = service
+        .pause_agent_lifecycle_target(&primary, &target)
+        .unwrap();
+    service
+        .agent_scheduler_mut()
+        .set_queue_limits(1, usize::MAX)
+        .unwrap();
+    service
+        .agent_scheduler_mut()
+        .enqueue(mez_agent::ScheduledWork {
+            turn_id: "queue-filler".into(),
+            conversation_id: "other".into(),
+            agent_id: "other".into(),
+            pane_id: None,
+            kind: mez_agent::ScheduledWorkKind::BackgroundTask,
+        })
+        .unwrap();
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    assert!(
+        service
+            .resume_agent_lifecycle_target(&primary, &target, generation)
+            .is_err()
+    );
+    assert_eq!(service.agent_human_pause_status("%1"), Some("paused"));
+    assert_eq!(
+        runtime_prepared_context_for_turn(&service, "turn-1")
+            .blocks()
+            .iter()
+            .filter(|block| block.label.starts_with("human resume "))
+            .count(),
+        0
+    );
+    service
+        .agent_scheduler_mut()
+        .cancel("queue-filler")
+        .unwrap();
+    assert!(
+        service
+            .resume_agent_lifecycle_target(&primary, &target, generation)
+            .unwrap()
+    );
+    assert_eq!(
+        runtime_prepared_context_for_turn(&service, "turn-1")
+            .blocks()
+            .iter()
+            .filter(|block| block.label.starts_with("human resume "))
+            .count(),
+        1
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Pause drains an already claimed native action without cancelling its effect,
+/// fences a pending sibling, and retains the settled result for explicit resume.
+#[test]
+fn runtime_human_pause_drains_native_without_replaying_siblings() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Native));
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .execute_agent_shell_command(&primary, "drain issued work")
+        .unwrap();
+    let root = temp_root("pause-native-drain");
+    fs::create_dir_all(&root).unwrap();
+    let effect = root.join("effect");
+    let forbidden = root.join("forbidden");
+    let actions = [
+        (
+            "issued",
+            format!("printf settled >> '{}'", effect.display()),
+        ),
+        (
+            "pending",
+            format!("printf forbidden > '{}'", forbidden.display()),
+        ),
+    ]
+    .into_iter()
+    .map(|(id, command)| mez_agent::AgentAction {
+        id: id.into(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Pause fixture".into(),
+            command,
+            interactive: false,
+            stateful: false,
+            timeout_ms: Some(5_000),
+        },
+    })
+    .collect();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".into(),
+            model: "test".into(),
+            raw_text: "pause native fixture".into(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "test pause drain".into(),
+                actions,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service.remove_pending_agent_provider_task("turn-1");
+    service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let dispatch = service
+        .claim_native_shell_action("turn-1", "issued")
+        .unwrap()
+        .unwrap();
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    let generation = service
+        .pause_agent_lifecycle_target(&primary, &target)
+        .unwrap();
+    assert_eq!(service.agent_human_pause_status("%1"), Some("pausing"));
+    assert!(
+        service
+            .claim_native_shell_action("turn-1", "pending")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        service
+            .resume_agent_lifecycle_target(&primary, &target, generation)
+            .is_err()
+    );
+    let outcome = crate::runtime::execute_native_shell_dispatch(dispatch);
+    assert!(
+        service
+            .complete_native_shell_action(outcome.clone())
+            .unwrap()
+    );
+    assert!(!service.complete_native_shell_action(outcome).unwrap());
+    assert_eq!(service.agent_human_pause_status("%1"), Some("paused"));
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    assert!(
+        service
+            .resume_agent_lifecycle_target(&primary, &target, generation)
+            .unwrap()
+    );
+    assert_eq!(fs::read_to_string(&effect).unwrap(), "settled");
+    assert!(!forbidden.exists());
+    let context = runtime_prepared_context_for_turn(&service, "turn-1");
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("superseded by explicit user resume"))
+    );
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A settled pause releases provider capacity while retaining its task. Only an
+/// attached primary may resume, and duplicate resume appends no second prompt.
+#[test]
+fn runtime_human_pause_retains_task_and_resumes_once() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "retain this task")
+        .unwrap();
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    let generation = service
+        .pause_agent_lifecycle_target(&primary, &target)
+        .unwrap();
+    assert_eq!(service.agent_human_pause_status("%1"), Some("paused"));
+    assert_eq!(service.agent_scheduler().snapshot().active_capacity_used, 0);
+    assert_eq!(
+        service.agent_turn_ledger().turn("turn-1").unwrap().state,
+        AgentTurnState::Blocked
+    );
+    let current = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    assert!(
+        service
+            .resume_agent_lifecycle_target(&observer, &current, generation)
+            .is_err()
+    );
+    assert!(
+        service
+            .resume_agent_lifecycle_target(&primary, &current, generation)
+            .unwrap()
+    );
+    assert!(
+        !service
+            .resume_agent_lifecycle_target(&primary, &current, generation)
+            .unwrap()
+    );
+    assert_eq!(
+        service.agent_turn_ledger().turn("turn-1").unwrap().state,
+        AgentTurnState::Running
+    );
+    let context = runtime_prepared_context_for_turn(&service, "turn-1");
+    assert_eq!(
+        context
+            .blocks()
+            .iter()
+            .filter(|block| block.label.starts_with("human resume "))
+            .count(),
+        1
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// A user may close an exact agent in another window without first focusing
 /// it. Live-process force policy still applies, and stale confirmations or
 /// foreign client IDs must never close a replacement or the invoking pane.

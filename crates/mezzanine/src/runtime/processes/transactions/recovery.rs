@@ -109,7 +109,10 @@ impl RuntimeSessionService {
         let candidates = self
             .stranded_agent_shell_dispatch_recovery_candidates()
             .into_iter()
-            .filter(|turn_id| !actor_progress_turn_ids.contains(turn_id))
+            .filter(|turn_id| {
+                !actor_progress_turn_ids.contains(turn_id)
+                    && !self.agent_turn_is_human_paused(turn_id)
+            })
             .collect::<Vec<_>>();
         let mut recovered = 0usize;
         for turn_id in candidates {
@@ -374,7 +377,8 @@ impl RuntimeSessionService {
         actor_progress_turn_ids: &BTreeSet<String>,
     ) -> bool {
         let turn_id = turn.turn_id.as_str();
-        self.agent_provider_task_is_owned(turn_id)
+        self.agent_turn_is_human_paused(turn_id)
+            || self.agent_provider_task_is_owned(turn_id)
             || actor_progress_turn_ids.contains(turn_id)
             || self
                 .process

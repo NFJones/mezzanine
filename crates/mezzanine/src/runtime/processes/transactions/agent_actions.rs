@@ -2869,6 +2869,18 @@ impl RuntimeSessionService {
             }
         }
 
+        if self.agent_turn_is_human_paused(turn_id) {
+            let execution = self
+                .agent_turn_executions()
+                .get(turn_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("paused managed execution is unavailable")
+                })?;
+            self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+            self.retain_human_paused_execution(&turn, execution, &observed_results)?;
+            return Ok(1);
+        }
         self.run_configured_completed_hooks(HookEvent::PostShellCommand, &post_shell_hook_payload)?;
 
         let mut transcript_entries = 0usize;

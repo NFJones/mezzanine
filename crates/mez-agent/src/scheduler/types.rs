@@ -179,6 +179,8 @@ pub struct AgentScheduler {
     /// Pane and agent claims retained while a waiting parent is queued for fair
     /// provider-capacity reacquisition.
     pub(super) reacquiring: HashMap<String, RunningWork>,
+    /// Orthogonal human dispatch inhibition; dependencies cannot clear it.
+    pub(super) human_paused: HashSet<String>,
     /// Stores the last started agent id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

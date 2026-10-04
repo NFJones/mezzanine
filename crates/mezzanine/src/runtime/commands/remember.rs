@@ -607,6 +607,9 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<Option<RuntimeAgentRememberDispatch>> {
+        if self.agent_is_human_paused(pane_id) {
+            return Ok(None);
+        }
         self.require_auxiliary_accounting_capacity()?;
         let Some(task) = self.take_pending_agent_remember_task(pane_id) else {
             return Ok(None);

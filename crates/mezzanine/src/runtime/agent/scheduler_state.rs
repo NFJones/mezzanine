@@ -93,7 +93,9 @@ impl RuntimeSessionService {
     /// counted as a prompt turn.
     pub(crate) fn enqueue_agent_work(&mut self, work: ScheduledWork) -> Result<()> {
         let conversation_id = work.conversation_id.clone();
+        let paused_work = work.clone();
         self.agent.agent_scheduler.enqueue(work)?;
+        self.adopt_human_paused_work(&paused_work);
         self.agent
             .session_title_tasks
             .note_prompt_turn(&conversation_id);

@@ -5,6 +5,110 @@
 
 use super::*;
 
+/// Mail may settle a peer wait and request fair reacquisition, but it cannot
+/// remove human inhibition. Explicit resume queues exactly one continuation.
+#[test]
+fn runtime_human_pause_peer_mail_cannot_unpause_wait() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "wait while human paused")
+        .unwrap();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".into(),
+            model: "test".into(),
+            raw_text: "wait".into(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "wait for mail".into(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "wait-paused".into(),
+                    payload: mez_agent::AgentActionPayload::Wait,
+                }],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &started.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    let generation = service
+        .pause_agent_lifecycle_target(&primary, &target)
+        .unwrap();
+    let now = current_unix_millis();
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now)
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "paused-mail".into(),
+                message_type: "send".into(),
+                time: format!("runtime:{now}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(
+                    AgentId::opaque(started.agent_id.clone()).unwrap(),
+                ),
+                correlation_id: Some(started.turn_id.clone()),
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".into(),
+                payload: "Continue now".into(),
+                extension_fields: Vec::new(),
+            },
+            MessageScope::Session,
+            now,
+        )
+        .unwrap();
+    service.deliver_pending_runtime_agent_messages(now).unwrap();
+    assert_eq!(service.agent_human_pause_status("%1"), Some("paused"));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Blocked
+    );
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    assert!(
+        service
+            .resume_agent_lifecycle_target(&primary, &target, generation)
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies `wait` parks its turn and model-originated MMP mail resumes that
 /// same turn without creating a new peer-message-triggered follow-up.
 ///

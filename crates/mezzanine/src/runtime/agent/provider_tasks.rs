@@ -743,6 +743,9 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Result<Option<RuntimeAgentProviderDispatch>> {
         self.require_live()?;
+        if self.agent_turn_is_human_paused(turn_id) {
+            return Ok(None);
+        }
         let Some(turn) = self
             .agent_turn_ledger()
             .turns()

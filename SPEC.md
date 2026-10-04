@@ -2468,6 +2468,20 @@ agent prompt rows cannot survive the mode boundary.
 Further entrances to the agent shell from the same pane MUST resume the same
 agent session unless the user explicitly starts a new session.
 
+Human-targeted pause MUST be orthogonal to approval, peer and child waits and
+MUST immediately inhibit new dispatch without cancelling issued effects. The
+runtime MUST display Pausing while issued work remains and Paused only at a
+settled boundary, release provider capacity while retaining task exclusivity,
+and accept each issued result once. Explicit attached-primary resume MUST
+revalidate the target and pause generation and append one trusted retained-task
+continuation without replaying completed actions. Unissued candidates superseded
+by resume MUST lose their old approval authority. Queue-full admission MUST leave
+the pause and continuation chronology unchanged. Mail, approval and child results
+MUST NOT remove human inhibition; existing children MAY continue. Idle pause MUST
+gate later task admission without manufacturing a task. This runtime-only state
+MUST NOT promise transparent durable suspension after restart. The administrative
+browser consumes these lifecycle APIs; pane-local stop remains interruption.
+
 Each pane-local agent session MUST have a stable UUID identity. Starting a new
 conversation MUST allocate a fresh UUID, and resuming or forking a saved
 conversation MUST bind the active pane to the selected or newly forked

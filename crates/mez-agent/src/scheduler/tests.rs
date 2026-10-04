@@ -251,6 +251,29 @@ fn scheduler_can_cancel_queued_or_running_turns() {
 
 /// Verifies that turns blocked on user interaction release provider capacity
 /// while retaining exclusive ownership of their agent and shell pane.
+/// Human pause gates readiness even after an independent dependency requeues
+/// the owner; settlement parking releases capacity but never pane exclusivity.
+#[test]
+fn scheduler_human_pause_is_orthogonal_to_wait_and_reacquisition() {
+    let mut scheduler = AgentScheduler::new(1).unwrap();
+    scheduler.enqueue(work("t1", "a1", "%1")).unwrap();
+    scheduler.enqueue(work("t2", "a2", "%1")).unwrap();
+    scheduler.enqueue(work("t3", "a3", "%2")).unwrap();
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "t1");
+    scheduler.set_human_paused("t1", true);
+    scheduler.block_running("t1").unwrap();
+    scheduler.requeue_blocked("t1").unwrap();
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "t3");
+    scheduler.complete("t3").unwrap();
+    assert!(scheduler.start_ready().is_none());
+    scheduler.set_human_paused("t1", false);
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "t1");
+    scheduler.complete("t1").unwrap();
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "t2");
+}
+
+/// Verifies that turns blocked on user interaction release provider capacity
+/// while retaining exclusive ownership of their agent and shell pane.
 #[test]
 fn scheduler_blocked_turns_release_capacity_and_keep_pane_exclusive() {
     let mut scheduler = AgentScheduler::new(1).unwrap();

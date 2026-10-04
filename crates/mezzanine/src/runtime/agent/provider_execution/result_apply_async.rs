@@ -129,6 +129,13 @@ impl RuntimeSessionService {
         self.record_agent_copy_output(turn, &execution);
         let mut terminal_observations = RuntimeTerminalActionObservations::default();
         terminal_observations.observe(&execution);
+        if self.agent_turn_is_human_paused(turn_id) {
+            return self.retain_human_paused_execution(
+                turn,
+                execution,
+                terminal_observations.results(),
+            );
+        }
         let skill_actions_executed =
             self.execute_running_skill_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
@@ -227,6 +234,13 @@ impl RuntimeSessionService {
         )>,
     ) -> Result<AgentTurnExecution> {
         let turn_id = turn.turn_id.as_str();
+        if self.agent_turn_is_human_paused(turn_id) {
+            return self.retain_human_paused_execution(
+                turn,
+                execution,
+                terminal_observations.results(),
+            );
+        }
         let spawn_actions_executed = self.execute_running_spawn_actions_for_turn_with_fork(
             turn,
             &mut execution,
@@ -539,6 +553,13 @@ impl RuntimeSessionService {
         mut terminal_observations: RuntimeTerminalActionObservations,
         actions_executed_before_shell: usize,
     ) -> Result<AgentTurnExecution> {
+        if self.agent_turn_is_human_paused(&turn.turn_id) {
+            return self.retain_human_paused_execution(
+                turn,
+                execution,
+                terminal_observations.results(),
+            );
+        }
         let shell_actions_dispatched =
             self.dispatch_running_shell_actions_to_panes(turn, &mut execution)?;
         terminal_observations.observe(&execution);

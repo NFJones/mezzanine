@@ -997,6 +997,9 @@ impl RuntimeSessionService {
         pane_id: &str,
         task_generation: u64,
     ) -> Result<Option<RuntimeAgentCompactionDispatch>> {
+        if self.agent_is_human_paused(pane_id) {
+            return Ok(None);
+        }
         if self.pending_agent_compaction_task_generation(pane_id) != Some(task_generation) {
             return Ok(None);
         }

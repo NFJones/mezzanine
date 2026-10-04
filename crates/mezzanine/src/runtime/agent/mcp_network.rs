@@ -491,6 +491,9 @@ impl RuntimeSessionService {
         turn_id: &str,
         action_id: &str,
     ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
+        if self.agent_turn_is_human_paused(turn_id) {
+            return Ok(None);
+        }
         let identity = (turn_id.to_string(), action_id.to_string());
         if self
             .agent
@@ -963,6 +966,10 @@ impl RuntimeSessionService {
         // repeats a call whose answer it never received.
         let observed_result = execution.action_results[result_index].clone();
         self.append_settled_external_action_context(&turn.turn_id, &observed_result)?;
+        if self.agent_turn_is_human_paused(&turn.turn_id) {
+            self.retain_human_paused_execution(&turn, execution, &[observed_result])?;
+            return Ok(true);
+        }
         if siblings_pending && execution.terminal_state == AgentTurnState::Failed {
             self.agent_turn_executions_mut()
                 .insert(turn.turn_id.clone(), execution);

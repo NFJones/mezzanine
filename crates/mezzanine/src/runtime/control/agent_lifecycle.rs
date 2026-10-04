@@ -15,13 +15,13 @@ use mez_core::ids::ClientId;
 /// Immutable user operation target, kept separate from display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeAgentLifecycleTarget {
-    client_id: ClientId,
-    pane_id: String,
-    agent_id: String,
-    conversation_id: String,
-    turn_id: Option<String>,
-    process: Option<RuntimePaneProcessIdentity>,
-    attempts: Vec<(String, String)>,
+    pub(crate) client_id: ClientId,
+    pub(crate) pane_id: String,
+    pub(crate) agent_id: String,
+    pub(crate) conversation_id: String,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) process: Option<RuntimePaneProcessIdentity>,
+    pub(crate) attempts: Vec<(String, String)>,
 }
 
 impl RuntimeSessionService {

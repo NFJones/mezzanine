@@ -621,6 +621,9 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Result<bool> {
+        if self.agent_turn_is_human_paused(turn_id) {
+            return Ok(false);
+        }
         let approval_ids = self
             .blocked_agent_approval_ids_by_turn()
             .remove(turn_id)
@@ -693,6 +696,9 @@ impl RuntimeSessionService {
         else {
             return Ok(None);
         };
+        if self.agent_turn_is_human_paused(&approval_ref.turn_id) {
+            return Ok(None);
+        }
         let mut execution = self
             .agent_turn_executions()
             .get(&approval_ref.turn_id)

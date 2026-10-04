@@ -198,6 +198,9 @@ impl RuntimeSessionService {
         turn_id: &str,
         action_id: &str,
     ) -> Result<Option<crate::runtime::RuntimeNativeShellDispatch>> {
+        if self.agent_turn_is_human_paused(turn_id) {
+            return Ok(None);
+        }
         let identity = (turn_id.to_string(), action_id.to_string());
         if self
             .agent
@@ -528,6 +531,7 @@ impl RuntimeSessionService {
                     ),
                 )?;
                 let _ = self.dispatch_stored_running_shell_actions(&turn.turn_id)?;
+                self.reconcile_human_pauses()?;
                 return Ok(true);
             }
         }
@@ -691,6 +695,10 @@ impl RuntimeSessionService {
         settled_results: Vec<ActionResult>,
     ) -> Result<()> {
         self.record_runtime_agent_patch_results_for_turn(turn, &execution);
+        if self.agent_turn_is_human_paused(&turn.turn_id) {
+            self.retain_human_paused_execution(turn, execution, &settled_results)?;
+            return Ok(());
+        }
         // A failed network sibling may have settled before this shell result.
         // Keep the batch and its external worker alive until all owned results
         // are available for one bounded correction decision.
@@ -1139,6 +1147,9 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Result<Option<AgentTurnExecution>> {
+        if self.agent_turn_is_human_paused(turn_id) {
+            return Ok(None);
+        }
         let Some(mut execution) = self.agent_turn_executions().get(turn_id).cloned() else {
             return Ok(None);
         };
@@ -1383,6 +1394,9 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
     ) -> Result<usize> {
+        if self.agent_turn_is_human_paused(&turn.turn_id) {
+            return Ok(0);
+        }
         if execution.terminal_state != AgentTurnState::Running {
             return Ok(0);
         }

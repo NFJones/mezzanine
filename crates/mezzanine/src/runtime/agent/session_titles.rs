@@ -812,6 +812,11 @@ impl RuntimeSessionService {
         &mut self,
         conversation_id: &str,
     ) -> MezResult<Option<RuntimeAgentSessionTitleDispatch>> {
+        if self.agent_shell_store().sessions().any(|session| {
+            session.session_id == conversation_id && self.agent_is_human_paused(&session.pane_id)
+        }) {
+            return Ok(None);
+        }
         let Some(mut task) = self
             .agent
             .pending_agent_session_title_tasks

@@ -20,6 +20,15 @@ impl RuntimeSessionService {
             .running_shell_transactions
             .iter()
             .filter_map(|(marker, transaction)| {
+                if self.agent_turn_is_human_paused(&transaction.turn_id)
+                    && self.native_shell_marker_has_worker_owner(marker)
+                    && !self
+                        .agent_worker_attempts_for_turn(&transaction.turn_id)
+                        .iter()
+                        .any(|(_, attempt)| attempt == marker)
+                {
+                    return None;
+                }
                 let timeout_ms = runtime_shell_transaction_effective_timeout_ms(transaction)?;
                 let elapsed_ms = now_unix_ms.saturating_sub(transaction.started_at_unix_ms);
                 (elapsed_ms >= timeout_ms)

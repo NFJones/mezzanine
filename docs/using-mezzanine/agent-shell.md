@@ -75,6 +75,16 @@ cannot undo a remote effect. Issued actions with unconfirmed outcomes are retain
 as interrupted with unknown effects, and are not automatically retried. Inspect
 current state before deciding whether a new mutation is needed.
 
+The runtime's targeted pause/resume APIs are distinct from `/stop`: pause retains
+the task, gates new dispatch, and drains already-issued work. Pausing is not proof
+of quiescence; Paused releases provider capacity but retains exclusive task
+ownership. Explicit primary resume supplies one continuation prompt and does not
+repeat settled actions. It supersedes unissued candidates rather than carrying
+their old approvals into changed work. Peer mail, approval replies and child
+completion cannot unpause the agent; already-running children may continue.
+These APIs are intended for the administrative agent browser, not new slash
+commands. Runtime pause is not transparent process suspension across restart.
+
 In the `/resume` picker, Enter resumes the selected conversation, `i` opens its
 transcript for inspection, and `a` toggles between the current project and all
 saved conversations. Press `d` to delete the selected saved conversation;

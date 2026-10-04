@@ -235,6 +235,7 @@ mod session_titles;
 #[cfg(test)]
 pub(crate) use session_titles::{SessionTitleDenial, session_title_task_id};
 mod names;
+mod pause;
 mod shell_dispatch;
 mod shell_state;
 mod skills;
@@ -484,6 +485,10 @@ pub(crate) struct RuntimeAgentComponent {
     skill_discovery_receipts: BTreeMap<String, Vec<skills::SkillSelectionReceipt>>,
     /// Successful model-selected loads, independent of arbitrary context text.
     model_loaded_skills: BTreeMap<String, BTreeSet<String>>,
+    /// Exact conversation-owned human inhibition, separate from dependency waits.
+    human_pauses: BTreeMap<String, pause::HumanPause>,
+    /// Monotonic fence for explicit pause/resume operations.
+    next_human_pause_generation: u64,
     /// Provider turns queued for worker dispatch.
     pending_agent_provider_tasks: BTreeSet<String>,
     /// Acceptance-frozen status inputs awaiting exact deferred-command claim.
@@ -3573,6 +3578,9 @@ impl RuntimeSessionService {
 
     /// Restores a parked turn's active deadline by its elapsed peer-wait time.
     pub(crate) fn resume_agent_turn_deadline(&mut self, turn_id: &str, now_ms: u64) -> Result<()> {
+        if self.agent_turn_is_human_paused(turn_id) {
+            return Ok(());
+        }
         let Some(parked_at_ms) = self
             .agent
             .agent_turn_peer_wait_started_at_ms
