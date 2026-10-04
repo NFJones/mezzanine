@@ -84,7 +84,12 @@ The OpenCode `1.17.13` component projects settled assistant-message snapshots
 only for an explicitly bound session. Its released producer separates uncached
 input and non-reasoning output; the projection restores inclusive counters with
 checked arithmetic and rejects ambiguous numbers. Message IDs are snapshot/upsert
-identities, not permission to add every repeated event. This component does not
+identities, not permission to add every repeated event. Completed messages map to
+one immutable durable delta stream per bound session/message: identical replay
+after reconnect adds nothing; changed completed counters, model or completion
+time conflict rather than silently charging another revision. Partial snapshots
+are not charged. No callback-local sequence is treated as a vendor revision.
+This component does not
 install a plugin, bind a shared server, deliver credentials or certify live usage.
 Release references are `anomalyco/opencode` tag `v1.17.13`,
 `packages/schema/src/v1/session.ts` and `packages/opencode/src/session/session.ts`.

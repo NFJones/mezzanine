@@ -267,6 +267,12 @@ edited ownership MUST conflict. Publication MUST retain bounded recovery intent
 before changing destinations, reject symlink/special-node traversal, and never
 claim whole-install atomicity or external-writer CAS. Vendor adapters remain
 responsible for released schema qualification and observational launch binding.
+The pinned OpenCode completed-message projection MUST bind an explicit session
+and use one immutable message-scoped delta stream. Identical completed snapshots
+MUST replay without new expense; changed counters, model or completion time MUST
+conflict, not create a new charged stream. Partial snapshots and callback-local
+revision numbers MUST NOT establish consumed usage. This component alone MUST
+NOT enable a certified plugin manifest or claim live vendor conformance.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow

@@ -3,8 +3,10 @@
 //! Release owners: packages/schema/src/v1/session.ts (AssistantMessage) and
 //! packages/opencode/src/session/session.ts (getUsage). Upstream input excludes
 //! cache reads/writes; output excludes reasoning. Restore inclusive ledger totals
-//! with checked arithmetic. A snapshot is not a new additive delta: the future
-//! bound plugin must deduplicate by message identity and reconcile revisions.
+//! with checked arithmetic. Completed snapshots use one immutable message stream:
+//! identical replay adds nothing and changed completed counters fail closed.
+//! Partial revisions are not charged; the future bound plugin must qualify any
+//! correction protocol rather than invent callback-local revision numbers.
 //! This pure owner never reads transcripts, installs plugins, infers pane
 //! authority, forwards content, or counts StepFinishPart and message totals twice.
 
@@ -112,9 +114,147 @@ pub(crate) fn normalize(
     }))
 }
 
+/// Projects one completed message into an immutable durable delta stream.
+/// `owner` and `project` must come from current server-authorized launch binding,
+/// never upstream payloads. The bound session/message pair determines the epoch;
+/// model, counters and completion time remain fingerprinted payload so corrected
+/// completed observations conflict rather than silently adding more expense.
+/// Returns no report for partial, user or unbound messages. This does not deliver
+/// an RPC, authorize historical import or certify live plugin callback semantics.
+pub(crate) fn completed_report(
+    release: &str,
+    bound_session: &str,
+    owner: &str,
+    project: Option<crate::storage::token_usage::AccountingProjectId>,
+    bytes: &[u8],
+) -> Result<Option<crate::storage::token_usage::ExternalUsageReport>> {
+    use sha2::{Digest, Sha256};
+
+    if owner.is_empty() || owner.len() > 128 || owner.chars().any(char::is_control) {
+        return Err(unavailable());
+    }
+    let Some(snapshot) = normalize(release, bound_session, bytes)? else {
+        return Ok(None);
+    };
+    // JSON tuple encoding avoids delimiter collisions in inert vendor IDs.
+    // Do not include counters/model/time in this identity: a changed replay
+    // must meet the existing receipt, not create a second charged stream.
+    let identity = serde_json::to_vec(&(
+        "opencode-completed-message/1",
+        release,
+        &snapshot.session,
+        &snapshot.message,
+    ))
+    .map_err(|_| unavailable())?;
+    let digest = Sha256::digest(identity);
+    let digest = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let epoch = format!("opencode-message:{digest}");
+    Ok(Some(crate::storage::token_usage::ExternalUsageReport {
+        owner: owner.to_string(),
+        project,
+        harness: "opencode".to_string(),
+        epoch,
+        event_id: format!("completed:{}", snapshot.completed_at_ms),
+        sequence: 1,
+        mode: "delta".to_string(),
+        baseline: false,
+        observed_at: snapshot.completed_at_ms / 1000,
+        model: mez_agent::ModelTokenUsageKey::new(snapshot.provider, snapshot.model),
+        counters: snapshot.counters,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Completed snapshots are immutable accounting observations, not deltas
+    /// on every callback. Real storage must conserve expense after reopen,
+    /// reordered messages and conflicting corrections, without retaining content.
+    #[test]
+    fn opencode_completed_reports_replay_once_and_reject_corrections() {
+        use crate::storage::token_usage::{TokenHistoryScope, TokenUsageStore};
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-opencode-replay-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        let store = TokenUsageStore::new(root.join("usage.sqlite"));
+        let bytes = br#"{"role":"assistant","sessionID":"bound","id":"message","providerID":"provider","modelID":"model","time":{"completed":100000},"tokens":{"input":10,"output":4,"reasoning":2,"cache":{"read":3,"write":5}},"text":"PRIVATE"}"#;
+        let report = completed_report(RELEASE, "bound", "server-owner", None, bytes)
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.mode, "delta");
+        assert_eq!(report.sequence, 1);
+        assert_eq!(report.observed_at, 100);
+        assert!(store.ingest_external(&report, 100).unwrap().applied);
+        let reopened = TokenUsageStore::new(store.path());
+        assert!(!reopened.ingest_external(&report, 100).unwrap().applied);
+
+        // Even a correction within the same rounded ledger second is not an
+        // identical immutable observation. Its stream sequence must conflict.
+        let mut changed_time: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        changed_time["time"]["completed"] = 100001.into();
+        let changed_time = completed_report(
+            RELEASE,
+            "bound",
+            "server-owner",
+            None,
+            &serde_json::to_vec(&changed_time).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(changed_time.epoch, report.epoch);
+        assert_ne!(changed_time.event_id, report.event_id);
+        assert!(reopened.ingest_external(&changed_time, 100).is_err());
+
+        let mut corrected: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        corrected["tokens"]["input"] = 11.into();
+        let changed = completed_report(
+            RELEASE,
+            "bound",
+            "server-owner",
+            None,
+            &serde_json::to_vec(&corrected).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(changed.epoch, report.epoch);
+        assert!(reopened.ingest_external(&changed, 100).is_err());
+        corrected["id"] = "other-message".into();
+        let other = completed_report(
+            RELEASE,
+            "bound",
+            "server-owner",
+            None,
+            &serde_json::to_vec(&corrected).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(other.epoch, report.epoch);
+        assert!(reopened.ingest_external(&other, 100).unwrap().applied);
+        assert!(!reopened.ingest_external(&report, 100).unwrap().applied);
+        let history = reopened
+            .history_snapshot(100, &[1], &TokenHistoryScope::default())
+            .unwrap();
+        let usage = history.windows[&1].values().next().unwrap();
+        assert_eq!(usage.usage.input_tokens, 37);
+        assert_eq!(usage.usage.output_tokens, 12);
+        assert!(
+            completed_report(RELEASE, "different", "server-owner", None, bytes)
+                .unwrap()
+                .is_none()
+        );
+        assert!(completed_report(RELEASE, "bound", "", None, bytes).is_err());
+        let digest = report.epoch.strip_prefix("opencode-message:").unwrap();
+        assert_eq!(digest.len(), 64);
+        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(!format!("{report:?}").contains("PRIVATE"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// Released disjoint categories restore inclusive totals while repeated
     /// snapshots retain one upsert identity. Sensitive fields never leave output.
