@@ -276,6 +276,7 @@ fn semantic_apply_patch_native_resolver_handles_symlink_after_missing_parent() {
     ));
 
     let output = Command::new("/bin/sh")
+        .arg("-x")
         .arg("-c")
         .arg(lines.join("\n"))
         .current_dir(&cwd)
