@@ -500,9 +500,9 @@ async fn pi_session_inherited_stream_delivers_ordered_lifecycle() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit trusted Pi 1.0.2 package and Node >=22.19.0 required"]
 async fn pi_session_released_extension_uses_inherited_descriptor() {
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::os::unix::process::CommandExt;
     use std::process::Stdio;
+
+    use super::super::pi_launch::{LaunchSpec, spawn};
 
     let node =
         std::path::PathBuf::from(std::env::var_os("MEZ_PI_NODE").expect("explicit Node required"));
@@ -518,43 +518,26 @@ async fn pi_session_released_extension_uses_inherited_descriptor() {
     let mut fixture = Fixture::new();
     let home = fixture.root.join("home");
     std::fs::create_dir(&home).unwrap();
-    let (parent, child) = std::os::unix::net::UnixStream::pair().unwrap();
-    parent.set_nonblocking(true).unwrap();
-    let parent = tokio::net::UnixStream::from_std(parent).unwrap();
-    // SAFETY: fcntl duplicates a live descriptor into a distinct owned CLOEXEC
-    // descriptor above the fixed destination. This avoids same-fd dup2 retaining
-    // CLOEXEC and keeps the source away from standard child pipe descriptors.
-    let source = unsafe { libc::fcntl(child.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 10) };
-    assert!(source >= 10);
-    // SAFETY: successful fcntl returned a newly owned descriptor.
-    let source = unsafe { OwnedFd::from_raw_fd(source) };
-    let raw = source.as_raw_fd();
-    let mut command = tokio::process::Command::new(&node);
-    command
-        .arg(repository.join("scripts/qualify-pi-inherited-stream.mjs"))
-        .arg(&package)
-        .env_clear()
-        .env("HOME", &home)
-        .env("PATH", node.parent().unwrap())
-        .current_dir(repository)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    // SAFETY: after fork this closure only uses async-signal-safe dup2 with
-    // captured descriptor integers. The source remains alive through spawn;
-    // dup2 clears CLOEXEC on destination 3, while all other copies keep it.
-    unsafe {
-        command.as_std_mut().pre_exec(move || {
-            if libc::dup2(raw, 3) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut process = command.spawn().unwrap();
-    drop(source);
-    drop(child);
+    let launched = spawn(LaunchSpec {
+        executable: node.clone(),
+        directory: repository.into(),
+        arguments: vec![
+            repository
+                .join("scripts/qualify-pi-inherited-stream.mjs")
+                .into_os_string(),
+            package.into_os_string(),
+        ],
+        environment: vec![
+            ("HOME".into(), home.into_os_string()),
+            ("PATH".into(), node.parent().unwrap().as_os_str().into()),
+        ],
+        stdin: Stdio::null(),
+        stdout: Stdio::null(),
+        stderr: Stdio::null(),
+    })
+    .unwrap();
+    let parent = launched.observer;
+    let mut process = launched.child;
     let (ingress, inputs) = channel();
     let launcher = ingress.clone();
     let (_stop, cancellation) = watch::channel(false);

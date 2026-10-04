@@ -34,6 +34,11 @@ pub(crate) mod pi;
 pub(crate) mod pi_ipc;
 #[allow(
     dead_code,
+    reason = "explicit Pi observer launch awaits production authorization and certification"
+)]
+pub(crate) mod pi_launch;
+#[allow(
+    dead_code,
     reason = "Pi launch-owned sequencing awaits privately bound transport"
 )]
 pub(crate) mod pi_owner;

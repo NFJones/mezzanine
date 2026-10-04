@@ -185,6 +185,15 @@ automatic rebinding. Offline tests exercise this wiring through the installed
 Pi 1.0.2 loader/runner; actual private launcher delivery, installation and
 supported-platform certification remain unfinished.
 
+The internal observer launch primitive now performs the inherited-descriptor
+handoff used by the offline loader fixture. Its caller supplies an absolute
+executable and directory, exact arguments, environment and stdio; no ambient
+environment or executable discovery is used. Descriptor 3 carries observations
+only. The process owner must reap the child, independently of observer disposal
+or telemetry failure. This is not a public launch command or an authorization
+issuer: production session selection/private binding, installation and platform
+certification remain unfinished, and no Pi manifest is enabled.
+
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.

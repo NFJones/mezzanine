@@ -345,6 +345,14 @@ Offline inherited-descriptor qualification MUST keep daemon capability authority
 in the parent and distinguish manually emitted released-runner callbacks from
 production vendor event conformance. A successful descriptor fixture MUST NOT
 enable a certified manifest or claim installed-adapter or accounting acceptance.
+The internal Pi observer launch primitive MUST require an explicit absolute
+executable and working directory, exact arguments, environment and stdio. It
+MUST NOT discover a shell, inherit the ambient environment, issue credentials or
+initialize a primary. Only the observation stream on descriptor 3 crosses this
+boundary; daemon capabilities remain parent-owned. All stream setup MUST precede
+spawn, and successful launch transfers child reaping to the caller. Observer
+failure or disposal MUST NOT kill the child. This primitive does not provide
+production launch authorization, session selection or adapter certification.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow
