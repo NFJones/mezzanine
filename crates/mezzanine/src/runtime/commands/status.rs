@@ -20,16 +20,6 @@ use crate::ui::command::auth_status_store_table_row;
 mod report;
 pub(crate) use report::RuntimeStatusReportWork;
 
-const TOKEN_USAGE_TABLE_COLUMNS: [&str; 7] = [
-    "Provider",
-    "Model",
-    "Input",
-    "Cached input",
-    "Output",
-    "Reasoning",
-    "Cumulative Cache Hit %",
-];
-
 /// Builds the `/auth-status` display from a provider set and credential store.
 ///
 /// The inline lane passes its live registry and store; the deferred executor
@@ -171,12 +161,39 @@ impl RuntimeSessionService {
         extended: bool,
         accounting: bool,
     ) -> Result<String> {
-        let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "agent shell session not found for pane",
-            )
-        })?;
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
+            self.find_pane_descriptor(pane_id)
+                .ok_or_else(|| MezError::invalid_state("status pane unavailable"))?;
+            let mut lines = vec![
+                "## Harness Status".to_string(),
+                String::new(),
+                format!(
+                    "Pane: {pane_id}; native latest-request/context samples unavailable (no native conversation)."
+                ),
+            ];
+            if accounting {
+                lines.extend([
+                    String::new(),
+                    "### Pane Agent Token Usage".into(),
+                    String::new(),
+                ]);
+                lines.extend(report::table(
+                    self.external_usage_partitions(Some(pane_id)),
+                )?);
+                let mut session_rows = report::native_rows(self.project_usage_for_instance())?;
+                session_rows.extend(self.external_usage_partitions(None));
+                lines.extend([
+                    String::new(),
+                    "### Mez Session Token Usage".into(),
+                    String::new(),
+                ]);
+                lines.extend(report::table(session_rows)?);
+            }
+            if extended {
+                self.append_extended_token_usage(&mut lines);
+            }
+            return Ok(lines.join("\n"));
+        };
         let agent_id = format!("agent-{pane_id}");
         let descriptor = self.find_pane_descriptor(pane_id);
         let window_id = descriptor
@@ -215,8 +232,6 @@ impl RuntimeSessionService {
             .runtime_metrics()
             .provider_wire_status(&session.session_id);
         let context_continuity = self.agent_context_continuity(&session.session_id);
-        let instance_token_usage_by_model =
-            self.runtime_agent_instance_provider_token_usage_by_model();
         let running_turn = session
             .running_turn_id
             .as_deref()
@@ -557,23 +572,23 @@ impl RuntimeSessionService {
         ];
         let mut lines = vec!["## Agent Status".to_string(), String::new()];
         lines.extend(runtime_markdown_table(&["Field", "Value"], &rows));
-        if accounting && !token_usage_by_model.is_empty() {
-            lines.push(String::new());
-            lines.push("### Pane Agent Token Usage".to_string());
-            lines.push(String::new());
-            lines.extend(runtime_markdown_table(
-                &TOKEN_USAGE_TABLE_COLUMNS,
-                &Self::runtime_agent_provider_token_usage_rows(&token_usage_by_model),
-            ));
-        }
-        if accounting && !instance_token_usage_by_model.is_empty() {
-            lines.push(String::new());
-            lines.push("### Mez Session Token Usage".to_string());
-            lines.push(String::new());
-            lines.extend(runtime_markdown_table(
-                &TOKEN_USAGE_TABLE_COLUMNS,
-                &Self::runtime_agent_provider_token_usage_rows(&instance_token_usage_by_model),
-            ));
+        if accounting {
+            let mut pane_rows = report::native_rows(self.project_usage_for_pane(pane_id))?;
+            pane_rows.extend(self.external_usage_partitions(Some(pane_id)));
+            let mut session_rows = report::native_rows(self.project_usage_for_instance())?;
+            session_rows.extend(self.external_usage_partitions(None));
+            if !pane_rows.is_empty() {
+                lines.push(String::new());
+                lines.push("### Pane Agent Token Usage".to_string());
+                lines.push(String::new());
+                lines.extend(report::table(pane_rows)?);
+            }
+            if !session_rows.is_empty() {
+                lines.push(String::new());
+                lines.push("### Mez Session Token Usage".to_string());
+                lines.push(String::new());
+                lines.extend(report::table(session_rows)?);
+            }
         }
         if extended {
             self.append_extended_token_usage(&mut lines);
@@ -618,7 +633,7 @@ impl RuntimeSessionService {
             now,
             &TOKEN_USAGE_WINDOWS_DAYS,
             &crate::storage::token_usage::TokenHistoryScope {
-                native_only: true,
+                native_only: false,
                 ..Default::default()
             },
         ) {
@@ -646,7 +661,15 @@ impl RuntimeSessionService {
             })
             .map(|index| TOKEN_USAGE_WINDOWS_DAYS[..=index].to_vec())
             .unwrap_or_else(|| TOKEN_USAGE_WINDOWS_DAYS.to_vec());
-        let windows = match snapshot.native_model_windows() {
+        let windows = match snapshot
+            .windows
+            .iter()
+            .map(|(days, rows)| {
+                report::table(rows.iter().map(|(key, value)| (key.clone(), value.clone())))
+                    .map(|table| (*days, table))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()
+        {
             Ok(windows) => windows,
             Err(_) => {
                 let message =
@@ -663,11 +686,8 @@ impl RuntimeSessionService {
             lines.push(String::new());
             lines.push(format!("### {days}-Day Token Usage"));
             lines.push(String::new());
-            let rows = windows
-                .get(&days)
-                .map(Self::runtime_agent_provider_token_usage_rows)
-                .unwrap_or_default();
-            lines.extend(runtime_markdown_table(&TOKEN_USAGE_TABLE_COLUMNS, &rows));
+            let rows = windows.get(&days).cloned().unwrap_or_default();
+            lines.extend(rows);
         }
     }
 
@@ -705,33 +725,6 @@ impl RuntimeSessionService {
         } else {
             cumulative.cached_input_hit_ratio_display()
         }
-    }
-
-    /// Returns the incremental provider/model token accounting snapshot.
-    fn runtime_agent_instance_provider_token_usage_by_model(
-        &self,
-    ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
-        self.total_agent_token_usage_by_model()
-    }
-
-    /// Builds markdown table rows for per-model provider token accounting.
-    fn runtime_agent_provider_token_usage_rows(
-        usage_by_model: &BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
-    ) -> Vec<Vec<String>> {
-        usage_by_model
-            .iter()
-            .map(|(key, usage)| {
-                vec![
-                    key.provider.clone(),
-                    key.model.clone(),
-                    usage.billed_input_tokens().to_string(),
-                    usage.cached_input_tokens_display(),
-                    usage.output_tokens.to_string(),
-                    usage.reasoning_tokens.to_string(),
-                    usage.cached_input_hit_ratio_display(),
-                ]
-            })
-            .collect()
     }
 
     /// Formats one provider/model token usage value for compact displays.

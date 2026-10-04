@@ -610,12 +610,12 @@ The ledger stores harness/model counters and opaque stream identities, not promp
 transcript or pane paths. Native latest-request samples remain separate. Pane
 reset changes only the external view baseline; session and durable expense remain.
 `agent/list` exposes separate `external_token_usage` runtime-instance telemetry.
-Until the dedicated harness-aware `/status` reader lands, legacy rolling-history
-queries and their oldest-event boundary include only native events. External
-records retain harness and unknown-reasoning coverage separately, never silently
-merge into native same-model totals. New stream slots are bounded independently
+The harness-aware `/status` reader includes native and external events in rolling
+history and its oldest-event boundary. Tables retain harness and unknown-reasoning
+coverage separately, never silently merging native same-model totals. The legacy
+native-only storage reader remains isolated. New stream slots are bounded independently
 of workers; updates and retries of existing streams remain eligible at capacity.
-The dedicated harness-aware `/status` view is a separate integration. Usage is
+External-only reports do not allocate native conversations. Usage is
 externally reported, not independently verified invoice data. After registration
 expiry or restart, new admission needs a fresh launch; already admitted reports
 can settle without reviving a registration.

@@ -450,6 +450,40 @@ impl RuntimeSessionService {
             Some(pane_id) => pane_id.to_string(),
             None => self.active_pane_id()?,
         };
+        if self.agent_shell_store().get(&pane_id).is_none()
+            && let Some(slash) = parse_slash_command(input).ok().flatten()
+            && matches!(slash.name.as_str(), "status" | "reset-status")
+        {
+            self.find_pane_descriptor(&pane_id)
+                .ok_or_else(|| MezError::invalid_state("status pane unavailable"))?;
+            let outcome = if slash.name == "status" {
+                if origin.is_authenticated_primary_input()
+                    && self.should_defer_agent_shell_command("status", input)
+                {
+                    return self.dispatch_deferred_agent_shell_command(
+                        primary_client_id,
+                        &pane_id,
+                        "status",
+                        input,
+                    );
+                }
+                self.execute_agent_shell_status_command(primary_client_id, &pane_id, input)?
+            } else {
+                if !slash.args.trim().is_empty() {
+                    return Err(MezError::invalid_args("reset-status accepts no arguments"));
+                }
+                let changed = self.reset_agent_token_usage_for_pane(&pane_id);
+                AgentShellCommandOutcome::Display {
+                    command: "reset-status".into(),
+                    body: format!("pane_token_usage_reset=true changed={changed}"),
+                }
+            };
+            return Ok(runtime_agent_shell_command_response_json(
+                &pane_id,
+                input,
+                Some(&outcome),
+            ));
+        }
         let visible = self
             .agent_shell_store()
             .get(&pane_id)

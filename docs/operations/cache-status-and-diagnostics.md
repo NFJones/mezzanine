@@ -25,6 +25,13 @@ All projects share one UTC query instant, consistent read snapshot and visible
 1/7/30/60/90-day window set. Missing registry/project/storage is unavailable,
 not verified zero. Pane reset does not erase session or durable expense.
 
+All token tables separate Harness, Provider and Model. Native calls are labelled
+`mez`; external observations retain their registered harness and category coverage.
+Missing reasoning/cache counters are unknown, not zero. External-only status does
+not create a native conversation, and external reports never replace native
+latest-request/context samples. Pane reset leaves cumulative stream checkpoints,
+runtime-instance expense and durable history intact.
+
 | Observation | Interpretation |
 | --- | --- |
 | `Cumulative cache hit` | Token-weighted ratio across retained provider samples, including cold starts and auxiliary routing or sizing requests. |

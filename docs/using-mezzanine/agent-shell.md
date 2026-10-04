@@ -106,8 +106,12 @@ the generated conversation title and canonical agent ID. The pane frame projects
 the identity only while agent mode is visible; explicit pane/window titles remain
 authoritative, and hiding reveals the underlying shell/program title again.
 `/status [--extended] [--project | --all-projects]` accepts either flag order.
-Without scope flags it retains overall totals. `--project` takes no path and
-selects the invoking pane's eligible accounting project; missing evidence is
+Without scope flags it retains overall totals.
+Every token table includes Harness, Provider and Model; native calls use `mez`.
+Same-model external rows remain separate, with omitted reasoning/cache counters
+shown as unknown. External-only panes can report and reset the pane view without
+creating a native conversation; they have no native latest-request sample.
+`--project` takes no path and selects the invoking pane's eligible accounting project; missing evidence is
 reported as unavailable rather than silently showing overall usage.
 `--all-projects` includes zero-use registered projects, trust/version labels,
 historical project IDs and unattributed expense. Scoped reports are STATIC

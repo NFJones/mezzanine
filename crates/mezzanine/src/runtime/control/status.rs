@@ -110,12 +110,7 @@ impl RuntimeSessionService {
             let cache_key = format!("{client}:{key}");
             let pane = self.session.active_pane_for(client)?.id.to_string();
             let report = self.prepare_status_report(client, &pane, options)?;
-            let conversation = self
-                .agent_shell_store()
-                .get(&pane)
-                .ok_or_else(|| MezError::invalid_state("status conversation unavailable"))?
-                .session_id
-                .clone();
+            let conversation = report.command_owner();
             let generation = self.begin_agent_command_claim(&pane, &conversation)?;
             if !self
                 .agent

@@ -2409,6 +2409,7 @@ impl RuntimeSessionService {
     }
 
     /// Aggregates non-zero token usage across all agent conversations.
+    #[cfg(test)]
     pub(crate) fn total_agent_token_usage_by_model(
         &self,
     ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {

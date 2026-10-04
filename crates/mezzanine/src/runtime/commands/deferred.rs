@@ -181,11 +181,6 @@ impl RuntimeSessionService {
         command: &str,
         input: &str,
     ) -> Result<String> {
-        let conversation_id = self
-            .agent_shell_store()
-            .get(pane_id)
-            .map(|session| session.session_id.clone())
-            .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
         // A direct resume replaces the pane conversation when it settles. It
         // therefore supersedes any queued command owned by the current
         // conversation before claiming the preparation worker, matching the
@@ -201,6 +196,14 @@ impl RuntimeSessionService {
             Some(self.prepare_status_report(primary_client_id, pane_id, options)?)
         } else {
             None
+        };
+        let conversation_id = if let Some(report) = &status_report {
+            report.command_owner()
+        } else {
+            self.agent_shell_store()
+                .get(pane_id)
+                .map(|session| session.session_id.clone())
+                .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?
         };
         let claim_generation = self.begin_agent_command_claim(pane_id, &conversation_id)?;
         if let Some(report) = status_report {
@@ -241,7 +244,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .filter(|session| session.visibility == AgentShellVisibility::Visible)
             .map(|session| session.session_id.as_str());
-        if current_conversation != Some(conversation_id) {
+        if command != "status" && current_conversation != Some(conversation_id) {
             self.take_pending_record_browser_overlay_claim_stack(pane_id, claim_generation);
             self.agent
                 .cancel_matching_agent_command(pane_id, conversation_id, claim_generation);
@@ -1071,7 +1074,9 @@ impl RuntimeSessionService {
             .agent_shell_store()
             .get(&work.pane_id)
             .map(|session| session.session_id.as_str());
-        if current_conversation != Some(work.conversation_id.as_str()) {
+        if !matches!(work.prepared, RuntimeAgentCommandPrepared::Status(_))
+            && current_conversation != Some(work.conversation_id.as_str())
+        {
             self.take_pending_record_browser_overlay_claim_stack(
                 &work.pane_id,
                 work.claim_generation,

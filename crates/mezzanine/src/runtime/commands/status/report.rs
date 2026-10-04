@@ -22,7 +22,9 @@ pub(crate) struct RuntimeStatusReportWork {
     /// Pane whose counters and diagnostics were captured.
     pub(crate) pane: String,
     /// Conversation owning the pane at acceptance, including visibility checks.
-    conversation: String,
+    conversation: Option<String>,
+    /// Exact external-only pane root; a native conversation uses its own fence.
+    process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
     /// Canonical cwd evidence retained by the actor; never reread by the worker.
     pub(crate) cwd: Option<std::path::PathBuf>,
     /// Active project at acceptance; completion must not relabel changed state.
@@ -46,7 +48,7 @@ pub(crate) struct RuntimeStatusReportWork {
 }
 
 /// Converts native partitions without inferring missing project attribution.
-fn native_rows(
+pub(super) fn native_rows(
     rows: Vec<mez_agent::ProjectTokenUsage>,
 ) -> Result<Vec<(TokenHistoryKey, TokenHistoryUsage)>> {
     rows.into_iter()
@@ -70,7 +72,7 @@ fn native_rows(
 }
 
 /// Combines same-harness/model rows only within the caller's chosen project scope.
-fn table(
+pub(super) fn table(
     rows: impl IntoIterator<Item = (TokenHistoryKey, TokenHistoryUsage)>,
 ) -> Result<Vec<String>> {
     let mut totals = BTreeMap::<(String, mez_agent::ModelTokenUsageKey), TokenHistoryUsage>::new();
@@ -154,20 +156,22 @@ impl RuntimeSessionService {
         let conversation = self
             .agent_shell_store()
             .get(pane)
-            .ok_or_else(|| MezError::invalid_state("status pane conversation unavailable"))?
-            .session_id
-            .clone();
+            .map(|session| session.session_id.clone());
+        let process = if conversation.is_none() {
+            Some(
+                self.pane_process_identity(pane)
+                    .map_err(|_| MezError::conflict("status pane incarnation unavailable"))?,
+            )
+        } else {
+            None
+        };
         let active_project = self.cached_accounting_project_for_pane(pane);
         if options.scope == StatusScope::Project && active_project.is_none() {
             return Err(MezError::invalid_state(
                 "active-project-unavailable: no eligible qualified accounting project",
             ));
         }
-        let diagnostics = self.runtime_agent_status_display_with_accounting(
-            pane,
-            false,
-            options.scope == StatusScope::Overall,
-        )?;
+        let diagnostics = self.runtime_agent_status_display_with_accounting(pane, false, false)?;
         let mut pane_usage = native_rows(self.project_usage_for_pane(pane))?;
         let mut instance_usage = native_rows(self.project_usage_for_instance())?;
         pane_usage.extend(self.external_usage_partitions(Some(pane)));
@@ -176,6 +180,7 @@ impl RuntimeSessionService {
             client: client.clone(),
             pane: pane.to_string(),
             conversation,
+            process,
             cwd: self.pane_current_working_directory(pane),
             active_project,
             options,
@@ -192,19 +197,35 @@ impl RuntimeSessionService {
     /// Revalidates retained report ownership without filesystem or database I/O.
     pub(crate) fn status_report_is_current(&self, work: &RuntimeStatusReportWork) -> bool {
         self.session.is_attached_primary(&work.client)
-            && self
-                .agent_shell_store()
-                .get(&work.pane)
-                .is_some_and(|session| {
-                    session.session_id == work.conversation
-                        && session.visibility == mez_agent::AgentShellVisibility::Visible
-                })
+            && match work.conversation.as_deref() {
+                Some(conversation) => {
+                    self.agent_shell_store()
+                        .get(&work.pane)
+                        .is_some_and(|session| {
+                            session.session_id == conversation
+                                && session.visibility == mez_agent::AgentShellVisibility::Visible
+                        })
+                }
+                None => {
+                    self.agent_shell_store().get(&work.pane).is_none()
+                        && work.process.as_ref().is_some_and(|process| {
+                            self.pane_process_identity_is_current(&work.pane, process)
+                        })
+                }
+            }
             && self.pane_current_working_directory(&work.pane) == work.cwd
             && self.cached_accounting_project_for_pane(&work.pane) == work.active_project
     }
 }
 
 impl RuntimeStatusReportWork {
+    /// Supplies an opaque command-lease owner without allocating a native session.
+    pub(crate) fn command_owner(&self) -> String {
+        self.conversation
+            .clone()
+            .unwrap_or_else(|| format!("external-status:{}", self.pane))
+    }
+
     /// Builds the static report; only an extended request may query captured storage.
     pub(crate) fn render(&self) -> Result<String> {
         let mut lines = vec![
@@ -228,7 +249,7 @@ impl RuntimeStatusReportWork {
                         project: (self.options.scope == StatusScope::Project)
                             .then(|| self.active_project.clone())
                             .flatten(),
-                        native_only: self.options.scope == StatusScope::Overall,
+                        native_only: false,
                         ..Default::default()
                     },
                 ) {
@@ -250,6 +271,22 @@ impl RuntimeStatusReportWork {
             None
         };
         if self.options.scope == StatusScope::Overall {
+            if !self.pane_usage.is_empty() {
+                lines.extend([
+                    String::new(),
+                    "### Pane Agent Token Usage".into(),
+                    String::new(),
+                ]);
+                lines.extend(table(self.pane_usage.clone())?);
+            }
+            if !self.instance_usage.is_empty() {
+                lines.extend([
+                    String::new(),
+                    "### Mez Session Token Usage".into(),
+                    String::new(),
+                ]);
+                lines.extend(table(self.instance_usage.clone())?);
+            }
             if let Some(history) = history {
                 self.append_history(&mut lines, &history, None, true)?;
             }

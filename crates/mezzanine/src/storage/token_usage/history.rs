@@ -100,6 +100,7 @@ pub(crate) fn checked_usage_sum(
 impl TokenHistorySnapshot {
     /// Combines native project partitions for the legacy status renderer using
     /// checked arithmetic. Validate every window before exposing any table.
+    #[cfg(test)]
     pub(crate) fn native_model_windows(
         &self,
     ) -> Result<BTreeMap<u16, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>> {

@@ -275,7 +275,7 @@ only its view baseline, not durable checkpoints or runtime-instance totals.
 Reports admitted before registration retirement MAY finish without reviving the
 registration. Storage failure MUST NOT replay a provider request. Telemetry is
 externally reported, not independently verified billing. Project attribution and
-harness-aware status presentation remain separate integration surfaces.
+harness-aware status presentation use frozen accounting provenance, not current focus.
 Accounting project identity MUST remain separate from trust and MMP audience
 identity. Provider dispatch MUST freeze an opaque project origin or explicit
 unattributed state before request execution; settlement MUST NOT resample cwd or
@@ -10060,6 +10060,10 @@ The baseline command capabilities are:
   `/status` MUST accept `[--extended] [--project | --all-projects]` in either
   flag order, rejecting duplicates, conflicting scopes, values and operands.
   Unqualified status MUST preserve overall totals and memory-only live display.
+  Every token table MUST include Harness alongside Provider and Model, keeping
+  same-model native (`mez`) and external counters separate. External-only panes
+  MUST support reporting and pane-view reset without allocating a native session;
+  native latest-request/context samples remain unavailable rather than fabricated.
   Scoped reports MUST be labelled STATIC snapshots: `--project` selects the
   invoking pane's eligible qualified accounting project without a path argument;
   unavailable project evidence MUST NOT fall back to overall totals.
