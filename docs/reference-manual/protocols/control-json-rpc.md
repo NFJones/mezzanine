@@ -519,7 +519,7 @@ v2 removes those methods and adds `client/set_layout_owner`.
 | Frame | `frame/read` | Read rendered frame fields and text (RO). |
 | Terminal | `terminal/view`, `terminal/presentation/acknowledge`, `terminal/step`, `terminal/resize`, `terminal/command` | Render a client view, acknowledge receipt-bearing local frame commits, submit bytes/primary size, update exact-client observer geometry, or invoke a terminal command. Presentation acknowledgement is available to primary and observer clients; primary-only mutation applies to step and command; resize is observer-only and never changes primary or canonical geometry. Negotiated observer v3–v5 uses the resulting pushed render instead of fetching another view. |
 | Agent | `agent/list`, `agent/task/list`, `agent/spawn`, `agent/shell/show`, `agent/shell/hide`, `agent/shell/command` | Inspect agents/tasks (RO), manage an agent shell, start prompt work, or spawn an agent. |
-| External agent | `agent/external/launch`, `agent/external/register`, `agent/external/renew`, `agent/external/deregister`, `agent/external/usage` | Additive `external-agent/1` launch capability, observational identity lease and durable usage reports. Launch issuance requires an attached primary; hook requests require capability-only authenticated Unix ingress, not an initialized client role. |
+| External agent | `agent/external/launch`, `agent/external/register`, `agent/external/renew`, `agent/external/deregister`, `agent/external/presentation`, `agent/external/usage` | Additive `external-agent/1` launch capability, observational identity/presentation lease and durable usage reports. Launch issuance requires an attached primary; hook requests require capability-only authenticated Unix ingress, not an initialized client role. |
 | Approval | `approval/list`, `approval/decide` | Inspect pending approvals (RO) or make a primary decision. |
 | Configuration | `config/get`, `config/set`, `config/unset`, `config/reload`, `config/validate` | Inspect or validate config (RO), or mutate/reload it. |
 | Project trust | `project/trust/list`, `project/trust/inspect`, `project/trust/decide`, `project/trust/revoke` | Inspect or decide project trust. |
@@ -555,7 +555,29 @@ distinguishes harness/version and marks native controls unsupported (`controls:
 not process death. Root replacement, pane close and runtime restart invalidate
 registrations. Restart requires a fresh launch rather than reviving snapshot
 identities. This is same-OS-user bearer authority, not executable attestation;
-vendor hooks, bootstrap and status/title are separate integrations.
+vendor hooks and bootstrap remain separately certified integrations.
+
+### Registration-owned presentation
+
+`agent/external/presentation` accepts the launch token, generation, exact external
+session ID, positive `sequence`, `state`, and optional `title` (null clears this
+source's title). States are `ready`, `running`, `approval-wait`, `input-wait`,
+`complete`, `interrupted`, `failed`, and `background`. Titles are inert text up to
+128 bytes; controls and bidi overrides are rejected. Identical sequence/payload
+replay is inert; older or conflicting observations fail. The event source must
+serialize its sequence, not derive authority from a vendor timestamp.
+
+Presentation belongs to the renewable registration, not the hook connection.
+EOF leaves it intact; deregistration, expiry, replacement, closure or restart
+retire only that owner. Titles never mutate stored mux provenance. Explicit pins
+and visible native primary identity take precedence. Multiple launch suggestions
+use launch-generation precedence; ordinary shell/program titles reappear when
+the last suggestion retires. Status is externally reported, not independently
+verified execution state. Presentation updates do not renew the lease: adapters
+must send explicit renewal during long idle sessions.
+
+`mez harness-event` is a fixed normalized helper, not an upstream hook parser.
+See the [CLI reference](../cli.md) for its bounded stdin envelope and limits.
 
 ### Durable external usage reports
 

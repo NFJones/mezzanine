@@ -46,12 +46,17 @@ impl RuntimePresentationComponent {
         }
     }
 
-    /// Returns the most recently updated source-owned status for one pane.
-    pub(crate) fn pane_harness_status(&self, pane_id: &str) -> Option<&RuntimePaneHarnessStatus> {
+    /// Projects only currently eligible owners without clearing unrelated sources.
+    pub(crate) fn pane_harness_status_filtered(
+        &self,
+        pane_id: &str,
+        eligible: impl Fn(&str) -> bool,
+    ) -> Option<&RuntimePaneHarnessStatus> {
         self.pane_harness_statuses
             .get(pane_id)?
-            .values()
-            .max_by_key(|entry| entry.sequence)
-            .map(|entry| &entry.status)
+            .iter()
+            .filter(|(source, _)| eligible(source))
+            .max_by_key(|(_, entry)| entry.sequence)
+            .map(|(_, entry)| &entry.status)
     }
 }

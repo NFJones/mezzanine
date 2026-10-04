@@ -105,6 +105,8 @@ mod dispatch;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod env;
+/// Owns bounded capability-only normalized harness event forwarding.
+mod harness_event;
 /// Exposes persistent local host lifecycle and routing commands.
 mod host;
 /// Exposes the issue module boundary.

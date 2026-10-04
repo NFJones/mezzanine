@@ -205,6 +205,251 @@ async fn runtime_external_registration_round_trips_authenticated_unix_transport(
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// A replaced root loses its external projection immediately, even when cleanup
+/// has not run. Independent client-owned status remains available underneath.
+#[test]
+fn runtime_external_presentation_immediate_root_replacement_hides_old_owner() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let launch: serde_json::Value = serde_json::from_str(&service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"launch","method":"agent/external/launch","params":{"pane_id":"%1","harness":"codex","version":"fixture"}}"#, &primary)).unwrap();
+    let base = serde_json::json!({"launch_token":launch["result"]["launch_token"],"generation":launch["result"]["generation"],"external_session_id":"replaced-run"});
+    let mut hook = ControlConnectionState::new(true, false);
+    hook.bind_authenticated_peer(crate::control::AuthenticatedPeer::unix_user(
+        crate::runtime::current_effective_uid(),
+    ))
+    .unwrap();
+    let mut register = base.clone();
+    register["display_name"] = serde_json::json!("Replaced fixture");
+    assert!(
+        external_request(&mut service, &mut hook, "agent/external/register", register)
+            .get("result")
+            .is_some()
+    );
+    service.presentation.set_pane_harness_status(
+        "%1",
+        "independent-client",
+        Some(crate::runtime::RuntimePaneHarnessStatus {
+            state: "complete".into(),
+            text: Some("Independent".into()),
+        }),
+    );
+    let mut update = base;
+    update["sequence"] = serde_json::json!(1);
+    update["state"] = serde_json::json!("running");
+    update["title"] = serde_json::json!("Old root task");
+    assert!(
+        external_request(
+            &mut service,
+            &mut hook,
+            "agent/external/presentation",
+            update
+        )
+        .get("result")
+        .is_some()
+    );
+    assert_eq!(
+        service.external_agent_pane_title("%1").as_deref(),
+        Some("Old root task")
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let descriptor = service.find_pane_descriptor("%1").unwrap();
+    service
+        .start_pane_process_with_start_directory(descriptor, Some("cat"), None)
+        .unwrap();
+    let frame = service.terminal_frame_context();
+    assert!(frame.panes["%1"].pane_title_override.is_none());
+    assert_eq!(
+        frame.panes["%1"].pane_status_state.as_deref(),
+        Some("complete")
+    );
+    assert_eq!(
+        frame.panes["%1"].pane_status_text.as_deref(),
+        Some("Independent")
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Multiple launches retain independent title/status ownership after old end
+/// events; expiry removes only the matching lease without claiming process death.
+#[test]
+fn runtime_external_presentation_retirement_preserves_other_launch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let mut hook = ControlConnectionState::new(true, false);
+    hook.bind_authenticated_peer(crate::control::AuthenticatedPeer::unix_user(
+        crate::runtime::current_effective_uid(),
+    ))
+    .unwrap();
+    let mut runs = Vec::new();
+    for name in ["first", "second"] {
+        let launch: serde_json::Value = serde_json::from_str(&service.dispatch_runtime_control_body(
+            r#"{"jsonrpc":"2.0","id":"launch","method":"agent/external/launch","params":{"pane_id":"%1","harness":"codex","version":"fixture"}}"#, &primary)).unwrap();
+        let base = serde_json::json!({"launch_token":launch["result"]["launch_token"],"generation":launch["result"]["generation"],"external_session_id":name});
+        let mut register = base.clone();
+        register["display_name"] = serde_json::json!(name);
+        let registered =
+            external_request(&mut service, &mut hook, "agent/external/register", register);
+        let id = registered["result"]["agent_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut update = base.clone();
+        update["sequence"] = serde_json::json!(1);
+        update["state"] = serde_json::json!("running");
+        update["title"] = serde_json::json!(name);
+        assert!(
+            external_request(
+                &mut service,
+                &mut hook,
+                "agent/external/presentation",
+                update
+            )
+            .get("result")
+            .is_some()
+        );
+        runs.push((base, id));
+    }
+    assert_eq!(
+        service.external_agent_pane_title("%1").as_deref(),
+        Some("second")
+    );
+    assert!(
+        external_request(
+            &mut service,
+            &mut hook,
+            "agent/external/deregister",
+            runs[0].0.clone()
+        )
+        .get("result")
+        .is_some()
+    );
+    assert_eq!(
+        service.external_agent_pane_title("%1").as_deref(),
+        Some("second")
+    );
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_status_state
+            .as_deref(),
+        Some("running")
+    );
+    service.expire_external_agent_for_tests(&runs[1].1);
+    assert!(service.external_agent_pane_title("%1").is_none());
+    assert!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_status_state
+            .is_none()
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Reconnecting hooks retain registration-owned presentation, reject stale
+/// sequence updates, preserve explicit title pins, and clear only their run.
+#[test]
+fn runtime_external_presentation_is_registration_owned_and_sequence_fenced() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let launch: serde_json::Value = serde_json::from_str(&service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"launch","method":"agent/external/launch","params":{"pane_id":"%1","harness":"codex","version":"fixture"}}"#, &primary)).unwrap();
+    let base = serde_json::json!({"launch_token":launch["result"]["launch_token"],"generation":launch["result"]["generation"],"external_session_id":"presentation-run"});
+    let mut hook = ControlConnectionState::new(true, false);
+    hook.bind_authenticated_peer(crate::control::AuthenticatedPeer::unix_user(
+        crate::runtime::current_effective_uid(),
+    ))
+    .unwrap();
+    let mut register = base.clone();
+    register["display_name"] = serde_json::json!("External Fixture");
+    assert!(
+        external_request(&mut service, &mut hook, "agent/external/register", register)
+            .get("result")
+            .is_some()
+    );
+    let mut update = base.clone();
+    update["sequence"] = serde_json::json!(1);
+    update["state"] = serde_json::json!("running");
+    update["title"] = serde_json::json!("External task");
+    let result = external_request(
+        &mut service,
+        &mut hook,
+        "agent/external/presentation",
+        update.clone(),
+    );
+    assert!(result.get("result").is_some(), "{result}");
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_title_override
+            .as_deref(),
+        Some("External task")
+    );
+    assert!(!hook.initialized());
+    assert_eq!(
+        external_request(
+            &mut service,
+            &mut hook,
+            "agent/external/presentation",
+            update.clone()
+        )["result"]["changed"],
+        false
+    );
+    update["state"] = serde_json::json!("failed");
+    assert!(
+        external_request(
+            &mut service,
+            &mut hook,
+            "agent/external/presentation",
+            update.clone()
+        )
+        .get("error")
+        .is_some()
+    );
+    service
+        .session
+        .set_pane_title_explicit("%1", "Pinned")
+        .unwrap();
+    assert!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_title_override
+            .is_none()
+    );
+    assert!(
+        external_request(
+            &mut service,
+            &mut hook,
+            "agent/external/deregister",
+            base.clone()
+        )
+        .get("result")
+        .is_some()
+    );
+    update["sequence"] = serde_json::json!(2);
+    assert!(
+        external_request(
+            &mut service,
+            &mut hook,
+            "agent/external/presentation",
+            update
+        )
+        .get("error")
+        .is_some()
+    );
+    assert!(
+        service.terminal_frame_context().panes["%1"]
+            .pane_status_state
+            .is_none()
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Sends one bounded capability request through the runtime connection owner.
 fn external_request(
     service: &mut RuntimeSessionService,

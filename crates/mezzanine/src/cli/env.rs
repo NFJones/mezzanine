@@ -49,6 +49,8 @@ pub(super) enum SocketSelection {
 /// and agent slash commands intentionally use separate parsers.
 #[derive(Debug, Clone, Subcommand)]
 pub(super) enum CliCommand {
+    /// Forwards one normalized observational event from bounded stdin; never initializes a client.
+    HarnessEvent,
     /// Manages Mezzanine configuration.
     Config(super::config::ConfigCliArgs),
     /// Starts a background session daemon and attaches when interactive.

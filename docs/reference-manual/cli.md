@@ -57,6 +57,32 @@ daemon; add
 
 ## Foreground service options
 
+### Normalized observational hook helper
+
+`mez -S /absolute/control.sock harness-event` reads one JSON envelope from stdin:
+
+```json
+{"operation":"presentation","launch_token":"<private capability>","generation":1,"external_session_id":"bound-run","data":{"sequence":1,"state":"running","title":"Task"}}
+```
+
+The token is stdin-only, never an argument or persisted configuration value.
+An attached primary must first authorize the exact pane-root launch. The helper
+maps only `register`, `renew`, `end`, `presentation`, and `usage` to their restricted
+external-agent operations; `data` uses the documented RPC fields without identity
+overrides, arbitrary methods, paths, prompts, transcripts or nested vendor payloads.
+It authenticates the Unix daemon's same-user peer and does not initialize a client.
+Input is capped at 64 KiB with a 250 ms EOF deadline; the single exchange is bounded
+to 500 ms. No retries or subprocesses are issued. Telemetry errors produce neutral
+`{}` output and success exit, without echoing credentials or daemon errors.
+
+This is not vendor hook installation or certification. Adapters must privately
+deliver launch credentials, normalize content-free released payloads, serialize
+presentation sequences, renew leases during idle periods, and verify that `{}` is
+neutral for the pinned vendor event. An absent daemon loses telemetry without
+changing approvals, sandbox policy, focus or continuation behavior. Remote/shared
+server sessions require explicit binding; inherited pane variables alone are not
+authorization. Iroh targets are unsupported by this helper.
+
 `mez serve`, `mez snapshot resume --serve`, and `mez snapshot resume-latest
 --serve` accept the same service options:
 

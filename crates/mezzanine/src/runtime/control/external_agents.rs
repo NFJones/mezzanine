@@ -43,7 +43,7 @@ pub(super) struct LaunchBinding {
     pub(super) generation: u64,
     pub(super) harness: String,
     version: String,
-    expires: u64,
+    pub(super) expires: u64,
     pub(super) registration: Option<Registration>,
     pub(super) retired: bool,
     pub(super) accounting_owner: String,
@@ -58,6 +58,8 @@ pub(super) struct Registration {
     pub(super) external_session_id: String,
     display_name: String,
     objective: Option<String>,
+    /// Latest normalized observation, retained independently of hook connections.
+    pub(super) presentation: Option<super::external_telemetry::ExternalPresentation>,
 }
 
 /// Parses bounded inert metadata without echoing rejected payloads.
@@ -231,6 +233,7 @@ impl RuntimeSessionService {
         }
         match request.method.as_str() {
             "agent/external/register" => self.register_external_agent(digest, &params),
+            "agent/external/presentation" => self.update_external_presentation(digest, &params),
             "agent/external/renew" => {
                 let external_session_id = text(&params, "external_session_id", 128)?;
                 let binding = self
@@ -332,6 +335,7 @@ impl RuntimeSessionService {
             external_session_id,
             display_name,
             objective,
+            presentation: None,
         });
         Ok(response)
     }
@@ -346,10 +350,14 @@ impl RuntimeSessionService {
         }
         binding.retired = true;
         binding.expires = current_unix_seconds().saturating_add(TOMBSTONE_SECONDS);
+        let pane_id = binding.pane_id.clone();
+        let owner = format!("external-registration:{}", binding.generation);
         let agent_id = binding
             .registration
             .as_ref()
             .map(|registration| registration.agent_id.clone());
+        self.presentation
+            .set_pane_harness_status(&pane_id, &owner, None);
         if let Some(agent_id) = agent_id {
             self.control
                 .message_service_mut()
@@ -408,6 +416,22 @@ impl RuntimeSessionService {
                 .message_service_mut()
                 .retire_observational_identity(&identity.agent_id);
         }
+        let owners = self
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .map(|binding| {
+                (
+                    binding.pane_id.clone(),
+                    format!("external-registration:{}", binding.generation),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (pane, owner) in owners {
+            self.presentation
+                .set_pane_harness_status(&pane, &owner, None);
+        }
         self.control.external_agents_mut().bindings.clear();
     }
 
@@ -443,7 +467,8 @@ impl RuntimeSessionService {
                 "window_id":descriptor.window_id.as_str(),"kind":"primary","harness":binding.harness,
                 "harness_version":binding.version,"display_name":registration.display_name,
                 "objective":registration.objective,"generation":binding.generation,
-                "external_session_id":registration.external_session_id,"status":"available",
+                "external_session_id":registration.external_session_id,"status":registration.presentation.as_ref().map_or("available", |observation| observation.state.as_str()),
+                "status_source":"external-reported",
                 "presence_source":"renewable-telemetry-lease","controls":[],"native":false}))
         }).collect()
     }

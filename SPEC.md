@@ -244,6 +244,20 @@ replacement, closure, expiry or runtime restart MUST retire the exact registrati
 without erasing independent settled accounting. Old end events MUST NOT retire a
 new launch. This same-user observational capability does not certify vendor
 telemetry or prove which executable holds the credential.
+`agent/external/presentation` MUST require the same capability, generation and
+external session binding. Positive observation sequences MUST reject stale or
+conflicting updates; identical replay MUST be inert. Bounded title suggestions
+MUST be temporary source-owned projections, never explicit renames. Native
+visible primary identity and explicit pane/window titles retain precedence.
+Reported states distinguish ready, running, approval/input wait, complete,
+interrupted, failed and background activity, without claiming process death.
+Retirement MUST clear only the exact registration's presentation.
+The fixed `mez harness-event` helper MUST accept only bounded normalized stdin,
+map fixed operations to restricted RPCs, and never initialize a client, execute
+auxiliary commands, forward arbitrary vendor payloads or retry effects. It MUST
+use same-user Unix peer authentication, finite input/exchange deadlines and
+neutral output on telemetry failure. Vendor normalization, private launch-token
+delivery and renewable-lease scheduling remain explicit adapter responsibilities.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow

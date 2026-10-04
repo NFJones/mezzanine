@@ -10,6 +10,7 @@ mod configuration;
 mod context;
 mod external_agents;
 mod external_presentation;
+mod external_telemetry;
 pub(crate) mod external_usage;
 mod ingress;
 mod lifecycle;
@@ -1374,7 +1375,10 @@ impl RuntimeSessionService {
 
         if matches!(
             request.method.as_str(),
-            "agent/external/register" | "agent/external/renew" | "agent/external/deregister"
+            "agent/external/register"
+                | "agent/external/renew"
+                | "agent/external/deregister"
+                | "agent/external/presentation"
         ) {
             return match self.dispatch_external_agent_request(&request, connection) {
                 Ok(result) => format!(
