@@ -149,7 +149,10 @@ impl RuntimeSessionService {
             .presentation
             .overlay_action_registry
             .current_generation();
-        let outcomes = crate::runtime::execute_runtime_command_sequence(self, client, input)?;
+        let (outcomes, mut agent_browser) =
+            crate::runtime::commands_support::execute_runtime_command_sequence_with_agent_browser(
+                self, client, input,
+            )?;
         let output = crate::runtime::runtime_command_outcomes_json(&outcomes);
         if self.require_live().is_err() {
             return Ok(output);
@@ -178,7 +181,9 @@ impl RuntimeSessionService {
                     },
                 )
             } else if command == "list-agents" {
-                let (browser, targets) = self.agent_management_browser(client)?;
+                let (browser, targets) = agent_browser.take().ok_or_else(|| {
+                    MezError::invalid_state("agent browser command snapshot unavailable")
+                })?;
                 (
                     browser,
                     RuntimeRecordBrowserOverlaySource::Agents {

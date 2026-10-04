@@ -2,6 +2,166 @@
 
 use super::*;
 
+/// Project labels follow each live pane's canonical current directory and
+/// deepest trust snapshot, not token mappings, titles or inherited projects.
+/// Moving the pane and withholding nested trust must refresh only inert labels
+/// while retaining exact lifecycle controls and searchable full project paths.
+#[test]
+fn runtime_agent_management_browser_projects_follow_current_trust() {
+    use crate::security::project::{ProjectTrustStore, TrustDecision};
+
+    let root = temp_root("agent-browser-projects");
+    let first = root.join("first-project");
+    let second = root.join("second-project");
+    let nested = second.join("nested");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&nested).unwrap();
+    let first = fs::canonicalize(first).unwrap();
+    let second = fs::canonicalize(second).unwrap();
+    let nested = fs::canonicalize(nested).unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "fixture task")
+        .unwrap();
+    service.stop_agent_turn_for_pane("%1").unwrap();
+    let mut trust = ProjectTrustStore::default();
+    trust
+        .decide_at(first.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    trust
+        .decide_at(second.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    service.set_project_trust_store(trust.clone(), None);
+    service.set_pane_current_working_directory("%1", first.clone());
+    let (browser, targets) = service.agent_management_browser(&primary).unwrap();
+    let record = browser
+        .records()
+        .iter()
+        .find(|record| record.id == "agent-%1")
+        .unwrap();
+    assert!(
+        record
+            .metadata
+            .contains(&("Project".into(), first.to_string_lossy().into_owned()))
+    );
+    assert!(record.metadata.iter().any(|(key, _)| key == "Controls"));
+    assert!(targets["agent-%1"].lifecycle.is_some());
+    assert!(browser.render_page().markdown.contains("Project"));
+    assert!(!browser.render_page().markdown.contains("| Controls |"));
+    // Actual interactive opening must reuse the textual command's snapshot.
+    // This detects the former second trust refresh and per-pane lookup pass.
+    crate::runtime::control::agent_browser::take_agent_browser_project_lookup_counts();
+    service
+        .execute_attached_display_command(&primary, "list-agents")
+        .unwrap();
+    assert_eq!(
+        crate::runtime::control::agent_browser::take_agent_browser_project_lookup_counts(),
+        (1, 1)
+    );
+    let mounted = &service
+        .primary_display_overlay()
+        .unwrap()
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser;
+    assert_eq!(mounted.records(), browser.records());
+    assert!(
+        browser
+            .render_page_matching("first-project")
+            .markdown
+            .contains("agent-%1")
+    );
+    service.set_pane_current_working_directory("%1", nested.clone());
+    let (browser, _) = service.agent_management_browser(&primary).unwrap();
+    let record = browser
+        .records()
+        .iter()
+        .find(|record| record.id == "agent-%1")
+        .unwrap();
+    assert!(
+        record
+            .metadata
+            .contains(&("Project".into(), second.to_string_lossy().into_owned()))
+    );
+    trust
+        .decide_at(nested.clone(), TrustDecision::Rejected, None, 2)
+        .unwrap();
+    service.set_project_trust_store(trust, None);
+    let (browser, _) = service.agent_management_browser(&primary).unwrap();
+    let record = browser
+        .records()
+        .iter()
+        .find(|record| record.id == "agent-%1")
+        .unwrap();
+    assert!(record.metadata.contains(&("Project".into(), "—".into())));
+    service.set_pane_current_working_directory("%1", root.join("missing"));
+    let (browser, _) = service.agent_management_browser(&primary).unwrap();
+    let record = browser
+        .records()
+        .iter()
+        .find(|record| record.id == "agent-%1")
+        .unwrap();
+    assert!(
+        record
+            .metadata
+            .contains(&("Project".into(), "unavailable".into()))
+    );
+    service.set_pane_current_working_directory("%1", nested.clone());
+    let database = root.join("trust.sqlite");
+    let mut persisted = ProjectTrustStore::default();
+    persisted
+        .decide_at(second.clone(), TrustDecision::Trusted, None, 3)
+        .unwrap();
+    persisted.save_to_file(&database).unwrap();
+    service.set_project_trust_store(persisted.clone(), Some(database.clone()));
+    persisted
+        .decide_at(nested, TrustDecision::Revoked, None, 4)
+        .unwrap();
+    persisted.save_to_file(&database).unwrap();
+    let (browser, _) = service.agent_management_browser(&primary).unwrap();
+    let record = browser
+        .records()
+        .iter()
+        .find(|record| record.id == "agent-%1")
+        .unwrap();
+    assert!(record.metadata.contains(&("Project".into(), "—".into())));
+    assert!(
+        record
+            .metadata
+            .contains(&("Project status".into(), "project-trust-revoked".into()))
+    );
+    fs::remove_file(&database).unwrap();
+    fs::create_dir(&database).unwrap();
+    let (browser, _) = service.agent_management_browser(&primary).unwrap();
+    let record = browser
+        .records()
+        .iter()
+        .find(|record| record.id == "agent-%1")
+        .unwrap();
+    assert!(
+        record
+            .metadata
+            .contains(&("Project".into(), "unavailable".into()))
+    );
+    assert!(
+        browser
+            .render_page()
+            .markdown
+            .contains("Project trust refresh failed")
+    );
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// A persisted selection whose live apply initially fails must retain the list,
 /// actual active marker and original diagnostic after guarded reconciliation.
 #[test]

@@ -113,6 +113,16 @@ controllers and external harnesses, not saved conversations or the model-facing
 64-row audience projection. Rows retain canonical IDs, location, state, objective
 and operation availability separately from clipped display text.
 
+The **Project** column replaces the visible Controls column. It shows the full
+currently trusted root for each live pane's canonical observed working directory
+as of opening or refreshing the list. A deeper rejected, revoked or pending
+decision withholds the label (`—`); no stored decision also shows `—`.
+Missing pane/directory/trust evidence shows `unavailable`, and trust reload errors
+leave the list usable with a warning. This is a snapshot, not continuous polling,
+frozen token attribution or MMP project membership. External rows describe their
+bound pane, not an independently verified vendor workspace. Project paths remain
+searchable and included in saved output; lifecycle keys and authority are unchanged.
+
 Enter or an identifier-cell click focuses the selected pane globally for the
 invoking primary and dismisses only on success. Navigation and search never focus.
 `i` interrupts native work; `p` pauses or explicitly resumes its retained task;

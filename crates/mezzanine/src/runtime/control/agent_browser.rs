@@ -13,6 +13,38 @@ use mez_core::ids::ClientId;
 use mez_mux::record_browser::{RecordBrowser, RecordBrowserRecord};
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+thread_local! {
+    /// Test-local counts isolate synchronous snapshot work from parallel fixtures.
+    static PROJECT_LOOKUPS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Takes and clears this test thread's snapshot and unique-pane lookup counts.
+#[cfg(test)]
+pub(crate) fn take_agent_browser_project_lookup_counts() -> (usize, usize) {
+    PROJECT_LOOKUPS.with(|counts| counts.replace((0, 0)))
+}
+
+/// Inert project labels qualified only during browser snapshot construction.
+/// No accounting mapping, MMP audience, pane title or vendor path grants a label.
+#[derive(Clone)]
+struct AgentBrowserProject {
+    /// Full canonical trusted root, known absence, or unavailable evidence.
+    label: String,
+    /// Bounded provenance fact, separate from the visible table column.
+    status: String,
+}
+
+impl AgentBrowserProject {
+    /// Reports unavailable evidence without disclosing failed path diagnostics.
+    fn unavailable() -> Self {
+        Self {
+            label: "unavailable".into(),
+            status: "unavailable".into(),
+        }
+    }
+}
+
 /// Retained authority evidence, separate from clipped labels and objectives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentBrowserTarget {
@@ -44,10 +76,21 @@ impl RuntimeSessionService {
                 "agent management requires attached primary",
             ));
         }
+        // Refresh may reconcile runtime authority; do it before capturing any
+        // targets. Failure keeps the list usable but withholds every trust label.
+        #[cfg(test)]
+        PROJECT_LOOKUPS.with(|counts| {
+            let (snapshots, panes) = counts.get();
+            counts.set((snapshots + 1, panes));
+        });
+        let trust_available = self
+            .refresh_project_trust_store_from_disk_if_changed()
+            .is_ok();
         self.reconcile_external_agent_registrations();
         self.reconcile_human_pauses()?;
         let mut targets = BTreeMap::new();
         let mut records = Vec::new();
+        let mut projects = BTreeMap::<String, AgentBrowserProject>::new();
         for identity in self.message_service().discover_agents() {
             let id = identity.agent_id.as_str().to_string();
             let external = self.external_agent_metadata(&id);
@@ -61,6 +104,14 @@ impl RuntimeSessionService {
             }
             let pane = identity.pane_id.as_ref().map(|pane| pane.as_str());
             let descriptor = pane.and_then(|pane| self.find_pane_descriptor(pane));
+            let project = if let Some(pane) = pane.filter(|_| descriptor.is_some()) {
+                projects
+                    .entry(pane.to_string())
+                    .or_insert_with(|| self.agent_browser_project(pane, trust_available))
+                    .clone()
+            } else {
+                AgentBrowserProject::unavailable()
+            };
             let session = pane.and_then(|pane| self.agent_shell_store().get(pane));
             let process = pane
                 .filter(|_| descriptor.is_some())
@@ -162,6 +213,8 @@ impl RuntimeSessionService {
                     "Task".into(),
                     turn.map(|turn| turn.turn_id.clone()).unwrap_or_default(),
                 ),
+                ("Project".into(), project.label),
+                ("Project status".into(), project.status),
                 ("Controls".into(), controls.into()),
             ];
             records.push(RecordBrowserRecord {
@@ -196,10 +249,59 @@ impl RuntimeSessionService {
             "Group".into(),
             "Role".into(),
             "Objective".into(),
-            "Controls".into(),
+            "Project".into(),
         ]);
         browser.set_help(Some("**Keys:** Enter focus · i interrupt · p pause/resume · d confirm close · r refresh · / search · s save · Esc dismiss. Children may continue while their parent is paused.".into()), None);
+        if !trust_available {
+            browser.set_error(Some(
+                "Project trust refresh failed; project labels unavailable.".into(),
+            ));
+        }
         Ok((browser, targets))
+    }
+
+    /// Qualifies current pane cwd before using the canonical-only trust resolver.
+    /// At most one lookup per pane is cached within a snapshot, never across
+    /// refreshes. The external row describes its bound pane, not vendor workspace.
+    fn agent_browser_project(&self, pane: &str, trust_available: bool) -> AgentBrowserProject {
+        use crate::security::project::{
+            ProjectTrustProvenance, resolve_canonical_project_trust_provenance,
+        };
+
+        #[cfg(test)]
+        PROJECT_LOOKUPS.with(|counts| {
+            let (snapshots, panes) = counts.get();
+            counts.set((snapshots, panes + 1));
+        });
+        if !trust_available || self.pane_process_identity(pane).is_err() {
+            return AgentBrowserProject::unavailable();
+        }
+        let Some(store) = self.integration.project_trust_store() else {
+            return AgentBrowserProject::unavailable();
+        };
+        let Some(cwd) = self
+            .pane_current_working_directory(pane)
+            .filter(|cwd| cwd.is_absolute())
+        else {
+            return AgentBrowserProject::unavailable();
+        };
+        let Ok(cwd) = std::fs::canonicalize(cwd) else {
+            return AgentBrowserProject::unavailable();
+        };
+        if !cwd.is_dir() {
+            return AgentBrowserProject::unavailable();
+        }
+        let provenance = resolve_canonical_project_trust_provenance(store, &cwd);
+        match provenance {
+            ProjectTrustProvenance::TrustedRoot(root) => AgentBrowserProject {
+                label: root.to_string_lossy().into_owned(),
+                status: "trusted".into(),
+            },
+            other => AgentBrowserProject {
+                label: "—".into(),
+                status: other.withheld_provenance().unwrap_or("no-decision").into(),
+            },
+        }
     }
 
     /// Revalidates live registration, conversation and exact root before focus.

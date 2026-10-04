@@ -214,6 +214,20 @@ fn runtime_external_presentation_immediate_root_replacement_hides_old_owner() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
+    let root = temp_root("external-browser-project");
+    fs::create_dir_all(&root).unwrap();
+    let root = fs::canonicalize(root).unwrap();
+    let mut trust = crate::security::project::ProjectTrustStore::default();
+    trust
+        .decide_at(
+            root.clone(),
+            crate::security::project::TrustDecision::Trusted,
+            None,
+            1,
+        )
+        .unwrap();
+    service.set_project_trust_store(trust, None);
+    service.set_pane_current_working_directory("%1", root.clone());
     let launch: serde_json::Value = serde_json::from_str(&service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"launch","method":"agent/external/launch","params":{"pane_id":"%1","harness":"codex","version":"fixture"}}"#, &primary)).unwrap();
     let base = serde_json::json!({"launch_token":launch["result"]["launch_token"],"generation":launch["result"]["generation"],"external_session_id":"replaced-run"});
@@ -255,6 +269,18 @@ fn runtime_external_presentation_immediate_root_replacement_hides_old_owner() {
         service.external_agent_pane_title("%1").as_deref(),
         Some("Old root task")
     );
+    let (browser, targets) = service.agent_management_browser(&primary).unwrap();
+    let external = browser
+        .records()
+        .iter()
+        .find(|record| record.title == "Replaced fixture")
+        .unwrap();
+    assert!(
+        external
+            .metadata
+            .contains(&("Project".into(), root.to_string_lossy().into_owned()))
+    );
+    assert!(targets[&external.id].lifecycle.is_none());
     service.terminate_all_pane_processes().unwrap();
     let descriptor = service.find_pane_descriptor("%1").unwrap();
     service
@@ -270,7 +296,15 @@ fn runtime_external_presentation_immediate_root_replacement_hides_old_owner() {
         frame.panes["%1"].pane_status_text.as_deref(),
         Some("Independent")
     );
+    let (browser, _) = service.agent_management_browser(&primary).unwrap();
+    assert!(
+        !browser
+            .records()
+            .iter()
+            .any(|record| record.title == "Replaced fixture")
+    );
     service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
 }
 
 /// Multiple launches retain independent title/status ownership after old end

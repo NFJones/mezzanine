@@ -57,18 +57,39 @@ pub(super) fn execute_runtime_command_sequence(
     primary_client_id: &mez_core::ids::ClientId,
     input: &str,
 ) -> Result<Vec<CommandOutcome>> {
+    execute_runtime_command_sequence_with_agent_browser(service, primary_client_id, input)
+        .map(|(outcomes, _)| outcomes)
+}
+
+/// Executes a sequence while retaining its last command-owned agent snapshot.
+/// The interactive caller consumes this exact snapshot; textual callers drop it.
+/// Later commands clear the handoff so it cannot describe an earlier outcome.
+pub(super) fn execute_runtime_command_sequence_with_agent_browser(
+    service: &mut RuntimeSessionService,
+    primary_client_id: &mez_core::ids::ClientId,
+    input: &str,
+) -> Result<(Vec<CommandOutcome>, Option<RuntimeAgentBrowserSnapshot>)> {
     let plan = runtime_terminal_command_plan(input)?;
     let mut outcomes = Vec::with_capacity(plan.len());
     let mut active_client_id = primary_client_id.clone();
+    let mut browser = None;
     for command in &plan {
-        outcomes.push(execute_runtime_planned_terminal_command(
+        browser = None;
+        outcomes.push(execute_runtime_planned_terminal_command_with_browser(
             service,
             &mut active_client_id,
             command.invocation(),
+            &mut browser,
         )?);
     }
-    Ok(outcomes)
+    Ok((outcomes, browser))
 }
+
+/// In-memory administrative browser and exact lifecycle targets for one outcome.
+pub(super) type RuntimeAgentBrowserSnapshot = (
+    mez_mux::record_browser::RecordBrowser,
+    BTreeMap<String, crate::runtime::control::agent_browser::AgentBrowserTarget>,
+);
 
 /// Runs the execute runtime command sequence async operation for this subsystem.
 ///
@@ -101,9 +122,24 @@ fn execute_runtime_planned_terminal_command(
     active_client_id: &mut mez_core::ids::ClientId,
     invocation: &CommandInvocation,
 ) -> Result<CommandOutcome> {
+    execute_runtime_planned_terminal_command_with_browser(
+        service,
+        active_client_id,
+        invocation,
+        &mut None,
+    )
+}
+
+/// Shares command execution while optionally retaining a typed agent snapshot.
+fn execute_runtime_planned_terminal_command_with_browser(
+    service: &mut RuntimeSessionService,
+    active_client_id: &mut mez_core::ids::ClientId,
+    invocation: &CommandInvocation,
+    browser: &mut Option<RuntimeAgentBrowserSnapshot>,
+) -> Result<CommandOutcome> {
     let focus_before = service.capture_zen_focus_snapshots();
     let outcome = if let Some(outcome) =
-        execute_runtime_live_terminal_command(service, active_client_id, invocation)?
+        execute_runtime_live_terminal_command(service, active_client_id, invocation, browser)?
     {
         outcome
     } else if let Some(outcome) =
@@ -191,6 +227,7 @@ pub(super) fn execute_runtime_live_terminal_command(
     service: &mut RuntimeSessionService,
     primary_client_id: &mez_core::ids::ClientId,
     invocation: &CommandInvocation,
+    agent_browser: &mut Option<RuntimeAgentBrowserSnapshot>,
 ) -> Result<Option<CommandOutcome>> {
     match invocation.name.as_str() {
         "exit" => {
@@ -342,10 +379,12 @@ pub(super) fn execute_runtime_live_terminal_command(
             if !invocation.args.is_empty() {
                 return Err(MezError::invalid_args("list-agents accepts no arguments"));
             }
-            let (browser, _) = service.agent_management_browser(primary_client_id)?;
+            let (browser, targets) = service.agent_management_browser(primary_client_id)?;
+            let body = browser.render_page().raw_markdown;
+            *agent_browser = Some((browser, targets));
             Ok(Some(CommandOutcome::Display {
                 command: invocation.name.clone(),
-                body: browser.render_page().raw_markdown,
+                body,
             }))
         }
         "show-metrics" => Ok(Some(CommandOutcome::Display {
