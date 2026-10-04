@@ -500,6 +500,50 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Settles only exact transferred occurrences on a non-runnable partial turn.
+    /// Scheduled or issued work keeps its existing owner and is never replayed.
+    pub(crate) fn settle_failed_deferred_steering_transfer(
+        &mut self,
+        dispatch: &crate::runtime::RuntimeAgentPromptHistoryDispatch,
+    ) -> Result<()> {
+        let ids: BTreeSet<_> = dispatch
+            .steering_receipts
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let turns = self
+            .agent
+            .steering_receipts
+            .values()
+            .filter(|owner| {
+                owner.turn.pane_id == dispatch.pane_id
+                    && owner.turn.conversation_id == dispatch.conversation_id
+                    && owner
+                        .entries
+                        .iter()
+                        .any(|entry| ids.contains(entry.id.as_str()))
+            })
+            .map(|owner| owner.turn.clone())
+            .collect::<Vec<_>>();
+        for turn in turns {
+            if self
+                .agent_turn_ledger()
+                .turn(&turn.turn_id)
+                .is_some_and(|current| current.state == super::AgentTurnState::Queued)
+                && !self.agent_work_is_scheduled(&turn.turn_id)
+                && !self.agent_provider_task_is_owned(&turn.turn_id)
+            {
+                self.agent_turn_ledger_mut()
+                    .finish_turn(&turn.turn_id, super::AgentTurnState::Failed)?;
+                self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
+            }
+        }
+        Ok(())
+    }
+
     /// Retains truthful unconsumed evidence when terminal cleanup releases a turn.
     pub(crate) fn settle_steering_receipts(&mut self, turn_id: &str) {
         if let Some(owner) = self.agent.steering_receipts.get_mut(turn_id) {

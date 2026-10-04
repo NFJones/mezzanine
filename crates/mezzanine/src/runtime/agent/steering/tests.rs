@@ -2,6 +2,221 @@
 
 use super::*;
 
+/// A failed post-transfer commit with no peer mail must terminally settle its
+/// exact partial turn rather than leave pending input without runnable ownership.
+#[test]
+fn steering_receipts_failed_deferred_context_commit_settles_partial_owner() {
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let primary = service
+        .attach_primary(
+            "primary",
+            true,
+            mez_mux::layout::Size::new(80, 24).unwrap(),
+            120,
+        )
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.mark_agent_compacting_for_tests("%1", 1);
+    service
+        .execute_agent_shell_command(&primary, "deferred occurrence")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    let dispatch = service.take_pending_agent_prompt_history().remove(0);
+    assert!(service.claim_agent_prompt_history_preparation(&dispatch));
+    service.fail_next_peer_message_receive_after_context_storage_for_tests();
+    let history =
+        crate::runtime::execute_runtime_agent_prompt_history_work(dispatch.history_work.clone());
+    assert!(
+        service
+            .complete_agent_prompt_history_preparation(&dispatch, history)
+            .is_err()
+    );
+    assert_eq!(
+        service.agent_turn_ledger().turn("turn-1").unwrap().state,
+        mez_agent::AgentTurnState::Failed
+    );
+    assert_eq!(
+        service.steering_receipts_for_tests("turn-1")[0].id,
+        dispatch.steering_receipts[0].id
+    );
+    assert_eq!(
+        service.steering_receipts_for_tests("turn-1")[0].status,
+        Status::NotSent
+    );
+    assert!(!service.agent_work_is_scheduled("turn-1"));
+    assert!(!service.agent_provider_task_is_owned("turn-1"));
+    assert!(
+        !service
+            .complete_agent_prompt_history_preparation(
+                &dispatch,
+                crate::runtime::execute_runtime_agent_prompt_history_work(
+                    dispatch.history_work.clone()
+                )
+            )
+            .unwrap()
+    );
+    assert_eq!(service.agent_turn_ledger().turns().len(), 1);
+}
+
+/// Interrupted persistence may fail after the terminal ledger transition. The
+/// receipts must settle first, preserve positive admission, and retain exact
+/// continuation context independently of the failed durable write.
+#[test]
+fn steering_receipts_interrupted_persistence_failure_preserves_terminal_evidence() {
+    let (mut service, turn) = fixture();
+    service
+        .inject_agent_steering_with_display("%1", "admitted", "first")
+        .unwrap();
+    let first = service.steering_receipts_for_tests(&turn.turn_id)[0].sequence;
+    service
+        .agent
+        .steering_receipts
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .admit(7, &BTreeSet::from([first]));
+    service
+        .inject_agent_steering_with_display("%1", "unconsumed", "second")
+        .unwrap();
+    let before = service.agent_turn_contexts()[&turn.turn_id].clone();
+    let root = std::env::temp_dir().join(format!(
+        "mez-steering-interrupt-{}",
+        crate::storage::token_usage::new_token_usage_event_id()
+    ));
+    let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+    service.set_agent_transcript_store(store.clone());
+    store.fail_next_transcript_append();
+    assert!(
+        service
+            .finish_agent_turn("%1", &turn.turn_id, mez_agent::AgentTurnState::Interrupted)
+            .is_err()
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&turn.turn_id)
+            .unwrap()
+            .state,
+        mez_agent::AgentTurnState::Interrupted
+    );
+    let receipts = service.steering_receipts_for_tests(&turn.turn_id);
+    assert_eq!(receipts[0].status, Status::Admitted(7));
+    assert_eq!(receipts[1].status, Status::NotSent);
+    assert_eq!(
+        service.agent.interrupted_agent_continuations[&turn.agent_id].context,
+        before
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Optional diagnostics immediately after deferred transfer must not strand a
+/// committed occurrence without canonical context or scheduler ownership.
+#[test]
+fn steering_receipts_deferred_transfer_trace_failure_retains_runnable_owner() {
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let primary = service
+        .attach_primary(
+            "primary",
+            true,
+            mez_mux::layout::Size::new(80, 24).unwrap(),
+            120,
+        )
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.mark_agent_compacting_for_tests("%1", 1);
+    service
+        .execute_agent_shell_command(&primary, "deferred occurrence")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    let dispatch = service.take_pending_agent_prompt_history().remove(0);
+    assert!(service.claim_agent_prompt_history_preparation(&dispatch));
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", mez_agent::AgentLogLevel::Debug)
+        .unwrap();
+    service.fail_agent_presentation_install_for_tests(0);
+    let history =
+        crate::runtime::execute_runtime_agent_prompt_history_work(dispatch.history_work.clone());
+    assert!(
+        service
+            .complete_agent_prompt_history_preparation(&dispatch, history)
+            .unwrap()
+    );
+    assert!(service.agent_turn_contexts().contains_key("turn-1"));
+    assert!(service.agent_work_is_scheduled("turn-1"));
+    assert_eq!(
+        service.steering_receipts_for_tests("turn-1")[0].id,
+        dispatch.steering_receipts[0].id
+    );
+    assert_eq!(
+        service.steering_receipts_for_tests("turn-1")[0].status,
+        Status::Pending
+    );
+}
+
+/// Terminal ledger evidence must settle pending receipts even when the later
+/// diagnostic trace fails, for both bound and replacement-conversation paths.
+#[test]
+fn steering_receipts_terminal_commit_settles_before_trace_failure() {
+    for rebound in [false, true] {
+        let (mut service, turn) = fixture();
+        service
+            .inject_agent_steering_with_display("%1", "pending", "display")
+            .unwrap();
+        if rebound {
+            service
+                .agent_shell_store_mut()
+                .finish_turn("%1", &turn.turn_id)
+                .unwrap();
+            service
+                .agent_shell_store_mut()
+                .start_new_conversation("%1")
+                .unwrap();
+        }
+        service
+            .agent_shell_store_mut()
+            .set_log_level("%1", mez_agent::AgentLogLevel::Debug)
+            .unwrap();
+        // Bound completion installs its footer before the transition trace.
+        service.fail_agent_presentation_install_for_tests(if rebound { 0 } else { 1 });
+        let result = if rebound {
+            service
+                .finish_agent_turn_without_shell_session(
+                    &turn,
+                    mez_agent::AgentTurnState::Completed,
+                )
+                .map(|_| ())
+        } else {
+            service
+                .finish_agent_turn("%1", &turn.turn_id, mez_agent::AgentTurnState::Completed)
+                .map(|_| ())
+        };
+        assert!(result.is_err());
+        assert_eq!(
+            service
+                .agent_turn_ledger()
+                .turn(&turn.turn_id)
+                .unwrap()
+                .state,
+            mez_agent::AgentTurnState::Completed
+        );
+        assert_eq!(
+            service.steering_receipts_for_tests(&turn.turn_id)[0].status,
+            Status::NotSent
+        );
+        assert!(service.agent.steering_receipts[&turn.turn_id].terminal);
+    }
+}
+
 /// A presentation fault after canonical insertion cannot report accepted
 /// steering as rejected or invite resubmission. Public ingress must retain one
 /// occurrence and its original receipt even when the status install fails.

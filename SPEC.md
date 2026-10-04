@@ -5889,8 +5889,13 @@ The existing ordered aggregate prompt MUST bind all joined receipt IDs to its
 producer-assigned event sequence, including interrupted-context remapping.
 Pre-history retries MUST preserve IDs; repeated completion MUST NOT create a
 second turn or overwrite transferred receipts. Failed or stale history work
-MUST retain bounded not-sent evidence without replay. Queued or claimed history
-commands MUST retain receipt ownership on the actor; cancellation and shutdown
+MUST retain bounded not-sent evidence without replay. Deferred history
+transfer MUST NOT be stranded by optional diagnostics before context or scheduler
+installation. An unrecoverable non-runnable partial transfer MUST terminally
+settle its exact receipt owner without replaying input. Terminal ledger commitment
+MUST settle unconsumed receipts before later fallible trace or persistence work;
+interruption MUST retain exact continuation context even if durable writing fails.
+Queued or claimed history commands MUST retain receipt ownership on the actor; cancellation and shutdown
 MUST settle that ownership without a worker reply. Late callbacks MUST NOT
 reconstruct receipts after transfer, settlement or bounded evidence eviction.
 Pre-history compaction queues MUST settle exact not-sent receipt evidence when

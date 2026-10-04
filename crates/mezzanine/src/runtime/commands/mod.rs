@@ -1677,6 +1677,9 @@ impl RuntimeSessionService {
             None,
             (history, dispatch.steering_receipts.clone()),
         );
+        if result.is_err() {
+            self.settle_failed_deferred_steering_transfer(dispatch)?;
+        }
         self.agent.settle_agent_command(
             &dispatch.pane_id,
             &dispatch.conversation_id,
@@ -1815,19 +1818,19 @@ impl RuntimeSessionService {
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
         self.bind_deferred_steering_receipts(&turn, prompt_sequence.get(), receipts);
         self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
-        self.append_agent_trace_turn_event(
+        let _ = self.append_agent_trace_turn_event(
             pane_id,
             &turn_id,
             "created state=queued reason=user_prompt_submitted",
-        )?;
-        self.append_agent_trace_turn_event(
+        );
+        let _ = self.append_agent_trace_turn_event(
             pane_id,
             &turn_id,
             &format!(
                 "context prepared blocks={} model_profile={}",
                 context_blocks, model_profile_name
             ),
-        )?;
+        );
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
         self.set_agent_turn_imported_history_sequence_high_water(
@@ -1895,24 +1898,24 @@ impl RuntimeSessionService {
         let _ = self.schedule_runtime_agent_session_title(&conversation_id, objective.as_deref());
         self.consume_interrupted_agent_continuation(&agent_id);
         if continued_interrupted_turn {
-            self.append_agent_trace_turn_event(
+            let _ = self.append_agent_trace_turn_event(
                 pane_id,
                 &turn_id,
                 "interrupted canonical context transferred to follow-up turn",
-            )?;
+            );
         }
         if self.transfer_interrupted_subagent_redirection(&agent_id, &conversation_id, &turn_id) {
-            self.append_agent_trace_turn_event(
+            let _ = self.append_agent_trace_turn_event(
                 pane_id,
                 &turn_id,
                 "interrupted subagent redirection transferred to follow-up turn",
-            )?;
+            );
         }
-        self.append_agent_trace_turn_event(
+        let _ = self.append_agent_trace_turn_event(
             pane_id,
             &turn_id,
             "scheduler enqueue kind=shell_capable",
-        )?;
+        );
         self.start_ready_agent_turns_suppressing_status_for(Some(&turn_id))?;
         let state = self
             .agent_turn_ledger()
@@ -1923,16 +1926,16 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("queued agent turn disappeared"))?;
         match state {
             AgentTurnState::Queued => {
-                self.append_agent_status_text_to_terminal_buffer(
+                let _ = self.append_agent_status_text_to_terminal_buffer(
                     pane_id,
                     "agent: queued and waiting for a turn slot",
-                )?;
+                );
             }
             AgentTurnState::Running => {
-                self.append_agent_status_text_to_terminal_buffer(
+                let _ = self.append_agent_status_text_to_terminal_buffer(
                     pane_id,
                     "agent: working on the request",
-                )?;
+                );
             }
             AgentTurnState::Blocked
             | AgentTurnState::Completed

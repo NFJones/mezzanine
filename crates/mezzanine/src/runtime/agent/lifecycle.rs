@@ -163,6 +163,15 @@ impl RuntimeSessionService {
             .runtime_metrics_mut()
             .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut().finish_turn(turn_id, state)?;
+        if matches!(
+            state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            self.settle_steering_receipts(turn_id);
+        }
+        if state == AgentTurnState::Interrupted {
+            self.retain_interrupted_agent_continuation(&turn);
+        }
         self.reconcile_active_turn_sleep_inhibition();
         if !awaiting_redirection
             && completion_attention_eligible
@@ -215,7 +224,7 @@ impl RuntimeSessionService {
     /// Normal completion, queued-turn cancellation, and missing-pane cleanup
     /// share this operation so provider claims, approvals, action bookkeeping,
     /// and retained execution context cannot outlive any terminal ledger path.
-    fn clear_terminal_agent_turn_runtime_state(&mut self, turn_id: &str) {
+    pub(super) fn clear_terminal_agent_turn_runtime_state(&mut self, turn_id: &str) {
         self.settle_steering_receipts(turn_id);
         self.retire_cancelled_mcp_leases_for_turn(turn_id);
         self.agent
@@ -385,6 +394,15 @@ impl RuntimeSessionService {
             .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut()
             .finish_turn(&turn.turn_id, state)?;
+        if matches!(
+            state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            self.settle_steering_receipts(&turn.turn_id);
+        }
+        if state == AgentTurnState::Interrupted {
+            self.retain_interrupted_agent_continuation(turn);
+        }
         self.reconcile_active_turn_sleep_inhibition();
         if pane_present
             && conversation_still_owned
