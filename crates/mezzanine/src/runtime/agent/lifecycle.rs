@@ -217,6 +217,8 @@ impl RuntimeSessionService {
     /// and retained execution context cannot outlive any terminal ledger path.
     fn clear_terminal_agent_turn_runtime_state(&mut self, turn_id: &str) {
         self.retire_cancelled_mcp_leases_for_turn(turn_id);
+        self.agent.skill_discovery_receipts.remove(turn_id);
+        self.agent.model_loaded_skills.remove(turn_id);
         let _ = self.retire_action_presentation_progress_for_turn(turn_id);
         self.clear_completed_received_peer_message_presentations_for_turn(turn_id);
         self.clear_settled_outbound_message_actions(turn_id);

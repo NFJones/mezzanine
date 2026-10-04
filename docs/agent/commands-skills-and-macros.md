@@ -128,9 +128,10 @@ A skill file needs YAML front matter with `name` and `description`, followed
 by Markdown instructions. The directory name must match `name`, using only
 lowercase ASCII letters, digits, and hyphens. Auxiliary scripts or references
 are not automatically executed or loaded just because you invoke the skill.
-Model-selected skill discovery and loading are disabled and are not available
-through `agents.enabled_actions`. Use `/list-skills` and invoke the chosen
-workflow explicitly with `$<skill-name>`.
+Model-selected skill discovery and loading are default-off. Use `/list-skills`
+and invoke a workflow explicitly with `$<skill-name>`, or explicitly include both
+`request_skills` and `call_skill` in the primary `agents.enabled_actions` allowlist
+and start a new conversation with eligible discovery metadata.
 
 Optional frontmatter `discovery: true` or `discovery: false` declares eligibility
 for that document only. Primary config may set `skills.discovery` or
@@ -138,9 +139,13 @@ for that document only. Primary config may set `skills.discovery` or
 otherwise per-name operator policy wins over the winning document declaration,
 then global policy, then default false. Omit the global setting to allow selective
 opt-ins. Resolve trust and source precedence first; lower-priority shadows cannot
-opt in their winner. These policy declarations do not yet enable callable model
-discovery/loading actions. Explicit invocation and the full human catalog remain
-unchanged, and auxiliary assets are never automatically executed.
+opt in their winner. Policy alone does not add actions to a captured conversation.
+Discovery returns eligible name/description/source metadata only; loading requires
+that turn's successful selection and live winner, policy, trust and document checks.
+Changed or revoked selections fail without suggesting hidden names. Model loading
+is limited to regular UTF-8 documents up to 1 MiB and rejects symlink descendants.
+Explicit invocation and the full human catalog remain available; auxiliary assets
+are never automatically executed or loaded. Skill text grants no action authority.
 
 `/sync-builtin-skills` restores managed built-in copies in the user configuration
 root. It preserves valid user overrides that omit the managed-version marker

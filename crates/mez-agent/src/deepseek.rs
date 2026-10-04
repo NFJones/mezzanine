@@ -548,10 +548,13 @@ fn deepseek_maap_tool_choice(shim_kind: DeepSeekMaapShimKind) -> serde_json::Val
 /// corrections. Provider-specific behavior such as thinking-mode tool-choice
 /// strategy still lives outside this shared prompt text.
 fn chat_completions_maap_tool_description(
-    _request: &ModelRequest,
+    request: &ModelRequest,
     _shim_kind: DeepSeekMaapShimKind,
 ) -> String {
-    crate::schema::maap_cache_stable_action_batch_description()
+    crate::schema::maap_current_action_batch_description(
+        &request.allowed_actions,
+        &request.available_mcp_tools,
+    )
 }
 
 /// Builds the DeepSeek shim argument schema for the selected function.

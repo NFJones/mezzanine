@@ -85,8 +85,13 @@ the existing permission owners do not change with these foundational contracts.
 | `issue_delete` | `id` | Deletes a local project issue. |
 | `complete` | none | Marks the turn complete when exposed by a compatibility surface. |
 
-`request_skills` and `call_skill` are reserved actions and must not appear
-while model-selected skills are disabled. `abort` is controller-owned and must
+`request_skills` and `call_skill` are optional paired actions, absent by default.
+Explicit action allowlisting plus eligible live discovery policy is required when
+capturing a new conversation. `request_skills` has no arguments and returns only
+eligible name/description/source metadata. `call_skill` accepts a generic `name`
+and optional `additional_context`; it requires this turn's successful selection
+and live policy/trust/winner/document revalidation. Neither grants permissions
+or automatically loads auxiliary files. `abort` is controller-owned and must
 not appear in provider action schemas. Availability of memory, issue, MCP,
 network, and other action types depends on the live turn capability surface.
 

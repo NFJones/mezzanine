@@ -7388,10 +7388,12 @@ by its corresponding action and valid unique size and reasoning
 values. `ModelInteractionKind` MAY constrain response semantics or suppress
 tool emission for internal non-MAAP interactions, but MUST NOT mutate the
 captured action catalog. The snapshot MUST be used by both provider exposure
-and runtime validation. It MUST default to every executable action. The model MUST use enabled actions directly
-without first emitting `request_capability`;
-capability and model-selected skill actions MUST NOT appear in the ordinary
-provider schema or configurable action set. Integration availability,
+and runtime validation. Defaults MUST include ordinary executable actions but
+exclude optional skill actions. The model MUST use enabled actions directly
+without first emitting `request_capability`; capability negotiation MUST remain
+absent. `request_skills` and `call_skill` MAY be configured as a pair and captured
+only when winning trusted metadata is eligible under live discovery policy.
+Enabling an absent pair MUST require a new conversation. Integration availability,
 permission policy, approval, subagent depth or terminal-profile limits, and
 argument validation remain runtime-owned and MUST return explicit action
 results when a selected enabled action cannot run.
@@ -7628,10 +7630,10 @@ The baseline action types are:
 
 - `say`: Present user-facing text with an HTTP-style content type used for
   presentation decisions.
-- `request_skills`: Reserved skill-catalog action. While model-selected skill
+- `request_skills`: Optional skill-catalog action. While model-selected skill
   actions are disabled, this action MUST NOT be exposed in provider action
   surfaces.
-- `call_skill`: Reserved skill-loading action. While model-selected skill
+- `call_skill`: Optional skill-loading action. While model-selected skill
   actions are disabled, this action MUST NOT be exposed in provider action
   surfaces.
 - `shell_command`: Send shell input to the pane for local filesystem
@@ -7901,10 +7903,10 @@ intends Mezzanine to execute.
 A `request_skills` action MUST NOT require arguments. While model-selected skill
 actions are disabled, Mezzanine MUST NOT expose this action in model-facing
 provider schemas or allowed-action surfaces. If exposed by an implementation
-profile, it MUST return the effective skill catalog visible to the active pane
-as an action result. The catalog MUST include each skill's `name`,
-`description`, and source scope, and it MAY include diagnostics for skipped
-invalid skill directories. It MUST NOT load full skill instruction bodies.
+profile, it MUST return only eligible winning metadata visible to the active pane
+as an action result: `name`, `description`, and source scope. Paths, bodies and
+diagnostics MUST remain excluded. Bounded internal document qualification MAY
+record a digest but MUST NOT insert instruction bodies into model context.
 
 A `call_skill` action MUST include:
 
@@ -7914,8 +7916,12 @@ A `call_skill` action MUST include:
 
 A `call_skill` action MUST NOT be exposed in model-facing provider schemas or
 allowed-action surfaces while model-selected skill actions are disabled. If
-exposed by an implementation profile, it MUST resolve the skill from the
-effective skill catalog, load the complete `SKILL.md` text, and return that
+exposed by an implementation profile, it MUST require this turn's successful
+discovery receipt and revalidate live policy, trust, winning metadata and bounded
+document identity. Historical results and compaction MUST NOT authorize loading.
+It MUST read a regular UTF-8 document through no-follow directory-relative handles
+under the current source root, bounded to 1 MiB, reject changed or escaped winners,
+load the complete `SKILL.md` text, and return that
 text as action-result context. When `additional_context` is present and
 non-empty, Mezzanine MUST append it to the returned skill text under a clearly
 labeled markdown section named `Additional context`. Unknown, invalid,
@@ -9391,6 +9397,13 @@ by default. While disabled, `request_skills` and `call_skill` MUST NOT appear in
 provider schemas, allowed-action surfaces, or model-facing action guidance.
 Users MAY still select skills explicitly with `$<skill-name>` syntax before a
 provider request is built.
+
+Optional model discovery requires both actions in `agents.enabled_actions` and
+eligible metadata at conversation capture. Defaults and migration MUST NOT add
+the pair silently. Live policy revocation MUST refuse further discovery/loading
+without widening or replacing captured schemas. Current-turn receipts MUST be
+retired with their turn; generic unavailable errors MUST NOT suggest hidden names
+or paths. Discovery MUST NOT be a mandatory startup step.
 
 The pane-local agent prompt MUST support explicit skill invocation with:
 
@@ -11541,8 +11554,9 @@ from provider action surfaces. It MUST prohibit emitting `request_skills` or
 `call_skill`, even if older context, examples, provider documentation, or
 cache-stable schemas mention them. It MUST explain that users MAY still
 explicitly load a skill with `$<skill-name> [additional context]`, and that
-already-loaded skill context should be followed with the currently available
-actions or by requesting a missing action capability.
+already-loaded skill context should be followed with the currently captured
+actions. When the optional pair is exposed, guidance MUST explain metadata-before-
+loading, live revalidation, and untrusted skill content without capability negotiation.
 
 The prompt MUST explain that `say` is for user-facing progress, final answers,
 or clarification when no terminal, web, MCP, or local mutation is needed, and

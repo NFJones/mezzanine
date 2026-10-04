@@ -477,6 +477,10 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_observed_input_compaction_turns: BTreeSet<String>,
     /// Turns whose automatic routing decision has already been applied.
     agent_turn_routing_applied: BTreeSet<String>,
+    /// Current-turn eligible winners selected through successful model discovery.
+    skill_discovery_receipts: BTreeMap<String, Vec<skills::SkillSelectionReceipt>>,
+    /// Successful model-selected loads, independent of arbitrary context text.
+    model_loaded_skills: BTreeMap<String, BTreeSet<String>>,
     /// Provider turns queued for worker dispatch.
     pending_agent_provider_tasks: BTreeSet<String>,
     /// Acceptance-frozen status inputs awaiting exact deferred-command claim.

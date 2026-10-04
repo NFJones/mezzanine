@@ -2,6 +2,87 @@
 
 use super::*;
 
+/// Opted-in provider batches discover metadata and load a selected document in
+/// separate continuations, using the same captured schema and runtime reducer.
+/// Discovery cannot expose document bodies or paths before explicit selection.
+#[test]
+fn runtime_model_skill_provider_continuations_discover_then_load() {
+    let root = temp_root("model-skill-provider-continuation");
+    fs::create_dir_all(root.join("skills/review")).unwrap();
+    fs::write(
+        root.join("skills/review/SKILL.md"),
+        "---\nname: review\ndescription: Review safely\ndiscovery: true\n---\nBODY_SENTINEL\n",
+    )
+    .unwrap();
+    let mut service = test_runtime_service();
+    service.set_config_root(root.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".into(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nenabled_actions = [\"say\", \"request_skills\", \"call_skill\"]\n"
+                .into(),
+        }])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "review using an eligible workflow")
+        .unwrap();
+    for (id, payload) in [
+        ("discover", mez_agent::AgentActionPayload::RequestSkills),
+        (
+            "load",
+            mez_agent::AgentActionPayload::CallSkill {
+                name: "review".into(),
+                additional_context: None,
+            },
+        ),
+    ] {
+        service.remove_pending_agent_provider_task(&started.turn_id);
+        let provider = RuntimeBatchProvider {
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".into(),
+                model: "test".into(),
+                raw_text: "skill fixture".into(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    rationale: "use selected workflow".into(),
+                    actions: vec![mez_agent::AgentAction {
+                        id: id.into(),
+                        payload,
+                    }],
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+        };
+        let execution = service
+            .execute_agent_turn_with_provider(
+                &started.turn_id,
+                &provider,
+                runtime_model_profile("runtime-batch", "test"),
+            )
+            .unwrap();
+        assert_eq!(
+            execution.action_results[0].status,
+            mez_agent::ActionStatus::Succeeded
+        );
+        let text = format!("{:?}", execution.action_results[0].content);
+        assert_eq!(text.contains("BODY_SENTINEL"), id == "load", "{text}");
+        if id == "discover" {
+            assert!(!text.contains("SKILL.md"), "{text}");
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies skill catalog lookup logs a compact normal-mode action line.
 ///
 /// Non-effecting skill discovery still needs the same execution visibility as

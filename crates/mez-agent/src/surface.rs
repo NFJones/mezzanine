@@ -472,11 +472,7 @@ pub struct AllowedActionSet {
 }
 
 impl AllowedActionSet {
-    /// Builds the complete provider-visible action surface used by ordinary
-    /// agent turns.
-    ///
-    /// Capability negotiation and model-selected skill loading are legacy
-    /// controller protocols, not executable actions in the static schema.
+    /// Builds the default provider-visible surface; optional skills remain off.
     pub fn all_enabled() -> Self {
         Self::from_actions([
             AllowedAction::Say,
@@ -502,11 +498,18 @@ impl AllowedActionSet {
         ])
     }
 
+    /// Builds the supported configurable universe, not default conversation exposure.
+    pub fn supported() -> Self {
+        let mut actions = Self::all_enabled();
+        actions.extend([AllowedAction::RequestSkills, AllowedAction::CallSkill]);
+        actions
+    }
+
     /// Returns whether this set contains only configurable executable actions.
     pub fn is_configurable(&self) -> bool {
         self.actions
             .iter()
-            .all(|action| Self::all_enabled().contains(*action))
+            .all(|action| Self::supported().contains(*action))
     }
 
     /// Validates a catalog loaded from durable session metadata.
@@ -516,6 +519,9 @@ impl AllowedActionSet {
         }
         if !self.is_configurable() {
             return Err("persisted action catalog contains a non-configurable action".to_string());
+        }
+        if self.contains(AllowedAction::RequestSkills) != self.contains(AllowedAction::CallSkill) {
+            return Err("persisted skill actions must be captured as a pair".to_string());
         }
         match (
             self.contains(AllowedAction::ConfigChange),

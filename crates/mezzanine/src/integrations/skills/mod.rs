@@ -23,6 +23,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod safe_read;
+
 use mez_agent::{
     SKILL_FILE_NAME, SkillCatalog, SkillDiagnostic, SkillDocument, SkillSource, SkillSummary,
 };
@@ -447,6 +449,39 @@ pub fn load_skill_document(summary: &SkillSummary) -> Result<SkillDocument> {
     })
 }
 
+/// Loads a model-selected winner from an explicitly authorized catalog root.
+/// Reparsed metadata must match the selected summary; errors disclose no paths.
+pub(crate) fn load_model_skill_document(
+    summary: &SkillSummary,
+    root: Option<&Path>,
+) -> Result<SkillDocument> {
+    let unavailable = || {
+        MezError::forbidden(
+            "selected skill unavailable or changed; request fresh metadata in a new turn",
+        )
+    };
+    let text = if summary.source == SkillSource::Builtin {
+        builtin_skill_text(&summary.name).ok_or_else(unavailable)?
+    } else {
+        let root = root.ok_or_else(unavailable)?;
+        if summary.path != root.join(&summary.name).join(SKILL_FILE_NAME) {
+            return Err(unavailable());
+        }
+        safe_read::read(root, &summary.name).map_err(|_| unavailable())?
+    };
+    let parsed = parse_skill_document(&text).map_err(|_| unavailable())?;
+    if parsed.name != summary.name
+        || parsed.description != summary.description
+        || parsed.discovery != summary.discovery
+    {
+        return Err(unavailable());
+    }
+    Ok(SkillDocument {
+        summary: summary.clone(),
+        text,
+    })
+}
+
 /// Returns the built-in skills shipped with Mezzanine.
 fn builtin_skill_summaries() -> Vec<SkillSummary> {
     [
@@ -640,7 +675,10 @@ fn read_skill_summary(
             "skill directory name {directory_name:?} is invalid"
         ));
     }
-    let text = fs::read_to_string(skill_path)
+    let root = directory
+        .parent()
+        .ok_or_else(|| "skill root unavailable".to_string())?;
+    let text = safe_read::read(root, directory_name)
         .map_err(|error| format!("failed to read SKILL.md: {error}"))?;
     let document = parse_skill_document(&text).map_err(|error| error.message().to_string())?;
     if document.name != directory_name {

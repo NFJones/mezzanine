@@ -157,6 +157,15 @@ impl RuntimeSessionService {
             return Ok(snapshot);
         }
         let mut allowed_actions = self.agent_enabled_actions().clone();
+        // Optional actions are captured only as a pair when a trusted winning
+        // document is eligible. Later opt-in cannot widen this conversation.
+        if !allowed_actions.contains(mez_agent::AllowedAction::RequestSkills)
+            || !allowed_actions.contains(mez_agent::AllowedAction::CallSkill)
+            || !self.model_skill_discovery_available(pane_id)?
+        {
+            allowed_actions.remove(mez_agent::AllowedAction::RequestSkills);
+            allowed_actions.remove(mez_agent::AllowedAction::CallSkill);
+        }
         if allowed_actions.contains(mez_agent::AllowedAction::ConfigChange) {
             allowed_actions = allowed_actions.with_config_change_setting_path_description(
                 crate::config::config_change_setting_path_description(),

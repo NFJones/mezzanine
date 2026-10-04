@@ -29,7 +29,7 @@ pub(crate) fn classify_action_list<'a>(
     names: impl IntoIterator<Item = Option<&'a str>>,
     diagnose_duplicates: bool,
 ) -> (Vec<AllowedAction>, Vec<ActionListIssue<'a>>) {
-    let configurable = AllowedActionSet::all_enabled();
+    let configurable = AllowedActionSet::supported();
     let mut actions = Vec::new();
     let mut issues = Vec::new();
     let mut seen = BTreeSet::new();

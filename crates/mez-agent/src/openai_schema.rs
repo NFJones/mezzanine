@@ -24,7 +24,7 @@ fn openai_maap_current_action_batch_tool(request: &ModelRequest) -> serde_json::
     serde_json::json!({
         "type": "function",
         "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
-        "description": crate::schema::maap_cache_stable_action_batch_description(),
+        "description": openai_maap_current_action_batch_description(request),
         "strict": true,
         "parameters": normalize_openai_strict_schema(maap_action_batch_schema(
             &request.allowed_actions,
