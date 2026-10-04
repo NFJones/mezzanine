@@ -77,8 +77,11 @@ unknown rather than falsely claiming not-sent or retrying input; admitted and
 not-sent evidence remain unchanged. Failed checkpoints retain live receipts but
 can leave restart evidence incomplete. Older metadata invents no receipts.
 Manual resume uses the same inert recovery policy and restores prior receipt
-evidence if its transaction fails. Complete transition publication and
-pending-tail labels remain unfinished; the current visible prompt echo remains.
+evidence if its transaction fails. Deferred transitions publish their newest
+evidence through the persistence drain; failed direct writes remain eligible for
+a later drain and adapter writes use bounded checkpoint retry. This does not
+archive every closed conversation's receipts. Pending-tail labels remain
+unfinished; the current visible prompt echo remains.
 Ordinary receipt ownership also checks the existing pane process incarnation;
 replacement or unreadable root identity cannot acknowledge earlier guidance.
 Deferred compaction receipts preserve that original binding through history

@@ -213,6 +213,7 @@ impl RuntimeSessionService {
                 (pane.into(), conversation.into(), command),
                 entries.to_vec(),
             );
+            self.agent.steering_recovery_dirty = true;
         }
     }
 
@@ -311,6 +312,7 @@ impl RuntimeSessionService {
         // Capacity validation installed the exact empty owner before turn commit.
         if let Some(owner) = self.agent.steering_receipts.get_mut(&turn.turn_id) {
             owner.entries = entries;
+            self.agent.steering_recovery_dirty = true;
         }
     }
 
@@ -488,6 +490,7 @@ impl super::RuntimeAgentComponent {
         pane: &str,
         entries: Vec<Deferred>,
     ) {
+        self.steering_recovery_dirty |= !entries.is_empty();
         for mut entry in entries {
             let key = (pane.to_string(), entry.conversation, entry.epoch);
             if !self.settled_compaction_steering.contains_key(&key)
@@ -516,6 +519,7 @@ impl super::RuntimeAgentComponent {
         let Some(mut entries) = self.pending_deferred_steering.remove(&key) else {
             return;
         };
+        self.steering_recovery_dirty = true;
         if phase == crate::runtime::RuntimeAgentCommandLifecyclePhase::Completed {
             return;
         }

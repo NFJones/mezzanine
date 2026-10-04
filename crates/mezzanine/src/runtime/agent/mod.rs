@@ -549,6 +549,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_compaction_epochs: BTreeMap<String, u64>,
     /// Bounded exact steering receipts retained through terminal settlement.
     steering_receipts: BTreeMap<String, steering::Receipts>,
+    /// Receipt state changed since the latest accepted checkpoint publication.
+    steering_recovery_dirty: bool,
     /// Execution-inert receipt evidence hydrated from a previous runtime owner.
     restored_steering_recovery:
         BTreeMap<(String, String), Vec<mez_agent::transcript::SteeringRecoveryReceipt>>,

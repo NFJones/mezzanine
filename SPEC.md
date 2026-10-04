@@ -5905,8 +5905,13 @@ restart evidence without failing or replaying already accepted input. Recovery
 is limited to checkpointed active pane bindings; terminal history is bounded.
 Manual resume MUST validate receipt metadata before mutation, reconcile pending
 evidence as admission unknown without scheduling old work, and restore the prior
-inert recovery map if the resume transaction fails. Complete transition
-publication and pending-log promotion remain unfinished.
+inert recovery map if the resume transaction fails. Deferred receipt retention,
+canonical transfer and terminal settlement MUST mark the recovery snapshot dirty
+for publication through the existing persistence drain. Failed direct publication
+MUST retain that fence for a later drain; adapter publication retains the existing
+generation-fenced bounded retry. Recovery remains active-binding checkpoint
+evidence, not a durable archive of every closed conversation. Pending-log
+promotion remains unfinished.
 Ordinary-turn receipt acceptance and admission MUST retain and revalidate the
 existing pane process incarnation. Unreadable identity for an existing root MUST
 reject acceptance; replacement MUST NOT acknowledge old receipts. An in-place

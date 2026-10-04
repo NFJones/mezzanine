@@ -31,6 +31,16 @@ fn project(receipt: &Receipt, turn: Option<&str>) -> SteeringRecoveryReceipt {
 }
 
 impl RuntimeSessionService {
+    /// Reports receipt changes awaiting checkpoint publication.
+    pub(crate) fn steering_recovery_needs_publication(&self) -> bool {
+        self.agent.steering_recovery_dirty
+    }
+
+    /// Marks the captured receipt snapshot accepted by the persistence owner.
+    pub(crate) fn mark_steering_recovery_published(&mut self) {
+        self.agent.steering_recovery_dirty = false;
+    }
+
     /// Captures only inert recovered evidence for transactional resume rollback.
     pub(crate) fn snapshot_restored_steering_recovery(
         &self,
@@ -50,6 +60,7 @@ impl RuntimeSessionService {
     /// ownership. Failure retains live receipts; callers must not retry input.
     /// Adapter checkpoints already provide generation-fenced bounded retry.
     pub(crate) fn publish_steering_recovery_checkpoint(&mut self) {
+        self.agent.steering_recovery_dirty = true;
         if self.checkpoint_agent_session_metadata().is_err() {
             let _ = self.append_lifecycle_event(
                 crate::runtime::EventKind::Diagnostic,

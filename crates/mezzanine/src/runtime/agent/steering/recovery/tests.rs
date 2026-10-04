@@ -2,6 +2,97 @@
 
 use super::*;
 
+/// Deferred terminal evidence is published at persistence drain in both direct
+/// and adapter modes. A failed direct publication retains the dirty fence for
+/// a later drain, without recreating a command or resubmitting accepted input.
+#[test]
+fn steering_recovery_deferred_settlement_publishes_at_persistence_drain() {
+    for adapter in [false, true] {
+        for history in [false, true] {
+            let root = std::env::temp_dir().join(format!(
+                "mez-steering-drain-{}",
+                crate::storage::token_usage::new_token_usage_event_id()
+            ));
+            let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+            let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+            let primary = service
+                .attach_primary(
+                    "primary",
+                    true,
+                    mez_mux::layout::Size::new(80, 24).unwrap(),
+                    120,
+                )
+                .unwrap();
+            service
+                .agent_shell_store_mut()
+                .enter_or_resume("%1")
+                .unwrap();
+            service.set_agent_transcript_store(store.clone());
+            if adapter {
+                service.persistence.enable_transcript_adapter();
+            }
+            service.mark_agent_compacting_for_tests("%1", 1);
+            service
+                .execute_agent_shell_command(&primary, "accepted guidance")
+                .unwrap();
+            service.drain_transcript_persistence_transition();
+            if history {
+                service
+                    .execute_agent_shell_command(&primary, "/stop")
+                    .unwrap();
+                let dispatch = service.take_pending_agent_prompt_history().remove(0);
+                assert!(service.claim_agent_prompt_history_preparation(&dispatch));
+                assert!(
+                    service
+                        .complete_agent_prompt_history_preparation(
+                            &dispatch,
+                            Err(crate::error::MezError::invalid_state(
+                                "history fixture failure"
+                            ))
+                        )
+                        .is_err()
+                );
+            } else {
+                service.discard_agent_compaction_steering("%1");
+            }
+            assert!(service.steering_recovery_needs_publication());
+            if !adapter {
+                store.fail_next_agent_session_metadata_write();
+                service.drain_transcript_persistence_transition();
+                assert!(service.steering_recovery_needs_publication());
+            }
+            let effects = service
+                .drain_transcript_persistence_transition()
+                .side_effects;
+            assert!(!service.steering_recovery_needs_publication());
+            let records = if adapter {
+                effects
+                    .into_iter()
+                    .find_map(|effect| match effect {
+                        crate::runtime::RuntimeSideEffect::PersistAgentSessionMetadata {
+                            records,
+                            ..
+                        } => Some(records),
+                        _ => None,
+                    })
+                    .expect("dirty receipts must enqueue a metadata checkpoint")
+            } else {
+                store
+                    .load_agent_session_metadata(service.session().id.as_str())
+                    .unwrap()
+            };
+            assert_eq!(records[0].steering_recovery.len(), 1);
+            assert_eq!(
+                records[0].steering_recovery[0].status,
+                SteeringRecoveryStatus::NotSent
+            );
+            assert!(service.agent_turn_ledger().turns().is_empty());
+            assert!(service.pending_agent_provider_tasks().is_empty());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
 /// Manual resume reconciles pending checkpoint evidence as uncertainty, never
 /// schedules old work, and restores the entire previous inert map on failure.
 #[test]

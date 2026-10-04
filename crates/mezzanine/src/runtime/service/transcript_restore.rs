@@ -845,13 +845,18 @@ impl RuntimeSessionService {
             })
             .collect::<Result<Vec<_>>>()?;
         if self.persistence.transcript_uses_adapter() {
+            self.mark_steering_recovery_published();
             return Ok(self.persistence.queue_agent_session_metadata(
                 store,
                 mezzanine_session_id,
                 records,
             ));
         }
-        store.save_agent_session_metadata_checkpoint(&mezzanine_session_id, &records)
+        let result = store.save_agent_session_metadata_checkpoint(&mezzanine_session_id, &records);
+        if result.is_ok() {
+            self.mark_steering_recovery_published();
+        }
+        result
     }
 
     /// Restores the durable agent-scoped model identity for one pane.
@@ -1370,6 +1375,11 @@ impl RuntimeSessionService {
 
     /// Drains transcript and prompt-history persistence through one runtime transition.
     pub(crate) fn drain_transcript_persistence_transition(&mut self) -> RuntimeTransition {
+        if self.steering_recovery_needs_publication()
+            && self.persistence.transcript_store().is_some()
+        {
+            self.publish_steering_recovery_checkpoint();
+        }
         RuntimeTransition {
             applied: false,
             side_effects: self.persistence.take_transcript_effects(),
