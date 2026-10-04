@@ -84,6 +84,8 @@ evidence through the persistence drain; failed direct writes remain eligible for
 a later drain and adapter writes use bounded checkpoint retry. This does not
 archive every closed conversation's receipts. Pending-tail labels remain
 unfinished; the current visible prompt echo remains.
+After steering is canonically accepted, a status-display or trace failure does
+not reject it or require resubmission.
 The internal receipt view contains only current-conversation display evidence in
 acceptance order; reading it cannot acknowledge input or change model chronology.
 Ordinary receipt ownership also checks the existing pane process incarnation;

@@ -1303,22 +1303,31 @@ impl RuntimeSessionService {
             }
         };
         self.retain_steering_receipt(&turn, sequence.get(), input, display);
-        self.append_agent_status_text_to_terminal_buffer(
+        // Canonical input and its occurrence receipt are already committed.
+        // Optional diagnostics cannot undo acceptance or invite input replay.
+        let presentation = self.append_agent_status_text_to_terminal_buffer(
             pane_id,
             &format!(
                 "agent: applied steering input to current turn {} at event sequence {}",
                 turn.turn_id,
                 sequence.get()
             ),
-        )?;
-        self.append_agent_trace_turn_event(
+        );
+        let trace = self.append_agent_trace_turn_event(
             pane_id,
             &turn.turn_id,
             &format!(
                 "user_steering applied reason=mid_turn_agent_prompt event_sequence={}",
                 sequence.get()
             ),
-        )?;
+        );
+        if presentation.is_err() || trace.is_err() {
+            let _ = self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                r#"{"diagnostic":"accepted steering retained; presentation or trace unavailable"}"#
+                    .to_string(),
+            );
+        }
         if turn.state == AgentTurnState::Running
             && !self.agent_turn_is_human_paused(&turn.turn_id)
             && !self.agent_provider_task_is_owned(&turn.turn_id)
@@ -1328,11 +1337,11 @@ impl RuntimeSessionService {
                 .is_some_and(runtime_execution_ready_for_provider_continuation)
         {
             self.queue_agent_provider_task(turn.turn_id.clone());
-            self.append_agent_trace_turn_event(
+            let _ = self.append_agent_trace_turn_event(
                 pane_id,
                 &turn.turn_id,
                 "provider_task queued reason=user_steering_ready_for_provider_continuation",
-            )?;
+            );
         }
         Ok(Some(turn.turn_id))
     }

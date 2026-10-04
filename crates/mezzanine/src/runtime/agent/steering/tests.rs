@@ -2,6 +2,38 @@
 
 use super::*;
 
+/// A presentation fault after canonical insertion cannot report accepted
+/// steering as rejected or invite resubmission. Public ingress must retain one
+/// occurrence and its original receipt even when the status install fails.
+#[test]
+fn steering_receipts_post_acceptance_presentation_failure_keeps_success() {
+    let (mut service, turn) = fixture();
+    let primary = service
+        .attach_primary(
+            "primary",
+            true,
+            mez_mux::layout::Size::new(80, 24).unwrap(),
+            120,
+        )
+        .unwrap();
+    // The public eager prompt echo installs first; the post-commit status is
+    // the second install, where the deterministic failure is injected.
+    service.fail_agent_presentation_install_for_tests(1);
+    let response = service
+        .execute_agent_shell_control_command(&primary, "accepted once")
+        .unwrap();
+    assert_eq!(
+        service.agent_turn_contexts()[&turn.turn_id]
+            .blocks()
+            .iter()
+            .filter(|block| block.content == "accepted once")
+            .count(),
+        1
+    );
+    assert_eq!(service.steering_receipts_for_tests(&turn.turn_id).len(), 1);
+    assert!(response.contains("injected_user_input=true"), "{response}");
+}
+
 /// The final available order is a valid accepted occurrence. Transfer requires
 /// no new order and must retain it; only subsequent new submissions may fail.
 #[test]

@@ -5881,7 +5881,9 @@ claim generation. Preparing or recording a claim, rejected leases and auxiliary
 requests MUST NOT acknowledge input. Admission means local dispatch, not proof
 of remote receipt or cognition. Terminal cleanup MUST settle unconsumed receipts
 without replay. Receipt/source retention MUST be finite; exhaustion MUST reject
-before canonical insertion. Manual-compaction submissions MUST retain distinct
+before canonical insertion. Once canonical insertion and receipt retention succeed,
+optional status presentation or trace failure MUST NOT report the input as rejected
+or prevent otherwise eligible continuation scheduling. Manual-compaction submissions MUST retain distinct
 occurrence IDs and independent display sources through history preparation.
 The existing ordered aggregate prompt MUST bind all joined receipt IDs to its
 producer-assigned event sequence, including interrupted-context remapping.
