@@ -76,8 +76,9 @@ evidence for active pane bindings. Restart converts pending evidence to admissio
 unknown rather than falsely claiming not-sent or retrying input; admitted and
 not-sent evidence remain unchanged. Failed checkpoints retain live receipts but
 can leave restart evidence incomplete. Older metadata invents no receipts.
-Manual resume recovery, complete transition publication and pending-tail labels
-remain unfinished; the current visible prompt echo remains.
+Manual resume uses the same inert recovery policy and restores prior receipt
+evidence if its transaction fails. Complete transition publication and
+pending-tail labels remain unfinished; the current visible prompt echo remains.
 Ordinary receipt ownership also checks the existing pane process incarnation;
 replacement or unreadable root identity cannot acknowledge earlier guidance.
 Deferred compaction receipts preserve that original binding through history

@@ -639,6 +639,7 @@ impl RuntimeSessionService {
             self.agent_context_usage_snapshot(&previous_session.session_id);
         let previous_unsettled_peer_presentations =
             self.snapshot_unsettled_received_peer_message_presentations();
+        let previous_steering_recovery = self.snapshot_restored_steering_recovery();
         let target_context_usage = self.agent_context_usage_display(&conversation_id);
         let target_context_snapshot = self.agent_context_usage_snapshot(&conversation_id);
         let previous_latest_usage = self
@@ -946,6 +947,7 @@ impl RuntimeSessionService {
                 self.restore_unsettled_received_peer_message_presentations(
                     &previous_unsettled_peer_presentations,
                 )?;
+                self.replace_restored_steering_recovery(previous_steering_recovery);
                 let _ = self.sync_prepared_runtime_agent_objective_for_conversation(
                     pane_id,
                     &previous_session.session_id,

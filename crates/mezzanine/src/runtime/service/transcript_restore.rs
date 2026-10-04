@@ -1229,6 +1229,7 @@ impl RuntimeSessionService {
         let Some(metadata) = metadata else {
             return Ok(None);
         };
+        metadata.validate()?;
         let root_routing_policy = metadata
             .root_routing_policy
             .as_deref()
@@ -1321,6 +1322,7 @@ impl RuntimeSessionService {
             metadata.context_usage_snapshot,
         );
         self.restore_agent_latest_request_usage(conversation_id, metadata.latest_request_usage);
+        self.restore_steering_recovery(pane_id, conversation_id, &metadata.steering_recovery)?;
         Ok(())
     }
 

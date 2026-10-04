@@ -31,6 +31,21 @@ fn project(receipt: &Receipt, turn: Option<&str>) -> SteeringRecoveryReceipt {
 }
 
 impl RuntimeSessionService {
+    /// Captures only inert recovered evidence for transactional resume rollback.
+    pub(crate) fn snapshot_restored_steering_recovery(
+        &self,
+    ) -> std::collections::BTreeMap<(String, String), Vec<SteeringRecoveryReceipt>> {
+        self.agent.restored_steering_recovery.clone()
+    }
+
+    /// Restores an exact pre-resume snapshot, including any evicted owner.
+    pub(crate) fn replace_restored_steering_recovery(
+        &mut self,
+        snapshot: std::collections::BTreeMap<(String, String), Vec<SteeringRecoveryReceipt>>,
+    ) {
+        self.agent.restored_steering_recovery = snapshot;
+    }
+
     /// Publishes the newest inert receipt snapshot through existing checkpoint
     /// ownership. Failure retains live receipts; callers must not retry input.
     /// Adapter checkpoints already provide generation-fenced bounded retry.

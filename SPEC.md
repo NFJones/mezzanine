@@ -5903,8 +5903,10 @@ provider or canonical input ownership. Positive admission and not-sent evidence
 remain unchanged. Checkpoint failure MUST retain live receipts and report incomplete
 restart evidence without failing or replaying already accepted input. Recovery
 is limited to checkpointed active pane bindings; terminal history is bounded.
-Manual resume recovery, complete transition publication and pending-log promotion
-remain unfinished.
+Manual resume MUST validate receipt metadata before mutation, reconcile pending
+evidence as admission unknown without scheduling old work, and restore the prior
+inert recovery map if the resume transaction fails. Complete transition
+publication and pending-log promotion remain unfinished.
 Ordinary-turn receipt acceptance and admission MUST retain and revalidate the
 existing pane process incarnation. Unreadable identity for an existing root MUST
 reject acceptance; replacement MUST NOT acknowledge old receipts. An in-place

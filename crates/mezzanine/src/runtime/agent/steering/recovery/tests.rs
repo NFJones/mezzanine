@@ -2,6 +2,116 @@
 
 use super::*;
 
+/// Manual resume reconciles pending checkpoint evidence as uncertainty, never
+/// schedules old work, and restores the entire previous inert map on failure.
+#[test]
+fn steering_recovery_manual_resume_is_inert_and_transactional() {
+    for fail in [false, true] {
+        let root = std::env::temp_dir().join(format!(
+            "mez-steering-resume-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+        let primary = service
+            .attach_primary(
+                "primary",
+                true,
+                mez_mux::layout::Size::new(80, 24).unwrap(),
+                120,
+            )
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service.set_agent_transcript_store(store.clone());
+        service.checkpoint_agent_session_metadata().unwrap();
+        let mut target = store
+            .load_agent_session_metadata(service.session().id.as_str())
+            .unwrap()
+            .remove(0);
+        target.conversation_id = "receipt-resume-target".into();
+        target.primary_display_name = None;
+        target.prompt_cache_lineage_id = "target-lineage".into();
+        target.transcript_entries = 1;
+        target.steering_recovery = vec![SteeringRecoveryReceipt {
+            id: "target-occurrence".into(),
+            turn_id: Some("old-turn".into()),
+            event_sequence: Some(9),
+            display: "exact display".into(),
+            status: SteeringRecoveryStatus::Pending,
+        }];
+        store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: target.conversation_id.clone(),
+                sequence: 1,
+                created_at_unix_seconds: 1,
+                role: mez_agent::transcript::TranscriptRole::User,
+                turn_id: "old-turn".into(),
+                agent_id: "agent-%1".into(),
+                pane_id: "%1".into(),
+                content: "historical prompt".into(),
+            })
+            .unwrap();
+        store
+            .save_agent_session_metadata(service.session().id.as_str(), &[target])
+            .unwrap();
+        let previous = service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        service
+            .restore_steering_recovery(
+                "%1",
+                &previous,
+                &[SteeringRecoveryReceipt {
+                    id: "prior-occurrence".into(),
+                    turn_id: None,
+                    event_sequence: None,
+                    display: "prior display".into(),
+                    status: SteeringRecoveryStatus::NotSent,
+                }],
+            )
+            .unwrap();
+        let before = service.snapshot_restored_steering_recovery();
+        if fail {
+            service.fail_next_agent_resume_after_authority_restore_for_tests();
+        }
+        let response = service
+            .execute_agent_shell_control_command(&primary, "/resume receipt-resume-target")
+            .unwrap();
+        if fail {
+            assert!(response.contains("error"), "{response}");
+            assert_eq!(service.snapshot_restored_steering_recovery(), before);
+            assert_eq!(
+                service.agent_shell_store().get("%1").unwrap().session_id,
+                previous
+            );
+        } else {
+            assert!(response.contains("\"kind\":\"mutated\""), "{response}");
+            assert_eq!(
+                service.agent_shell_store().get("%1").unwrap().session_id,
+                "receipt-resume-target"
+            );
+            let recovered = service
+                .steering_recovery_checkpoint("%1", "receipt-resume-target")
+                .unwrap();
+            assert_eq!(recovered.len(), 1);
+            assert_eq!(recovered[0].id, "target-occurrence");
+            assert_eq!(
+                recovered[0].status,
+                SteeringRecoveryStatus::AdmissionUnknown
+            );
+        }
+        assert!(service.pending_agent_provider_tasks().is_empty());
+        assert!(service.agent_turn_ledger().turns().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// Persistent metadata publication failure must not turn public steering
 /// acceptance into an error after canonical insertion and receipt retention.
 #[test]
