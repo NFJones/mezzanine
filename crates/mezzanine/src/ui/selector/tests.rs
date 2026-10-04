@@ -1,5 +1,9 @@
 //! Product selector adapter tests.
 
+use super::api::{
+    shadow_hint_with_extra_in_working_directory,
+    start_active_selector_with_extra_in_working_directory,
+};
 use super::{
     AsyncFilesystemSelectorCandidates, SelectorCandidate, SelectorCandidateKind,
     SelectorExtraCandidate, SelectorSurface, plan_selector, plan_selector_with_extra,
@@ -13,9 +17,6 @@ use mez_mux::command::plans::{
 use mez_mux::process::{PaneProcessLaunch, pane_command_plan};
 use mez_mux::selector::apply_selector_candidate;
 use std::fs;
-use std::sync::Mutex;
-
-static CWD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Fixture names whose bytes are never inert in raw shell source.
 const HOSTILE_FIXTURE_NAMES: [&str; 6] = [
@@ -188,10 +189,12 @@ fn selector_plans_agent_argument_candidates() {
     .unwrap();
     assert_eq!(issue_kind_plan.candidates[0].value, "task");
 
-    let memory_kind_plan = plan_selector(
+    let memory_kind_plan = plan_selector_with_extra_in_working_directory(
         SelectorSurface::AgentCommand,
         "/show-memories --kind d",
         "/show-memories --kind d".len(),
+        &[],
+        Some(std::path::Path::new("/dev/null")),
     )
     .unwrap();
     assert_eq!(memory_kind_plan.candidates[0].value, "documentation");
@@ -201,36 +204,38 @@ fn selector_plans_agent_argument_candidates() {
 /// arguments in the Mezzanine and agent prompt surfaces.
 #[test]
 fn selector_plans_path_candidates_for_prompt_arguments() {
-    let _guard = CWD_TEST_LOCK.lock().unwrap();
-    let original = std::env::current_dir().unwrap();
     let root = std::env::temp_dir().join(format!("mez-selector-paths-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("fixtures")).unwrap();
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(root.join("fixture.toml"), "value = true\n").unwrap();
     fs::write(root.join("src").join("selector.rs"), "// fixture\n").unwrap();
-    std::env::set_current_dir(&root).unwrap();
 
-    let command_plan = plan_selector(
+    let command_plan = plan_selector_with_extra_in_working_directory(
         SelectorSurface::MezzanineCommand,
         "source-file fi",
         "source-file fi".len(),
+        &[],
+        Some(&root),
     )
     .unwrap();
-    let agent_plan = plan_selector(
+    let agent_plan = plan_selector_with_extra_in_working_directory(
         SelectorSurface::AgentCommand,
         "/list-mcp ./fi",
         "/list-mcp ./fi".len(),
+        &[],
+        Some(&root),
     )
     .unwrap();
-    let relative_agent_plan = plan_selector(
+    let relative_agent_plan = plan_selector_with_extra_in_working_directory(
         SelectorSurface::AgentCommand,
         "inspect src/sel",
         "inspect src/sel".len(),
+        &[],
+        Some(&root),
     )
     .unwrap();
 
-    std::env::set_current_dir(original).unwrap();
     let _ = fs::remove_dir_all(&root);
 
     // Mezzanine candidates are outer-parser encoded so the command parser
@@ -265,18 +270,12 @@ fn selector_plans_path_candidates_for_prompt_arguments() {
 /// explicit pane working directory instead of the launcher process cwd.
 #[test]
 fn selector_plans_path_candidates_from_explicit_working_directory() {
-    let _guard = CWD_TEST_LOCK.lock().unwrap();
     let original = std::env::current_dir().unwrap();
-    let launch_root =
-        std::env::temp_dir().join(format!("mez-selector-launch-{}", std::process::id()));
     let pane_root = std::env::temp_dir().join(format!("mez-selector-pane-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&launch_root);
     let _ = fs::remove_dir_all(&pane_root);
-    fs::create_dir_all(&launch_root).unwrap();
     fs::create_dir_all(pane_root.join("src")).unwrap();
     fs::write(pane_root.join("fixture.toml"), "value = true\n").unwrap();
     fs::write(pane_root.join("src").join("selector.rs"), "// fixture\n").unwrap();
-    std::env::set_current_dir(&launch_root).unwrap();
 
     let command_plan = plan_selector_with_extra_in_working_directory(
         SelectorSurface::MezzanineCommand,
@@ -295,8 +294,7 @@ fn selector_plans_path_candidates_from_explicit_working_directory() {
     )
     .unwrap();
 
-    std::env::set_current_dir(original).unwrap();
-    let _ = fs::remove_dir_all(&launch_root);
+    assert_eq!(std::env::current_dir().unwrap(), original);
     let _ = fs::remove_dir_all(&pane_root);
 
     assert!(
@@ -451,16 +449,19 @@ fn async_filesystem_selector_rejects_stale_request_results() {
 /// a slash command.
 #[test]
 fn selector_plans_agent_root_path_candidates_for_first_token() {
-    let _guard = CWD_TEST_LOCK.lock().unwrap();
-    let original = std::env::current_dir().unwrap();
     let root = std::env::temp_dir().join(format!("mez-selector-root-paths-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("src")).unwrap();
-    std::env::set_current_dir(&root).unwrap();
 
-    let plan = plan_selector(SelectorSurface::AgentCommand, "sr", 2).unwrap();
+    let plan = plan_selector_with_extra_in_working_directory(
+        SelectorSurface::AgentCommand,
+        "sr",
+        2,
+        &[],
+        Some(&root),
+    )
+    .unwrap();
 
-    std::env::set_current_dir(original).unwrap();
     let _ = fs::remove_dir_all(&root);
 
     assert!(
@@ -475,17 +476,20 @@ fn selector_plans_agent_root_path_candidates_for_first_token() {
 /// instead of trying to recurse into a non-existent path.
 #[test]
 fn selector_plans_breadth_first_candidates_for_incomplete_directory_components() {
-    let _guard = CWD_TEST_LOCK.lock().unwrap();
-    let original = std::env::current_dir().unwrap();
     let root =
         std::env::temp_dir().join(format!("mez-selector-breadth-first-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("src")).unwrap();
-    std::env::set_current_dir(&root).unwrap();
 
-    let plan = plan_selector(SelectorSurface::AgentCommand, "sr/", 3).unwrap();
+    let plan = plan_selector_with_extra_in_working_directory(
+        SelectorSurface::AgentCommand,
+        "sr/",
+        3,
+        &[],
+        Some(&root),
+    )
+    .unwrap();
 
-    std::env::set_current_dir(original).unwrap();
     let _ = fs::remove_dir_all(&root);
 
     assert!(
@@ -503,18 +507,17 @@ fn selector_plans_breadth_first_candidates_for_incomplete_directory_components()
 /// or the next completion splits the path into multiple tokens and stops.
 #[test]
 fn selector_continues_agent_path_completion_inside_directory_with_spaces() {
-    let _guard = CWD_TEST_LOCK.lock().unwrap();
-    let original = std::env::current_dir().unwrap();
     let root =
         std::env::temp_dir().join(format!("mez-selector-spaced-paths-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("dir with spaces").join("subdir")).unwrap();
-    std::env::set_current_dir(&root).unwrap();
 
-    let first_plan = plan_selector(
+    let first_plan = plan_selector_with_extra_in_working_directory(
         SelectorSurface::AgentCommand,
         "inspect ./dir",
         "inspect ./dir".len(),
+        &[],
+        Some(&root),
     )
     .unwrap();
     let directory_candidate = first_plan
@@ -525,14 +528,15 @@ fn selector_continues_agent_path_completion_inside_directory_with_spaces() {
         .clone();
     let (selected_line, selected_cursor) =
         apply_selector_candidate("inspect ./dir", &first_plan, &directory_candidate);
-    let second_plan = plan_selector(
+    let second_plan = plan_selector_with_extra_in_working_directory(
         SelectorSurface::AgentCommand,
         &selected_line,
         selected_cursor,
+        &[],
+        Some(&root),
     )
     .unwrap();
 
-    std::env::set_current_dir(original).unwrap();
     let _ = fs::remove_dir_all(&root);
 
     assert_eq!(selected_line, "inspect ./dir\\ with\\ spaces/");
@@ -549,43 +553,58 @@ fn selector_continues_agent_path_completion_inside_directory_with_spaces() {
 /// directory instead of trying to match a literal `~` filename.
 #[test]
 fn selector_plans_agent_path_candidates_for_bare_tilde() {
-    let _guard = CWD_TEST_LOCK.lock().unwrap();
+    if std::env::var_os("MEZ_TEST_SELECTOR_HOME_CHILD").is_some() {
+        let plan = plan_selector(
+            SelectorSurface::AgentCommand,
+            "inspect ~",
+            "inspect ~".len(),
+        )
+        .unwrap();
+        assert!(
+            plan.candidates
+                .iter()
+                .any(|candidate| candidate.value == "~/notes/")
+        );
+        assert!(
+            plan.candidates
+                .iter()
+                .any(|candidate| candidate.value == "~/notes.txt")
+        );
+        return;
+    }
     let home_root = std::env::temp_dir().join(format!("mez-selector-home-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home_root);
     fs::create_dir_all(home_root.join("notes")).unwrap();
     fs::write(home_root.join("notes.txt"), "remember me\n").unwrap();
     let original_home = std::env::var_os("HOME");
-    unsafe {
-        std::env::set_var("HOME", &home_root);
-    }
-
-    let plan = plan_selector(
-        SelectorSurface::AgentCommand,
-        "inspect ~",
-        "inspect ~".len(),
-    )
-    .unwrap();
-
-    match original_home {
-        Some(home) => unsafe {
-            std::env::set_var("HOME", home);
-        },
-        None => unsafe {
-            std::env::remove_var("HOME");
-        },
-    }
+    let original_cwd = std::env::current_dir().unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "ui::selector::tests::selector_plans_agent_path_candidates_for_bare_tilde",
+            "--test-threads=1",
+        ])
+        .env("MEZ_TEST_SELECTOR_HOME_CHILD", "1")
+        .env("HOME", &home_root)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("isolated selector home fixture timed out");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
     let _ = fs::remove_dir_all(&home_root);
-
-    assert!(
-        plan.candidates
-            .iter()
-            .any(|candidate| candidate.value == "~/notes/")
-    );
-    assert!(
-        plan.candidates
-            .iter()
-            .any(|candidate| candidate.value == "~/notes.txt")
-    );
+    assert!(status.success(), "isolated selector home fixture: {status}");
+    assert_eq!(std::env::var_os("HOME"), original_home);
+    assert_eq!(std::env::current_dir().unwrap(), original_cwd);
 }
 
 /// Verifies dynamic agent argument candidates are scoped to their command.
@@ -766,23 +785,24 @@ fn selector_plans_dynamic_agent_mcp_server_candidates() {
 /// matches until the user explicitly types more path input.
 #[test]
 fn active_selector_keeps_cycling_after_implicit_directory_selection() {
-    let _guard = CWD_TEST_LOCK.lock().unwrap();
-    let original = std::env::current_dir().unwrap();
-    let root = std::env::temp_dir().join(format!("mez-selector-refresh-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "mez-selector-implicit-refresh-{}",
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("src")).unwrap();
-    std::env::set_current_dir(&root).unwrap();
 
-    let selector = start_active_selector(
+    let selector = start_active_selector_with_extra_in_working_directory(
         SelectorSurface::AgentCommand,
         "/list-mcp ./sr",
         "/list-mcp ./sr".len(),
         false,
+        &[],
+        Some(&root),
     )
     .unwrap();
     let (line, cursor) = selector.selected_line().unwrap();
 
-    std::env::set_current_dir(original).unwrap();
     let _ = fs::remove_dir_all(&root);
 
     assert_eq!(line, "/list-mcp ./src/");
@@ -793,23 +813,24 @@ fn active_selector_keeps_cycling_after_implicit_directory_selection() {
 /// the selected directory on the next Tab press.
 #[test]
 fn active_selector_refreshes_after_explicit_directory_selection() {
-    let _guard = CWD_TEST_LOCK.lock().unwrap();
-    let original = std::env::current_dir().unwrap();
-    let root = std::env::temp_dir().join(format!("mez-selector-refresh-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "mez-selector-explicit-refresh-{}",
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("src")).unwrap();
-    std::env::set_current_dir(&root).unwrap();
 
-    let selector = start_active_selector(
+    let selector = start_active_selector_with_extra_in_working_directory(
         SelectorSurface::AgentCommand,
         "/list-mcp ./sr/",
         "/list-mcp ./sr/".len(),
         false,
+        &[],
+        Some(&root),
     )
     .unwrap();
     let (line, cursor) = selector.selected_line().unwrap();
 
-    std::env::set_current_dir(original).unwrap();
     let _ = fs::remove_dir_all(&root);
 
     assert_eq!(line, "/list-mcp ./src/");
@@ -820,26 +841,24 @@ fn active_selector_refreshes_after_explicit_directory_selection() {
 /// directory even though accepted values are outer-parser encoded.
 #[test]
 fn active_selector_refreshes_mezzanine_encoded_directory_selection() {
-    let _guard = CWD_TEST_LOCK.lock().unwrap();
-    let original = std::env::current_dir().unwrap();
     let root = std::env::temp_dir().join(format!(
         "mez-selector-encoded-refresh-{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("src")).unwrap();
-    std::env::set_current_dir(&root).unwrap();
 
-    let selector = start_active_selector(
+    let selector = start_active_selector_with_extra_in_working_directory(
         SelectorSurface::MezzanineCommand,
         "source-file ./sr/",
         "source-file ./sr/".len(),
         false,
+        &[],
+        Some(&root),
     )
     .unwrap();
     let (line, cursor) = selector.selected_line().unwrap();
 
-    std::env::set_current_dir(original).unwrap();
     let _ = fs::remove_dir_all(&root);
 
     assert_eq!(line, "source-file './src/'");
@@ -850,21 +869,19 @@ fn active_selector_refreshes_mezzanine_encoded_directory_selection() {
 /// even though accepted candidates are outer-parser encoded.
 #[test]
 fn selector_shadow_hint_completes_mezzanine_literal_paths() {
-    let _guard = CWD_TEST_LOCK.lock().unwrap();
-    let original = std::env::current_dir().unwrap();
     let root = std::env::temp_dir().join(format!("mez-selector-shadow-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("fixture.toml"), "value = true\n").unwrap();
-    std::env::set_current_dir(&root).unwrap();
 
-    let hint = shadow_hint(
+    let hint = shadow_hint_with_extra_in_working_directory(
         SelectorSurface::MezzanineCommand,
         "source-file fi",
         "source-file fi".len(),
+        &[],
+        Some(&root),
     );
 
-    std::env::set_current_dir(original).unwrap();
     let _ = fs::remove_dir_all(&root);
 
     let hint = hint.unwrap();
