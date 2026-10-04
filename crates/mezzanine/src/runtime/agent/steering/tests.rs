@@ -2,6 +2,52 @@
 
 use super::*;
 
+/// The final available order is a valid accepted occurrence. Transfer requires
+/// no new order and must retain it; only subsequent new submissions may fail.
+#[test]
+fn steering_receipts_final_order_transfers_without_new_allocation() {
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let primary = service
+        .attach_primary(
+            "primary",
+            true,
+            mez_mux::layout::Size::new(80, 24).unwrap(),
+            120,
+        )
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.agent.next_steering_acceptance_order = u64::MAX - 1;
+    service.mark_agent_compacting_for_tests("%1", 1);
+    service
+        .execute_agent_shell_command(&primary, "final occurrence")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    let dispatch = service.take_pending_agent_prompt_history().remove(0);
+    assert_eq!(dispatch.steering_receipts[0].acceptance_order, u64::MAX);
+    assert!(service.claim_agent_prompt_history_preparation(&dispatch));
+    let history =
+        crate::runtime::execute_runtime_agent_prompt_history_work(dispatch.history_work.clone());
+    assert!(
+        service
+            .complete_agent_prompt_history_preparation(&dispatch, history)
+            .unwrap()
+    );
+    assert_eq!(
+        service.steering_receipts_for_tests("turn-1")[0].acceptance_order,
+        u64::MAX
+    );
+    assert!(
+        service
+            .inject_agent_steering_with_display("%1", "new", "new")
+            .is_err()
+    );
+}
+
 /// Source exhaustion rejects before canonical insertion, active owner pressure
 /// never evicts pending work, and a terminal owner is the only eviction target.
 #[test]

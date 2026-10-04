@@ -549,6 +549,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_compaction_epochs: BTreeMap<String, u64>,
     /// Bounded exact steering receipts retained through terminal settlement.
     steering_receipts: BTreeMap<String, steering::Receipts>,
+    /// Monotonic occurrence order, independent of turn IDs and content.
+    next_steering_acceptance_order: u64,
     /// Receipt state changed since the latest accepted checkpoint publication.
     steering_recovery_dirty: bool,
     /// Execution-inert receipt evidence hydrated from a previous runtime owner.
@@ -2663,6 +2665,7 @@ impl RuntimeSessionService {
                 "deferred steering receipt budget exhausted",
             ));
         }
+        let acceptance_order = self.next_steering_acceptance_order()?;
         self.agent
             .agent_compaction_steering
             .entry(pane_id.to_string())
@@ -2671,7 +2674,7 @@ impl RuntimeSessionService {
                 client: primary_client_id,
                 conversation: conversation_id,
                 epoch: compaction_epoch,
-                receipt: steering::Receipt::deferred(prompt, display, process),
+                receipt: steering::Receipt::deferred(prompt, display, process, acceptance_order),
             });
         self.publish_steering_recovery_checkpoint();
         Ok(())

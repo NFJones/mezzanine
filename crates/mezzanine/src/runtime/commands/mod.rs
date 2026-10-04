@@ -1272,6 +1272,7 @@ impl RuntimeSessionService {
         {
             return Err(MezError::conflict("steering turn conversation changed"));
         }
+        self.check_new_steering_order()?;
         self.check_steering_receipt_capacity(&turn, input, display)?;
         let insertion = (|| {
             let context = self

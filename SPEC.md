@@ -5894,9 +5894,11 @@ reconstruct receipts after transfer, settlement or bounded evidence eviction.
 Pre-history compaction queues MUST settle exact not-sent receipt evidence when
 discarded on conversation replacement, pane removal, stale epoch or shutdown.
 Teardown MUST consume queue ownership without rejoining or redispatching input.
-Session metadata version 4 MUST retain bounded typed steering occurrence evidence
-separately from canonical model history. Version 3 and older metadata MUST decode
-with no invented receipt evidence. Restored pending evidence MUST become admission
+Session metadata version 5 MUST retain bounded typed steering occurrence evidence
+and producer-assigned acceptance order separately from canonical model history.
+Version 4 migration MUST preserve stored array order without claiming that it
+recovers original cross-owner acceptance order. Version 3 and older metadata MUST
+decode with no invented receipt evidence. Restored pending evidence MUST become admission
 unknown: a checkpoint may predate actual local admission, so restart MUST NOT
 claim not-sent or resend input. Recovery MUST NOT recreate process, approval,
 provider or canonical input ownership. Positive admission and not-sent evidence
@@ -5912,6 +5914,11 @@ MUST retain that fence for a later drain; adapter publication retains the existi
 generation-fenced bounded retry. Recovery remains active-binding checkpoint
 evidence, not a durable archive of every closed conversation. Pending-log
 promotion remains unfinished.
+The display-only receipt view MUST select the currently bound conversation,
+deduplicate by occurrence identity, and preserve acceptance order independently
+of status, turn-map order or equal display text. Restored order MUST advance the
+live allocator; exhausted order MUST reject before canonical insertion. Reading
+the view MUST NOT acknowledge input, mutate chronology or schedule work.
 Ordinary-turn receipt acceptance and admission MUST retain and revalidate the
 existing pane process incarnation. Unreadable identity for an existing root MUST
 reject acceptance; replacement MUST NOT acknowledge old receipts. An in-place

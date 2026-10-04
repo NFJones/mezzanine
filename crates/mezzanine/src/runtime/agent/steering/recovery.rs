@@ -19,6 +19,7 @@ use crate::error::Result;
 fn project(receipt: &Receipt, turn: Option<&str>) -> SteeringRecoveryReceipt {
     SteeringRecoveryReceipt {
         id: receipt.id.clone(),
+        acceptance_order: receipt.acceptance_order,
         turn_id: turn.map(str::to_string),
         event_sequence: turn.map(|_| receipt.sequence),
         display: receipt.display.clone(),
@@ -31,6 +32,21 @@ fn project(receipt: &Receipt, turn: Option<&str>) -> SteeringRecoveryReceipt {
 }
 
 impl RuntimeSessionService {
+    /// Projects receipt evidence only for the pane's currently bound conversation.
+    /// This view grants no execution or acknowledgement authority; rendering
+    /// must track occurrence IDs rather than matching display text. Pending
+    /// evidence is never silently truncated; bounded terminal history may age out.
+    #[allow(dead_code, reason = "pending-log rendering consumes this receipt view")]
+    pub(crate) fn steering_presentation_receipts(
+        &self,
+        pane: &str,
+    ) -> Result<Vec<SteeringRecoveryReceipt>> {
+        let conversation = self.agent_shell_store().get(pane).ok_or_else(|| {
+            crate::error::MezError::invalid_state("steering presentation owner unavailable")
+        })?;
+        self.steering_recovery_checkpoint(pane, &conversation.session_id)
+    }
+
     /// Reports receipt changes awaiting checkpoint publication.
     pub(crate) fn steering_recovery_needs_publication(&self) -> bool {
         self.agent.steering_recovery_dirty
@@ -41,19 +57,29 @@ impl RuntimeSessionService {
         self.agent.steering_recovery_dirty = false;
     }
 
-    /// Captures only inert recovered evidence for transactional resume rollback.
+    /// Captures inert evidence and its allocator watermark for resume rollback.
     pub(crate) fn snapshot_restored_steering_recovery(
         &self,
-    ) -> std::collections::BTreeMap<(String, String), Vec<SteeringRecoveryReceipt>> {
-        self.agent.restored_steering_recovery.clone()
+    ) -> (
+        std::collections::BTreeMap<(String, String), Vec<SteeringRecoveryReceipt>>,
+        u64,
+    ) {
+        (
+            self.agent.restored_steering_recovery.clone(),
+            self.agent.next_steering_acceptance_order,
+        )
     }
 
     /// Restores an exact pre-resume snapshot, including any evicted owner.
     pub(crate) fn replace_restored_steering_recovery(
         &mut self,
-        snapshot: std::collections::BTreeMap<(String, String), Vec<SteeringRecoveryReceipt>>,
+        snapshot: (
+            std::collections::BTreeMap<(String, String), Vec<SteeringRecoveryReceipt>>,
+            u64,
+        ),
     ) {
-        self.agent.restored_steering_recovery = snapshot;
+        self.agent.restored_steering_recovery = snapshot.0;
+        self.agent.next_steering_acceptance_order = snapshot.1;
     }
 
     /// Publishes the newest inert receipt snapshot through existing checkpoint
@@ -116,6 +142,7 @@ impl RuntimeSessionService {
         }
         let mut ids = BTreeSet::new();
         candidates.retain(|entry| ids.insert(entry.id.clone()));
+        candidates.sort_by_key(|entry| entry.acceptance_order);
         let (mut pending, terminal): (Vec<_>, Vec<_>) = candidates
             .into_iter()
             .partition(|entry| entry.status == SteeringRecoveryStatus::Pending);
@@ -132,6 +159,7 @@ impl RuntimeSessionService {
                 pending.push(entry);
             }
         }
+        pending.sort_by_key(|entry| entry.acceptance_order);
         validate_steering_recovery(&pending)?;
         Ok(pending)
     }
@@ -145,6 +173,13 @@ impl RuntimeSessionService {
         receipts: &[SteeringRecoveryReceipt],
     ) -> Result<()> {
         validate_steering_recovery(receipts)?;
+        self.agent.next_steering_acceptance_order = self.agent.next_steering_acceptance_order.max(
+            receipts
+                .iter()
+                .map(|entry| entry.acceptance_order)
+                .max()
+                .unwrap_or(0),
+        );
         let key = (pane.to_string(), conversation.to_string());
         if !self.agent.restored_steering_recovery.contains_key(&key)
             && self.agent.restored_steering_recovery.len() >= OWNER_CAPACITY

@@ -37,6 +37,8 @@ pub(crate) enum Status {
 pub(crate) struct Receipt {
     /// Stable identity independent of content, timestamps and request retries.
     pub(crate) id: String,
+    /// Actor-assigned acceptance order, preserved through every ownership transfer.
+    pub(crate) acceptance_order: u64,
     /// Canonical user event bound at acceptance, never reconstructed from text.
     pub(crate) sequence: u64,
     /// Exact model input, without presentation labels.
@@ -64,9 +66,11 @@ impl Receipt {
         input: String,
         display: String,
         process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
+        acceptance_order: u64,
     ) -> Self {
         Self {
             id: crate::storage::token_usage::new_token_usage_event_id(),
+            acceptance_order,
             sequence: 0,
             input,
             display,
@@ -133,6 +137,17 @@ impl Receipts {
 }
 
 impl RuntimeSessionService {
+    /// Allocates a monotonic occurrence order; exhaustion rejects acceptance.
+    pub(in crate::runtime) fn next_steering_acceptance_order(&mut self) -> Result<u64> {
+        let order = self
+            .agent
+            .next_steering_acceptance_order
+            .checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("steering acceptance order exhausted"))?;
+        self.agent.next_steering_acceptance_order = order;
+        Ok(order)
+    }
+
     /// Captures an existing root, never treating its unreadable identity as absent.
     pub(in crate::runtime) fn steering_process_binding(
         &self,
@@ -316,6 +331,16 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Rejects new occurrences after order exhaustion; transfers allocate nothing.
+    pub(in crate::runtime) fn check_new_steering_order(&self) -> Result<()> {
+        if self.agent.next_steering_acceptance_order == u64::MAX {
+            return Err(MezError::invalid_state(
+                "steering acceptance order exhausted",
+            ));
+        }
+        Ok(())
+    }
+
     /// Checks finite receipt capacity before canonical input is committed.
     pub(crate) fn check_steering_receipt_capacity(
         &mut self,
@@ -407,8 +432,12 @@ impl RuntimeSessionService {
         display: &str,
     ) {
         if let Some(owner) = self.agent.steering_receipts.get_mut(&turn.turn_id) {
+            // Capacity validation rejects exhaustion immediately before atomic
+            // insertion; actor ownership prevents another allocation here.
+            self.agent.next_steering_acceptance_order += 1;
             owner.entries.push(Receipt {
                 id: crate::storage::token_usage::new_token_usage_event_id(),
+                acceptance_order: self.agent.next_steering_acceptance_order,
                 sequence,
                 input: input.into(),
                 display: display.into(),

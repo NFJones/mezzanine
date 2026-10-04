@@ -34,6 +34,8 @@ pub enum SteeringRecoveryStatus {
 pub struct SteeringRecoveryReceipt {
     /// Stable occurrence identity, not content matching or time correlation.
     pub id: String,
+    /// Producer-assigned occurrence order, independent of request/event sequence.
+    pub acceptance_order: u64,
     /// Exact original turn when bound; absent during pre-turn compaction work.
     pub turn_id: Option<String>,
     /// Exact canonical event identity when bound, never a snapshot high-water.
@@ -51,6 +53,7 @@ impl SteeringRecoveryReceipt {
             !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
         };
         if !identity(&self.id)
+            || self.acceptance_order == 0
             || self
                 .turn_id
                 .as_deref()
@@ -84,6 +87,7 @@ pub fn validate_steering_recovery(
     receipts: &[SteeringRecoveryReceipt],
 ) -> Result<(), TranscriptContractError> {
     let mut ids = std::collections::BTreeSet::new();
+    let mut orders = std::collections::BTreeSet::new();
     let mut bytes = 0usize;
     if receipts.len() > STEERING_RECOVERY_ENTRIES {
         return Err(TranscriptContractError::new(
@@ -93,7 +97,10 @@ pub fn validate_steering_recovery(
     for receipt in receipts {
         receipt.validate()?;
         bytes = bytes.saturating_add(receipt.display.len());
-        if !ids.insert(&receipt.id) || bytes > STEERING_RECOVERY_BYTES {
+        if !ids.insert(&receipt.id)
+            || !orders.insert(receipt.acceptance_order)
+            || bytes > STEERING_RECOVERY_BYTES
+        {
             return Err(TranscriptContractError::new(
                 "steering recovery identity or source budget exhausted",
             ));
@@ -112,6 +119,7 @@ mod tests {
     fn steering_recovery_restart_preserves_occurrences_and_uncertainty() {
         let first = SteeringRecoveryReceipt {
             id: "first".into(),
+            acceptance_order: 1,
             turn_id: Some("turn".into()),
             event_sequence: Some(1),
             display: "same\r\n雪".into(),
@@ -119,6 +127,7 @@ mod tests {
         };
         let mut second = first.clone();
         second.id = "second".into();
+        second.acceptance_order = 2;
         validate_steering_recovery(&[first.clone(), second]).unwrap();
         let recovered = first.after_restart();
         assert_eq!(recovered.status, SteeringRecoveryStatus::AdmissionUnknown);
@@ -139,6 +148,7 @@ mod tests {
     fn steering_recovery_rejects_invalid_evidence_and_budgets() {
         let mut receipt = SteeringRecoveryReceipt {
             id: "receipt".into(),
+            acceptance_order: 1,
             turn_id: None,
             event_sequence: None,
             display: String::new(),

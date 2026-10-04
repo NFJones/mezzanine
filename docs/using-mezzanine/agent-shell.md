@@ -71,8 +71,10 @@ History failure retains not-sent evidence without retrying input. Queued or
 claimed history cancellation settles actor-owned receipts without waiting for
 the worker; late callbacks cannot recreate discarded receipt evidence.
 Pre-history compaction queue teardown retains exact not-sent occurrences without
-replaying input. Session metadata version 4 retains bounded display-only occurrence
-evidence for active pane bindings. Restart converts pending evidence to admission
+replaying input. Session metadata version 5 retains bounded display-only occurrence
+evidence and acceptance order for active pane bindings. Version 4 migration keeps
+its stored array order, not a reconstructed original cross-owner order.
+Restart converts pending evidence to admission
 unknown rather than falsely claiming not-sent or retrying input; admitted and
 not-sent evidence remain unchanged. Failed checkpoints retain live receipts but
 can leave restart evidence incomplete. Older metadata invents no receipts.
@@ -82,6 +84,8 @@ evidence through the persistence drain; failed direct writes remain eligible for
 a later drain and adapter writes use bounded checkpoint retry. This does not
 archive every closed conversation's receipts. Pending-tail labels remain
 unfinished; the current visible prompt echo remains.
+The internal receipt view contains only current-conversation display evidence in
+acceptance order; reading it cannot acknowledge input or change model chronology.
 Ordinary receipt ownership also checks the existing pane process incarnation;
 replacement or unreadable root identity cannot acknowledge earlier guidance.
 Deferred compaction receipts preserve that original binding through history

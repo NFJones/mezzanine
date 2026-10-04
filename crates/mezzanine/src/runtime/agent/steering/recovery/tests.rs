@@ -2,6 +2,69 @@
 
 use super::*;
 
+/// Presentation order follows accepted occurrences, not turn-map ordering,
+/// content equality, or status partitioning. Restored order advances the live
+/// allocator, and replacement conversations cannot inherit another owner's view.
+#[test]
+fn steering_recovery_presentation_order_survives_restore_and_new_acceptance() {
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let history = vec![SteeringRecoveryReceipt {
+        id: "restored-occurrence".into(),
+        acceptance_order: 70,
+        turn_id: None,
+        event_sequence: None,
+        display: "same display".into(),
+        status: SteeringRecoveryStatus::Pending,
+    }];
+    service
+        .restore_steering_recovery("%1", &conversation, &history)
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "initial").unwrap();
+    for _ in 0..2 {
+        service
+            .inject_agent_steering_with_display("%1", "exact input", "same display")
+            .unwrap();
+    }
+    let view = service.steering_presentation_receipts("%1").unwrap();
+    assert_eq!(
+        view.iter()
+            .map(|entry| entry.acceptance_order)
+            .collect::<Vec<_>>(),
+        vec![70, 71, 72]
+    );
+    assert_eq!(view[0].status, SteeringRecoveryStatus::AdmissionUnknown);
+    assert_ne!(view[1].id, view[2].id);
+    assert_eq!(view[1].turn_id.as_deref(), Some(started.turn_id.as_str()));
+    assert!(view.iter().all(|entry| entry.display == "same display"));
+    let before = service.agent_turn_contexts()[&started.turn_id].clone();
+    assert_eq!(service.steering_presentation_receipts("%1").unwrap(), view);
+    assert_eq!(service.agent_turn_contexts()[&started.turn_id], before);
+    service
+        .agent_shell_store_mut()
+        .finish_turn("%1", &started.turn_id)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .start_new_conversation("%1")
+        .unwrap();
+    assert!(
+        service
+            .steering_presentation_receipts("%1")
+            .unwrap()
+            .is_empty()
+    );
+}
+
 /// Pending occurrences take precedence over bounded terminal recovery history.
 /// Duplicate actor copies project once, while excessive pending pressure rejects
 /// the checkpoint without dropping accepted source or creating execution work.
@@ -32,6 +95,7 @@ fn steering_recovery_projection_preserves_pending_and_deduplicates_transfer() {
     let terminal = (0..STEERING_RECOVERY_ENTRIES)
         .map(|index| SteeringRecoveryReceipt {
             id: format!("terminal-{index}"),
+            acceptance_order: index as u64 + 2,
             turn_id: None,
             event_sequence: None,
             display: "historical display".into(),
@@ -60,7 +124,12 @@ fn steering_recovery_projection_preserves_pending_and_deduplicates_transfer() {
     );
     let overflow = (0..STEERING_RECOVERY_ENTRIES)
         .map(|index| {
-            let mut entry = super::super::Receipt::deferred("input".into(), "display".into(), None);
+            let mut entry = super::super::Receipt::deferred(
+                "input".into(),
+                "display".into(),
+                None,
+                index as u64 + 200,
+            );
             entry.id = format!("pending-{index}");
             entry
         })
@@ -208,6 +277,7 @@ fn steering_recovery_manual_resume_is_inert_and_transactional() {
         target.transcript_entries = 1;
         target.steering_recovery = vec![SteeringRecoveryReceipt {
             id: "target-occurrence".into(),
+            acceptance_order: if fail { u64::MAX } else { 1 },
             turn_id: Some("old-turn".into()),
             event_sequence: Some(9),
             display: "exact display".into(),
@@ -240,6 +310,7 @@ fn steering_recovery_manual_resume_is_inert_and_transactional() {
                 &previous,
                 &[SteeringRecoveryReceipt {
                     id: "prior-occurrence".into(),
+                    acceptance_order: 1,
                     turn_id: None,
                     event_sequence: None,
                     display: "prior display".into(),
@@ -279,6 +350,17 @@ fn steering_recovery_manual_resume_is_inert_and_transactional() {
         }
         assert!(service.pending_agent_provider_tasks().is_empty());
         assert!(service.agent_turn_ledger().turns().is_empty());
+        if fail {
+            let started = service
+                .start_agent_prompt_turn("%1", "continue old conversation")
+                .unwrap();
+            assert_eq!(
+                service
+                    .inject_agent_steering_with_display("%1", "new guidance", "display")
+                    .unwrap(),
+                Some(started.turn_id)
+            );
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 }

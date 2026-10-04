@@ -34,7 +34,9 @@ const LEGACY_PROMPT_HISTORY_VERSION: &str = "mez-agent-prompt-history/1";
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/4";
+const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/5";
+/// Recovery evidence before explicit producer acceptance order.
+const UNORDERED_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/4";
 /// Metadata with primary display identities, before steering recovery evidence.
 const IDENTITY_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/3";
 /// Metadata with project partitions but without primary display identities.
@@ -460,7 +462,11 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
     let identity_version = fields
         .first()
         .is_some_and(|version| version == IDENTITY_AGENT_SESSION_METADATA_VERSION);
+    let unordered_version = fields
+        .first()
+        .is_some_and(|version| version == UNORDERED_AGENT_SESSION_METADATA_VERSION);
     if !((current && fields.len() == 35)
+        || (unordered_version && fields.len() == 35)
         || (identity_version && fields.len() == 34)
         || (project_version && fields.len() == 33)
         || (legacy
@@ -607,6 +613,27 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         steering_recovery: if current {
             serde_json::from_str(&fields[34])
                 .map_err(|_| MezError::invalid_args("invalid steering recovery metadata"))?
+        } else if unordered_version {
+            // Version four retained array order, not original global acceptance
+            // order. Preserve that stored order only; never infer it from text.
+            let mut rows: Vec<serde_json::Value> = serde_json::from_str(&fields[34])
+                .map_err(|_| MezError::invalid_args("invalid steering recovery metadata"))?;
+            for (index, row) in rows.iter_mut().enumerate() {
+                let object = row
+                    .as_object_mut()
+                    .ok_or_else(|| MezError::invalid_args("invalid steering recovery metadata"))?;
+                if object.contains_key("acceptance_order") {
+                    return Err(MezError::invalid_args(
+                        "unexpected version-four steering order",
+                    ));
+                }
+                object.insert(
+                    "acceptance_order".into(),
+                    serde_json::json!(index as u64 + 1),
+                );
+            }
+            serde_json::from_value(serde_json::Value::Array(rows))
+                .map_err(|_| MezError::invalid_args("invalid steering recovery metadata"))?
         } else {
             Vec::new()
         },
@@ -648,7 +675,8 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
             .map(|value| decode_token_usage_by_model(value))
             .transpose()?
             .unwrap_or_default(),
-        project_token_usage: if current || identity_version || project_version {
+        project_token_usage: if current || unordered_version || identity_version || project_version
+        {
             serde_json::from_str(&fields[32]).map_err(|error| {
                 MezError::invalid_args(format!("project accounting metadata is invalid: {error}"))
             })?

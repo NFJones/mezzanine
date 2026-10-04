@@ -4266,7 +4266,7 @@ fn agent_session_metadata_decoder_accepts_pre_pane_identity_rows() {
     assert!(appended_field.is_empty());
 
     let legacy_row = legacy_row.replacen(
-        "mez-agent-session-metadata/4",
+        "mez-agent-session-metadata/5",
         "mez-agent-session-metadata/1",
         1,
     );
@@ -4295,7 +4295,7 @@ fn agent_session_metadata_round_trips_project_partitions() {
         usage,
     }];
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    assert!(encoded.starts_with("mez-agent-session-metadata/4\t"));
+    assert!(encoded.starts_with("mez-agent-session-metadata/5\t"));
     assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
     metadata.project_token_usage[0].usage.input_tokens += 1;
     assert!(encode_agent_session_metadata(&metadata).is_err());
@@ -4310,6 +4310,7 @@ fn agent_session_metadata_steering_recovery_round_trip_and_v3_migration() {
     let mut metadata = agent_session_metadata("$recovery", "recovery-conversation");
     metadata.steering_recovery = vec![SteeringRecoveryReceipt {
         id: "occurrence".into(),
+        acceptance_order: 1,
         turn_id: Some("turn".into()),
         event_sequence: Some(9),
         display: "exact\t雪\r\n\\source".into(),
@@ -4319,13 +4320,43 @@ fn agent_session_metadata_steering_recovery_round_trip_and_v3_migration() {
     assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
     let (legacy, _) = encoded.rsplit_once('\t').unwrap();
     let legacy = legacy.replacen(
-        "mez-agent-session-metadata/4",
+        "mez-agent-session-metadata/5",
         "mez-agent-session-metadata/3",
         1,
     );
     let mut expected = metadata.clone();
     expected.steering_recovery.clear();
     assert_eq!(decode_agent_session_metadata(&legacy).unwrap(), expected);
+    let mut unordered = metadata.clone();
+    unordered.steering_recovery[0].acceptance_order = 9;
+    let mut second = unordered.steering_recovery[0].clone();
+    second.id = "second-occurrence".into();
+    second.acceptance_order = 3;
+    unordered.steering_recovery.push(second);
+    let encoded = encode_agent_session_metadata(&unordered).unwrap();
+    let (prefix, _) = encoded.rsplit_once('\t').unwrap();
+    let mut rows = serde_json::to_value(&unordered.steering_recovery).unwrap();
+    for row in rows.as_array_mut().unwrap() {
+        row.as_object_mut().unwrap().remove("acceptance_order");
+    }
+    let legacy = format!(
+        "{}\t{}",
+        prefix.replacen(
+            "mez-agent-session-metadata/5",
+            "mez-agent-session-metadata/4",
+            1
+        ),
+        serde_json::to_string(&rows)
+            .unwrap()
+            .replace('\\', "\\\\")
+            .replace('\t', "\\t")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+    );
+    let migrated = decode_agent_session_metadata(&legacy).unwrap();
+    unordered.steering_recovery[0].acceptance_order = 1;
+    unordered.steering_recovery[1].acceptance_order = 2;
+    assert_eq!(migrated, unordered);
     metadata
         .steering_recovery
         .push(metadata.steering_recovery[0].clone());
