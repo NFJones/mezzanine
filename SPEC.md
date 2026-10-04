@@ -341,6 +341,10 @@ may invoke its launcher-supplied channel opener, at most once per instance.
 Shutdown MUST forward its inert fact before idempotent channel cleanup; failed
 opening or stale context MUST remain neutral without automatic reconnect or
 session rebinding. Injectable wiring alone MUST NOT activate a certified manifest.
+Offline inherited-descriptor qualification MUST keep daemon capability authority
+in the parent and distinguish manually emitted released-runner callbacks from
+production vendor event conformance. A successful descriptor fixture MUST NOT
+enable a certified manifest or claim installed-adapter or accounting acceptance.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow

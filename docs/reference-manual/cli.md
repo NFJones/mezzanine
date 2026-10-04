@@ -120,6 +120,16 @@ extensions, request credentials, start providers or install configuration, and
 does not certify private launch delivery, renewal, reload rebinding or accounting.
 Package-independent tests also run via `timeout 120s node --test scripts/test-pi-observer.mjs`.
 
+Real inherited-descriptor qualification uses the same explicit trusted paths:
+`MEZ_PI_NODE=/absolute/node MEZ_PI_PACKAGE=/absolute/pi-coding-agent timeout 180s cargo test -p mezzanine --lib --quiet pi_session_released_extension_uses_inherited_descriptor -- --ignored`.
+It passes a Unix socket as descriptor 3 to an isolated Node child, drives the
+released inline extension loader/runner, and checks ordered lifecycle delivery
+through the Rust callback bridge and session coordinator. Daemon capabilities
+remain in the parent; the child receives no token in arguments or environment.
+The daemon responses are synthetic and callbacks are manually emitted. This
+qualifies descriptor plumbing, not a production launcher, vendor event producer,
+installed extension, reload/session replacement or token accounting.
+
 The pure Pi launch-owner reducer retains at most 32 lifecycle reports (one slot
 reserved for retirement). Exact pending identities survive observer reload;
 only the originating owner's head acknowledgment consumes a report. Old observer
