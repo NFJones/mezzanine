@@ -13,6 +13,7 @@ pub(crate) mod capability;
 mod resolution;
 
 pub(crate) use resolution::host_resolved_path_scopes;
+#[cfg(any(test, target_os = "macos"))]
 pub(crate) use resolution::resolve_host_path;
 
 #[cfg(test)]

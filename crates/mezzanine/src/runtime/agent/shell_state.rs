@@ -1383,8 +1383,10 @@ impl RuntimeSessionService {
     fn with_seatbelt_toolchain_reads(
         &self,
         pane_id: &str,
-        mut status: RuntimePrimaryPathScopeStatus,
+        status: RuntimePrimaryPathScopeStatus,
     ) -> RuntimePrimaryPathScopeStatus {
+        #[cfg(target_os = "macos")]
+        let mut status = status;
         #[cfg(target_os = "macos")]
         for root in self.seatbelt_toolchain_read_scopes_for_pane(pane_id) {
             if !status.read_scopes.iter().any(|scope| scope == root) {
