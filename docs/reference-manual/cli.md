@@ -80,6 +80,15 @@ component does not deliver launch capabilities, renew idle leases, install hooks
 or certify a live Codex process. Its release reference is
 `openai/codex` tag `rust-v0.160.0`, `codex-rs/hooks/schema/generated`.
 
+The OpenCode `1.17.13` component projects settled assistant-message snapshots
+only for an explicitly bound session. Its released producer separates uncached
+input and non-reasoning output; the projection restores inclusive counters with
+checked arithmetic and rejects ambiguous numbers. Message IDs are snapshot/upsert
+identities, not permission to add every repeated event. This component does not
+install a plugin, bind a shared server, deliver credentials or certify live usage.
+Release references are `anomalyco/opencode` tag `v1.17.13`,
+`packages/schema/src/v1/session.ts` and `packages/opencode/src/session/session.ts`.
+
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.

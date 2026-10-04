@@ -19,6 +19,11 @@ pub(crate) mod codex;
 pub(crate) mod installer;
 #[allow(
     dead_code,
+    reason = "pinned projection awaits launch-bound plugin qualification"
+)]
+pub(crate) mod opencode;
+#[allow(
+    dead_code,
     reason = "release-qualified vendor adapters consume the common installer"
 )]
 mod publication;
