@@ -5883,6 +5883,12 @@ of remote receipt or cognition. Terminal cleanup MUST settle unconsumed receipts
 without replay. Receipt/source retention MUST be finite; exhaustion MUST reject
 before canonical insertion. This initial ledger does not cover manual-compaction
 queues, restart persistence or pending-log promotion.
+Guidance submitted to a retained blocked turn MUST remain on that turn rather
+than create a second queued task. Acceptance MUST NOT change scheduler wait or
+blocked ownership, remove human dispatch inhibition, grant approval or wake a
+model-mail-only wait. Current conversation ownership MUST be checked before
+canonical insertion; explicit resume and dependency/approval transitions retain
+their existing scheduling authority.
 The initial prompt MUST be appended once before the assistant actions and
 evidence it causes. Steering MUST be appended at the exact boundary where it is
 received, without synthetic timestamps, turn ids, precedence prose, or a late

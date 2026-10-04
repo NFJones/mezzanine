@@ -94,3 +94,51 @@ fn steering_receipts_capacity_rejects_before_canonical_mutation() {
     foreign.conversation_id = "replacement".into();
     assert!(!service.agent.steering_receipts[&turn.turn_id].belongs_to(&foreign));
 }
+
+/// Guidance belongs to an already retained blocked or waiting task. Accepting
+/// it must preserve the scheduler lane and ledger status without admitting a
+/// provider, resuming an approval, or treating text as model-mail wake authority.
+#[test]
+fn steering_receipts_blocked_and_waiting_guidance_preserves_scheduler_owner() {
+    for waiting in [false, true] {
+        let (mut service, turn) = fixture();
+        service.remove_pending_agent_provider_task(&turn.turn_id);
+        if waiting {
+            service
+                .agent_scheduler_mut()
+                .wait_running(&turn.turn_id)
+                .unwrap();
+        } else {
+            service
+                .agent_scheduler_mut()
+                .block_running(&turn.turn_id)
+                .unwrap();
+        }
+        service
+            .agent_turn_ledger_mut()
+            .finish_turn(&turn.turn_id, mez_agent::AgentTurnState::Blocked)
+            .unwrap();
+        let before = service.agent_scheduler().snapshot();
+        assert_eq!(
+            service
+                .inject_agent_steering_with_display("%1", "guidance only", "display guidance",)
+                .unwrap(),
+            Some(turn.turn_id.clone())
+        );
+        assert_eq!(service.agent_scheduler().snapshot(), before);
+        assert_eq!(service.agent_turn_ledger().turns().len(), 1);
+        assert_eq!(
+            service
+                .agent_turn_ledger()
+                .turn(&turn.turn_id)
+                .unwrap()
+                .state,
+            mez_agent::AgentTurnState::Blocked
+        );
+        assert!(service.pending_agent_provider_tasks().is_empty());
+        assert_eq!(
+            service.steering_receipts_for_tests(&turn.turn_id)[0].status,
+            Status::Pending
+        );
+    }
+}

@@ -67,6 +67,8 @@ acknowledges only the exact included user events; preparation, auxiliary request
 and rejected claims do not. This is not proof that a remote model read the input.
 The receipt component does not yet provide pending-tail labels, manual-compaction
 receipt recovery or restart persistence; the current visible prompt echo remains.
+Guidance to an already retained blocked task stays on that task; it does not
+resume a human pause, grant approval, wake a mail-only wait or queue a second turn.
 
 After interruption, the next non-slash prompt continues from retained user,
 assistant, tool, and steering context. It adds guidance without restarting

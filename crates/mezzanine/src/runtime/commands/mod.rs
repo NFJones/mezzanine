@@ -1252,7 +1252,10 @@ impl RuntimeSessionService {
             .find(|turn| {
                 turn.turn_id == turn_id
                     && turn.pane_id == pane_id
-                    && turn.state == AgentTurnState::Running
+                    && matches!(
+                        turn.state,
+                        AgentTurnState::Running | AgentTurnState::Blocked
+                    )
             })
             .cloned()
         else {
@@ -1262,6 +1265,13 @@ impl RuntimeSessionService {
             input: input.to_string(),
             submitted_at_unix_seconds: current_unix_seconds(),
         };
+        if !self
+            .agent_shell_store()
+            .get(pane_id)
+            .is_some_and(|session| session.session_id == turn.conversation_id)
+        {
+            return Err(MezError::conflict("steering turn conversation changed"));
+        }
         self.check_steering_receipt_capacity(&turn, input, display)?;
         let context = self
             .agent_turn_contexts_mut()
@@ -1297,7 +1307,9 @@ impl RuntimeSessionService {
                 sequence.get()
             ),
         )?;
-        if !self.agent_provider_task_is_owned(&turn.turn_id)
+        if turn.state == AgentTurnState::Running
+            && !self.agent_turn_is_human_paused(&turn.turn_id)
+            && !self.agent_provider_task_is_owned(&turn.turn_id)
             && self
                 .agent_turn_executions()
                 .get(&turn.turn_id)

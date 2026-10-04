@@ -491,6 +491,18 @@ fn runtime_human_pause_retains_task_and_resumes_once() {
     let current = service
         .capture_agent_lifecycle_target(&primary, "%1")
         .unwrap();
+    let steering = service
+        .execute_agent_shell_command(&primary, "guidance while paused")
+        .unwrap();
+    assert!(steering.contains("injected_user_input=true"), "{steering}");
+    assert_eq!(service.agent_turn_ledger().turns().len(), 1);
+    assert_eq!(service.agent_human_pause_status("%1"), Some("paused"));
+    assert_eq!(
+        service.agent_turn_ledger().turn("turn-1").unwrap().state,
+        AgentTurnState::Blocked
+    );
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert_eq!(service.steering_receipts_for_tests("turn-1").len(), 1);
     let observer = service
         .session
         .attach_observer_with_terminal("observer", None, 1)
