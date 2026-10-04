@@ -2,14 +2,12 @@
 
 use super::action_registry::{
     OverlayActionTarget, RuntimeOverlayAction, overlay_set_key_preset_target,
-    overlay_set_theme_target,
 };
 use super::display_content::{
     RuntimeCommandDisplayOverlayContent, runtime_command_overlay_available_width,
     runtime_human_readable_display_lines, runtime_live_overlay_source_from_json,
     wrap_runtime_command_display_overlay_content,
 };
-use super::record_adapter::runtime_theme_preview_style_spans;
 use crate::runtime::render::*;
 use unicode_width::UnicodeWidthStr;
 
@@ -559,11 +557,6 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_width(
                 },
             );
         }
-        style_spans.extend(runtime_list_themes_markdown_preview_style_spans(
-            content.command.as_deref(),
-            copy_text.as_deref(),
-            &display,
-        ));
         content.line_style_spans.push(style_spans);
         content.line_kinds.push(kind);
         content.line_copy_texts.push(copy_text);
@@ -605,34 +598,6 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_layout(
     let prose_width = prose_width.min(available_width).max(1);
     content = wrap_runtime_command_display_overlay_content(content, prose_width, available_width);
     content
-}
-
-/// Returns preview swatch styling for Markdown-rendered `list-themes` rows.
-pub(super) fn runtime_list_themes_markdown_preview_style_spans(
-    command: Option<&str>,
-    source_line: Option<&str>,
-    display: &str,
-) -> Vec<TerminalStyleSpan> {
-    if !matches!(command, Some("list-themes")) {
-        return Vec::new();
-    }
-    let Some(source_line) = source_line else {
-        return Vec::new();
-    };
-    let cells = runtime_markdown_table_cells(source_line);
-    if cells.len() < 5 {
-        return Vec::new();
-    }
-    let preview = cells[2];
-    let preview_colors = cells[4];
-    let Some(preview_start) = display.find(preview) else {
-        return Vec::new();
-    };
-    runtime_theme_preview_style_spans(
-        UnicodeWidthStr::width(&display[..preview_start]),
-        preview,
-        Some(preview_colors),
-    )
 }
 
 /// Splits one Markdown table line into trimmed cell contents.
@@ -707,9 +672,6 @@ pub(crate) fn runtime_markdown_body_row_actions(
         return Vec::new();
     };
     match command {
-        Some("list-themes") => {
-            runtime_markdown_listing_row_action(source_line, display, overlay_set_theme_target)
-        }
         Some("list-key-presets") => {
             runtime_markdown_listing_row_action(source_line, display, overlay_set_key_preset_target)
         }

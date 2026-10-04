@@ -154,7 +154,7 @@ impl RuntimeSessionService {
         if self.require_live().is_err() {
             return Ok(output);
         }
-        let handoff = if matches!(outcomes.last(), Some(CommandOutcome::Display { command, .. }) if matches!(command.as_str(), "choose-window" | "list-agents"))
+        let handoff = if matches!(outcomes.last(), Some(CommandOutcome::Display { command, .. }) if matches!(command.as_str(), "choose-window" | "list-agents" | "list-themes"))
             && outcomes
                 .iter()
                 .filter(|outcome| {
@@ -170,7 +170,14 @@ impl RuntimeSessionService {
                 Some(CommandOutcome::Display { command, .. }) => command.clone(),
                 _ => return Err(MezError::invalid_state("selection outcome unavailable")),
             };
-            let (browser, source) = if command == "list-agents" {
+            let (browser, source) = if command == "list-themes" {
+                (
+                    self.theme_record_browser()?,
+                    RuntimeRecordBrowserOverlaySource::Themes {
+                        client_id: client.as_str().into(),
+                    },
+                )
+            } else if command == "list-agents" {
                 let (browser, targets) = self.agent_management_browser(client)?;
                 (
                     browser,

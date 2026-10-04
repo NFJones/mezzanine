@@ -142,7 +142,7 @@ pub(super) fn render_record_browser_overlay_matching(
                 record_browser_open_target(record).is_some()
                     || matches!(
                         record_browser.command.as_str(),
-                        "resume" | "choose-window" | "list-agents"
+                        "resume" | "choose-window" | "list-agents" | "list-themes"
                     )
             }));
     let terminal_width = if registers_row_actions {
@@ -257,7 +257,7 @@ fn record_browser_layout_content(
         };
         let Some(target) = matches!(
             command,
-            "list-personalities" | "choose-window" | "list-agents"
+            "list-personalities" | "choose-window" | "list-agents" | "list-themes"
         )
         .then(|| OverlayActionTarget::RecordBrowserSelect {
             record_id: record.id.clone(),

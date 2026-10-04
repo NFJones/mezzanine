@@ -365,7 +365,6 @@ impl RuntimeSessionService {
                 self.execute_overlay_agent_slash_command(primary_client_id, &command)
             }
             OverlayActionTarget::TerminalCommand { .. }
-            | OverlayActionTarget::SetTheme { .. }
             | OverlayActionTarget::SetKeyPreset { .. } => {
                 let Some(command) = target.terminal_command_line() else {
                     return Ok(true);
@@ -599,6 +598,9 @@ impl RuntimeSessionService {
         if let Some(changed) =
             self.apply_agent_management_overlay_input(primary_client_id, input)?
         {
+            return Ok(Some(changed));
+        }
+        if let Some(changed) = self.apply_theme_browser_input(primary_client_id, input)? {
             return Ok(Some(changed));
         }
         let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {

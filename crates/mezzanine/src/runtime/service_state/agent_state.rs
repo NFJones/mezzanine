@@ -107,6 +107,8 @@ pub(crate) type RuntimeRecordBrowserOverlayFrame =
 /// Query context retained for one backend-specific record-browser overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeRecordBrowserOverlaySource {
+    /// In-memory theme catalog; explicit apply belongs to this exact primary.
+    Themes { client_id: String },
     /// Administrative session snapshot with exact targets and modal confirmation.
     Agents {
         client_id: String,

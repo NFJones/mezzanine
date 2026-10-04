@@ -5,6 +5,43 @@
 
 use super::*;
 
+/// Producer palette spans must stay on literal block cells through both boxed
+/// and stacked wrapping, without coloring headers or changing row identity.
+#[test]
+fn literal_table_palette_styles_follow_wrapping() {
+    let color = TerminalColor::Rgb(12, 34, 56);
+    for width in [80, 12, 5] {
+        let layout = render_literal_table_styled(
+            vec!["ID".into(), "Palette".into()],
+            vec![vec![
+                ("theme".into(), Vec::new()),
+                (
+                    "██████".into(),
+                    vec![TerminalStyleSpan {
+                        start: 0,
+                        length: 6,
+                        rendition: GraphicRendition {
+                            foreground: Some(color),
+                            ..Default::default()
+                        },
+                    }],
+                ),
+            ]],
+            width,
+            &theme(),
+        );
+        let colored = layout
+            .lines
+            .iter()
+            .flat_map(|line| line.style_spans.iter())
+            .filter(|span| span.rendition.foreground == Some(color))
+            .map(|span| span.length)
+            .sum::<usize>();
+        assert_eq!(colored, 6, "width={width}");
+        assert!(!layout.first_cells.is_empty());
+    }
+}
+
 /// Literal table geometry must retain only first-cell value ranges in box and
 /// stacked layouts, including hard-wrapped UUIDs. Metadata is literal text and
 /// cannot introduce Markdown structure or steal another row's identity.

@@ -200,6 +200,9 @@ pub struct RecordBrowser {
     records: Arc<Vec<RecordBrowserRecord>>,
     /// Optional producer-owned exact exports, separate from decorated detail.
     copy_sources: Arc<std::collections::BTreeMap<String, String>>,
+    /// Inert producer styles keyed by stable record ID and metadata column.
+    cell_styles:
+        Arc<std::collections::BTreeMap<(String, String), Vec<mez_terminal::TerminalStyleSpan>>>,
     kind_filter_choices: Vec<RecordBrowserFilterChoice>,
     selected_kind_filter_value: String,
     scope_toggle_enabled: bool,
@@ -227,6 +230,7 @@ impl PartialEq for RecordBrowser {
         (Arc::ptr_eq(&self.records, &other.records) || self.records == other.records)
             && (Arc::ptr_eq(&self.copy_sources, &other.copy_sources)
                 || self.copy_sources == other.copy_sources)
+            && self.cell_styles == other.cell_styles
             && self.title == other.title
             && self.scope_indicator == other.scope_indicator
             && self.kind_filter_choices == other.kind_filter_choices
@@ -282,6 +286,7 @@ impl RecordBrowser {
             scope_indicator: None,
             records: Arc::new(records),
             copy_sources: Arc::new(std::collections::BTreeMap::new()),
+            cell_styles: Arc::new(std::collections::BTreeMap::new()),
             kind_filter_choices,
             selected_kind_filter_value: String::new(),
             scope_toggle_enabled: false,
@@ -361,6 +366,14 @@ impl RecordBrowser {
             .unzip();
         self.table_columns = labels;
         self.table_column_keys = keys;
+    }
+
+    /// Replaces inert producer-owned cell styles before table wrapping.
+    pub fn set_cell_styles(
+        &mut self,
+        styles: std::collections::BTreeMap<(String, String), Vec<mez_terminal::TerminalStyleSpan>>,
+    ) {
+        self.cell_styles = Arc::new(styles);
     }
 
     /// Replaces the default list and detail key guidance.
@@ -787,19 +800,26 @@ impl RecordBrowser {
             let rows = records
                 .iter()
                 .map(|(_, record)| {
-                    std::iter::once(record.id.clone())
+                    std::iter::once((record.id.clone(), Vec::new()))
                         .chain(self.table_column_keys.iter().map(|key| {
-                            record
+                            let text = record
                                 .metadata
                                 .iter()
                                 .find(|(record_key, _)| record_key == key)
                                 .map(|(_, value)| value.clone())
-                                .unwrap_or_default()
+                                .unwrap_or_default();
+                            (
+                                text,
+                                self.cell_styles
+                                    .get(&(record.id.clone(), key.clone()))
+                                    .cloned()
+                                    .unwrap_or_default(),
+                            )
                         }))
                         .collect()
                 })
                 .collect();
-            let layout = crate::render::render_literal_table(headers, rows, width, theme);
+            let layout = crate::render::render_literal_table_styled(headers, rows, width, theme);
             let offset = lines.len();
             record_ranges.extend(
                 layout

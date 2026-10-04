@@ -493,8 +493,8 @@ pub(super) fn non_show_markdown_command_uses_terminal_width_for_table_layout() {
     );
 }
 
-/// Verifies Markdown-rendered `list-themes` rows keep clickable theme actions
-/// and apply per-block preview colors through the shared overlay renderer.
+/// Textual theme output remains useful but cannot reconstruct interactive
+/// authority or palette geometry from Markdown. Retained typed browsers own both.
 #[cfg(test)]
 #[test]
 pub(super) fn list_themes_markdown_overlay_preserves_actions_and_preview_colors() {
@@ -505,13 +505,7 @@ pub(super) fn list_themes_markdown_overlay_preserves_actions_and_preview_colors(
         &ui_theme,
     );
 
-    assert!(
-        content.actions.iter().any(|action| action.target
-            == OverlayActionTarget::SetTheme {
-                name: "kanagawa".to_string()
-            }),
-        "{content:?}"
-    );
+    assert!(content.actions.is_empty(), "{content:?}");
     let line_index = content
         .lines
         .iter()
@@ -526,15 +520,7 @@ pub(super) fn list_themes_markdown_overlay_preserves_actions_and_preview_colors(
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(preview_spans.len(), 5, "{content:?}");
-    assert_eq!(
-        preview_spans[0].rendition.foreground,
-        Some(mez_terminal::TerminalColor::Rgb(0x11, 0x11, 0x11))
-    );
-    assert_eq!(
-        preview_spans[4].rendition.foreground,
-        Some(mez_terminal::TerminalColor::Rgb(0x55, 0x55, 0x55))
-    );
+    assert!(preview_spans.is_empty(), "{content:?}");
 }
 
 /// Verifies rendered `list-themes` overlay headers reserve the same selector

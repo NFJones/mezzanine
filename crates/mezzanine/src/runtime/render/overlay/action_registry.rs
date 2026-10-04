@@ -44,11 +44,6 @@ pub(crate) enum OverlayActionTarget {
         /// Unparsed argument text following the command name.
         args: String,
     },
-    /// Terminal theme selection with a validated theme name.
-    SetTheme {
-        /// Theme name selected by this action.
-        name: String,
-    },
     /// Terminal key-preset selection with a validated preset name.
     SetKeyPreset {
         /// Key-preset name selected by this action.
@@ -87,7 +82,6 @@ impl OverlayActionTarget {
                 record_id,
             } => Some(format!("/{command_name} {record_id}")),
             Self::TerminalCommand { .. }
-            | Self::SetTheme { .. }
             | Self::SetKeyPreset { .. }
             | Self::ActivityDetail { .. }
             | Self::RecordBrowserSelect { .. }
@@ -99,7 +93,6 @@ impl OverlayActionTarget {
     pub(crate) fn terminal_command_line(&self) -> Option<String> {
         match self {
             Self::TerminalCommand { name, args } => Some(join_command_line("", name, args)),
-            Self::SetTheme { name } => Some(format!("set-theme {name}")),
             Self::SetKeyPreset { name } => Some(format!("set-key-preset {name}")),
             Self::RecordBrowserOpen { .. }
             | Self::RecordBrowserSelect { .. }
@@ -252,17 +245,6 @@ pub(crate) fn overlay_terminal_command_target(command: &str) -> Option<OverlayAc
     Some(OverlayActionTarget::TerminalCommand { name, args })
 }
 
-/// Returns a validated theme-selection target for one action cell label.
-pub(crate) fn overlay_set_theme_target(label: &str) -> Option<OverlayActionTarget> {
-    let target = overlay_terminal_command_target(label)?;
-    match target {
-        OverlayActionTarget::TerminalCommand { name, args } if name == "set-theme" => {
-            plain_identifier_token(&args).map(|name| OverlayActionTarget::SetTheme { name })
-        }
-        _ => None,
-    }
-}
-
 /// Returns a validated key-preset selection target for one action cell label.
 pub(crate) fn overlay_set_key_preset_target(label: &str) -> Option<OverlayActionTarget> {
     let target = overlay_terminal_command_target(label)?;
@@ -343,8 +325,8 @@ mod tests {
         let mut registry = OverlayActionRegistry::default();
         registry.begin_generation();
         let first_generation = registry.current_generation();
-        let action_id = registry.register(OverlayActionTarget::SetTheme {
-            name: "kanagawa".to_string(),
+        let action_id = registry.register(OverlayActionTarget::RecordBrowserSelect {
+            record_id: "kanagawa".to_string(),
         });
         assert!(registry.resolve(action_id).is_some());
 
@@ -352,8 +334,8 @@ mod tests {
 
         assert_ne!(registry.current_generation(), first_generation);
         assert_eq!(registry.resolve(action_id), None);
-        let fresh = registry.register(OverlayActionTarget::SetTheme {
-            name: "kanagawa".to_string(),
+        let fresh = registry.register(OverlayActionTarget::RecordBrowserSelect {
+            record_id: "kanagawa".to_string(),
         });
         assert_ne!(fresh, action_id);
         assert!(registry.resolve(fresh).is_some());
@@ -380,8 +362,8 @@ mod tests {
         let mut other = OverlayActionRegistry::default();
         other.begin_generation();
         other.begin_generation();
-        let foreign = other.register(OverlayActionTarget::SetTheme {
-            name: "kanagawa".to_string(),
+        let foreign = other.register(OverlayActionTarget::RecordBrowserSelect {
+            record_id: "kanagawa".to_string(),
         });
 
         assert_eq!(current.resolve(foreign), None);
@@ -395,15 +377,6 @@ mod tests {
         assert!(overlay_terminal_command_target("set-theme kanagawa\nkill-pane").is_none());
         assert!(overlay_terminal_command_target("unknown-command now").is_none());
 
-        assert_eq!(
-            overlay_set_theme_target("set-theme kanagawa"),
-            Some(OverlayActionTarget::SetTheme {
-                name: "kanagawa".to_string()
-            })
-        );
-        assert!(overlay_set_theme_target("set-theme `kanagawa`").is_none());
-        assert!(overlay_set_theme_target("set-theme kanagawa extra").is_none());
-        assert!(overlay_set_theme_target("set-key-preset simple").is_none());
         assert_eq!(
             overlay_set_key_preset_target("set-key-preset simple"),
             Some(OverlayActionTarget::SetKeyPreset {
@@ -445,11 +418,10 @@ mod tests {
         );
         assert_eq!(terminal.agent_command_line(), None);
 
-        let theme = overlay_set_theme_target("set-theme kanagawa").unwrap();
-        assert_eq!(
-            theme.terminal_command_line().as_deref(),
-            Some("set-theme kanagawa")
-        );
+        let theme = OverlayActionTarget::RecordBrowserSelect {
+            record_id: "kanagawa".into(),
+        };
+        assert_eq!(theme.terminal_command_line(), None);
         assert_eq!(
             overlay_set_key_preset_target("set-key-preset simple")
                 .unwrap()

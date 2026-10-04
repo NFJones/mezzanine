@@ -714,6 +714,12 @@ and effective state; live reconciliation does not replay the write. Unknown writ
 outcomes are not reported as unchanged. The agent `theme.active` action uses the
 same boundary and retains partial-effect evidence on failure.
 
+The attached `list-themes` picker uses shared paging/search/copy/save. Navigation
+does not preview or mutate; Enter or identifier activation explicitly applies and
+refreshes the list without losing search. Its active marker reflects actual
+runtime state, independently of the highlighted row. Save exports the retained
+raw view, not only search-filtered rows.
+
 Default aliases:
 
 | Alias | Default declaration | Description |

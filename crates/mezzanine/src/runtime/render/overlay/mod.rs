@@ -14,6 +14,7 @@ mod record_adapter;
 mod selection_adapter;
 mod service;
 mod terminal_browser;
+mod theme_browser;
 
 pub(crate) use action_registry::OverlayActionRegistry;
 #[cfg(test)]

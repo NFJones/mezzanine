@@ -35,6 +35,24 @@ pub fn render_literal_table(
     width: usize,
     theme: &RichTextTheme,
 ) -> TableLayout {
+    render_literal_table_styled(
+        headers,
+        rows.into_iter()
+            .map(|row| row.into_iter().map(|text| (text, Vec::new())).collect())
+            .collect(),
+        width,
+        theme,
+    )
+}
+
+/// Lays out producer-styled literal cells. Styles are inert display-cell spans
+/// and follow the same box/stacked wrapping as ordinary table content.
+pub fn render_literal_table_styled(
+    headers: Vec<String>,
+    rows: Vec<Vec<(String, Vec<TerminalStyleSpan>)>>,
+    width: usize,
+    theme: &RichTextTheme,
+) -> TableLayout {
     let mut table = MarkdownTableState::new(
         vec![Alignment::Left; headers.len()],
         Some(width.max(1)),
@@ -43,16 +61,16 @@ pub fn render_literal_table(
         theme.table_alternate_row,
     );
     table.header_rows = 1;
-    table.rows = std::iter::once(headers)
+    table.rows = std::iter::once(headers.into_iter().map(|text| (text, Vec::new())).collect())
         .chain(rows)
         .map(|row| {
             row.into_iter()
-                .map(|text| MarkdownTableCell {
+                .map(|(text, style_spans)| MarkdownTableCell {
                     text: sanitized_terminal_line(&text)
                         .replace(['\n', '\r'], " ")
                         .trim()
                         .to_string(),
-                    style_spans: Vec::new(),
+                    style_spans,
                 })
                 .collect()
         })

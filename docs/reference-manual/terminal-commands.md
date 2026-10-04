@@ -93,6 +93,13 @@ activate it. Plain control/text output remains available without mounting a
 browser. A sequence with multiple display outcomes uses ordinary combined output
 rather than attaching one chooser to unrelated rows.
 
+`list-themes` mounts the same retained browser with Enter labelled apply. It
+shows active/source/palette metadata, initially highlights the active theme,
+and refreshes in place after explicit keyboard or identifier-cell activation.
+Search and viewport are retained where possible. Browse, search and dismissal
+never mutate configuration; dismissal does not undo applied selections. Errors
+remain visible with actual active state after partial settlement.
+
 ## Selected command contracts
 
 The following commands have behavior or safety boundaries that are useful to

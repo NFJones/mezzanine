@@ -2,6 +2,146 @@
 
 use super::*;
 
+/// A persisted selection whose live apply initially fails must retain the list,
+/// actual active marker and original diagnostic after guarded reconciliation.
+#[test]
+fn runtime_theme_browser_partial_failure_refreshes_actual_active_theme() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let root = temp_root("theme-browser-partial");
+    service.set_config_root(root.clone());
+    service
+        .execute_attached_display_command(&primary, "list-themes")
+        .unwrap();
+    let input = |service: &mut RuntimeSessionService, bytes: &[u8]| {
+        service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(bytes.to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+    };
+    input(&mut service, b"/dracula\r");
+    service.integration.set_theme_selection_fault("apply");
+    input(&mut service, b"\r");
+    assert_eq!(service.ui_theme().name, "dracula");
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(overlay.search_query.as_deref(), Some("dracula"));
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("persisted=true"))
+    );
+    let record = overlay
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .records()
+        .iter()
+        .find(|record| record.id == "dracula")
+        .unwrap();
+    assert!(
+        record
+            .metadata
+            .iter()
+            .any(|(key, value)| key == "Active" && value == "★ active")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Theme navigation must remain inert; explicit Enter applies once and retains
+/// the searchable list rather than opening detail or dismissing the picker.
+#[test]
+fn runtime_theme_browser_applies_and_refreshes_in_place() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(35, 12).unwrap(), 120)
+        .unwrap();
+    let initial = service.ui_theme().name.clone();
+    service
+        .execute_attached_display_command(&primary, "list-themes")
+        .unwrap();
+    assert!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .record_browser
+            .is_some()
+    );
+    let input = |service: &mut RuntimeSessionService, bytes: &[u8]| {
+        service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(bytes.to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+    };
+    input(&mut service, b"/dracula\r");
+    assert_eq!(service.ui_theme().name, initial);
+    let stale = service.primary_display_overlay().unwrap().selections[0].action_id;
+    input(&mut service, b"\r");
+    assert_eq!(service.ui_theme().name, "dracula");
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(overlay.search_query.as_deref(), Some("dracula"));
+    assert!(
+        !overlay
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .is_detail_view()
+    );
+    assert!(
+        service
+            .execute_primary_display_overlay_action(&primary, stale)
+            .unwrap()
+    );
+    input(&mut service, b"/absent\r");
+    input(&mut service, b"\r");
+    assert_eq!(service.ui_theme().name, "dracula");
+    assert!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .selections
+            .is_empty()
+    );
+    input(&mut service, b"/kanagawa\r");
+    let action = service.primary_display_overlay().unwrap().selections[0].action_id;
+    assert!(
+        service
+            .execute_primary_display_overlay_action(&primary, action)
+            .unwrap()
+    );
+    assert_eq!(service.ui_theme().name, "kanagawa");
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .search_query
+            .as_deref(),
+        Some("kanagawa")
+    );
+}
+
 /// A task settling while close is armed invalidates that exact confirmation;
 /// confirmation cannot close a replacement task or drift to a neighboring row.
 #[test]

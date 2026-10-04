@@ -983,6 +983,22 @@ fn runtime_theme_available(service: &RuntimeSessionService, theme: &str) -> Resu
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(crate) fn runtime_list_themes_command(service: &RuntimeSessionService) -> Result<String> {
+    let mut lines = vec![ui_theme_list_table_header()];
+    for (name, source, definition) in runtime_theme_catalog(service)? {
+        lines.push(ui_theme_list_table_row(
+            &name,
+            source,
+            name == service.ui_theme().name,
+            &definition,
+        ));
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Returns typed definitions in built-in then sorted custom order, without I/O.
+fn runtime_theme_catalog(
+    service: &RuntimeSessionService,
+) -> Result<Vec<(String, &'static str, UiThemeDefinition)>> {
     let structured = runtime_effective_config_value(service.integration.config_layers())?;
     let mut custom_theme_names = structured
         .get("themes")
@@ -992,33 +1008,88 @@ pub(crate) fn runtime_list_themes_command(service: &RuntimeSessionService) -> Re
     custom_theme_names.sort();
     custom_theme_names.dedup();
 
-    let mut lines = vec![ui_theme_list_table_header()];
+    let mut catalog = Vec::new();
     for theme in BUILTIN_UI_THEME_NAMES {
         let definition = builtin_ui_theme_definition(theme)
             .ok_or_else(|| MezError::config(format!("built-in theme `{theme}` is unavailable")))?;
-        lines.push(ui_theme_list_table_row(
-            theme,
-            "builtin",
-            *theme == service.ui_theme().name,
-            &definition,
-        ));
+        catalog.push((theme.to_string(), "builtin", definition));
     }
-    lines.extend(
+    catalog.extend(
         custom_theme_names
             .iter()
             .filter(|theme| !BUILTIN_UI_THEME_NAMES.contains(&theme.as_str()))
             .map(|theme| {
                 let definition = runtime_theme_definition_for_selection(service, theme)?;
-                Ok(ui_theme_list_table_row(
-                    theme,
-                    "config",
-                    theme == &service.ui_theme().name,
-                    &definition,
-                ))
+                Ok((theme.clone(), "config", definition))
             })
             .collect::<Result<Vec<_>>>()?,
     );
-    Ok(lines.join("\n"))
+    Ok(catalog)
+}
+
+impl RuntimeSessionService {
+    /// Builds the retained theme catalog with inert metadata and stable names.
+    pub(crate) fn theme_record_browser(&self) -> Result<mez_mux::record_browser::RecordBrowser> {
+        use mez_mux::record_browser::{RecordBrowser, RecordBrowserRecord};
+        let mut styles = BTreeMap::new();
+        let records = runtime_theme_catalog(self)?
+            .into_iter()
+            .map(|(name, source, definition)| {
+                let (preview, colors) = mez_mux::theme::ui_theme_preview_fields(&definition);
+                let spans = colors
+                    .split(',')
+                    .enumerate()
+                    .filter_map(|(index, color)| {
+                        Some(mez_terminal::TerminalStyleSpan {
+                            start: index,
+                            length: 1,
+                            rendition: mez_terminal::GraphicRendition {
+                                foreground: Some(mez_mux::theme::parse_hex_color(color)?),
+                                ..Default::default()
+                            },
+                        })
+                    })
+                    .collect();
+                styles.insert((name.clone(), "Palette".into()), spans);
+                RecordBrowserRecord {
+                    id: name.clone(),
+                    open_command: None,
+                    title: name.clone(),
+                    metadata: vec![
+                        (
+                            "Active".into(),
+                            if name == self.ui_theme().name {
+                                "★ active"
+                            } else {
+                                "—"
+                            }
+                            .into(),
+                        ),
+                        ("Palette".into(), preview),
+                        ("Source".into(), source.into()),
+                        ("Colors".into(), colors),
+                    ],
+                    markdown: ui_theme_list_table_row(
+                        &name,
+                        source,
+                        name == self.ui_theme().name,
+                        &definition,
+                    ),
+                }
+            })
+            .collect();
+        let mut browser = RecordBrowser::new("UI themes", records, Vec::new())?;
+        browser.set_cell_styles(styles);
+        browser.set_table_columns(vec![
+            "Active".into(),
+            "Palette".into(),
+            "Source".into(),
+            "Colors".into(),
+        ]);
+        browser.set_help(Some("**Keys:** Enter apply · r refresh · / search · y copy · s save · Esc dismiss. Navigation does not preview or apply.".into()), None);
+        browser.set_active_record_id(&self.ui_theme().name);
+        Ok(browser)
+    }
 }
 
 /// Runs the runtime source file command operation for this subsystem.

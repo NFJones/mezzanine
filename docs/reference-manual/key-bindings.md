@@ -122,6 +122,11 @@ in-memory catalog. Keyboard and identifier-cell mouse activation select the same
 stable record ID. Refresh preserves search and retires old clickable identities;
 navigation, searching and dismissal do not change focus.
 
+`list-themes` uses Enter or an identifier-cell click to apply the selected theme
+and refresh in place; `r` refreshes without applying. Highlighting is not active
+theme state. Search is preserved after apply, and Esc does not undo an earlier
+explicit selection. Palette colors follow literal cell wrapping.
+
 In `list-agents`, Enter focuses the selected pane, `i` interrupts native work,
 `p` pauses/resumes, and `r` refreshes. `d` opens target-labelled close confirmation;
 `y` confirms force-close and `n` or Esc cancels. Search and save prompts take key
