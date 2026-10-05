@@ -2,7 +2,7 @@
 //!
 //! Full snapshot receipt alone cannot enable reuse. The presenter records the
 //! identity/geometry only after complete output and receipt settlement. This API
-//! is not activated by the foreground loop; callers must invalidate its base if
+//! is used by the internal foreground; callers must invalidate its base if
 //! their exclusively owned terminal writer is replaced, reset or used elsewhere.
 //! Errors consume the connection rather than replaying or returning ambiguous
 //! ownership. An unchanged reply supplies no replacement rows or new receipts.

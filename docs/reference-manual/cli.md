@@ -583,8 +583,10 @@ An explicit internal conditional API now reuses exact identity/geometry only
 after complete output and receipt settlement. The broker checks its delivered
 base; unchanged replies carry no replacement rows or receipts. Replacement
 snapshots and terminal resets invalidate reuse. Callers must invalidate before
-external writes or writer replacement; ordinary foreground activation remains
-separate from this explicit API.
+external writes or writer replacement. The internal foreground uses this fence
+for refreshes: unchanged replies reschedule fetches without another output write
+or receipt acknowledgement. Writer invalidation also clears conditional reuse;
+ordinary CLI attachment activation remains unfinished.
 Snapshots also retain decoded style rows with finite span/cell bounds and
 original overlay order. Broker and client validate row alignment using the
 shared rendition interpretation; unknown style metadata is not forwarded.

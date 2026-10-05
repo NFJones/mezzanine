@@ -115,6 +115,7 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
                 .deadline()
                 .is_some_and(|deadline| deadline <= tokio::time::Instant::now());
         if action == AttachRenderAction::InvalidateAndView {
+            session.invalidate_committed_view();
             terminal.invalidate_output_frame().await?;
         }
         let mut size_changed = false;
@@ -154,7 +155,17 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
             }
         }
         if render {
-            session = session.snapshot(size.columns, size.rows, budget).await?.0;
+            let (updated, modified) = session
+                .conditional_snapshot(size.columns, size.rows, budget)
+                .await?;
+            session = updated;
+            render = modified;
+            if !modified {
+                // An exact unchanged reply retains already committed output.
+                // Reschedule fetches without writing or acknowledging it again.
+                ordinary_rate.update_from_rendered_view(session.render_rate_limit_fps);
+                animation.update_from_rendered_view(session.modes.animation_refresh_interval_ms);
+            }
             pending_ordinary = false;
         }
     }

@@ -149,6 +149,82 @@ fn inert_client(
     (root, listener, peer, client)
 }
 
+/// An ordinary event refresh may reuse only the initially committed frame.
+/// Unchanged settlement must not write another frame or acknowledge receipts;
+/// cancellation during the following event poll still restores presentation.
+#[tokio::test]
+async fn outbound_foreground_unchanged_refresh_preserves_committed_frame() {
+    let (root, listener, peer, mut client) = inert_client(Vec::new());
+    client.events_negotiated = true;
+    let identity = "a".repeat(64);
+    client.view_identity = Some(identity.clone());
+    let handle = client.client.handle.clone();
+    let summary = client.summary.clone();
+    let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+    for _ in 0..3 {
+        terminal.push_pending_input_read();
+    }
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let foreground_stop = stop.clone();
+    let foreground = client.run_snapshot_foreground(
+        &mut terminal,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(1),
+        async move { foreground_stop.notified().await },
+    );
+    let responder = async {
+        let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(request["operation"], "events");
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"action":"view","event_id":7
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(
+            request["if_view_identity"], identity,
+            "foreground reuse requires its committed snapshot identity"
+        );
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"columns":80,"rows":24,
+                "not_modified":true,"view_identity":identity,
+                "event_cutoff":7,"render_rate_limit_fps":30
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(
+            request["operation"], "events",
+            "unchanged views cannot trigger another output acknowledgement"
+        );
+        stop.notify_one();
+        assert!(peer.next().await.is_none());
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(foreground, responder)
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(terminal.written_frames.len(), 1);
+    assert_eq!(terminal.presentation_entries, 1);
+    assert_eq!(terminal.presentation_restores, 1);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Idle animation deadlines must trigger a fresh snapshot even without redraw
 /// events and while ordinary pacing is closed. This exercises retained IPC
 /// ownership, not physical visibility or the full production attach scheduler.

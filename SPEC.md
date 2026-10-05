@@ -4310,6 +4310,10 @@ The broker MUST fence requested bases against its last delivered view. Unchanged
 replies MUST retain exact session ownership and contain no replacement rows or
 receipts. Full replacement or terminal reset/replacement MUST invalidate reuse;
 callers remain responsible for invalidating after output outside this owner.
+Internal foreground refreshes MUST use this committed-base fence. Exact unchanged
+replies MUST NOT write or acknowledge the retained frame again; they MAY refresh
+local fetch deadlines for the already committed view. Writer invalidation MUST
+also invalidate conditional reuse. Ordinary CLI attachment remains separate.
 Snapshot style rows MUST align with rendered lines, retain ordered overlay
 precedence, and enforce finite span counts and checked cell ranges. Both broker
 and client MUST use the shared rendition decoder; unknown style metadata MUST
