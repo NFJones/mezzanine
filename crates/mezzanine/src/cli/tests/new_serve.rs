@@ -3,6 +3,31 @@
 use super::*;
 use crate::cli::control_client::exchange_control_request;
 
+/// Local X11 misuse must fail before config publication, host startup or session
+/// allocation, even when dry-run or interactive admission would otherwise allow
+/// the command. Both fresh-session spellings share this boundary.
+#[test]
+fn local_new_x11_rejects_before_session_allocation() {
+    for command in ["new", "new-session"] {
+        for flag in ["--x11", "--x11-trusted"] {
+            for dry_run in [false, true] {
+                let (env, home) = test_env("new-x11-local-rejection");
+                let config = env.config_paths().unwrap();
+                let mut args = vec!["mez".into(), command.into(), flag.into()];
+                if dry_run {
+                    args.push("--dry-run".into());
+                }
+                let mut stdout = Vec::new();
+                let error = run_with(args, env, true, &mut stdout, &mut Vec::new()).unwrap_err();
+                assert!(error.message().contains("explicit Iroh target"), "{error}");
+                assert!(stdout.is_empty());
+                assert!(!config.default_primary_file().exists());
+                let _ = fs::remove_dir_all(home);
+            }
+        }
+    }
+}
+
 /// Verifies noninteractive new requires dry run.
 ///
 /// This regression scenario documents the behavior being protected so a

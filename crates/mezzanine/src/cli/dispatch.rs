@@ -281,16 +281,7 @@ async fn run_with_inner<W: Write, E: Write>(
                 return run_attach(
                     &socket_selection,
                     &control_target,
-                    super::attach::AttachCliArgs {
-                        observer: false,
-                        x11: false,
-                        x11_trusted: false,
-                        x11_takeover: false,
-                        default: false,
-                        session_id: None,
-                        create: true,
-                        create_name: args.name,
-                    },
+                    args.into_remote_attach(),
                     env,
                     interactive,
                     output_format,
@@ -298,6 +289,11 @@ async fn run_with_inner<W: Write, E: Write>(
                 )
                 .await
                 .map(|()| 0);
+            }
+            if args.x11 || args.x11_trusted {
+                return Err(MezError::invalid_args(
+                    "X11 forwarding for new sessions requires an explicit Iroh target",
+                ));
             }
             if prefer_host && !args.dry_run && ensure_host_available(&env).await? {
                 if !interactive {

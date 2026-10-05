@@ -436,6 +436,44 @@ fn remote_session_routing(
 mod routing_tests {
     use super::*;
 
+    /// Forwarding new-session X11 intent must not turn creation into default
+    /// resolution or takeover. The existing routing owner retains the requested
+    /// name and operation key; key collision hardening is a separate defect.
+    #[test]
+    fn remote_new_x11_preserves_fresh_routing_and_name() {
+        for trusted in [false, true] {
+            let args = super::super::super::serve::NewCliArgs {
+                dry_run: false,
+                name: Some("fresh".into()),
+                x11: !trusted,
+                x11_trusted: trusted,
+            }
+            .into_remote_attach();
+            assert_eq!(args.x11, !trusted);
+            assert_eq!(args.x11_trusted, trusted);
+            assert!(!args.x11_takeover);
+            let first = remote_session_routing(&args);
+            let second = remote_session_routing(&args);
+            let super::super::super::control_client::IrohSessionRouting::Create {
+                name,
+                idempotency_key,
+            } = first
+            else {
+                panic!("fresh creation required");
+            };
+            assert_eq!(name.as_deref(), Some("fresh"));
+            let super::super::super::control_client::IrohSessionRouting::Create {
+                idempotency_key: next,
+                ..
+            } = second
+            else {
+                panic!("fresh creation required");
+            };
+            assert_eq!(idempotency_key, next);
+            assert!(!idempotency_key.is_empty());
+        }
+    }
+
     /// Bare host-profile attach must resolve the existing default, while the
     /// internal `mez new` marker must remain the only omitted-target creation
     /// route. This prevents reconnect from substituting a blank fresh session.

@@ -55,7 +55,7 @@ pub(super) enum CliCommand {
     HarnessEvent,
     /// Manages Mezzanine configuration.
     Config(super::config::ConfigCliArgs),
-    /// Starts a background session daemon and attaches when interactive.
+    /// Creates a fresh local or explicitly selected remote session and attaches.
     #[command(visible_alias = "new-session")]
     New(super::serve::NewCliArgs),
     /// Starts a foreground control daemon for a new session.

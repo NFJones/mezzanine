@@ -3967,7 +3967,12 @@ credit, initialization results, and local display access unchanged.
 X11 forwarding MUST be an explicit feature of an authenticated Iroh primary
 attachment. Unix clients, observers, unauthenticated peers, and agent or
 automation roles MUST NOT activate it. Untrusted forwarding MUST be the
-default request mode. Trusted forwarding MUST require a separate explicit
+default for explicit remote `new --x11` as well as attach. Remote `new` MUST
+forward `--x11` or `--x11-trusted` through the existing primary attachment
+negotiation while retaining fresh creation, name and operation-key semantics.
+Local `new` MUST reject either mode before session allocation; fresh creation
+MUST NOT admit `--x11-takeover` or existing-session selectors.
+Trusted forwarding MUST require a separate explicit
 client request and `allow_trusted = true`. Trusted forwarding MUST use a fresh
 local `xauth generate ... trusted` authorization from a private authority copy;
 a raw matching `MIT-MAGIC-COOKIE-1` record MUST NOT be relayed as trusted

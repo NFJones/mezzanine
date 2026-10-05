@@ -625,6 +625,53 @@ fn invocation_parses_explicit_iroh_target_without_unix_fallback() {
     assert!(error.message().contains("cannot be used with"), "{error}");
 }
 
+/// Both fresh-session aliases accept remote X11 requests without introducing
+/// existing-session selectors or takeover. Global profile selection works on
+/// either side of the command; conflicting trust modes remain rejected.
+#[test]
+fn x11_new_flags_are_explicit_and_transport_scoped() {
+    let runtime = RuntimeEnv {
+        mez_tmpdir: Some(OsString::from("/tmp")),
+        xdg_runtime_dir: None,
+        tmpdir: None,
+        uid: 1000,
+    };
+    for command in ["new", "new-session"] {
+        for flag in ["--x11", "--x11-trusted"] {
+            for before in [false, true] {
+                let args = if before {
+                    vec!["mez", "--iroh-profile", "workstation", command, flag]
+                } else {
+                    vec!["mez", command, flag, "--iroh-profile", "workstation"]
+                };
+                let parsed = CliInvocation::parse(
+                    &args.into_iter().map(str::to_string).collect::<Vec<_>>(),
+                    &runtime,
+                    None,
+                )
+                .unwrap();
+                let Some(CliCommand::New(args)) = parsed.command else {
+                    panic!("fresh-session command expected");
+                };
+                let attach = args.into_remote_attach();
+                assert_eq!(attach.x11, flag == "--x11");
+                assert_eq!(attach.x11_trusted, flag == "--x11-trusted");
+                assert!(attach.create);
+                assert!(!attach.observer && !attach.default && !attach.x11_takeover);
+                assert!(attach.session_id.is_none());
+            }
+        }
+    }
+    for options in [vec!["--x11", "--x11-trusted"], vec!["--x11-takeover"]] {
+        let args = [vec!["mez", "new"], options]
+            .concat()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(CliInvocation::parse(&args, &runtime, None).is_err());
+    }
+}
+
 /// X11 attach flags are explicit Iroh-primary options. Clap rejects conflicting
 /// trust modes, while runtime selection rejects Unix and observer requests
 /// before profile lookup or network initialization.

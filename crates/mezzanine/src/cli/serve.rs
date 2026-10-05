@@ -66,6 +66,11 @@ pub(super) async fn run_new<W: Write>(
     stdout: &mut W,
 ) -> Result<()> {
     let dry_run = parsed.dry_run;
+    if parsed.x11 || parsed.x11_trusted {
+        return Err(MezError::invalid_args(
+            "X11 forwarding for new sessions requires an explicit Iroh target",
+        ));
+    }
     let session_name = parsed.name;
     if !interactive && !dry_run {
         return Err(MezError::forbidden(
@@ -149,6 +154,29 @@ pub(super) struct NewCliArgs {
     /// Optional name assigned to a newly created supervised session.
     #[arg(long, value_name = "NAME")]
     pub(super) name: Option<String>,
+    /// Requests untrusted X11 forwarding for an explicit Iroh fresh-session attach.
+    #[arg(long, conflicts_with = "x11_trusted")]
+    pub(super) x11: bool,
+    /// Requests explicitly trusted X11 forwarding when host policy permits it.
+    #[arg(long, conflicts_with = "x11")]
+    pub(super) x11_trusted: bool,
+}
+
+impl NewCliArgs {
+    /// Carries fresh creation and X11 intent to the existing remote attach owner.
+    /// No existing-session selector or route takeover is admitted here.
+    pub(super) fn into_remote_attach(self) -> super::attach::AttachCliArgs {
+        super::attach::AttachCliArgs {
+            observer: false,
+            x11: self.x11,
+            x11_trusted: self.x11_trusted,
+            x11_takeover: false,
+            default: false,
+            session_id: None,
+            create: true,
+            create_name: self.name,
+        }
+    }
 }
 
 /// Runs the socket selection for new session operation for this subsystem.

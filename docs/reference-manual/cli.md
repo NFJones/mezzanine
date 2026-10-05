@@ -34,7 +34,7 @@ also create a session; use an explicit target or `--default` to avoid creation.
 
 | Command | Behavior |
 | --- | --- |
-| `mez new [--dry-run] [--name NAME]` | Start a new background session and attach; an interactive terminal is required unless using `--dry-run`. `--name` assigns a session name. With `--dry-run`, validate session construction instead of starting a daemon. Alias: `new-session`. |
+| `mez new [--dry-run] [--name NAME] [--x11\|--x11-trusted]` | Create a fresh local or explicitly selected remote session and attach; an interactive terminal is required unless using local `--dry-run`. `--name` assigns a session name. X11 modes require an explicit host-scoped Iroh target; takeover is not supported for fresh creation. Alias: `new-session`. |
 | `mez serve` | Start a foreground session service; it does not attach a primary client unless `--attach-primary` is supplied from an interactive terminal. Alias: `daemon`. |
 | `mez list [--all]` | List resumable sessions known to the local client. With the persistent local host, `--all` adds visible remote durable leases to the same scope-tagged aggregate. Alias: `list-sessions`. |
 | `mez attach [SESSION_ID] [--observer\|--observe\|--default] [--x11\|--x11-trusted] [--x11-takeover]` | Attach a primary client, request read-only observer access, select an existing host default without creating, or request X11 forwarding for an authenticated Iroh primary. `--observer` and `--observe` are equivalent. `--default` conflicts with an explicit target; X11 options are described below. Alias: `attach-session`. |
@@ -385,7 +385,9 @@ prerequisites, route policy, role ceilings, revocation, and identity recovery.
 permits a primary device with creation authority to force-kill sessions it
 created.
 
-An explicit Iroh primary `attach` also accepts these X11 options:
+An explicit Iroh primary `attach` accepts these X11 options. Remote `new`
+also accepts `--x11` and `--x11-trusted`, preserving fresh creation and its name;
+`--x11-takeover` is attach-only because a fresh session has no route to replace.
 
 | Option | Behavior |
 | --- | --- |
@@ -400,6 +402,11 @@ requested forwarding. The attaching machine accepts conventional Unix
 displays, constrained XQuartz launchd sockets, and TCP displays. A TCP hostname
 or address—including a non-loopback target—is resolved once and frozen with
 its real cookie before dialing. Neither value is sent to the server.
+
+For example, `mez --iroh-profile home-mez new --name work --x11` creates and
+attaches a fresh host session with untrusted forwarding. First-use host pairing
+can use `mez new --iroh-invite-file HOST.json --save-as home-mez --name work --x11`.
+Local X11 requests and remote `--dry-run` are rejected before session allocation.
 
 Direct control commands keep Unix as their default target. `--iroh-invite-file
 PATH` explicitly performs first-use pairing from an owner-only, bounded JSON
