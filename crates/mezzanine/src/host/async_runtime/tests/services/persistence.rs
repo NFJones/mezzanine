@@ -3,6 +3,145 @@
 use super::super::*;
 use crate::storage::transcript::AgentPresentationEntry;
 
+/// Settled steering uses the actual ordered persistence worker and exact actor
+/// acknowledgements. A failed first write retries after the destination recovers;
+/// an already committed occurrence is replayed without a second durable row or
+/// visible echo. Neither case reconstructs provider work.
+#[tokio::test(flavor = "current_thread")]
+async fn async_steering_persistence_worker_retries_without_repeating_promotion() {
+    use mez_agent::transcript::{SteeringRecoveryReceipt, SteeringRecoveryStatus};
+    for committed in [false, true] {
+        let root = std::env::temp_dir().join(format!(
+            "mez-steering-worker-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let mut service = test_service_with_event_log();
+        service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service.set_agent_transcript_store(store.clone());
+        let conversation = service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        let source = crate::storage::transcript::steering::Source {
+            version: 1,
+            conversation_id: conversation.clone(),
+            receipt: SteeringRecoveryReceipt {
+                id: "worker-occurrence".into(),
+                acceptance_order: 1,
+                turn_id: Some("old-turn".into()),
+                event_sequence: Some(1),
+                display: "worker guidance".into(),
+                status: SteeringRecoveryStatus::Admitted(7),
+            },
+        };
+        service
+            .append_settled_steering_source("%1", &source)
+            .unwrap();
+        let effects = service
+            .drain_transcript_persistence_transition()
+            .side_effects;
+        let effect = effects
+            .into_iter()
+            .find(|effect| {
+                matches!(
+                    effect,
+                    RuntimeSideEffect::PersistSteeringPresentation { .. }
+                )
+            })
+            .unwrap();
+        let RuntimeSideEffect::PersistSteeringPresentation { entry, path, .. } = &effect else {
+            unreachable!();
+        };
+        if committed {
+            store
+                .append_presentation_many(std::slice::from_ref(entry))
+                .unwrap();
+        } else {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::create_dir(path).unwrap();
+        }
+        let path = path.clone();
+        let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+            .build()
+            .unwrap();
+        let client = async {
+            handle
+                .queue_runtime_side_effects(vec![effect])
+                .await
+                .unwrap();
+            let first = run_async_persistence_side_effect_service(
+                &handle,
+                AsyncRuntimeSideEffectServiceConfig {
+                    max_polls: 1,
+                    drain_limit: 64,
+                    idle_interval: Duration::from_millis(1),
+                },
+                |_, _| false,
+            )
+            .await
+            .unwrap();
+            if committed {
+                assert_eq!(first.failed, 0);
+            } else {
+                assert_eq!(first.failed, 1);
+                std::fs::remove_dir(&path).unwrap();
+                let retry = run_async_persistence_side_effect_service(
+                    &handle,
+                    AsyncRuntimeSideEffectServiceConfig {
+                        max_polls: 2,
+                        drain_limit: 64,
+                        idle_interval: Duration::from_millis(1),
+                    },
+                    |polls, _| polls >= 2,
+                )
+                .await
+                .unwrap();
+                assert_eq!(retry.failed, 0);
+                assert!(retry.completed >= 1);
+            }
+            assert_eq!(
+                store
+                    .inspect_presentation(&conversation)
+                    .unwrap()
+                    .iter()
+                    .filter(|entry| entry.source_content_type.as_deref()
+                        == Some(crate::storage::transcript::steering::CONTENT_TYPE))
+                    .count(),
+                1
+            );
+            handle.shutdown().await.unwrap();
+        };
+        let ((), mut exit) = tokio::join!(client, actor.run());
+        let text = exit
+            .service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        assert_eq!(text.matches("user> worker guidance").count(), 1, "{text}");
+        exit.service
+            .apply_pane_resize_completion_event("%1", Size::new(40, 24).unwrap())
+            .unwrap();
+        assert!(
+            exit.service
+                .take_agent_presentation_resize_work("%1")
+                .unwrap()
+                .is_some()
+        );
+        assert!(exit.service.pending_agent_provider_tasks().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// Waits for startup receipt admission before simulating worker loss or retry.
 async fn wait_for_startup_receipts(
     handle: &crate::host::async_runtime::AsyncRuntimeSessionHandle,
