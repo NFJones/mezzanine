@@ -19,6 +19,8 @@ pub(crate) struct InitializedSessionFrontend {
     delivered_receipts: Vec<u64>,
     /// Last successfully delivered view identity and its exact requested geometry.
     delivered_view: Option<(String, u16, u16)>,
+    /// Selected-path evidence owned by this connection, never a sibling endpoint.
+    health: crate::host::terminal::iroh_health::AttachIrohHealthTracker,
     events: Option<
         crate::host::outbound_frontend::events::OutboundEventReader<iroh::endpoint::RecvStream>,
     >,
@@ -76,12 +78,37 @@ impl ConnectedFrontend {
             summary,
             delivered_receipts: Vec::new(),
             delivered_view: None,
+            health: Default::default(),
             events,
         })
     }
 }
 
 impl InitializedSessionFrontend {
+    /// Samples only this retained connection when its refresh deadline is due.
+    /// Disconnection returns unknown without borrowing another path or reviving
+    /// ownership. Callers own reply delivery, redraw and terminal retirement.
+    pub(crate) fn transport_health(
+        &mut self,
+    ) -> Result<(bool, crate::host::terminal::TerminalIrohStatusQuality)> {
+        self.connected
+            .prepared
+            .frontend
+            ._endpoint
+            .frontend_config_root()?;
+        let connection = self.connected.connection.connection();
+        if connection.close_reason().is_some() {
+            return Ok((
+                false,
+                crate::host::terminal::TerminalIrohStatusQuality::Unknown,
+            ));
+        }
+        if self.health.deadline() <= tokio::time::Instant::now() {
+            self.health.sample(connection);
+        }
+        Ok((true, self.health.quality()))
+    }
+
     /// Reads only negotiated version-one events on this retained connection.
     /// Idle cancellation preserves reader state. Errors/EOF require the caller
     /// to retire this session owner; no reconnect, replay or IPC occurs here.

@@ -267,12 +267,51 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             first.connected.prepared.initialize["idempotency_key"],
             "create-lease-work"
         );
+        assert_eq!(
+            first.health.quality(),
+            crate::host::terminal::TerminalIrohStatusQuality::Unknown
+        );
+        assert_eq!(
+            second.health.quality(),
+            crate::host::terminal::TerminalIrohStatusQuality::Unknown
+        );
+        let second_deadline = second.health.deadline();
+        let first_health = first.transport_health().unwrap();
+        assert!(
+            first_health.0,
+            "sampling must describe its retained live connection"
+        );
+        assert_eq!(
+            second.health.deadline(),
+            second_deadline,
+            "sampling cannot advance a sibling's tracker"
+        );
+        assert_eq!(
+            first.transport_health().unwrap(),
+            first_health,
+            "an immediate repeat must retain the sample"
+        );
         let first_event = tokio::time::timeout(Duration::from_secs(2), first.next_event())
             .await
             .unwrap()
             .unwrap()
             .expect("negotiated first-session event");
         assert!(first_event.1.is_some());
+        first.connected.connection.connection().close(
+            iroh::endpoint::VarInt::from_u32(0),
+            b"fixture first retired",
+        );
+        assert_eq!(
+            first.transport_health().unwrap(),
+            (
+                false,
+                crate::host::terminal::TerminalIrohStatusQuality::Unknown
+            )
+        );
+        assert!(
+            second.transport_health().unwrap().0,
+            "retiring one connection cannot mark its sibling down"
+        );
         drop(first);
         let second_event = tokio::time::timeout(Duration::from_secs(2), second.next_event())
             .await

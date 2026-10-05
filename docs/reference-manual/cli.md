@@ -569,6 +569,11 @@ Optional version-one events now remain owned by the initialized session and its
 exact connection lease. Setup validates the preface within a deadline; later
 versions and X11 remain rejected. Real-host fixtures qualify event availability
 after sibling retirement, not frontend forwarding or ordinary CLI activation.
+Each internal initialized session now retains its own shared health tracker and
+samples only its exact connection when due. Missing measurements remain unknown;
+closed connections report disconnected with unknown quality. Sibling sampling
+is independent. This boundary adds no worker, frontend health reply, local status
+composition, or ordinary attachment activation.
 An internal display-only view exchange now carries bounded rendered lines and
 validated session identity across exact-handle local IPC. It does not provide
 terminal input, presentation acknowledgement or the complete attached

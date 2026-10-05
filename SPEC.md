@@ -4291,6 +4291,11 @@ retained connection lease and validate the exact preface under a finite deadline
 Later event versions and X11 MUST reject before initialization. Reader errors or
 EOF require retirement of that session owner, not reconnect or creation replay;
 retiring one session MUST NOT close a sibling connection.
+Internal session health sampling MUST retain one shared health tracker per exact
+connection lease and sample only that connection when its refresh deadline is due.
+Unavailable measurements MUST remain unknown; a closed connection MUST report
+disconnected with unknown quality. Sampling MUST NOT advance a sibling tracker,
+spawn a worker, reconnect, or imply frontend delivery or local status composition.
 The internal display-only frontend view exchange MUST bind the exact local handle
 and initialized session, accept only bounded geometry, and project correlated
 role/geometry-checked rendered lines. It MUST NOT acknowledge presentation,
