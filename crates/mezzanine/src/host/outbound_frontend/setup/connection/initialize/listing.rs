@@ -13,6 +13,9 @@ const LIST_ID: &str = "outbound-host-list";
 #[serde(deny_unknown_fields)]
 struct ListRequest {
     handle: FrontendHandle,
+    /// A health check reports validated initialization only, without listing.
+    #[serde(default)]
+    authentication_only: bool,
 }
 
 impl InitializedHostFrontend {
@@ -34,11 +37,15 @@ impl InitializedHostFrontend {
                 .map_err(|_| MezError::invalid_args("outbound host-list request invalid"))?;
             if request.handle != self.connected.prepared.frontend.handle { return Err(MezError::conflict("outbound host-list handle changed")); }
             self.connected.prepared.frontend._endpoint.frontend_config_root()?;
+            let sessions = if request.authentication_only {
+                Vec::new()
+            } else {
             let body = serde_json::json!({"jsonrpc":"2.0","id":LIST_ID,"method":"host/session/list","params":{}}).to_string();
             self.bridge.stream_mut().write_all(&crate::control::encode_control_body(&body)).await
                 .map_err(|_| MezError::invalid_state("outbound host-list write unavailable"))?;
             let body = read_exact_frame(self.bridge.stream_mut()).await?;
-            let sessions = project_response(&body)?;
+            project_response(&body)?
+            };
             self.connected.prepared.frontend._endpoint.frontend_config_root()?;
             let reply = serde_json::json!({"handle":request.handle,"host":self.summary,"sessions":sessions}).to_string();
             if reply.len() > BODY_LIMIT { return Err(MezError::invalid_state("outbound host-list reply exceeds limit")); }

@@ -131,8 +131,15 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
     std::fs::create_dir(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     let host_root = root.join("host");
+    std::fs::create_dir(root.join("cli-runtime")).unwrap();
     let cli_env = crate::cli::CliEnv {
         home: Some(root.join("client-home")),
+        runtime: crate::runtime::RuntimeEnv {
+            mez_tmpdir: Some(root.join("cli-runtime").into_os_string()),
+            xdg_runtime_dir: None,
+            tmpdir: None,
+            uid: crate::runtime::current_effective_uid(),
+        },
         ..Default::default()
     };
     let cli_paths = crate::config::ConfigPaths::from_home(cli_env.home.clone().unwrap());
@@ -387,6 +394,28 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
                 cli_listing["result"]["sessions"].as_array().unwrap().len(),
                 4
             );
+            cli_output.clear();
+            let code = crate::cli::run_with(
+                vec![
+                    "mez".into(),
+                    "--json".into(),
+                    "remote".into(),
+                    "profile".into(),
+                    "check".into(),
+                    "creator".into(),
+                ],
+                cli_env.clone(),
+                false,
+                &mut cli_output,
+                &mut cli_error,
+            )
+            .await
+            .expect("profile health must reuse the live paired broker");
+            assert_eq!(code, 0);
+            let health: serde_json::Value = serde_json::from_slice(&cli_output).unwrap();
+            assert_eq!(health["authenticated"], true);
+            assert_eq!(health["reachable"], true);
+            assert_eq!(router.snapshots().await.unwrap().len(), 4);
             let (second, _, second_event) = second
                 .poll_events(25, Duration::from_secs(2))
                 .await
@@ -516,7 +545,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             cancel.notify_one();
         };
         let (accepted, ()) = tokio::join!(supervised, clients);
-        assert_eq!(accepted.unwrap(), 4);
+        assert_eq!(accepted.unwrap(), 5);
         stop.notify_one();
     });
     let (served, ()) = tokio::time::timeout(Duration::from_secs(30), async {
@@ -524,7 +553,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
     })
     .await
     .unwrap();
-    assert_eq!(served.unwrap(), 6);
+    assert_eq!(served.unwrap(), 7);
     router
         .shutdown_all(true, Duration::from_secs(5))
         .await

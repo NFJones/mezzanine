@@ -550,6 +550,10 @@ after checking the current outbound veto. Only missing or refused discovery
 retains direct fallback; unsafe discovery, protocol errors and failed broker
 operations do not create a competing endpoint. Invitation listing and automatic
 broker startup are unchanged; other ordinary consumers remain unmigrated.
+Host-scoped `remote profile check NAME` also reuses an authenticated active broker.
+Its authentication-only exchange requires no session-list permission and creates
+no session. Outbound veto and unsafe/protocol/operation failures remain terminal;
+only absent/refused discovery retains direct fallback. Legacy checks are unchanged.
 Errors after writing never automatically replay initialization. Session
 creation/attachment uses a separate internal transition retaining the original
 intent/key and validating exact client/session/active-lease evidence. A loopback

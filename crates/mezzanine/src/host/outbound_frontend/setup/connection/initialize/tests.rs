@@ -112,7 +112,32 @@ async fn outbound_host_initialize_real_trust_accepts_then_rejects_revocation() {
                     initialized.summary,
                     serde_json::json!({"selected_version":3,"granted_role":"observer","host_only":true})
                 );
-                drop(initialized);
+                assert!(
+                    !redemption.record.host_routing.session_list,
+                    "health fixture must not borrow listing authority"
+                );
+                let handle = initialized.connected.prepared.frontend.handle().clone();
+                client
+                    .send(ProtocolFrame::new(
+                        CONTENT_TYPE,
+                        serde_json::json!({
+                            "handle":handle,"authentication_only":true
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                let response = async {
+                    let frame = client.next().await.unwrap().unwrap();
+                    assert_eq!(frame.content_type, CONTENT_TYPE);
+                    let reply: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+                    assert_eq!(reply["handle"], serde_json::to_value(handle).unwrap());
+                    assert_eq!(reply["host"]["host_only"], true);
+                    assert_eq!(reply["sessions"], serde_json::json!([]));
+                    assert_eq!(reply.as_object().unwrap().len(), 3);
+                };
+                let (delivered, ()) = tokio::join!(initialized.deliver_list(), response);
+                delivered.unwrap();
             }
             assert_eq!(admission.slots.available_permits(), 1);
             assert!(

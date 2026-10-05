@@ -31,9 +31,32 @@ impl OutboundFrontendClient {
     /// Success returns validated summaries and retires the management stream;
     /// siblings remain independently owned by the broker.
     pub(crate) async fn list_sessions(
+        self,
+        profile: &str,
+        budget: Duration,
+    ) -> Result<Vec<ListedSession>> {
+        self.management_exchange(profile, budget, false).await
+    }
+
+    /// Authenticates the protected host profile without listing sessions or
+    /// requiring list permission. Success retires only this management stream.
+    pub(crate) async fn authenticate_profile(self, profile: &str, budget: Duration) -> Result<()> {
+        let sessions = self.management_exchange(profile, budget, true).await?;
+        if !sessions.is_empty() {
+            return Err(MezError::invalid_state(
+                "outbound health reply contains unexpected sessions",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Shares consumed host-only setup while keeping the operation vocabulary
+    /// closed. Authentication-only mode performs no remote follow-up method.
+    async fn management_exchange(
         mut self,
         profile: &str,
         budget: Duration,
+        authentication_only: bool,
     ) -> Result<Vec<ListedSession>> {
         if !(Duration::from_millis(100)..=Duration::from_secs(120)).contains(&budget)
             || profile.is_empty()
@@ -58,7 +81,7 @@ impl OutboundFrontendClient {
             self.stream
                 .send(ProtocolFrame::new(
                     CONTENT_TYPE,
-                    serde_json::json!({"handle":self.handle}).to_string(),
+                    serde_json::json!({"handle":self.handle,"authentication_only":authentication_only}).to_string(),
                 ))
                 .await?;
             let frame =

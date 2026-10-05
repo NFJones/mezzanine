@@ -4272,6 +4272,10 @@ when available, respecting the current outbound veto before discovery. Only
 missing or refused discovery MAY use the existing direct exchange; permission,
 protocol and broker-operation failures MUST NOT trigger competing endpoint use.
 Invitation listing and automatic broker startup remain separate paths.
+Host-scoped profile health MUST likewise reuse an authenticated active broker
+when available, with the current outbound veto and the same fail-closed discovery
+boundary. Authentication-only management MUST issue no session-list follow-up,
+require no list permission, and allocate no session. Legacy checks remain separate.
 The separate internal session initialization MUST retain the original routing
 intent and invocation key, validate correlated role/client/session/active-lease
 evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection
