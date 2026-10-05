@@ -161,6 +161,8 @@ conversation title instead of `agent draft`; focused panes retain editing labels
 Manual names and the existing session-title policy determine this inert label.
 Long titles are ellipsized to available cells without hiding live status. Title
 rendering uses retained metadata, not catalog reads or provider requests.
+Active composer status is separated from its trailing horizontal rule by one
+space when room remains, without changing draft text or the allocated row width.
 `/status [--extended] [--project | --all-projects]` accepts either flag order.
 Without scope flags it retains overall totals.
 Every token table includes Harness, Provider and Model; native calls use `mez`.

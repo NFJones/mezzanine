@@ -3370,7 +3370,10 @@ At pane-body widths of at least 64 cells and heights of at least 14 rows, the
 editable agent composer MUST include a lightweight separator/context row and
 a display-only help row around the existing input surface. The header rule MUST
 fill the allocated pane width, independent of the prose wrapping cap, without
-crossing split dividers. Static decoration MUST use foreground-only dim
+crossing split dividers. Active status text MUST have one separating space before
+the trailing rule resumes when space remains; clipping MUST NOT add a row or
+exceed the allocated width. Idle decoration remains unchanged.
+Static decoration MUST use foreground-only dim
 thinking-log styling; the active status label retains its wave overlay.
 Unfocused/read-only composers MUST use their own resolved conversation title
 when available, falling back to `agent draft`. This is not agent identity or a

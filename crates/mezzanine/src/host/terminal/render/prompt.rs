@@ -459,11 +459,16 @@ fn agent_composer_decoration_rendition(ui_theme: &UiTheme) -> GraphicRendition {
 
 /// Clips header text with the shared display-width owner, then fills remaining
 /// allocated pane cells with a rule. Prose wrapping caps do not bound this row.
-fn agent_composer_header_rule(header: &str, width: usize) -> String {
+fn agent_composer_header_rule(header: &str, width: usize, active: bool) -> String {
     let clipped = fit_width(header, width);
     let text = clipped.trim_end();
     let remaining = width.saturating_sub(terminal_text_width(text));
-    format!("{text}{}", "─".repeat(remaining))
+    let separator = usize::from(active && remaining > 0);
+    format!(
+        "{text}{}{}",
+        " ".repeat(separator),
+        "─".repeat(remaining.saturating_sub(separator))
+    )
 }
 
 /// Runs the prompt shadow hint style span operation for this subsystem.
@@ -866,8 +871,9 @@ pub(super) fn render_agent_prompt_block(
         let (label, help) = agent_composer_help(&prompt, composer);
         let label = if composer.read_only {
             let title = composer.session_title.as_deref().unwrap_or(label);
-            let reserved =
-                6_usize.saturating_add(live_footer.map(terminal_text_width).unwrap_or(0));
+            let reserved = 6_usize
+                .saturating_add(live_footer.map(terminal_text_width).unwrap_or(0))
+                .saturating_add(usize::from(live_footer.is_some()));
             composer_title_label(title, width.saturating_sub(reserved))
         } else {
             label.to_string()
@@ -876,9 +882,10 @@ pub(super) fn render_agent_prompt_block(
             || format!("── {label} ──"),
             |status| format!("── {label} · {status}"),
         );
-        prompt_layout
-            .lines
-            .insert(0, agent_composer_header_rule(&header, width));
+        prompt_layout.lines.insert(
+            0,
+            agent_composer_header_rule(&header, width, live_footer.is_some()),
+        );
         prompt_layout.shadow_spans.insert(0, Vec::new());
         prompt_live_footer_suffixes.insert(
             0,

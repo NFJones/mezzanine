@@ -147,6 +147,38 @@ fn composer_lowercase_guidance_preserves_draft_case() {
 
 /// Composer decorations use the restored thinking rendition and fill the pane
 /// width with a rule, without changing input geometry or active-label motion.
+/// Active parentheticals remain separated from the resumed rule in editable
+/// and read-only views, without changing draft bytes or allocated header width.
+#[test]
+fn composer_active_header_separates_timer_from_trailing_rule() {
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
+    prompt.buffer.insert_text("draft 雪");
+    let before = prompt.clone();
+    for role in [ClientViewRole::Primary, ClientViewRole::Observer] {
+        for width in [64, 80, 120] {
+            let shown = view(
+                Size::new(width, 24).unwrap(),
+                &prompt,
+                AgentComposerContext::default(),
+                role,
+            );
+            let header = shown
+                .lines
+                .iter()
+                .find(|line| line.contains("executing"))
+                .unwrap();
+            assert!(header.contains(") ─"), "{header}");
+            assert!(!header.contains(")─"), "{header}");
+            assert_eq!(
+                unicode_width::UnicodeWidthStr::width(header.as_str()),
+                usize::from(width)
+            );
+            assert_eq!(prompt, before);
+        }
+    }
+}
+
+/// Composer decorations fill the pane width without changing input geometry.
 #[test]
 fn composer_header_rule_fills_width_with_static_shadow_style() {
     let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
