@@ -133,9 +133,13 @@ should be assumed to exist.
 Custom profiles can select a model and narrow permissions, MCP access,
 environment, cooperation mode, and filesystem scopes. See the
 [configuration reference](../configuration/reference.md). The prospective
-`agents.name_mode` setting chooses `nonhuman` (default), `human`, or
+`agents.name_mode` setting chooses `machine` (default), `alien`, `human`, or
 `literal` display names for primary and child agents; changing it does not rename existing identities or alter
 their canonical identities.
+Machine and alien each retain 4,096 names from the exact original ordered blocks:
+machine compounds first, alien syllabic names second. Neither category spills
+into another on exhaustion; the canonical agent ID is the fallback. Schema 101
+maps exact legacy `nonhuman` to `machine`, without rewriting saved names.
 
 ## Use routed loops sparingly
 

@@ -3653,7 +3653,7 @@ fn migrates_schema_94_by_removing_only_outbound_peer_marker_colors() {
         );
         assert_eq!(
             root.pointer("/agents/name_mode"),
-            Some(&serde_json::json!("nonhuman"))
+            Some(&serde_json::json!("machine"))
         );
         assert_eq!(
             root.pointer("/theme/colors/prompt_fg"),
@@ -3738,7 +3738,7 @@ fn migrates_schema_94_toml_inline_agents_without_rewriting_authored_values() {
     for (text, expected, valid) in [
         (
             "version = 94\nagents = {}\ntheme = { colors = { agent_transcript_peer_receiver_fg = \"thinking\" } }\n",
-            serde_json::json!("nonhuman"),
+            serde_json::json!("machine"),
             true,
         ),
         (

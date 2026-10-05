@@ -184,15 +184,15 @@ fn config_mutation_rejects_validation_failure() {
 /// validation, so a rejected requested value cannot persist as a partial edit.
 #[test]
 fn config_mutation_handles_subagent_name_mode_transactionally() {
-    let source = "[agents]\nname_mode = \"nonhuman\"\n";
+    let source = "[agents]\nname_mode = \"machine\"\n";
     let mut set = plan_config_mutation(
         ConfigFormat::Toml,
         source,
         ConfigScope::Primary,
-        set_string("agents.name_mode", "nonhuman"),
+        set_string("agents.name_mode", "machine"),
     )
     .unwrap();
-    for mode in ["human", "literal"] {
+    for mode in ["alien", "human", "literal"] {
         set = plan_config_mutation(
             ConfigFormat::Toml,
             &set.text,
@@ -217,7 +217,7 @@ fn config_mutation_handles_subagent_name_mode_transactionally() {
     assert!(
         invalid
             .message()
-            .contains("agents.name_mode must be nonhuman, human, or literal")
+            .contains("agents.name_mode must be machine, alien, human, or literal")
     );
 
     let reset = plan_config_mutation(

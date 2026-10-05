@@ -37,6 +37,12 @@ fn runtime_primary_agent_name_survives_restart_and_rebind() {
             .as_deref(),
         Some(name.as_str())
     );
+    assert!(
+        crate::integrations::agent::subagent::SUBAGENT_MACHINE_NAMES
+            .iter()
+            .any(|candidate| candidate.to_ascii_lowercase() == name)
+    );
+    service.set_subagent_name_mode(crate::runtime::config::SubagentNameMode::Alien);
     service
         .agent_shell_store_mut()
         .start_new_conversation("%1")
@@ -47,6 +53,12 @@ fn runtime_primary_agent_name_survives_restart_and_rebind() {
     assert_ne!(
         service.primary_agent_display_name("%1"),
         Some(name.as_str())
+    );
+    let alien = service.primary_agent_display_name("%1").unwrap();
+    assert!(
+        crate::integrations::agent::subagent::SUBAGENT_ALIEN_NAMES
+            .iter()
+            .any(|candidate| candidate.to_ascii_lowercase() == alien)
     );
     service
         .agent_shell_store_mut()

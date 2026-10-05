@@ -223,7 +223,7 @@ fn initial_config_uses_native_shell_and_platform_sandbox_defaults() {
     );
     assert_eq!(
         agents.get("name_mode").and_then(toml::Value::as_str),
-        Some("nonhuman")
+        Some("machine")
     );
     assert_eq!(
         agents

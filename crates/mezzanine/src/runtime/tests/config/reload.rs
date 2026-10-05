@@ -872,7 +872,7 @@ fn runtime_config_reload_applies_prospective_subagent_name_mode() {
     let mut service = test_runtime_service();
     assert_eq!(
         service.subagent_name_mode(),
-        crate::runtime::config::SubagentNameMode::Nonhuman
+        crate::runtime::config::SubagentNameMode::Machine
     );
     service.set_subagent_lineage(
         "agent-%existing",
@@ -919,7 +919,7 @@ fn runtime_config_reload_applies_prospective_subagent_name_mode() {
     assert!(
         error
             .message()
-            .contains("agents.name_mode must be nonhuman, human, or literal"),
+            .contains("agents.name_mode must be machine, alien, human, or literal"),
         "{error}"
     );
     assert_eq!(
@@ -976,7 +976,7 @@ fn runtime_config_reload_from_disk_rolls_back_invalid_subagent_name_mode() {
 
     assert!(response.contains(r#""error""#), "{response}");
     assert!(
-        response.contains("agents.name_mode must be nonhuman, human, or literal"),
+        response.contains("agents.name_mode must be machine, alien, human, or literal"),
         "{response}"
     );
     assert_eq!(
@@ -987,7 +987,7 @@ fn runtime_config_reload_from_disk_rolls_back_invalid_subagent_name_mode() {
 }
 
 /// Verifies direct runtime parsing defaults an omitted display-name mode and
-/// accepts only the three exact documented strings.
+/// accepts only the four exact documented strings.
 ///
 /// Config validation normally guards file-backed input, but runtime callers can
 /// construct effective JSON directly. This parser-level regression keeps that
@@ -998,14 +998,12 @@ fn runtime_subagent_name_mode_parser_defaults_and_rejects_invalid_values() {
     for root in [serde_json::json!({}), serde_json::json!({"agents": {}})] {
         assert_eq!(
             crate::runtime::config::runtime_subagent_name_mode_from_config(&root).unwrap(),
-            crate::runtime::config::SubagentNameMode::Nonhuman
+            crate::runtime::config::SubagentNameMode::Machine
         );
     }
     for (value, expected) in [
-        (
-            "nonhuman",
-            crate::runtime::config::SubagentNameMode::Nonhuman,
-        ),
+        ("machine", crate::runtime::config::SubagentNameMode::Machine),
+        ("alien", crate::runtime::config::SubagentNameMode::Alien),
         ("human", crate::runtime::config::SubagentNameMode::Human),
         ("literal", crate::runtime::config::SubagentNameMode::Literal),
     ] {
@@ -1016,6 +1014,7 @@ fn runtime_subagent_name_mode_parser_defaults_and_rejects_invalid_values() {
         );
     }
     for value in [
+        serde_json::json!("nonhuman"),
         serde_json::json!("Human"),
         serde_json::json!(7),
         serde_json::json!(false),
@@ -1025,7 +1024,7 @@ fn runtime_subagent_name_mode_parser_defaults_and_rejects_invalid_values() {
             crate::runtime::config::runtime_subagent_name_mode_from_config(&root).unwrap_err();
         assert_eq!(
             error.message(),
-            "agents.name_mode must be nonhuman, human, or literal"
+            "agents.name_mode must be machine, alien, human, or literal"
         );
     }
 }

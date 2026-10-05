@@ -236,10 +236,8 @@ fn runtime_config_change_updates_subagent_name_mode_transactionally() {
     };
 
     for (mode, expected) in [
-        (
-            "nonhuman",
-            crate::runtime::config::SubagentNameMode::Nonhuman,
-        ),
+        ("machine", crate::runtime::config::SubagentNameMode::Machine),
+        ("alien", crate::runtime::config::SubagentNameMode::Alien),
         ("human", crate::runtime::config::SubagentNameMode::Human),
         ("literal", crate::runtime::config::SubagentNameMode::Literal),
     ] {
@@ -279,7 +277,7 @@ fn runtime_config_change_updates_subagent_name_mode_transactionally() {
     assert_eq!(result.status, ActionStatus::Succeeded);
     assert_eq!(
         service.subagent_name_mode(),
-        crate::runtime::config::SubagentNameMode::Nonhuman
+        crate::runtime::config::SubagentNameMode::Machine
     );
     let config_text = fs::read_to_string(config_root.join("config.toml")).unwrap();
     assert!(!config_text.contains("name_mode"), "{config_text}");

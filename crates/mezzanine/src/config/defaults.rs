@@ -173,7 +173,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 100
+version = 101
 
 # Model-selected skills remain default-off when policy is absent. Explicit false
 # is a global veto; omission permits individual document/operator opt-ins.
@@ -679,7 +679,7 @@ max_subagents_per_subagent = 2
 max_subagent_panes_per_window = 4
 subagent_wait_policy = "join"
 # Display-name allocation mode for future primary and child identities.
-name_mode = "nonhuman"
+name_mode = "machine"
 max_depth = 2
 
 # Model profiles are materialized by authentication/catalog setup. When a

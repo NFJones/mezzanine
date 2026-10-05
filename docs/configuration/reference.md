@@ -65,7 +65,7 @@ copy/replace examples such as command-rule arrays, or provider catalog fields
 that are materialized only after authentication; they are not activation
 markers.
 
-The current config schema version is `100`. On launch, Mezzanine migrates an
+The current config schema version is `101`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -88,6 +88,10 @@ absent/default-off and preserving authored action allowlists.
 The v99-to-v100 migration renames `agents.subagent_name_mode` to
 `agents.name_mode`, preferring an authored new key and removing the old key.
 It preserves authored naming values in TOML (including inline tables), JSON and YAML.
+The v100-to-v101 migration maps exact `agents.name_mode = "nonhuman"` to
+`machine`, leaving omission, other authored values/types and unrelated settings
+unchanged. Project overlays are not migrated: update retired `nonhuman` values
+to `machine` or another supported category when advancing their schema version.
 
 Project overlays can use `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
 `.mezzanine/config.yml`, or `.mezzanine/config.json` under a project directory.
@@ -176,7 +180,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `100` | Config schema version. Do not change this. |
+| `version` | integer | `101` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
@@ -954,7 +958,7 @@ description.
 | `agents.max_subagents_per_subagent` | integer | `2` | Maximum child subagents for each subagent. |
 | `agents.max_subagent_panes_per_window` | integer | `4` | Maximum subagent panes per window. |
 | `agents.subagent_wait_policy` | string | `"join"` | Default wait behavior for spawned subagents. |
-| `agents.name_mode` | string | `"nonhuman"` | Prospective display-name allocation mode for primary and child agents: `nonhuman`, `human`, or `literal`. Reloading or a live config change affects only new identities and never renames existing lineage or persisted conversations. Schema 100 migrates the former `agents.subagent_name_mode` key, preferring an authored new key. Canonical agent IDs and authority remain unchanged. |
+| `agents.name_mode` | string | `"machine"` | Prospective display-name allocation mode for primary and child agents: `machine`, `alien`, `human`, or `literal`. Reloading or a live config change affects only new identities and never renames existing lineage or persisted conversations. Schema 101 maps exact legacy `nonhuman` to `machine`; project overlays require an authored update. Canonical agent IDs and authority remain unchanged. |
 | `agents.max_depth` | integer | `2` | Maximum subagent tree depth. |
 
 The same resolved conversation title labels unfocused/read-only composer headers

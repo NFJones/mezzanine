@@ -8,7 +8,7 @@
 
 use rand::RngExt;
 
-use crate::integrations::agent::subagent::SUBAGENT_NONHUMAN_NAMES;
+use crate::integrations::agent::subagent::{SUBAGENT_ALIEN_NAMES, SUBAGENT_MACHINE_NAMES};
 
 use super::{
     AuditActor, AuditRecord, ClientRole, Envelope, EventKind, MezError, PaneProcessStart, Path,
@@ -520,8 +520,14 @@ impl RuntimeSessionService {
             .collect::<std::collections::BTreeSet<_>>();
         match self.subagent_name_mode() {
             SubagentNameMode::Literal => child_agent_id.to_string(),
-            SubagentNameMode::Nonhuman => select_subagent_display_name_from_corpus(
-                SUBAGENT_NONHUMAN_NAMES.as_slice(),
+            SubagentNameMode::Machine => select_subagent_display_name_from_corpus(
+                SUBAGENT_MACHINE_NAMES.as_slice(),
+                &active_names,
+                child_agent_id,
+                rng,
+            ),
+            SubagentNameMode::Alien => select_subagent_display_name_from_corpus(
+                SUBAGENT_ALIEN_NAMES.as_slice(),
                 &active_names,
                 child_agent_id,
                 rng,
@@ -2221,6 +2227,49 @@ mod tests {
     use rand::SeedableRng;
 
     use super::select_subagent_display_name_from_corpus;
+
+    /// Exhausting one category must not borrow available names from another.
+    /// Shared primary reservations are case-insensitive and the fallback remains
+    /// the exact canonical ID, without numeric suffixes or cross-category spill.
+    #[test]
+    fn category_exhaustion_preserves_exact_identity_without_spillover() {
+        use crate::integrations::agent::subagent::{SUBAGENT_ALIEN_NAMES, SUBAGENT_MACHINE_NAMES};
+        use crate::runtime::config::SubagentNameMode;
+        for (mode, corpus, other_mode, other) in [
+            (
+                SubagentNameMode::Machine,
+                SUBAGENT_MACHINE_NAMES.as_slice(),
+                SubagentNameMode::Alien,
+                SUBAGENT_ALIEN_NAMES.as_slice(),
+            ),
+            (
+                SubagentNameMode::Alien,
+                SUBAGENT_ALIEN_NAMES.as_slice(),
+                SubagentNameMode::Machine,
+                SUBAGENT_MACHINE_NAMES.as_slice(),
+            ),
+        ] {
+            let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+            for (index, name) in corpus.iter().enumerate() {
+                service.reserve_primary_agent_name(
+                    &format!("saved-{index}"),
+                    &name.to_ascii_uppercase(),
+                );
+            }
+            service.set_subagent_name_mode(mode);
+            assert_eq!(
+                service.resolve_subagent_display_name("agent-%27"),
+                "agent-%27"
+            );
+            service.set_subagent_name_mode(other_mode);
+            let selected = service.resolve_subagent_display_name("agent-%28");
+            assert!(
+                other
+                    .iter()
+                    .any(|name| name.to_ascii_lowercase() == selected)
+            );
+        }
+    }
 
     #[test]
     /// Verifies corpus allocation excludes names held by active subagents while

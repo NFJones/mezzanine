@@ -10,4 +10,4 @@
 /// presentation naming remains in this module.
 mod names;
 #[allow(unused_imports)]
-pub use names::{SUBAGENT_HUMAN_NAMES, SUBAGENT_NONHUMAN_NAMES};
+pub use names::{SUBAGENT_ALIEN_NAMES, SUBAGENT_HUMAN_NAMES, SUBAGENT_MACHINE_NAMES};

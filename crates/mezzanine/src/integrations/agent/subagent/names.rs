@@ -5,14 +5,20 @@
 
 use std::sync::LazyLock;
 
-/// Built-in nonhuman subagent display names embedded in the product binary.
-///
-/// The reference corpus remains outside the tracked product source tree. This
-/// lazy collection turns the compile-time embedded text into individual names
-/// only when display-name allocation first needs it.
-#[allow(dead_code)]
-pub static SUBAGENT_NONHUMAN_NAMES: LazyLock<Vec<&str>> =
-    LazyLock::new(|| include_str!("nonhuman_names.txt").lines().collect());
+/// Exact historical ordered union embedded once, not a selectable mixed policy.
+/// Its first block contains machine compounds, the second alien syllabic names.
+/// Preserving this asset avoids regeneration and makes partition provenance
+/// independently fingerprintable. Existing stored names never consult it again.
+static ALL_CATEGORY_NAMES: LazyLock<Vec<&str>> =
+    LazyLock::new(|| include_str!("name_categories.txt").lines().collect());
+
+/// Machine compounds: the original first 4,096 entries, in exact source order.
+pub static SUBAGENT_MACHINE_NAMES: LazyLock<Vec<&str>> =
+    LazyLock::new(|| ALL_CATEGORY_NAMES[..4096].to_vec());
+
+/// Alien syllabic names: the original final 4,096 entries, in exact source order.
+pub static SUBAGENT_ALIEN_NAMES: LazyLock<Vec<&str>> =
+    LazyLock::new(|| ALL_CATEGORY_NAMES[4096..].to_vec());
 
 /// Built-in human-readable subagent display names.
 ///
@@ -198,7 +204,56 @@ pub const SUBAGENT_HUMAN_NAMES: &[&str] = &[
 mod tests {
     use sha2::{Digest, Sha256};
 
-    use super::{SUBAGENT_HUMAN_NAMES, SUBAGENT_NONHUMAN_NAMES};
+    use super::{
+        ALL_CATEGORY_NAMES as SUBAGENT_NONHUMAN_NAMES, SUBAGENT_ALIEN_NAMES, SUBAGENT_HUMAN_NAMES,
+        SUBAGENT_MACHINE_NAMES,
+    };
+
+    /// Freezes the exact two blocks, including casefold disjointness, endpoints
+    /// and ordered union. Classification is presentation vocabulary, not a
+    /// change to names or a regeneration of the historical corpus.
+    #[test]
+    fn category_name_corpus_partitions_preserve_exact_source_blocks() {
+        let digest = |names: &[&str]| {
+            let mut hash = Sha256::new();
+            for name in names {
+                hash.update(name.as_bytes());
+                hash.update(b"\n");
+            }
+            hash.finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        assert_eq!(SUBAGENT_MACHINE_NAMES.len(), 4096);
+        assert_eq!(SUBAGENT_ALIEN_NAMES.len(), 4096);
+        assert_eq!(SUBAGENT_MACHINE_NAMES.first(), Some(&"AxiomAmber"));
+        assert_eq!(SUBAGENT_MACHINE_NAMES.last(), Some(&"ThrusterFlare"));
+        assert_eq!(SUBAGENT_ALIEN_NAMES.first(), Some(&"Aexvax"));
+        assert_eq!(SUBAGENT_ALIEN_NAMES.last(), Some(&"Raxqyr"));
+        assert_eq!(
+            digest(&SUBAGENT_MACHINE_NAMES),
+            "bc4b241a9f22cabb7fcca5fc860f713e91616c17489405cf106bbefee7cc76f1"
+        );
+        assert_eq!(
+            digest(&SUBAGENT_ALIEN_NAMES),
+            "4af4db237ec1c28de7be998750e2bd530e946078c9e5c38de35360c509ed8dd1"
+        );
+        let union = SUBAGENT_MACHINE_NAMES
+            .iter()
+            .chain(SUBAGENT_ALIEN_NAMES.iter())
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(union, *SUBAGENT_NONHUMAN_NAMES);
+        assert_eq!(
+            union
+                .iter()
+                .map(|name| name.to_ascii_lowercase())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            8192
+        );
+    }
 
     #[test]
     /// Verifies the compile-time embedded nonhuman corpus retains the complete

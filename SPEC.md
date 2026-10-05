@@ -3815,7 +3815,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 100 is the current implemented configuration schema version for this
+schema version 101 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -3851,6 +3851,10 @@ discovery policy and authored action allowlists. Schema 99 adds primary-user
 The `99 -> 100` migration MUST rename `agents.subagent_name_mode` to
 `agents.name_mode`, preserving an authored canonical value when both exist and
 removing the obsolete key in TOML (including inline tables), JSON and YAML.
+The `100 -> 101` migration MUST convert only exact authored `nonhuman` naming
+policy to `machine`, preserving omission, other values/types and unrelated
+fields in all supported formats. Current-schema input MUST reject `nonhuman`;
+project overlays require an explicit authored update rather than a runtime alias.
 
 The `90 -> 91` migration MUST advance only the schema version. It MUST preserve
 configured and omitted `frames.window.pills.<name>.foreground`,
@@ -4948,12 +4952,16 @@ The `agents` table MUST support `default_provider`, `default_model_profile`,
 `max_concurrent_agents`, `max_queued_turns`, `max_queued_bytes`,
 `max_root_subagents`, `max_subagents_per_subagent`,
 `max_subagent_panes_per_window`, `subagent_wait_policy`, `name_mode`, and `max_depth`.
-`agents.name_mode` MUST be exactly one of `nonhuman`, `human`, or
-`literal`, and MUST default to `nonhuman`. It selects presentation-only
+`agents.name_mode` MUST be exactly one of `machine`, `alien`, `human`, or
+`literal`, and MUST default to `machine`. It selects presentation-only
 display-name allocation for primary and child agents created after the effective configuration
 is loaded or reloaded; it MUST NOT rename existing agents or persisted
 conversations, affect canonical agent IDs, identity, routing, authority, or
 delegation limits, or itself require a particular name corpus or allocator.
+Machine and alien allocation each use their exact 4,096-entry ordered partition
+of the historical asset, respectively machine compounds and alien syllabic names.
+Category exhaustion MUST fall back to the exact canonical ID without spillover
+or suffix invention; shared case-insensitive reservations remain authoritative.
 `agents.max_queued_turns` MUST be a positive integer and MUST default to `256`.
 `agents.max_queued_bytes` MUST be a positive integer and MUST default to
 `4194304`. The scheduler MUST reject new queue admission when either budget
@@ -9315,7 +9323,7 @@ window or otherwise move the primary user's active window or pane.
 
 Each spawned subagent MUST receive a human-readable display name according to
 the prospective `agents.name_mode` policy in effect when it is
-spawned. Product-generated nonhuman and human display names MUST be lowercase
+spawned. Product-generated machine, alien and human display names MUST be lowercase
 ASCII; literal names retain the canonical agent id. The display name MUST be
 unique among reserved primary and child identities ignoring ASCII case when the subagent
 is spawned. Existing live or persisted names MUST NOT be renamed by a policy
@@ -12396,7 +12404,7 @@ grandparents, unrelated agents, and fenced descendants retain ordinary outbound
 recipient labels. The `parent<` marker uses `agent_transcript_parent`; other
 outbound markers use `agent_transcript_peer_recipient`.
 For ordinary child recipients, outbound sender rows MUST use the spawn-owned
-display name rather than the opaque agent id. Generated human and nonhuman names
+display name rather than the opaque agent id. Generated human, machine and alien names
 remain readable, while literal-name mode retains its assigned literal name. This
 name MUST be bounded and sanitized; an empty result MUST fall back to the
 canonical raw agent id. Selectors MUST retain their explicit recipient

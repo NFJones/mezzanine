@@ -85,16 +85,16 @@ fn spawn_subagent_for_display_name_test(service: &mut RuntimeSessionService) -> 
 ///
 /// This exercises the real pane spawn path rather than a parser-only configuration test,
 /// ensuring display names exposed through the response and stored lifecycle state honor the
-/// prospective runtime setting for nonhuman, human, and literal child allocations.
+/// prospective runtime setting for machine, alien, human, and literal allocations.
 #[test]
 fn runtime_subagent_spawn_applies_configured_display_name_mode() {
     let mut nonhuman_service = test_runtime_service();
     let (child_id, nonhuman_name) = spawn_subagent_for_display_name_test(&mut nonhuman_service);
     assert!(
-        crate::integrations::agent::subagent::SUBAGENT_NONHUMAN_NAMES
+        crate::integrations::agent::subagent::SUBAGENT_MACHINE_NAMES
             .iter()
             .any(|name| name.to_ascii_lowercase() == nonhuman_name),
-        "default mode must use the nonhuman corpus: {nonhuman_name}"
+        "default mode must use the machine corpus: {nonhuman_name}"
     );
     assert_eq!(nonhuman_name, nonhuman_name.to_ascii_lowercase());
     assert_eq!(
@@ -105,6 +105,17 @@ fn runtime_subagent_spawn_applies_configured_display_name_mode() {
         nonhuman_name
     );
     nonhuman_service.terminate_all_pane_processes().unwrap();
+
+    let mut alien_service = test_runtime_service();
+    alien_service.set_subagent_name_mode(crate::runtime::config::SubagentNameMode::Alien);
+    let (_, alien_name) = spawn_subagent_for_display_name_test(&mut alien_service);
+    assert!(
+        crate::integrations::agent::subagent::SUBAGENT_ALIEN_NAMES
+            .iter()
+            .any(|name| name.to_ascii_lowercase() == alien_name)
+    );
+    assert_eq!(alien_name, alien_name.to_ascii_lowercase());
+    alien_service.terminate_all_pane_processes().unwrap();
 
     let mut human_service = test_runtime_service();
     human_service.set_subagent_name_mode(crate::runtime::config::SubagentNameMode::Human);

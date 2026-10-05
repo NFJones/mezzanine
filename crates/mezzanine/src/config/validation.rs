@@ -350,11 +350,14 @@ pub(crate) fn validate_config_text_with_document(
             });
         }
         if let Some(value) = root.pointer("/agents/name_mode")
-            && !matches!(value.as_str(), Some("nonhuman" | "human" | "literal"))
+            && !matches!(
+                value.as_str(),
+                Some("machine" | "alien" | "human" | "literal")
+            )
         {
             diagnostics.push(ConfigDiagnostic {
                 path: "agents.name_mode".to_string(),
-                message: "agents.name_mode must be nonhuman, human, or literal".to_string(),
+                message: "agents.name_mode must be machine, alien, human, or literal".to_string(),
             });
         }
     }
@@ -575,11 +578,11 @@ pub(crate) fn validate_config_text_with_document(
                 message: "unsupported subagent wait policy; use join or detach".to_string(),
             });
         } else if path == "agents.name_mode"
-            && !matches!(value.as_str(), "nonhuman" | "human" | "literal")
+            && !matches!(value.as_str(), "machine" | "alien" | "human" | "literal")
         {
             diagnostics.push(ConfigDiagnostic {
                 path,
-                message: "agents.name_mode must be nonhuman, human, or literal".to_string(),
+                message: "agents.name_mode must be machine, alien, human, or literal".to_string(),
             });
         } else if path == "agents.auto_sizing.fallback_policy" && value != "use-default-profile" {
             diagnostics.push(ConfigDiagnostic {

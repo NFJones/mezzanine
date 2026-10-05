@@ -14,6 +14,7 @@ mod driver;
 mod ops;
 mod v01_v06;
 mod v07_v12;
+mod v100_v101;
 mod v13_v19;
 mod v20_v21;
 mod v21_v22;

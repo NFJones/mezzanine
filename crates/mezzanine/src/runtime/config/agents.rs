@@ -587,9 +587,11 @@ pub(crate) fn runtime_subagent_wait_policy_from_config(root: &Value) -> Result<S
 /// lineage or persisted conversations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum SubagentNameMode {
-    /// Use the nonhuman display-name corpus.
+    /// Use the machine display-name corpus.
     #[default]
-    Nonhuman,
+    Machine,
+    /// Use the alien display-name corpus.
+    Alien,
     /// Use the human display-name corpus.
     Human,
     /// Use the canonical runtime agent id verbatim.
@@ -600,7 +602,8 @@ impl SubagentNameMode {
     /// Parses one exact configuration value into a display-name mode.
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
-            "nonhuman" => Some(Self::Nonhuman),
+            "machine" => Some(Self::Machine),
+            "alien" => Some(Self::Alien),
             "human" => Some(Self::Human),
             "literal" => Some(Self::Literal),
             _ => None,
@@ -610,7 +613,8 @@ impl SubagentNameMode {
     /// Returns the canonical configuration spelling for this mode.
     pub(crate) fn name(self) -> &'static str {
         match self {
-            Self::Nonhuman => "nonhuman",
+            Self::Machine => "machine",
+            Self::Alien => "alien",
             Self::Human => "human",
             Self::Literal => "literal",
         }
@@ -627,14 +631,14 @@ pub(crate) fn runtime_subagent_name_mode_from_config(root: &Value) -> Result<Sub
     };
     let value = runtime_json_string(Some(value)).ok_or_else(|| {
         MezError::config(format!(
-            "agents.name_mode must be {}, human, or literal",
-            SubagentNameMode::Nonhuman.name()
+            "agents.name_mode must be {}, alien, human, or literal",
+            SubagentNameMode::Machine.name()
         ))
     })?;
     SubagentNameMode::parse(value).ok_or_else(|| {
         MezError::config(format!(
-            "agents.name_mode must be {}, human, or literal",
-            SubagentNameMode::Nonhuman.name()
+            "agents.name_mode must be {}, alien, human, or literal",
+            SubagentNameMode::Machine.name()
         ))
     })
 }

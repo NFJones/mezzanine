@@ -967,7 +967,8 @@ fn validates_agent_peer_message_log_mode_values() {
 #[test]
 fn validates_agent_subagent_name_mode_values() {
     for (format, text) in [
-        (ConfigFormat::Toml, "[agents]\nname_mode = \"nonhuman\"\n"),
+        (ConfigFormat::Toml, "[agents]\nname_mode = \"machine\"\n"),
+        (ConfigFormat::Toml, "[agents]\nname_mode = \"alien\"\n"),
         (ConfigFormat::Json, r#"{"agents":{"name_mode":"human"}}"#),
         (ConfigFormat::Yaml, "agents:\n  name_mode: literal\n"),
     ] {
@@ -981,6 +982,7 @@ fn validates_agent_subagent_name_mode_values() {
     }
     for (format, text) in [
         (ConfigFormat::Toml, "[agents]\nname_mode = \"robot\"\n"),
+        (ConfigFormat::Toml, "[agents]\nname_mode = \"nonhuman\"\n"),
         (ConfigFormat::Toml, "[agents]\nname_mode = \"Human\"\n"),
         (ConfigFormat::Toml, "[agents]\nname_mode = 3\n"),
         (ConfigFormat::Toml, "[agents]\nname_mode = \"\"\n"),
@@ -995,7 +997,8 @@ fn validates_agent_subagent_name_mode_values() {
         );
         assert!(validation.diagnostics.iter().any(|diagnostic| {
             diagnostic.path == "agents.name_mode"
-                && diagnostic.message == "agents.name_mode must be nonhuman, human, or literal"
+                && diagnostic.message
+                    == "agents.name_mode must be machine, alien, human, or literal"
         }));
     }
 }
