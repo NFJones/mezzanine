@@ -4,7 +4,7 @@ use super::{
     AttachedTerminalOutputModes, ClientId, MezError, Result, TerminalStepRefreshRequirement,
     TerminalStyleSpan, json_escape,
 };
-use crate::host::terminal::wire_styles::parse_terminal_graphic_rendition;
+use crate::host::terminal::wire_status::parse_terminal_iroh_status_slot;
 pub(super) use crate::host::terminal::wire_styles::parse_terminal_style_span_row;
 #[cfg(test)]
 use mez_terminal::TerminalColor;
@@ -306,37 +306,6 @@ fn parse_focus_label_presentation_ids(value: &serde_json::Value) -> Result<Vec<u
             })
         })
         .collect()
-}
-
-/// Decodes one server-owned client-space Iroh status slot.
-fn parse_terminal_iroh_status_slot(
-    value: &serde_json::Value,
-) -> Result<crate::host::terminal::TerminalIrohStatusSlot> {
-    let number = |field: &str| {
-        value
-            .get(field)
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| MezError::invalid_state("terminal Iroh status slot is incomplete"))
-            .and_then(|value| {
-                usize::try_from(value)
-                    .map_err(|_| MezError::invalid_state("terminal Iroh status slot is too large"))
-            })
-    };
-    let rendition = |field: &str| {
-        value
-            .get(field)
-            .ok_or_else(|| MezError::invalid_state("terminal Iroh status rendition is missing"))
-            .and_then(parse_terminal_graphic_rendition)
-    };
-    Ok(crate::host::terminal::TerminalIrohStatusSlot {
-        row: number("row")?,
-        column: number("column")?,
-        width: number("width")?,
-        good: rendition("good")?,
-        degraded: rendition("degraded")?,
-        poor: rendition("poor")?,
-        unknown: rendition("unknown")?,
-    })
 }
 
 /// Returns the redraw requirements reported by a terminal step response.

@@ -57,6 +57,7 @@ pub(crate) mod wire_events;
 pub(crate) mod wire_identity;
 pub(crate) mod wire_modes;
 pub(crate) mod wire_receipts;
+pub(crate) mod wire_status;
 pub(crate) mod wire_styles;
 pub(crate) use render::render_focus_label;
 /// Exposes the screen module boundary.
