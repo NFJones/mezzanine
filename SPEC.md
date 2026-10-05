@@ -537,8 +537,11 @@ generations MUST still advance, and checkpoint-based recovery eligibility MUST
 remain unchanged; timestamp retention does not preserve prior live authority.
 
 Remote creation MUST require a client-generated idempotency key scoped to the
-authenticated host principal and normalized creation request. A replay of the
-same key and request MUST return the original lease/session result. Reusing the
+authenticated host principal and normalized creation request. The
+same logical CLI operation MUST retain its original random operation key across
+transport compatibility retries. Independent operations MUST allocate a fresh
+collision-resistant nonce, not derive identity solely from a reusable process ID.
+A replay of the same key and request MUST return the original lease/session result. Reusing the
 key with different normalized inputs MUST fail with `conflict`. Failed creation
 MUST compensate or retain an administratively visible terminal state; it MUST
 NOT orphan a live runtime or usable authority.

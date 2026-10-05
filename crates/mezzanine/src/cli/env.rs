@@ -496,14 +496,21 @@ pub(super) fn selected_socket_path(socket_selection: &SocketSelection) -> &PathB
     }
 }
 
-/// Runs the cli idempotency key operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Allocates one collision-resistant identity for a new logical CLI operation.
+/// Callers retain this value in their prepared request for all retries; neither
+/// PID reuse nor a second operation in the same process reuses the identity.
 pub(super) fn cli_idempotency_key(operation: &str) -> String {
-    format!("cli-{}-{operation}", std::process::id())
+    cli_idempotency_key_with_nonce(operation, rand::random::<u128>())
 }
+
+/// Encodes an operation-local random nonce without process or clock identity.
+fn cli_idempotency_key_with_nonce(operation: &str, nonce: u128) -> String {
+    format!("cli-{operation}-{nonce:032x}")
+}
+
+#[cfg(test)]
+mod idempotency_tests;
+
 /// Runs the registry root operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

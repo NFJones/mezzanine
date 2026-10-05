@@ -437,8 +437,8 @@ mod routing_tests {
     use super::*;
 
     /// Forwarding new-session X11 intent must not turn creation into default
-    /// resolution or takeover. The existing routing owner retains the requested
-    /// name and operation key; key collision hardening is a separate defect.
+    /// resolution or takeover. Separate creation operations have distinct keys;
+    /// a prepared routing clone retains its original key for retry.
     #[test]
     fn remote_new_x11_preserves_fresh_routing_and_name() {
         for trusted in [false, true] {
@@ -453,6 +453,7 @@ mod routing_tests {
             assert_eq!(args.x11_trusted, trusted);
             assert!(!args.x11_takeover);
             let first = remote_session_routing(&args);
+            assert_eq!(first.clone(), first);
             let second = remote_session_routing(&args);
             let super::super::super::control_client::IrohSessionRouting::Create {
                 name,
@@ -469,7 +470,7 @@ mod routing_tests {
             else {
                 panic!("fresh creation required");
             };
-            assert_eq!(idempotency_key, next);
+            assert_ne!(idempotency_key, next);
             assert!(!idempotency_key.is_empty());
         }
     }

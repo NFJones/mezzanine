@@ -508,6 +508,9 @@ creates. `new` requests a fresh session, while an explicit
 attach target selects only an authorized existing lease. Pairing and profile
 checks are implemented as host-only operations and cannot create or attach a
 session.
+CLI mutation keys use a fresh random nonce per logical operation rather than a
+process ID. Prepared request retries retain their original key; starting a new
+command is a new operation, not recovery of an ambiguous earlier creation.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.
