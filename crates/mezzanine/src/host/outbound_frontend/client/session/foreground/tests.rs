@@ -140,6 +140,7 @@ fn inert_client(
         receipts,
         lines: vec!["exact snapshot".into()],
         events_negotiated: false,
+        render_rate_limit_fps: None,
     };
     (root, listener, peer, client)
 }

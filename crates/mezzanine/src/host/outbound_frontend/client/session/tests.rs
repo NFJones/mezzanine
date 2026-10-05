@@ -19,6 +19,22 @@ fn outbound_client_snapshot_validation_is_closed_and_identity_scoped() {
         "cursor":{"row":0,"column":0,"visible":false},"output_modes":{},"presentation_ids":[]});
     let snapshot: Snapshot = serde_json::from_value(original.clone()).unwrap();
     validate_snapshot(&snapshot, &handle, 2).unwrap();
+    assert_eq!(snapshot.render_rate_limit_fps, None);
+    for fps in [0_u64, 30, u64::MAX] {
+        let mut reported = original.clone();
+        reported["render_rate_limit_fps"] = serde_json::json!(fps);
+        let reported: Snapshot = serde_json::from_value(reported).unwrap();
+        assert_eq!(reported.render_rate_limit_fps, Some(fps));
+    }
+    for invalid in [
+        serde_json::json!(-1),
+        serde_json::json!("30"),
+        serde_json::json!(false),
+    ] {
+        let mut malformed = original.clone();
+        malformed["render_rate_limit_fps"] = invalid;
+        assert!(serde_json::from_value::<Snapshot>(malformed).is_err());
+    }
     for (pointer, value) in [
         ("/handle/generation", serde_json::json!(2)),
         ("/session/selected_version", serde_json::json!(2)),

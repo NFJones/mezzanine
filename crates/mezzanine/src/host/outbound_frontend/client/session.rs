@@ -35,6 +35,7 @@ struct Snapshot {
     cursor: serde_json::Value,
     output_modes: serde_json::Value,
     presentation_ids: Vec<u64>,
+    render_rate_limit_fps: Option<u64>,
 }
 
 /// Client pinned to its first exact session settlement, with one retained stream.
@@ -46,6 +47,7 @@ pub(crate) struct OutboundSessionClient {
     receipts: Vec<u64>,
     lines: Vec<String>,
     events_negotiated: bool,
+    render_rate_limit_fps: Option<u64>,
 }
 
 mod acknowledge;
@@ -117,6 +119,7 @@ impl OutboundFrontendClient {
                     client: self,
                     modes: snapshot_modes(&snapshot, columns, rows)?,
                     events_negotiated: params.event_stream_version == Some(1),
+                    render_rate_limit_fps: snapshot.render_rate_limit_fps,
                     lines: snapshot.lines.clone(),
                     receipts: snapshot.presentation_ids,
                     summary: snapshot.session,
@@ -190,6 +193,7 @@ impl OutboundSessionClient {
             self.modes = snapshot_modes(&snapshot, columns, rows)?;
             self.receipts = snapshot.presentation_ids;
             self.lines = snapshot.lines.clone();
+            self.render_rate_limit_fps = snapshot.render_rate_limit_fps;
             Ok((self, snapshot.lines))
         })
         .await

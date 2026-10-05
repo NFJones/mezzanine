@@ -554,6 +554,9 @@ An internal display-only view exchange now carries bounded rendered lines and
 validated session identity across exact-handle local IPC. It does not provide
 terminal input, presentation acknowledgement or the complete attached
 renderer. Failed exchanges dispose their owner instead of replaying requests.
+Snapshots retain optional server-resolved ordinary render-rate metadata without
+inventing a ceiling when unavailable or zero. Invalid explicit values reject;
+metadata retention alone does not enable foreground pacing or CLI activation.
 Snapshots also retain decoded style rows with finite span/cell bounds and
 original overlay order. Broker and client validate row alignment using the
 shared rendition interpretation; unknown style metadata is not forwarded.

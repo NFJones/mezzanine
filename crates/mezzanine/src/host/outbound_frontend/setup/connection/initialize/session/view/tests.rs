@@ -5,6 +5,32 @@
 
 use super::*;
 
+/// Missing cadence remains unavailable, while zero and reported rates retain
+/// their exact values. Malformed explicit metadata cannot become a scheduling
+/// policy or cross IPC as an invented default.
+#[test]
+fn outbound_view_render_rate_preserves_optional_policy() {
+    assert_eq!(project_render_rate(&serde_json::json!({})).unwrap(), None);
+    for fps in [0_u64, 30, u64::MAX] {
+        assert_eq!(
+            project_render_rate(&serde_json::json!({"result":{"render_rate_limit_fps":fps}}))
+                .unwrap(),
+            Some(fps)
+        );
+    }
+    for invalid in [
+        serde_json::json!(-1),
+        serde_json::json!("30"),
+        serde_json::json!(false),
+        serde_json::Value::Null,
+    ] {
+        assert!(
+            project_render_rate(&serde_json::json!({"result":{"render_rate_limit_fps":invalid}}))
+                .is_err()
+        );
+    }
+}
+
 /// Broker snapshots project only decoded cursor/output modes after checking
 /// viewport bounds. Unknown peer metadata cannot become local terminal policy.
 #[test]

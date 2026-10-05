@@ -305,7 +305,8 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             second.delivered_receipts,
             serde_json::from_value::<Vec<u64>>(view["presentation_ids"].clone()).unwrap()
         );
-        assert_eq!(view.as_object().unwrap().len(), 7);
+        assert!(view["render_rate_limit_fps"].is_u64());
+        assert_eq!(view.as_object().unwrap().len(), 8);
         drop(second);
         drop(first_local);
         drop(second_local);

@@ -102,6 +102,7 @@ impl InitializedSessionFrontend {
             let modes = project_view_modes(&response, request.columns, request.rows)?;
             let response_value: serde_json::Value = serde_json::from_str(&response)
                 .map_err(|_| MezError::invalid_state("outbound view response invalid"))?;
+            let render_rate = project_render_rate(&response_value)?;
             let receipts = crate::host::terminal::wire_receipts::parse_receipts(
                 response_value
                     .pointer("/result/presentation_ids")
@@ -115,7 +116,7 @@ impl InitializedSessionFrontend {
             let body = serde_json::json!({"handle":request.handle,"session":self.summary,
                 "lines":lines,"line_style_spans":styles,
                 "cursor":modes["cursor"],"output_modes":modes["output_modes"],
-                "presentation_ids":receipts})
+                "presentation_ids":receipts,"render_rate_limit_fps":render_rate})
             .to_string();
             if body.len() > BODY_LIMIT {
                 return Err(MezError::invalid_state(
@@ -211,3 +212,16 @@ fn project_view_modes(body: &str, columns: u16, rows: u16) -> Result<serde_json:
 
 #[cfg(test)]
 mod tests;
+
+/// Retains optional server cadence without inferring a ceiling for older peers.
+/// Explicit malformed values reject before snapshot publication.
+fn project_render_rate(response: &serde_json::Value) -> Result<Option<u64>> {
+    response
+        .pointer("/result/render_rate_limit_fps")
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| MezError::invalid_state("outbound view render rate invalid"))
+        })
+        .transpose()
+}

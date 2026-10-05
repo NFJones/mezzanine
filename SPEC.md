@@ -4277,6 +4277,10 @@ and initialized session, accept only bounded geometry, and project correlated
 role/geometry-checked rendered lines. It MUST NOT acknowledge presentation,
 forward arbitrary control methods, retarget a connection or send terminal input.
 Failure consumes the owner rather than retrying a potentially desynchronized stream.
+Snapshots MAY retain the optional server-resolved ordinary render rate as typed
+metadata. Missing or zero rate MUST NOT imply a guessed ceiling; malformed
+explicit rates MUST reject before publication. Retention alone does not activate
+foreground pacing or certify production scheduling.
 Snapshot style rows MUST align with rendered lines, retain ordered overlay
 precedence, and enforce finite span counts and checked cell ranges. Both broker
 and client MUST use the shared rendition decoder; unknown style metadata MUST
