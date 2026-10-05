@@ -1,9 +1,9 @@
-//! Owner-side host-only initialization over one pinned connection.
+//! Owner-side initialization over one pinned connection.
 //!
 //! Private proof never enters the local response. Exactly one remote initialize
 //! is issued: failures after writing are potentially ambiguous and never replay
-//! application work. Session creation/attachment, events and X11 are deliberately
-//! excluded until their ownership contracts are integrated. Reads consume exactly
+//! application work. Separate validators bind host-only or session settlement;
+//! event and X11 forwarding remain excluded. Reads consume exactly
 //! one bounded frame, preserving bytes of subsequent frames in the bridge.
 
 use super::*;
@@ -24,6 +24,8 @@ pub(crate) struct InitializedHostFrontend {
     summary: serde_json::Value,
 }
 
+mod session;
+
 impl ConnectedFrontend {
     /// Sends one host-only initialize under a single setup deadline. Unsupported
     /// session/stream modes reject before opening an application stream.
@@ -39,6 +41,28 @@ impl ConnectedFrontend {
                 "outbound host-only initialization required",
             ));
         }
+        let (connected, bridge, summary) = self
+            .initialize_once(|body, connected| {
+                validate_host_response(body, connected.prepared.profile.server_addr.id)
+            })
+            .await?;
+        Ok(InitializedHostFrontend {
+            connected,
+            bridge,
+            summary,
+        })
+    }
+
+    /// Issues exactly one owner-authenticated initialize and validates its reply
+    /// before transferring the retained stream/connection. The validator cannot
+    /// trigger retries, and no raw response is emitted on local IPC.
+    async fn initialize_once<F>(
+        self,
+        validate: F,
+    ) -> Result<(Self, IrohCompressionBridge, serde_json::Value)>
+    where
+        F: FnOnce(&str, &Self) -> Result<serde_json::Value>,
+    {
         let deadline = self
             .prepared
             .frontend
@@ -74,13 +98,9 @@ impl ConnectedFrontend {
                     )
                 })?;
             let response = read_exact_frame(bridge.stream_mut()).await?;
-            let summary = validate_host_response(&response, self.prepared.profile.server_addr.id)?;
+            let summary = validate(&response, &self)?;
             self.prepared.frontend._endpoint.frontend_config_root()?;
-            Ok(InitializedHostFrontend {
-                connected: self,
-                bridge,
-                summary,
-            })
+            Ok((self, bridge, summary))
         })
         .await
         .map_err(|_| {

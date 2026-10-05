@@ -1,0 +1,261 @@
+//! Exact session settlement and shared-owner real-host creation qualification.
+//!
+//! Local setup retains protected profile evidence. Real loopback host fixtures
+//! allocate shell-backed sessions only; no provider calls or user input replay.
+
+use super::*;
+
+/// Supplies one valid correlated active-lease response for validator probes.
+fn response(server: iroh::EndpointId) -> serde_json::Value {
+    serde_json::json!({"jsonrpc":"2.0","id":REQUEST_ID,"result":{
+        "selected_version":3,"granted_role":"primary","host":{"endpoint_id":server.to_string()},
+        "session":{"id":"$1"},"client":{"id":"c1"},
+        "lease":{"lease_id":"lease-one","session_id":"$1","state":"active"},
+        "x11_forwarding":null
+    }})
+}
+
+/// Session/client/lease facts must match one correlated response and explicit
+/// stable targets. Returned proof, role drift and mismatched lease ownership
+/// cannot become a valid local summary, and diagnostics omit raw peer payload.
+#[test]
+fn outbound_session_settlement_requires_exact_client_and_lease() {
+    let server = iroh::SecretKey::generate().public();
+    let params = initialize_params_from_json(
+        &serde_json::json!({
+            "client_name":"frontend","requested_version":3,"requested_role":"primary",
+            "session_intent":"attach","session_target":{"session_id":"$1"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let original = response(server);
+    let summary = validate_session_response(&original.to_string(), server, &params).unwrap();
+    assert_eq!(summary["session_id"], "$1");
+    assert_eq!(summary["client_id"], "c1");
+    for target in [
+        serde_json::json!({"session_id":"$1","lease_id":null}),
+        serde_json::json!({"lease_id":"lease-one","session_id":null}),
+        serde_json::json!({"name":"work","session_id":null,"lease_id":null}),
+    ] {
+        let nullable = initialize_params_from_json(
+            &serde_json::json!({
+                "client_name":"frontend","requested_version":3,"requested_role":"primary",
+                "session_intent":"attach","session_target":target
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(validate_session_response(&original.to_string(), server, &nullable).is_ok());
+    }
+    for (pointer, value) in [
+        ("/id", serde_json::json!("other")),
+        ("/result/granted_role", serde_json::json!("observer")),
+        ("/result/client/id", serde_json::json!("agent-%1")),
+        ("/result/session/id", serde_json::json!("$2")),
+        ("/result/lease/session_id", serde_json::json!("$2")),
+        ("/result/lease/state", serde_json::json!("pending")),
+        ("/result/lease/lease_id", serde_json::json!("")),
+    ] {
+        let mut changed = original.clone();
+        *changed.pointer_mut(pointer).unwrap() = value;
+        assert!(
+            validate_session_response(&changed.to_string(), server, &params).is_err(),
+            "{pointer}"
+        );
+    }
+    let mut proof = original;
+    proof["result"]["device_credential"] = serde_json::json!("private-proof");
+    let error = validate_session_response(&proof.to_string(), server, &params).unwrap_err();
+    assert!(!error.message().contains("private-proof"));
+}
+
+/// Prepares one primary Create through real local hello and profile resolution.
+/// Invocation keys are retained exactly; profile proof is never local input.
+async fn create_frontend(
+    admission: &OutboundFrontendAdmission,
+    name: &str,
+) -> (
+    PreparedFrontend,
+    Framed<tokio::net::UnixStream, ProtocolFrameCodec>,
+) {
+    let (server, client) = tokio::net::UnixStream::pair().unwrap();
+    let mut client = Framed::new(client, ProtocolFrameCodec::new(HELLO_LIMIT).unwrap());
+    client
+        .send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({"protocol":PROTOCOL}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let frontend = admission.admit(server).await.unwrap();
+    client.next().await.unwrap().unwrap();
+    client.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
+        "handle":frontend.handle(),"profile":"creator","initialize":{
+            "client_name":name,"requested_version":3,"requested_role":"primary",
+            "session_intent":"create","idempotency_key":format!("create-{name}"),
+            "detach_primary_on_disconnect":true,
+            "client":{"name":name,"interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"},
+                "metadata":{"session_name":name}}
+        }
+    }).to_string())).await.unwrap();
+    (
+        frontend.prepare(Duration::from_secs(2)).await.unwrap(),
+        client,
+    )
+}
+
+/// Two independently initialized connections using the same paired endpoint
+/// create distinct sessions while the first remains attached. Retiring one
+/// owner leaves the sibling control stream usable. This is an in-process
+/// broker-component fixture, not two CLI processes or event/X11 qualification.
+#[tokio::test]
+async fn outbound_session_initialization_creates_distinct_live_siblings() {
+    use crate::host::iroh::HostIrohRuntime;
+    use crate::host::router::{
+        HostDefaultSessionPolicy, HostSessionRouter, HostSessionRouterConfig,
+    };
+    use crate::host::shell::{ResolvedShell, ShellSource};
+    use crate::runtime::{RuntimeIrohCompressionCodec, RuntimeIrohTransportPolicy};
+    use crate::security::remote::{
+        RemoteHostRoutingAuthority, RemoteRoleCeiling, RemoteSessionAttachScope, RemoteTrustStore,
+    };
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-owner-sessions-{:032x}",
+        rand::random::<u128>()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let host_root = root.join("host");
+    let client_root = root.join("client");
+    let policy = RuntimeIrohTransportPolicy {
+        compression_codecs: vec![RuntimeIrohCompressionCodec::None],
+        ..Default::default()
+    };
+    let host = HostIrohRuntime::bind(
+        &host_root,
+        RuntimeIrohTransportPolicy {
+            enabled: true,
+            ..policy.clone()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let endpoint = OutboundEndpointOwner::bind(&client_root, &policy)
+        .await
+        .unwrap();
+    let admission =
+        OutboundFrontendAdmission::new(endpoint.clone(), 2, Duration::from_secs(2)).unwrap();
+    let router = HostSessionRouter::new(HostSessionRouterConfig {
+        runtime_root: root.join("runtime"),
+        owner_uid: crate::runtime::current_effective_uid(),
+        config_root: host_root.clone(),
+        config_layers: Vec::new(),
+        shell: ResolvedShell::new(
+            std::path::PathBuf::from("/bin/sh"),
+            ShellSource::FallbackBinSh,
+        ),
+        max_sessions: 4,
+        max_live_sessions: 4,
+        default_session_policy: HostDefaultSessionPolicy::MostRecentAttachable,
+        default_lease_lifetime_seconds: 0,
+    });
+    let trust = RemoteTrustStore::under_host_config_root(&host_root).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let invitation = trust
+        .create_host_invitation(
+            host.endpoint_id(),
+            RemoteRoleCeiling::Primary,
+            RemoteHostRoutingAuthority {
+                session_create: true,
+                session_kill: false,
+                session_list: true,
+                session_attach_scope: RemoteSessionAttachScope::Own,
+                max_active_leases: 4,
+                max_live_sessions: 4,
+                lease_lifetime_ceiling_seconds: None,
+            },
+            600,
+            now,
+        )
+        .unwrap();
+    let redemption = trust
+        .redeem_invitation(
+            &invitation.token,
+            host.endpoint_id(),
+            &endpoint.endpoint_id().to_string(),
+            "creator",
+            RequestedRole::Primary,
+            now,
+        )
+        .unwrap();
+    RemoteClientProfileStore::under_config_root(&client_root)
+        .save(&RemoteClientProfile {
+            name: "creator".into(),
+            server_addr: host.endpoint_addr().unwrap(),
+            role: RemoteRoleCeiling::Primary,
+            scope: RemoteClientProfileScope::Host,
+            device_credential: redemption.device_credential,
+        })
+        .unwrap();
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let server_stop = stop.clone();
+    let serve = host.serve_routed(router.clone(), async move { server_stop.notified().await });
+    let client_work = async {
+        let (first, first_local) = create_frontend(&admission, "first").await;
+        let first = first
+            .connect_pinned()
+            .await
+            .unwrap()
+            .initialize_session()
+            .await
+            .unwrap();
+        let (second, second_local) = create_frontend(&admission, "second").await;
+        let mut second = second
+            .connect_pinned()
+            .await
+            .unwrap()
+            .initialize_session()
+            .await
+            .unwrap();
+        assert_ne!(first.summary["session_id"], second.summary["session_id"]);
+        assert_ne!(first.summary["lease_id"], second.summary["lease_id"]);
+        assert_eq!(router.snapshots().await.unwrap().len(), 2);
+        assert_eq!(
+            first.connected.prepared.initialize["idempotency_key"],
+            "create-first"
+        );
+        drop(first);
+        second.bridge.stream_mut().write_all(&crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"sibling-view","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#
+        )).await.unwrap();
+        let view = read_exact_frame(second.bridge.stream_mut()).await.unwrap();
+        let view: serde_json::Value = serde_json::from_str(&view).unwrap();
+        assert!(view.get("result").is_some(), "sibling view rejected");
+        drop(second);
+        drop(first_local);
+        drop(second_local);
+        assert_eq!(admission.slots.available_permits(), 2);
+        stop.notify_one();
+    };
+    let (served, ()) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(serve, client_work)
+    })
+    .await
+    .unwrap();
+    assert_eq!(served.unwrap(), 2);
+    router
+        .shutdown_all(true, Duration::from_secs(5))
+        .await
+        .unwrap();
+    drop(admission);
+    endpoint.begin_shutdown().unwrap().finish().await.unwrap();
+    drop(host);
+    std::fs::remove_dir_all(root).unwrap();
+}

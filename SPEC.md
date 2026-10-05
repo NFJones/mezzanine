@@ -4262,6 +4262,11 @@ host-only settlement, and retain only allowlisted response facts. Device proof
 MUST NOT enter frontend IPC or diagnostics. Failure after writing MUST NOT
 automatically replay initialization. Session creation/attachment, event and X11
 forwarding remain excluded from this host-only transition.
+The separate internal session initialization MUST retain the original routing
+intent and invocation key, validate correlated role/client/session/active-lease
+evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection
+or replay creation after ambiguous failure. Event/X11 forwarding and CLI activation
+remain outside this session initialization checkpoint.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and
