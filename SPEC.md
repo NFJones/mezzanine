@@ -4299,6 +4299,11 @@ missing/refused discovery and protected election. It MUST reprobe after election
 retain and revalidate the guard through readiness, and bound asynchronous retries
 by one deadline. Protocol or permission failures MUST NOT trigger replacement.
 This composition alone does not select a production launcher or reroute CLI consumers.
+The internal client session transition MUST consume readiness once, send only
+credential-free setup, and pin validated session/client/lease identities from its
+first snapshot. Later snapshots MUST retain those exact identities. Codec changes
+MUST preserve buffered stream data; failed exchanges MUST consume ownership
+without replaying setup or exposing a desynchronized client for retry.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and

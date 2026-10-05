@@ -17,6 +17,13 @@ use super::*;
 
 const SOCKET_NAME: &str = "outbound.sock";
 
+mod session;
+#[allow(
+    unused_imports,
+    reason = "ordinary CLI integration follows client snapshot qualification"
+)]
+pub(crate) use session::{OutboundSessionClient, SessionSummary};
+
 /// Strict content-free broker reply. Unknown fields cannot carry remote proof.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

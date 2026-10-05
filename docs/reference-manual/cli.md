@@ -578,6 +578,11 @@ invoking at most one caller-supplied launcher for missing/refused discovery. It
 reprobes after election and retains the guard until readiness. Protocol and
 permission failures are not replacement signals. Production launcher selection
 and ordinary CLI consumer migration remain unfinished.
+An internal client session API consumes readiness once, sends credential-free
+setup, and pins session/client/lease identities from the initial line snapshot.
+Subsequent snapshots retain the same settlement and stream buffers. Failed
+exchanges dispose ownership without setup replay. This remains a line-snapshot
+component, not a full terminal renderer or supported ordinary CLI attachment.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.

@@ -274,9 +274,8 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
         let server_cancel = cancel.clone();
         let supervised = listener.serve(async move { server_cancel.notified().await });
         let clients = async {
-            let (first, _, first_view) = supervised_create(&socket, "supervised-first").await;
-            let (mut second, handle, second_view) =
-                supervised_create(&socket, "supervised-second").await;
+            let (first, first_view) = supervised_create(&socket, "supervised-first").await;
+            let (second, second_view) = supervised_create(&socket, "supervised-second").await;
             assert_ne!(
                 first_view["session"]["session_id"],
                 second_view["session"]["session_id"]
@@ -287,22 +286,25 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             );
             assert_eq!(router.snapshots().await.unwrap().len(), 4);
             drop(first);
-            second
-                .send(ProtocolFrame::new(
-                    CONTENT_TYPE,
-                    serde_json::json!({
-                        "handle":handle,"columns":80,"rows":24
-                    })
-                    .to_string(),
-                ))
+            let (second, lines) = second
+                .snapshot(80, 24, Duration::from_secs(2))
                 .await
                 .unwrap();
-            let frame = second.next().await.unwrap().unwrap();
-            let next: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
-            assert_eq!(next["session"], second_view["session"]);
-            assert_eq!(next["handle"], handle);
+            assert_eq!(
+                serde_json::to_value(second.summary()).unwrap(),
+                second_view["session"]
+            );
+            assert!(lines.len() <= 24);
+            let (second, _) = second
+                .snapshot(100, 30, Duration::from_secs(2))
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(second.summary()).unwrap(),
+                second_view["session"]
+            );
+            drop(second);
             cancel.notify_one();
-            assert!(second.next().await.is_none());
         };
         let (accepted, ()) = tokio::join!(supervised, clients);
         assert_eq!(accepted.unwrap(), 2);
@@ -333,43 +335,22 @@ async fn supervised_create(
     path: &std::path::Path,
     name: &str,
 ) -> (
-    Framed<tokio::net::UnixStream, ProtocolFrameCodec>,
-    serde_json::Value,
+    crate::host::outbound_frontend::client::OutboundSessionClient,
     serde_json::Value,
 ) {
-    let stream = tokio::net::UnixStream::connect(path).await.unwrap();
-    let mut client = Framed::new(stream, ProtocolFrameCodec::new(BODY_LIMIT).unwrap());
-    client
-        .send(ProtocolFrame::new(
-            CONTENT_TYPE,
-            serde_json::json!({"protocol":PROTOCOL}).to_string(),
-        ))
-        .await
-        .unwrap();
-    let hello = client.next().await.unwrap().unwrap();
-    let hello: serde_json::Value = serde_json::from_str(&hello.body).unwrap();
-    let handle = hello["handle"].clone();
-    client.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
-        "handle":handle,"profile":"creator","initialize":{
+    let client = crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
+        path.parent().unwrap(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    let (client, lines) = client.start_session("creator", serde_json::json!({
             "client_name":name,"requested_version":3,"requested_role":"primary",
             "session_intent":"create","idempotency_key":format!("create-{name}"),
             "detach_primary_on_disconnect":true,
             "client":{"name":name,"interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"},
                 "metadata":{"session_name":name}}
-        }
-    }).to_string())).await.unwrap();
-    client
-        .send(ProtocolFrame::new(
-            CONTENT_TYPE,
-            serde_json::json!({"handle":handle,"columns":80,"rows":24}).to_string(),
-        ))
-        .await
-        .unwrap();
-    let frame = client.next().await.unwrap().unwrap();
-    assert_eq!(frame.content_type, CONTENT_TYPE);
-    let view: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
-    assert_eq!(view["handle"], handle);
-    assert!(view["lines"].is_array());
-    assert_eq!(view.as_object().unwrap().len(), 3);
-    (client, handle, view)
+    }), 80, 24, Duration::from_secs(2)).await.unwrap();
+    let view = serde_json::json!({"session":client.summary(), "lines":lines});
+    (client, view)
 }
