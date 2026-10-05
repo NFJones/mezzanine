@@ -194,6 +194,14 @@ or telemetry failure. This is not a public launch command or an authorization
 issuer: production session selection/private binding, installation and platform
 certification remain unfinished, and no Pi manifest is enabled.
 
+The internal owned observer runner joins strict callback ingress and session
+lease delivery without detached tasks or child ownership. Clean stream EOF drains
+accepted facts before ending renewal; it does not imply process death or request
+deregistration. Explicit quit facts retain their existing exact-session retirement
+semantics. Errors and cancellation preserve pending reducer evidence without
+automatic reconnect or vendor replay. Production authorization, reload/replacement
+orchestration and installation are still separate, unfinished work.
+
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.

@@ -83,6 +83,163 @@ async fn reply(stream: &mut tokio::net::UnixStream, result: serde_json::Value) {
         .unwrap();
 }
 
+/// Clean observer EOF drains accepted facts without inventing process death or
+/// deregistration; an explicit quit alone supplies retirement authority within
+/// the already bound lifecycle. No detached future remains after return.
+#[tokio::test(flavor = "current_thread")]
+async fn pi_session_owned_observer_drains_eof_and_explicit_retirement() {
+    for quit in [false, true] {
+        let mut fixture = Fixture::new();
+        let (stream, mut writer) = tokio::net::UnixStream::pair().unwrap();
+        let (_stop, cancellation) = watch::channel(false);
+        let worker = run_observer_with_clock(
+            &mut fixture.owner,
+            &fixture.transport,
+            "Pi",
+            stream,
+            cancellation,
+            || Some(100),
+        );
+        let producer = async {
+            writer
+                .write_all(b"{\"type\":\"agent_start\"}\n")
+                .await
+                .unwrap();
+            if quit {
+                writer
+                    .write_all(b"{\"type\":\"session_shutdown\",\"reason\":\"quit\"}\n")
+                    .await
+                    .unwrap();
+            }
+            writer.shutdown().await.unwrap();
+        };
+        let server = async {
+            let (mut stream, value) = request(&fixture.listener).await;
+            assert_eq!(value["method"], "agent/external/register");
+            reply(&mut stream, serde_json::json!({"registered":true,"agent_id":"agent","generation":1,"expires_at_unix_seconds":160})).await;
+            let (mut stream, value) = request(&fixture.listener).await;
+            assert_eq!(value["method"], "agent/external/presentation");
+            assert_eq!(value["params"]["state"], "running");
+            assert_eq!(value["params"]["sequence"], 1);
+            reply(
+                &mut stream,
+                serde_json::json!({"sequence":1,"changed":true}),
+            )
+            .await;
+            if quit {
+                let (mut stream, value) = request(&fixture.listener).await;
+                assert_eq!(value["method"], "agent/external/deregister");
+                reply(
+                    &mut stream,
+                    serde_json::json!({"retired":true,"changed":true}),
+                )
+                .await;
+            }
+        };
+        let (result, (), ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(worker, producer, server)
+        })
+        .await
+        .unwrap();
+        result.unwrap();
+        assert!(fixture.owner.pending().is_none());
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(30),
+                fixture.listener.accept()
+            )
+            .await
+            .is_err()
+        );
+    }
+}
+
+/// Cancellation and a missing delivery acknowledgement preserve the original
+/// pending operation. Ending this runner closes only telemetry, without a
+/// reconnect, replacement session or guessed retirement request.
+#[tokio::test(flavor = "current_thread")]
+async fn pi_session_owned_observer_failure_preserves_pending_delivery() {
+    for cancel in [false, true] {
+        let mut fixture = Fixture::new();
+        let (stream, mut writer) = tokio::net::UnixStream::pair().unwrap();
+        let (stop, cancellation) = watch::channel(false);
+        let worker = run_observer_with_clock(
+            &mut fixture.owner,
+            &fixture.transport,
+            "Pi",
+            stream,
+            cancellation,
+            || Some(100),
+        );
+        let producer = async {
+            writer
+                .write_all(b"{\"type\":\"agent_start\"}\n")
+                .await
+                .unwrap();
+            writer.shutdown().await.unwrap();
+        };
+        let server = async {
+            let (mut stream, _) = request(&fixture.listener).await;
+            reply(&mut stream, serde_json::json!({"registered":true,"agent_id":"agent","generation":1,"expires_at_unix_seconds":160})).await;
+            let (mut stream, value) = request(&fixture.listener).await;
+            assert_eq!(value["method"], "agent/external/presentation");
+            if cancel {
+                stop.send(true).unwrap();
+                let mut byte = [0];
+                assert_eq!(stream.read(&mut byte).await.unwrap(), 0);
+            }
+        };
+        let (result, (), ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(worker, producer, server)
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.is_ok(), cancel);
+        let head = fixture.owner.pending().unwrap();
+        assert_eq!(head.sequence, 1);
+        assert_eq!(head.operation, Operation::Present("running"));
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(30),
+                fixture.listener.accept()
+            )
+            .await
+            .is_err()
+        );
+    }
+}
+
+/// Invalid observer content ends telemetry with a content-free error. The
+/// runner neither reconnects nor emits guessed lifecycle or retirement facts.
+#[tokio::test(flavor = "current_thread")]
+async fn pi_session_owned_observer_invalid_frame_is_neutral() {
+    let mut fixture = Fixture::new();
+    let (stream, mut writer) = tokio::net::UnixStream::pair().unwrap();
+    let (_stop, cancellation) = watch::channel(false);
+    writer
+        .write_all(b"{\"type\":\"agent_start\",\"private\":\"PRIVATE_CONTENT\"}\n")
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        run_observer_with_clock(
+            &mut fixture.owner,
+            &fixture.transport,
+            "Pi",
+            stream,
+            cancellation,
+            || Some(100),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.unwrap_err().message(),
+        "Pi observer stream unavailable"
+    );
+    assert!(fixture.owner.pending().is_none());
+}
+
 /// A reload proposal can remain unconfirmed across an idle renewal. The
 /// worker must use the new acknowledged lease fence, not expire the session
 /// at the original deadline while the launcher still holds a valid proposal.

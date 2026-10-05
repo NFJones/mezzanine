@@ -30,6 +30,8 @@ enum Input {
         session: String,
         reply: oneshot::Sender<Result<AttachmentOffer>>,
     },
+    /// Ordered observer EOF fence; earlier observations drain before exit.
+    ObserverEnded,
 }
 
 /// Nonblocking callback ingress; possession grants no registration capability.
@@ -137,6 +139,66 @@ pub(crate) async fn run(
     .await
 }
 
+/// Owns one explicitly bound observer stream and coordinator without spawning
+/// tasks or taking child-process ownership. Clean EOF drains earlier accepted
+/// observations, then ends renewal without inventing deregistration. Invalid
+/// input or delivery failure ends telemetry; original reducer state remains
+/// caller-owned and no exchange or vendor action is automatically replayed.
+/// Reload/replacement orchestration and launch authorization remain external.
+pub(crate) async fn run_observer(
+    owner: &mut LifecycleOwner,
+    transport: &CapabilityTransport,
+    name: &str,
+    stream: tokio::net::UnixStream,
+    stop: watch::Receiver<bool>,
+) -> Result<()> {
+    run_observer_with_clock(owner, transport, name, stream, stop, || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|time| time.as_secs())
+    })
+    .await
+}
+
+/// Shares production stream/coordinator ownership with an explicit test clock.
+async fn run_observer_with_clock(
+    owner: &mut LifecycleOwner,
+    transport: &CapabilityTransport,
+    name: &str,
+    stream: tokio::net::UnixStream,
+    stop: watch::Receiver<bool>,
+    clock: impl Fn() -> Option<u64>,
+) -> Result<()> {
+    if !transport.belongs_to(owner) {
+        return Err(unavailable());
+    }
+    let session = owner.transport_binding().0.to_string();
+    let epoch = owner.observer_epoch();
+    let (ingress, inputs) = channel();
+    // Keep the launch lifetime alive until the coordinator drains the ordered
+    // EOF fence. Dropping just the bridge must not cancel accepted deliveries.
+    let launcher = ingress.clone();
+    let bridge = async {
+        super::pi_ipc::serve(stream, &session, epoch, ingress, stop.clone()).await?;
+        launcher
+            .0
+            .send(Input::ObserverEnded)
+            .await
+            .map_err(|_| unavailable())
+    };
+    let worker = run_with_clock(owner, transport, name, inputs, stop.clone(), clock);
+    tokio::pin!(bridge, worker);
+    tokio::select! {
+        biased;
+        result = &mut worker => result,
+        result = &mut bridge => {
+            result?;
+            worker.await
+        }
+    }
+}
+
 /// Shares the complete worker with a per-fixture clock, never global mutation.
 async fn run_with_clock(
     owner: &mut LifecycleOwner,
@@ -202,6 +264,7 @@ async fn run_with_clock(
         };
         match input {
             None => return Ok(()), // launcher/observer channel lifetime ended
+            Some(Input::ObserverEnded) => return Ok(()),
             Some(Input::Observation {
                 epoch,
                 session,

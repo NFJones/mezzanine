@@ -353,6 +353,12 @@ boundary; daemon capabilities remain parent-owned. All stream setup MUST precede
 spawn, and successful launch transfers child reaping to the caller. Observer
 failure or disposal MUST NOT kill the child. This primitive does not provide
 production launch authorization, session selection or adapter certification.
+The owned Pi observer runner MUST join strict stream ingress and lease delivery
+without detached tasks or child-process ownership. Clean EOF MUST drain earlier
+accepted facts through an ordered end fence, then stop renewal without inventing
+deregistration or process death. Invalid input, cancellation and delivery failure
+MUST preserve caller-owned reducer evidence without reconnecting or replaying
+vendor work. Reload orchestration and authorization remain separate boundaries.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow
