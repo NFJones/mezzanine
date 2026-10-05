@@ -36,6 +36,7 @@ struct EndpointResource {
     root: ConfigRootIdentity,
     slots: Arc<Semaphore>,
     setup_timeout: Duration,
+    policy: RuntimeIrohTransportPolicy,
 }
 
 /// Retained native directory identity, not a caller-authored routing label.
@@ -173,6 +174,7 @@ impl OutboundEndpointOwner {
                 root,
                 slots: Arc::new(Semaphore::new(policy.max_connections)),
                 setup_timeout: policy.setup_timeout,
+                policy: policy.clone(),
             }),
         })
     }
@@ -180,6 +182,12 @@ impl OutboundEndpointOwner {
     /// Returns public transport identity, never device or endpoint credentials.
     pub(crate) fn endpoint_id(&self) -> iroh::EndpointId {
         self.inner.endpoint.id()
+    }
+
+    /// Returns the immutable network/framing policy of this exact endpoint.
+    /// Consumers cannot silently rebind or broaden it for a different target.
+    pub(crate) fn transport_policy(&self) -> &RuntimeIrohTransportPolicy {
+        &self.inner.policy
     }
 
     /// Returns the validated retained root for owner-private frontend discovery.

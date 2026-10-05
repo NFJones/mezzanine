@@ -31,6 +31,8 @@ pub(crate) struct PreparedFrontend {
     initialize: serde_json::Value,
 }
 
+mod connection;
+
 impl AdmittedFrontend {
     /// Consumes one strict bounded setup request and resolves its protected alias.
     /// Rejection/cancellation disposes this local stream, never replaying input.

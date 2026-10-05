@@ -532,6 +532,11 @@ profile inside the owner. Caller credentials are rejected; existing control
 initialization and profile role/scope validation remain authoritative. A timed-out
 profile waiter does not cancel blocking I/O: its finite slot stays occupied until
 the worker exits. This preparation does not dial or create a remote session.
+The next internal transition supports pinned direct transport only. It retains
+the exact frontend and independent connection lease, verifies the server ID,
+and negotiates a bounded codec without sending application initialization.
+Relay/discovery policy qualification, remote authority settlement and CLI
+activation remain unfinished; unsupported policy rejects without another endpoint.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.

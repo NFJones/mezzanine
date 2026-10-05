@@ -4251,6 +4251,11 @@ MUST reuse control initialization validation and enforce profile role/scope;
 frontends MUST NOT supply device proof or route addresses. Blocking profile work
 MUST retain finite capacity and endpoint ownership until it exits, even after
 its waiter times out. Prepared setup is not remote authentication or creation.
+The internal pinned-direct connection transition MUST retain the prepared
+frontend and an independent connection lease, verify the protected server ID,
+and bound all pre-stream codec attempts by one deadline. Unsupported shared
+endpoint route policy MUST reject without rebinding. This transition sends no
+application initialization and establishes no remote session authority.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and
