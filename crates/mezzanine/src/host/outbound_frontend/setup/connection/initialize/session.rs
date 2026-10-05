@@ -17,6 +17,8 @@ pub(crate) struct InitializedSessionFrontend {
     summary: serde_json::Value,
 }
 
+mod view;
+
 impl ConnectedFrontend {
     /// Initializes one host-routed session using its original invocation key.
     /// Unsupported modes reject before opening a stream; failed replies retain

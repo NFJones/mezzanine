@@ -546,6 +546,10 @@ intent/key and validating exact client/session/active-lease evidence. A loopback
 host fixture qualifies two sessions while the first remains attached and sibling
 control survives retirement; this is not multi-process CLI acceptance. Event/X11
 forwarding, startup election and CLI activation remain unfinished.
+An internal display-only view exchange now carries bounded rendered lines and
+validated session identity across exact-handle local IPC. It does not provide
+styles, terminal input, presentation acknowledgement or the complete attached
+renderer. Failed exchanges dispose their owner instead of replaying requests.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.

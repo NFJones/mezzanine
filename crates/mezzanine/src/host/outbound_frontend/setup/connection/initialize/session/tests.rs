@@ -232,12 +232,32 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             "create-first"
         );
         drop(first);
-        second.bridge.stream_mut().write_all(&crate::control::encode_control_body(
-            r#"{"jsonrpc":"2.0","id":"sibling-view","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#
-        )).await.unwrap();
-        let view = read_exact_frame(second.bridge.stream_mut()).await.unwrap();
-        let view: serde_json::Value = serde_json::from_str(&view).unwrap();
-        assert!(view.get("result").is_some(), "sibling view rejected");
+        let handle = second.connected.prepared.frontend.handle().clone();
+        let mut second_local = Framed::new(
+            second_local.into_inner(),
+            ProtocolFrameCodec::new(BODY_LIMIT).unwrap(),
+        );
+        second_local
+            .send(ProtocolFrame::new(
+                CONTENT_TYPE,
+                serde_json::json!({
+                    "handle":handle,"columns":80,"rows":24
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let local_response = async {
+            let frame = second_local.next().await.unwrap().unwrap();
+            assert_eq!(frame.content_type, CONTENT_TYPE);
+            serde_json::from_str::<serde_json::Value>(&frame.body).unwrap()
+        };
+        let (delivered, view) = tokio::join!(second.deliver_view(), local_response);
+        second = delivered.unwrap();
+        assert_eq!(view["session"], second.summary);
+        assert_eq!(view["handle"], serde_json::to_value(&handle).unwrap());
+        assert!(view["lines"].is_array());
+        assert_eq!(view.as_object().unwrap().len(), 3);
         drop(second);
         drop(first_local);
         drop(second_local);

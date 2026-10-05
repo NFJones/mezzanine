@@ -4267,6 +4267,11 @@ intent and invocation key, validate correlated role/client/session/active-lease
 evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection
 or replay creation after ambiguous failure. Event/X11 forwarding and CLI activation
 remain outside this session initialization checkpoint.
+The internal display-only frontend view exchange MUST bind the exact local handle
+and initialized session, accept only bounded geometry, and project correlated
+role/geometry-checked rendered lines. It MUST NOT acknowledge presentation,
+forward arbitrary control methods, retarget a connection or send terminal input.
+Failure consumes the owner rather than retrying a potentially desynchronized stream.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and
