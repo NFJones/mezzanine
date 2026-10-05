@@ -617,6 +617,11 @@ evidence and composes the shared pill into a copy of the retained frame. Server
 rows/styles and receipt identity remain unchanged. Invalid health or known
 disconnection prevents output/ACK; incomplete output never acknowledges. This
 does not qualify health-driven idle repaint or ordinary CLI attachment.
+An explicit internal status-repaint API now refreshes previously painted,
+receipt-settled output when coarse health changes. It preserves server rows,
+styles and revision, sends no receipt ACK or view request, and skips writes for
+unchanged samples. Replacement or writer invalidation clears eligibility.
+Automatic idle scheduling and ordinary CLI attachment remain unfinished.
 Partial or failed output never arms presentation; terminal restoration and
 started output tails remain caller-owned. Unix-fd fixtures qualify byte commitment,
 not visibility in a physical terminal or complete interactive attachment support.

@@ -32,7 +32,9 @@ impl OutboundSessionClient {
         let expires = tokio::time::Instant::now() + budget;
         tokio::time::timeout_at(expires, async move {
             self.committed_view = None;
+            self.painted_health = None;
             self.client.discovery.validate()?;
+            let mut painted_health = None;
             let (lines, styles) = if self.iroh_status_slot.is_some() {
                 let remaining = expires.saturating_duration_since(tokio::time::Instant::now());
                 let (owner, connected, quality) = self.sample_transport_health(remaining).await?;
@@ -42,6 +44,7 @@ impl OutboundSessionClient {
                         "outbound connection closed before presentation; reattach required",
                     ));
                 }
+                painted_health = Some(quality);
                 crate::host::terminal::iroh_pill::compose(
                     &self.lines,
                     &self.styles,
@@ -62,6 +65,7 @@ impl OutboundSessionClient {
             }
             let (mut owner, acknowledged) = self.acknowledge_presented(key, remaining).await?;
             if acknowledged {
+                owner.painted_health = painted_health;
                 owner.committed_view = owner
                     .view_identity
                     .clone()
@@ -74,6 +78,55 @@ impl OutboundSessionClient {
             MezError::invalid_state(
                 "outbound presentation timed out; output or acknowledgement may be incomplete",
             )
+        })?
+    }
+}
+
+impl OutboundSessionClient {
+    /// Refreshes only the decoration of previously committed, receipt-settled
+    /// output. A changed sample writes the exact retained base with no receipts
+    /// and sends no ACK or view request. Errors consume this owner; callers still
+    /// own cleanup of started output and invalidate after external writer use.
+    pub(crate) async fn repaint_transport_status<I: AsyncAttachedTerminalIo>(
+        mut self,
+        terminal: &mut I,
+        budget: Duration,
+    ) -> Result<(Self, bool)> {
+        validate_budget(1, 1, budget)?;
+        if self.iroh_status_slot.is_none()
+            || self.painted_health.is_none()
+            || !self.receipts.is_empty()
+        {
+            return Err(MezError::conflict(
+                "outbound status repaint requires settled output",
+            ));
+        }
+        tokio::time::timeout(budget, async move {
+            let (owner, connected, quality) = self.sample_transport_health(budget).await?;
+            self = owner;
+            if !connected {
+                return Err(MezError::invalid_state(
+                    "outbound status connection closed; reattach required",
+                ));
+            }
+            if self.painted_health == Some(quality) {
+                return Ok((self, false));
+            }
+            let (lines, styles) = crate::host::terminal::iroh_pill::compose(
+                &self.lines,
+                &self.styles,
+                self.iroh_status_slot,
+                connected,
+                quality,
+            );
+            commit_snapshot(terminal, &lines, &styles, self.modes, &[]).await?;
+            self.client.discovery.validate()?;
+            self.painted_health = Some(quality);
+            Ok((self, true))
+        })
+        .await
+        .map_err(|_| {
+            MezError::invalid_state("outbound status repaint timed out; output may be incomplete")
         })?
     }
 }

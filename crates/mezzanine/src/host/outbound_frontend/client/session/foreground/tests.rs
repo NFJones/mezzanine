@@ -146,6 +146,7 @@ fn inert_client(
         snapshot_size: (80, 24),
         committed_view: None,
         iroh_status_slot: None,
+        painted_health: None,
     };
     (root, listener, peer, client)
 }

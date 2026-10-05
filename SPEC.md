@@ -4351,6 +4351,12 @@ shared pill renderer. Composition MUST preserve the server base rows/styles and
 the original receipt list. Invalid health, known disconnection or incomplete
 output MUST NOT acknowledge presentation. This does not certify health-driven
 idle repaint, physical visibility or ordinary CLI attachment.
+The explicit internal status-repaint API MUST require previously painted,
+receipt-settled output and preserve its retained server base and revision.
+Changed coarse health MAY repaint that base without receipt IDs or an ACK;
+unchanged samples MUST NOT write. Replacement or writer invalidation MUST clear
+repaint eligibility. Failure consumes ownership; automatic idle scheduling
+and ordinary CLI attachment remain separate qualification boundaries.
 The internal request-driven foreground composition MUST retire its session on
 EOF, cancellation or error, attempt presentation restoration on explicit return,
 and retain distinct operation identities without replay. Whole-future abandonment

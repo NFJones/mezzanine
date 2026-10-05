@@ -59,6 +59,8 @@ pub(crate) struct OutboundSessionClient {
     committed_view: Option<(String, u16, u16)>,
     /// Optional server-owned presentation slot, not measured connection health.
     iroh_status_slot: Option<crate::host::terminal::TerminalIrohStatusSlot>,
+    /// Last successfully painted health decoration; absent until settled output.
+    painted_health: Option<crate::host::terminal::TerminalIrohStatusQuality>,
 }
 
 mod acknowledge;
@@ -134,6 +136,7 @@ impl OutboundFrontendClient {
                     iroh_status_slot: snapshot_status_slot(&snapshot, columns, rows)?,
                     snapshot_size: (columns, rows),
                     committed_view: None,
+                    painted_health: None,
                     events_negotiated: params.event_stream_version == Some(1),
                     render_rate_limit_fps: snapshot.render_rate_limit_fps,
                     view_identity: snapshot.view_identity,
@@ -218,6 +221,7 @@ impl OutboundSessionClient {
             self.event_cutoff = snapshot.event_cutoff;
             self.snapshot_size = (columns, rows);
             self.committed_view = None;
+            self.painted_health = None;
             Ok((self, snapshot.lines))
         })
         .await

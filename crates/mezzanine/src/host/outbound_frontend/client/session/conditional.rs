@@ -28,6 +28,7 @@ impl OutboundSessionClient {
     /// output outside this owner. This never changes remote state or receipts.
     pub(crate) fn invalidate_committed_view(&mut self) {
         self.committed_view = None;
+        self.painted_health = None;
     }
 
     /// Fetches one view, optionally reusing the exact committed identity/geometry.
@@ -98,6 +99,7 @@ impl OutboundSessionClient {
                 self.render_rate_limit_fps = snapshot.render_rate_limit_fps;
                 self.snapshot_size = (columns, rows);
                 self.committed_view = None;
+                self.painted_health = None;
                 true
             };
             self.client.discovery.validate()?;

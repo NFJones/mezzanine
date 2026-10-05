@@ -71,6 +71,7 @@ fn fixture() -> (
         event_cutoff: Some(1),
         snapshot_size: (80, 24),
         committed_view: None,
+        painted_health: None,
         iroh_status_slot: Some(crate::host::terminal::TerminalIrohStatusSlot {
             row: 0,
             column: 3,
@@ -82,6 +83,117 @@ fn fixture() -> (
         }),
     };
     (root, listener, peer, owner)
+}
+
+/// A settled frame can repaint changed health without another ACK or snapshot.
+/// Unchanged samples do not write; failed repaint or disconnection retires the
+/// stream. The original rows, revision and settled receipt state stay immutable.
+#[tokio::test]
+async fn outbound_present_status_repaint_preserves_settlement_without_ack() {
+    for mode in ["changed", "same", "down", "output-failure"] {
+        let (root, listener, peer, owner) = fixture();
+        let handle = owner.client.handle.clone();
+        let summary = owner.summary.clone();
+        let mut terminal = PartialWriter::default();
+        let initial = async {
+            let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+            let frame = peer.next().await.unwrap().unwrap();
+            let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+            assert_eq!(request["operation"], "health");
+            peer.send(ProtocolFrame::new(
+                CONTENT_TYPE,
+                serde_json::json!({
+                    "handle":handle,"session":summary,"connected":true,"quality":"degraded"
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+            let frame = peer.next().await.unwrap().unwrap();
+            let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+            assert_eq!(request["operation"], "acknowledge");
+            peer.send(ProtocolFrame::new(
+                CONTENT_TYPE,
+                serde_json::json!({
+                    "handle":handle,"session":summary,"idempotency_key":"initial",
+                    "presentation_ids":[7],"acknowledged":true
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+            peer
+        };
+        let (result, mut peer) = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::join!(
+                owner.present(&mut terminal, "initial", Duration::from_secs(1)),
+                initial
+            )
+        })
+        .await
+        .unwrap();
+        let (owner, acknowledged) = result.unwrap();
+        assert!(acknowledged);
+        let base = owner.committed_view.clone();
+        let lines = owner.lines.clone();
+        let styles = owner.styles.clone();
+        terminal.fail_flush = mode == "output-failure";
+        let reply = async {
+            let frame = peer.next().await.unwrap().unwrap();
+            let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+            assert_eq!(
+                request,
+                serde_json::json!({"operation":"health","handle":handle})
+            );
+            peer.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
+                "handle":handle,"session":summary,"connected":mode != "down",
+                "quality":if mode == "same" { "degraded" } else if mode == "down" { "unknown" } else { "poor" }
+            }).to_string())).await.unwrap();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::join!(
+                owner.repaint_transport_status(&mut terminal, Duration::from_secs(1)),
+                reply
+            )
+        })
+        .await
+        .unwrap();
+        if matches!(mode, "changed" | "same") {
+            let (owner, painted) = result.unwrap();
+            assert_eq!(painted, mode == "changed");
+            assert_eq!(owner.committed_view, base);
+            assert_eq!(owner.lines, lines);
+            assert_eq!(owner.styles, styles);
+            assert!(owner.receipts.is_empty());
+            assert_eq!(terminal.frames, if painted { 2 } else { 1 });
+            assert_eq!(terminal.pending, 0);
+            if painted {
+                assert_eq!(
+                    terminal.styles[0]
+                        .iter()
+                        .find(|span| span.start == 3)
+                        .unwrap()
+                        .rendition
+                        .background,
+                    Some(TerminalColor::Indexed(1))
+                );
+            }
+            drop(owner);
+        } else {
+            assert!(result.is_err());
+            assert_eq!(terminal.frames, if mode == "down" { 1 } else { 2 });
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), peer.next())
+                .await
+                .unwrap()
+                .is_none(),
+            "status repaint must send no ACK, view or replay after its health request"
+        );
+        drop(peer);
+        drop(listener);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 /// Exact health facts affect only the returned local decoration. ACK follows the
