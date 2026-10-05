@@ -113,12 +113,39 @@ async fn create_frontend(
 /// broker-component fixture, not two CLI processes or event/X11 qualification.
 #[tokio::test]
 async fn outbound_session_initialization_creates_distinct_live_siblings() {
+    Box::pin(qualify_session_siblings(
+        crate::runtime::RuntimeIrohCompressionCodec::None,
+    ))
+    .await;
+}
+
+/// The production host/broker workflow must preserve direction-local codec
+/// history through initialization, events, repeated views, input, management,
+/// receipt acknowledgement and exact self-detach. This qualifies loopback
+/// transport ownership, not multiple CLI processes or physical-terminal UX.
+#[tokio::test]
+async fn outbound_session_compressed_workflows_preserve_live_siblings() {
+    use crate::runtime::RuntimeIrohCompressionCodec;
+    for codec in [
+        RuntimeIrohCompressionCodec::Zstd,
+        RuntimeIrohCompressionCodec::Lz4,
+        RuntimeIrohCompressionCodec::ZstdStream,
+        RuntimeIrohCompressionCodec::Lz4Stream,
+    ] {
+        Box::pin(qualify_session_siblings(codec)).await;
+    }
+}
+
+/// Exercises one disposable paired root with an explicitly pinned codec. All
+/// callers retain their own connections; no application fallback or replay is
+/// permitted after initialization, and no provider work is invoked.
+async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionCodec) {
     use crate::host::iroh::HostIrohRuntime;
     use crate::host::router::{
         HostDefaultSessionPolicy, HostSessionRouter, HostSessionRouterConfig,
     };
     use crate::host::shell::{ResolvedShell, ShellSource};
-    use crate::runtime::{RuntimeIrohCompressionCodec, RuntimeIrohTransportPolicy};
+    use crate::runtime::RuntimeIrohTransportPolicy;
     use crate::security::remote::{
         RemoteHostRoutingAuthority, RemoteRoleCeiling, RemoteSessionAttachScope, RemoteTrustStore,
     };
@@ -146,7 +173,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
     cli_paths.ensure_default_config().unwrap();
     let client_root = cli_paths.root().to_path_buf();
     let policy = RuntimeIrohTransportPolicy {
-        compression_codecs: vec![RuntimeIrohCompressionCodec::None],
+        compression_codecs: vec![codec],
         ..Default::default()
     };
     let host = HostIrohRuntime::bind(
@@ -245,6 +272,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             .initialize_session()
             .await
             .unwrap();
+        assert_eq!(first.connected.compression.codec(), codec);
         let first_session_id = first.summary["session_id"].as_str().unwrap().to_string();
         let first_lease_id = first.summary["lease_id"].as_str().unwrap().to_string();
         let (second, second_local) = create_frontend(&admission, "$999").await;
