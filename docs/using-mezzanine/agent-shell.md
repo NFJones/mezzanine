@@ -95,7 +95,9 @@ for replay and bounded persistence-only retry. Source-copy selection retains exa
 display text, including authored CRLF and trailing newlines. Selecting an overflow
 summary or tail row recovers the complete pending source group once; rendered
 copy still selects visible cells. Captured copy views stay frozen during output
-and promotion. Interaction, restart and failure qualification is still in progress.
+and promotion. Automated Linux tests cover promotion, recovery, transient output,
+source copying and persistence retry. Physical-terminal and macOS workflows and
+the exhaustive observer/theme/selector interaction matrix have not been qualified.
 After steering is canonically accepted, a status-display or trace failure does
 not reject it or require resubmission.
 Deferred transfer diagnostics cannot strand accepted guidance before scheduling.

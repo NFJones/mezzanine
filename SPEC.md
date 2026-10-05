@@ -5937,7 +5937,10 @@ MUST preserve the complete occurrence display source, including CRLF and trailin
 newlines, independently of rendered labels and wrapping. Overflow summary and
 tail rows MUST retain an explicit full-source association; selecting the group
 MUST emit it once. Frozen copy snapshots MUST remain unchanged by later output
-or promotion. Full interaction, restart and failure qualification remains in progress.
+or promotion. Live display obligations MUST NOT be truncated by bounded restart
+checkpoint history. Linux automated qualification covers receipt promotion,
+recovery, transient composition, copying and persistence faults; physical-terminal,
+macOS and exhaustive observer/theme/selector interaction qualification remain gaps.
 The display-only receipt view MUST select the currently bound conversation,
 deduplicate by occurrence identity, and preserve acceptance order independently
 of status, turn-map order or equal display text. Restored order MUST advance the
