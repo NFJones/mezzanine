@@ -20,7 +20,7 @@ impl OutboundSessionClient {
     /// remote presentation. This does not enter/restore terminal mode or drive
     /// input/events, and returns the unchanged owner only on validated settlement.
     pub(crate) async fn present<I: AsyncAttachedTerminalIo>(
-        self,
+        mut self,
         terminal: &mut I,
         key: &str,
         budget: Duration,
@@ -31,6 +31,7 @@ impl OutboundSessionClient {
         }
         let expires = tokio::time::Instant::now() + budget;
         tokio::time::timeout_at(expires, async move {
+            self.committed_view = None;
             self.client.discovery.validate()?;
             commit_snapshot(
                 terminal,
@@ -47,7 +48,14 @@ impl OutboundSessionClient {
                     "outbound output committed but acknowledgement budget exhausted",
                 ));
             }
-            self.acknowledge_presented(key, remaining).await
+            let (mut owner, acknowledged) = self.acknowledge_presented(key, remaining).await?;
+            if acknowledged {
+                owner.committed_view = owner
+                    .view_identity
+                    .clone()
+                    .map(|identity| (identity, owner.snapshot_size.0, owner.snapshot_size.1));
+            }
+            Ok((owner, acknowledged))
         })
         .await
         .map_err(|_| {

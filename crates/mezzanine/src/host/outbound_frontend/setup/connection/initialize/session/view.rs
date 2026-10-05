@@ -12,6 +12,7 @@ use super::*;
 const VIEW_REQUEST_ID: &str = "outbound-session-view";
 
 mod acknowledge;
+mod conditional;
 mod events;
 mod step;
 
@@ -22,6 +23,8 @@ struct ViewRequest {
     handle: FrontendHandle,
     columns: u16,
     rows: u16,
+    /// Optional exact delivered base; never independently proves local commitment.
+    if_view_identity: Option<String>,
 }
 
 impl InitializedSessionFrontend {
@@ -82,21 +85,44 @@ impl InitializedSessionFrontend {
                     "outbound local view geometry unavailable",
                 ));
             }
+            conditional::validate_base(&request, self.delivered_view.as_ref())?;
             self.connected
                 .prepared
                 .frontend
                 ._endpoint
                 .frontend_config_root()?;
-            let body = serde_json::json!({"jsonrpc":"2.0","id":VIEW_REQUEST_ID,
+            let mut body = serde_json::json!({"jsonrpc":"2.0","id":VIEW_REQUEST_ID,
                 "method":"terminal/view","params":{"client_size":{
-                    "columns":request.columns,"rows":request.rows}}})
-            .to_string();
+                    "columns":request.columns,"rows":request.rows}}});
+            if let Some(identity) = &request.if_view_identity {
+                body["params"]["if_view_identity"] = serde_json::json!(identity);
+            }
+            let body = body.to_string();
             self.bridge
                 .stream_mut()
                 .write_all(&crate::control::encode_control_body(&body))
                 .await
                 .map_err(|_| MezError::invalid_state("outbound view write unavailable"))?;
             let response = read_exact_frame(self.bridge.stream_mut()).await?;
+            if let Some(reply) = conditional::project_unchanged(&response, &request, &self.summary)?
+            {
+                self.connected
+                    .prepared
+                    .frontend
+                    ._endpoint
+                    .frontend_config_root()?;
+                self.connected
+                    .prepared
+                    .frontend
+                    .stream
+                    .get_mut()
+                    .write_all(&encode_frame(&ProtocolFrame::new(CONTENT_TYPE, reply)))
+                    .await
+                    .map_err(|_| {
+                        MezError::invalid_state("outbound unchanged view delivery unavailable")
+                    })?;
+                return Ok(self);
+            }
             let lines = project_view_lines(&response, &request, &self.summary)?;
             let styles = project_view_styles(&response, lines.len(), request.columns)?;
             let modes = project_view_modes(&response, request.columns, request.rows)?;
@@ -133,6 +159,8 @@ impl InitializedSessionFrontend {
                 .await
                 .map_err(|_| MezError::invalid_state("outbound local view delivery unavailable"))?;
             self.delivered_receipts = receipts;
+            self.delivered_view =
+                view_identity.map(|identity| (identity, request.columns, request.rows));
             Ok(self)
         })
         .await

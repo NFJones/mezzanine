@@ -143,6 +143,8 @@ fn inert_client(
         render_rate_limit_fps: None,
         view_identity: None,
         event_cutoff: None,
+        snapshot_size: (80, 24),
+        committed_view: None,
     };
     (root, listener, peer, client)
 }

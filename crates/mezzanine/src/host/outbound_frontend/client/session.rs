@@ -52,9 +52,14 @@ pub(crate) struct OutboundSessionClient {
     render_rate_limit_fps: Option<u64>,
     view_identity: Option<String>,
     event_cutoff: Option<u64>,
+    /// Geometry belonging to the exact retained snapshot, not the current TTY.
+    snapshot_size: (u16, u16),
+    /// Set only by successful complete-output presentation and receipt settlement.
+    committed_view: Option<(String, u16, u16)>,
 }
 
 mod acknowledge;
+mod conditional;
 mod events;
 mod foreground;
 mod present;
@@ -122,6 +127,8 @@ impl OutboundFrontendClient {
                 OutboundSessionClient {
                     client: self,
                     modes: snapshot_modes(&snapshot, columns, rows)?,
+                    snapshot_size: (columns, rows),
+                    committed_view: None,
                     events_negotiated: params.event_stream_version == Some(1),
                     render_rate_limit_fps: snapshot.render_rate_limit_fps,
                     view_identity: snapshot.view_identity,
@@ -202,6 +209,8 @@ impl OutboundSessionClient {
             self.render_rate_limit_fps = snapshot.render_rate_limit_fps;
             self.view_identity = snapshot.view_identity;
             self.event_cutoff = snapshot.event_cutoff;
+            self.snapshot_size = (columns, rows);
+            self.committed_view = None;
             Ok((self, snapshot.lines))
         })
         .await

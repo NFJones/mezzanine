@@ -4304,6 +4304,12 @@ Snapshots MAY retain optional server view identity and event cutoff as typed
 evidence. Identity MUST use the shared lowercase SHA-256 representation check;
 malformed explicit metadata MUST reject before publication. Receiving this
 evidence MUST NOT establish a committed conditional-rendering baseline.
+The explicit internal conditional exchange MUST reuse only an exact identity
+and geometry established after complete local output and receipt settlement.
+The broker MUST fence requested bases against its last delivered view. Unchanged
+replies MUST retain exact session ownership and contain no replacement rows or
+receipts. Full replacement or terminal reset/replacement MUST invalidate reuse;
+callers remain responsible for invalidating after output outside this owner.
 Snapshot style rows MUST align with rendered lines, retain ordered overlay
 precedence, and enforce finite span counts and checked cell ranges. Both broker
 and client MUST use the shared rendition decoder; unknown style metadata MUST

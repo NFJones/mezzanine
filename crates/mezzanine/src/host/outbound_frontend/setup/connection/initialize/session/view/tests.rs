@@ -116,6 +116,7 @@ fn outbound_view_projection_is_closed_and_geometry_bound() {
         },
         columns: 80,
         rows: 2,
+        if_view_identity: None,
     };
     let session = serde_json::json!({"granted_role":"primary"});
     let original = serde_json::json!({"jsonrpc":"2.0","id":VIEW_REQUEST_ID,

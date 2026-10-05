@@ -17,6 +17,8 @@ pub(crate) struct InitializedSessionFrontend {
     bridge: IrohCompressionBridge,
     summary: serde_json::Value,
     delivered_receipts: Vec<u64>,
+    /// Last successfully delivered view identity and its exact requested geometry.
+    delivered_view: Option<(String, u16, u16)>,
     events: Option<
         crate::host::outbound_frontend::events::OutboundEventReader<iroh::endpoint::RecvStream>,
     >,
@@ -73,6 +75,7 @@ impl ConnectedFrontend {
             bridge,
             summary,
             delivered_receipts: Vec::new(),
+            delivered_view: None,
             events,
         })
     }

@@ -579,6 +579,12 @@ metadata retention alone does not enable foreground pacing or CLI activation.
 Snapshots also retain optional validated view identity and event cutoff. These
 are server revision evidence, not proof of local output commitment or permission
 to reuse a conditional-rendering baseline. Invalid explicit metadata rejects.
+An explicit internal conditional API now reuses exact identity/geometry only
+after complete output and receipt settlement. The broker checks its delivered
+base; unchanged replies carry no replacement rows or receipts. Replacement
+snapshots and terminal resets invalidate reuse. Callers must invalidate before
+external writes or writer replacement; ordinary foreground activation remains
+separate from this explicit API.
 Snapshots also retain decoded style rows with finite span/cell bounds and
 original overlay order. Broker and client validate row alignment using the
 shared rendition interpretation; unknown style metadata is not forwarded.
