@@ -4410,6 +4410,10 @@ terminal-step idempotency key. It MUST issue one mutation without automatic
 replay and validate correlated accepted-byte and lifecycle evidence. Runtime
 acceptance MUST NOT be described as proof of process or model delivery. Input
 forwarding MUST NOT acknowledge presentation or enable arbitrary control methods.
+Input settlement MUST retain typed view-refresh and full-redraw requirements.
+A full-redraw requirement MUST imply refresh and invalidate both committed-view
+reuse and physical writer state before replacement capture. Missing requirements
+retain the established no-refresh default; malformed explicit values MUST reject.
 The internal listener supervisor MUST bound accepted pipelines independently of
 admission capacity and retain their futures without detached forwarding tasks.
 Peer failure MUST retire only its pipeline; cancellation MUST dispose owned

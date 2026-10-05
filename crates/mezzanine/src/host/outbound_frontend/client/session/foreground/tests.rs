@@ -151,6 +151,77 @@ fn inert_client(
     (root, listener, peer, client)
 }
 
+/// Input requesting a full redraw must invalidate physical writer state and
+/// suppress conditional reuse of the previously committed identity. The exact
+/// mutation is admitted once; cancellation during replacement capture restores
+/// presentation without replaying input or writing an unvalidated frame.
+#[tokio::test]
+async fn outbound_foreground_input_full_redraw_invalidates_committed_base() {
+    let (root, listener, peer, mut client) = inert_client(Vec::new());
+    client.events_negotiated = true;
+    client.view_identity = Some("a".repeat(64));
+    let handle = client.client.handle.clone();
+    let summary = client.summary.clone();
+    let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+    terminal.push_input(b"x".to_vec());
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let foreground_stop = stop.clone();
+    let foreground = client.run_snapshot_foreground(
+        &mut terminal,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(1),
+        async move { foreground_stop.notified().await },
+    );
+    let responder = async {
+        let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(request["operation"], "events");
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"action":"none","event_id":null
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let frame = peer.next().await.unwrap().unwrap();
+        let mutation: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(mutation["operation"], "step");
+        assert_eq!(mutation["input_bytes"], serde_json::json!([120]));
+        peer.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
+            "handle":handle,"session":summary,"idempotency_key":mutation["idempotency_key"],
+            "acknowledgement":{"input_bytes":1,"client_detached":false,
+                "session_terminated":false,"view_refresh_required":true,"full_redraw_required":true}
+        }).to_string())).await.unwrap();
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert!(request.get("operation").is_none());
+        assert!(
+            request.get("if_view_identity").is_none(),
+            "full redraw must discard committed reuse"
+        );
+        assert_eq!(request["columns"], 80);
+        stop.notify_one();
+        assert!(
+            peer.next().await.is_none(),
+            "input must not replay after cancellation"
+        );
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(foreground, responder)
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(terminal.invalidated_output_frames, 1);
+    assert_eq!(terminal.written_frames.len(), 1);
+    assert_eq!(terminal.presentation_restores, 1);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Idle coarse-health changes must repaint the settled local decoration without
 /// fetching server rows or acknowledging receipts again. The original health
 /// exchange supplies initial presentation, and cancellation retires a later poll.

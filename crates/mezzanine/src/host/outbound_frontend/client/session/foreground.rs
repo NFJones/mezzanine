@@ -141,6 +141,10 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
                 if acknowledgement.client_detached || acknowledgement.session_terminated {
                     return Ok(());
                 }
+                if acknowledgement.full_redraw_required {
+                    session.invalidate_committed_view();
+                    terminal.invalidate_output_frame().await?;
+                }
                 input_step_applied = true;
                 render = true;
             }
@@ -156,6 +160,10 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
             session = updated;
             if acknowledgement.client_detached || acknowledgement.session_terminated {
                 return Ok(());
+            }
+            if acknowledgement.full_redraw_required {
+                session.invalidate_committed_view();
+                terminal.invalidate_output_frame().await?;
             }
         }
         if render {

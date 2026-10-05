@@ -135,8 +135,24 @@ fn project_acknowledgement(body: &str, input_len: usize) -> Result<serde_json::V
         .ok_or_else(|| {
             MezError::invalid_state("outbound input lifecycle unavailable; outcome unknown")
         })?;
+    let redraw = |field: &str| -> Result<bool> {
+        response
+            .pointer(&format!("/result/application/{field}"))
+            .map(|value| {
+                value.as_bool().ok_or_else(|| {
+                    MezError::invalid_state(
+                        "outbound input redraw evidence invalid; outcome unknown",
+                    )
+                })
+            })
+            .transpose()
+            .map(|value| value.unwrap_or(false))
+    };
+    let full_redraw = redraw("full_redraw_required")?;
+    let refresh = redraw("view_refresh_required")? || full_redraw;
     Ok(
-        serde_json::json!({"input_bytes":input_len,"client_detached":detached,"session_terminated":terminated}),
+        serde_json::json!({"input_bytes":input_len,"client_detached":detached,"session_terminated":terminated,
+            "view_refresh_required":refresh,"full_redraw_required":full_redraw}),
     )
 }
 

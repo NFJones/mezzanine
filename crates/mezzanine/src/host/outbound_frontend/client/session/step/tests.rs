@@ -20,6 +20,16 @@ fn outbound_input_client_reply_requires_exact_mutation_owner() {
     let reply: InputReply = serde_json::from_value(original.clone()).unwrap();
     validate_reply(&reply, &handle, &reply.session, "exact", 2).unwrap();
     assert!(reply.acknowledgement.client_detached);
+    assert!(!reply.acknowledgement.view_refresh_required);
+    assert!(!reply.acknowledgement.full_redraw_required);
+    let mut redraw = original.clone();
+    redraw["acknowledgement"]["view_refresh_required"] = serde_json::json!(true);
+    redraw["acknowledgement"]["full_redraw_required"] = serde_json::json!(true);
+    let valid: InputReply = serde_json::from_value(redraw.clone()).unwrap();
+    validate_reply(&valid, &handle, &reply.session, "exact", 2).unwrap();
+    redraw["acknowledgement"]["view_refresh_required"] = serde_json::json!(false);
+    let invalid: InputReply = serde_json::from_value(redraw).unwrap();
+    assert!(validate_reply(&invalid, &handle, &reply.session, "exact", 2).is_err());
     for (pointer, value) in [
         ("/handle/generation", serde_json::json!(2)),
         ("/session/session_id", serde_json::json!("$2")),

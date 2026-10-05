@@ -14,6 +14,12 @@ pub(crate) struct InputAcknowledgement {
     pub(crate) input_bytes: usize,
     pub(crate) client_detached: bool,
     pub(crate) session_terminated: bool,
+    /// Missing facts retain the established attach no-refresh default.
+    #[serde(default)]
+    pub(crate) view_refresh_required: bool,
+    /// Discards cached physical output before the next complete view.
+    #[serde(default)]
+    pub(crate) full_redraw_required: bool,
 }
 
 /// Exact local reply envelope; arbitrary metadata and device proof reject.
@@ -84,6 +90,9 @@ impl OutboundSessionClient {
             })?;
             validate_reply(&reply, &self.client.handle, &self.summary, key, input.len())?;
             self.client.discovery.validate()?;
+            if reply.acknowledgement.full_redraw_required {
+                self.invalidate_committed_view();
+            }
             Ok((self, reply.acknowledgement))
         })
         .await
@@ -103,6 +112,8 @@ fn validate_reply(
         || reply.session != *summary
         || reply.idempotency_key != key
         || reply.acknowledgement.input_bytes != count
+        || (reply.acknowledgement.full_redraw_required
+            && !reply.acknowledgement.view_refresh_required)
     {
         return Err(MezError::invalid_state(
             "outbound input acknowledgement changed; outcome unknown",

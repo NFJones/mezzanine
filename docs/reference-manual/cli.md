@@ -674,6 +674,10 @@ Reported byte acceptance is runtime evidence, not proof of process or model
 delivery. Errors consume ownership without automatic replay; full rendering,
 events, X11 and ordinary CLI migration remain unfinished. Receipt forwarding is
 qualified separately from physical-terminal output commitment.
+Input settlement retains runtime refresh and full-redraw flags. Full redraw
+implies refresh and discards committed-view reuse and writer state before the
+next capture. Missing flags retain the existing no-refresh default; malformed
+explicit flags reject rather than becoming invented rendering evidence.
 An internal listener supervisor drives finitely many independent setup/display
 pipelines. Stalled peers do not serialize siblings; cancellation disposes owned
 pipelines without replay. The caller still disposes the listener and completes

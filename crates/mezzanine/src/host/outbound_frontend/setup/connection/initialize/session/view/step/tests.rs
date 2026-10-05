@@ -191,6 +191,31 @@ fn outbound_input_request_requires_exact_primary_and_budget() {
     assert!(serde_json::from_value::<StepRequest>(foreign).is_err());
 }
 
+/// A full-redraw result must survive projection even if the ordinary refresh
+/// flag is false. Otherwise conditional reuse can preserve invalid local output
+/// after the runtime explicitly requested that the retained frame be discarded.
+#[test]
+fn outbound_input_acknowledgement_preserves_full_redraw_requirement() {
+    let response = serde_json::json!({"jsonrpc":"2.0","id":STEP_ID,"result":{
+        "input_bytes":2,"client_detached":false,"session_terminated":false,
+        "application":{"view_refresh_required":false,"full_redraw_required":true}
+    }});
+    let projected = project_acknowledgement(&response.to_string(), 2).unwrap();
+    assert_eq!(projected["full_redraw_required"], true);
+    assert_eq!(projected["view_refresh_required"], true);
+    for field in ["view_refresh_required", "full_redraw_required"] {
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!("true"),
+            serde_json::json!(1),
+        ] {
+            let mut malformed = response.clone();
+            malformed["result"]["application"][field] = value;
+            assert!(project_acknowledgement(&malformed.to_string(), 2).is_err());
+        }
+    }
+}
+
 /// Correlation and exact runtime input acceptance must precede a content-free
 /// acknowledgement. Lifecycle flags are preserved rather than invented from
 /// input size, and forwarded-byte or credential metadata never crosses IPC.
@@ -201,7 +226,8 @@ fn outbound_input_acknowledgement_is_exact_and_content_free() {
         "application":{"forwarded_bytes":0},"device_credential":"not-projected"}});
     assert_eq!(
         project_acknowledgement(&original.to_string(), 2).unwrap(),
-        serde_json::json!({"input_bytes":2,"client_detached":false,"session_terminated":false})
+        serde_json::json!({"input_bytes":2,"client_detached":false,"session_terminated":false,
+            "view_refresh_required":false,"full_redraw_required":false})
     );
     for (pointer, value) in [
         ("/id", serde_json::json!("other")),
