@@ -402,7 +402,28 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
                 first_event.is_some(),
                 "negotiated events must cross local IPC"
             );
+            let (first, connected, _) = first
+                .sample_transport_health(Duration::from_secs(2))
+                .await
+                .unwrap();
+            assert!(connected);
+            assert_eq!(
+                serde_json::to_value(first.summary()).unwrap(),
+                first_view["session"]
+            );
             drop(first);
+            let (second, connected, _) = second
+                .sample_transport_health(Duration::from_secs(2))
+                .await
+                .unwrap();
+            assert!(
+                connected,
+                "sibling retirement must not mark this connection down"
+            );
+            assert_eq!(
+                serde_json::to_value(second.summary()).unwrap(),
+                second_view["session"]
+            );
             // A management frontend must use the same protected endpoint while
             // its sibling attachment remains live; listing allocates no session.
             let management =

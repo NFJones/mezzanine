@@ -4296,6 +4296,10 @@ connection lease and sample only that connection when its refresh deadline is du
 Unavailable measurements MUST remain unknown; a closed connection MUST report
 disconnected with unknown quality. Sampling MUST NOT advance a sibling tracker,
 spawn a worker, reconnect, or imply frontend delivery or local status composition.
+The separate internal health exchange MUST bind the exact frontend and session,
+return only connected state and the closed coarse-quality vocabulary, and retain
+finite delivery deadlines. Paths, counters and credentials MUST NOT cross IPC.
+Sampling replies MUST NOT render, acknowledge receipts or trigger remote work.
 The internal display-only frontend view exchange MUST bind the exact local handle
 and initialized session, accept only bounded geometry, and project correlated
 role/geometry-checked rendered lines. It MUST NOT acknowledge presentation,

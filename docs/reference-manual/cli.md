@@ -574,6 +574,10 @@ samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling
 is independent. This boundary adds no worker, frontend health reply, local status
 composition, or ordinary attachment activation.
+An explicit internal health exchange now delivers only connected state and coarse
+quality across exact-session IPC under a finite deadline. It exposes no paths,
+counters or credentials and performs no remote request, rendering or receipt ACK.
+Real-host sibling fixtures qualify this exchange, not ordinary CLI attachment.
 An internal display-only view exchange now carries bounded rendered lines and
 validated session identity across exact-handle local IPC. It does not provide
 terminal input, presentation acknowledgement or the complete attached
