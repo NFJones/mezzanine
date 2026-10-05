@@ -410,7 +410,7 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
         let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
         let server_cancel = cancel.clone();
         let supervised = listener.serve(async move { server_cancel.notified().await });
-        let clients = async {
+        let clients = Box::pin(async {
             // This name collides with another lease's actual session ID. The
             // host must reject that ambiguous untyped target before revocation.
             let (first, first_view) = supervised_create(&socket, &first_session_id).await;
@@ -457,6 +457,96 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
             );
             // A management frontend must use the same protected endpoint while
             // its sibling attachment remains live; listing allocates no session.
+            for (intent, role, target) in [
+                (
+                    "attach",
+                    "observer",
+                    Some(
+                        serde_json::json!({"session_id":second_view["session"]["session_id"],"lease_id":null}),
+                    ),
+                ),
+                (
+                    "attach",
+                    "observer",
+                    Some(
+                        serde_json::json!({"lease_id":second_view["session"]["lease_id"],"session_id":null}),
+                    ),
+                ),
+                (
+                    "attach",
+                    "observer",
+                    Some(
+                        serde_json::json!({"name":"supervised-second","session_id":null,"lease_id":null}),
+                    ),
+                ),
+                (
+                    "attach",
+                    "primary",
+                    Some(serde_json::json!({"session_id":first_view["session"]["session_id"]})),
+                ),
+                ("default", "primary", None),
+                ("resolve_or_create", "primary", None),
+            ] {
+                let client =
+                    crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
+                        socket.parent().unwrap(),
+                        Duration::from_secs(2),
+                    )
+                    .await
+                    .unwrap();
+                let mut initialize = serde_json::json!({
+                    "client_name":"resolution-fixture","requested_version":3,"requested_role":role,
+                    "session_intent":intent,"detach_primary_on_disconnect":true,
+                    "client":{"name":"resolution-fixture","interactive":true,
+                        "terminal":{"columns":80,"rows":24,"term":"xterm"}}
+                });
+                if let Some(target) = &target {
+                    initialize["session_target"] = target.clone();
+                }
+                if intent == "resolve_or_create" {
+                    initialize["idempotency_key"] = serde_json::json!("resolve-existing-fixture");
+                }
+                let (resolved, _) = client
+                    .start_session("creator", initialize, 80, 24, Duration::from_secs(2))
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("resolution {intent}/{role}/{target:?}: {error}")
+                    });
+                let summary = serde_json::to_value(resolved.summary()).unwrap();
+                assert_eq!(summary["granted_role"], role);
+                if intent == "attach" {
+                    let expected = if role == "observer" {
+                        &second_view
+                    } else {
+                        &first_view
+                    };
+                    assert_eq!(summary["session_id"], expected["session"]["session_id"]);
+                    assert_eq!(summary["lease_id"], expected["session"]["lease_id"]);
+                } else {
+                    assert!(
+                        [
+                            first_session_id.as_str(),
+                            second_session_id.as_str(),
+                            first_view["session"]["session_id"].as_str().unwrap(),
+                            second_view["session"]["session_id"].as_str().unwrap()
+                        ]
+                        .contains(&summary["session_id"].as_str().unwrap())
+                    );
+                }
+                assert_eq!(
+                    router.snapshots().await.unwrap().len(),
+                    4,
+                    "existing-session resolution must not allocate another runtime"
+                );
+                if role == "primary" {
+                    resolved
+                        .detach_self("resolution-detach", Duration::from_secs(2))
+                        .await
+                        .unwrap();
+                } else {
+                    drop(resolved);
+                }
+            }
             let management =
                 crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
                     socket.parent().unwrap(),
@@ -728,9 +818,9 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
             assert_eq!(foreground.written_frames.len(), 1);
             assert_eq!(router.snapshots().await.unwrap().len(), 4);
             cancel.notify_one();
-        };
+        });
         let (accepted, ()) = tokio::join!(supervised, clients);
-        assert_eq!(accepted.unwrap(), 10);
+        assert_eq!(accepted.unwrap(), 16);
         stop.notify_one();
     });
     let (served, ()) = tokio::time::timeout(Duration::from_secs(30), async {
@@ -738,7 +828,7 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
     })
     .await
     .unwrap();
-    assert_eq!(served.unwrap(), 12);
+    assert_eq!(served.unwrap(), 18);
     router
         .shutdown_all(true, Duration::from_secs(5))
         .await
