@@ -10,6 +10,80 @@
 use crate::error::{MezError, Result};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 
+/// Independent per-row allocation cap for layered snapshot styles. A full
+/// 4096-cell base plus selection overlays may exceed the number of columns.
+const MAX_SNAPSHOT_STYLE_SPANS_PER_ROW: usize = 8192;
+
+/// Decodes aligned viewport style rows with finite cell and span budgets.
+/// This opt-in check leaves legacy attach decoding unchanged. Positive spans
+/// must fit the supplied cell width; overlapping overlays retain source order
+/// because later renderer spans take precedence over earlier ones.
+pub(crate) fn bounded_style_rows(
+    value: &serde_json::Value,
+    line_count: usize,
+    columns: u16,
+) -> Result<Vec<Vec<TerminalStyleSpan>>> {
+    let rows = value
+        .as_array()
+        .filter(|rows| rows.len() == line_count)
+        .ok_or_else(|| MezError::invalid_state("snapshot style rows must align with lines"))?;
+    let width = usize::from(columns);
+    if width == 0 || width > 4096 || line_count > 4096 {
+        return Err(MezError::invalid_state(
+            "snapshot style geometry unavailable",
+        ));
+    }
+    rows.iter()
+        .map(|row| {
+            let values = row
+                .as_array()
+                .filter(|spans| spans.len() <= MAX_SNAPSHOT_STYLE_SPANS_PER_ROW)
+                .ok_or_else(|| {
+                    MezError::invalid_state("snapshot style row exceeds layer budget")
+                })?;
+            values
+                .iter()
+                .map(|value| {
+                    let span = parse_terminal_style_span(value)?;
+                    span.start
+                        .checked_add(span.length)
+                        .filter(|next| *next <= width)
+                        .ok_or_else(|| {
+                            MezError::invalid_state("snapshot style span exceeds geometry")
+                        })?;
+                    if span.length == 0 {
+                        return Err(MezError::invalid_state("snapshot style span is empty"));
+                    }
+                    Ok(span)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Projects only decoded rendition fields; unknown peer metadata never crosses
+/// transport boundaries. Cell coordinates and all existing flags are retained.
+pub(crate) fn style_rows_value(rows: &[Vec<TerminalStyleSpan>]) -> serde_json::Value {
+    let color = |color: Option<TerminalColor>| match color {
+        None => serde_json::Value::Null,
+        Some(TerminalColor::Indexed(index)) => serde_json::json!({"kind":"indexed","index":index}),
+        Some(TerminalColor::Rgb(red, green, blue)) => {
+            serde_json::json!({"kind":"rgb","red":red,"green":green,"blue":blue})
+        }
+    };
+    serde_json::Value::Array(rows.iter().map(|row| {
+        serde_json::Value::Array(row.iter().map(|span| {
+            let rendition = span.rendition;
+            serde_json::json!({"start":span.start,"length":span.length,"rendition":{
+                "bold":rendition.bold,"dim":rendition.dim,"italic":rendition.italic,
+                "underline":rendition.underline,"double_underline":rendition.double_underline,
+                "strikethrough":rendition.strikethrough,"inverse":rendition.inverse,"hidden":rendition.hidden,
+                "foreground":color(rendition.foreground),"background":color(rendition.background)
+            }})
+        }).collect())
+    }).collect())
+}
+
 /// Decodes one style row, preserving source order and existing error semantics.
 pub(crate) fn parse_terminal_style_span_row(
     value: &serde_json::Value,

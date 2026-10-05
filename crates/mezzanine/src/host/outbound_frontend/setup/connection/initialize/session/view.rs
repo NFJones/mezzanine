@@ -82,13 +82,14 @@ impl InitializedSessionFrontend {
                 .map_err(|_| MezError::invalid_state("outbound view write unavailable"))?;
             let response = read_exact_frame(self.bridge.stream_mut()).await?;
             let lines = project_view_lines(&response, &request, &self.summary)?;
+            let styles = project_view_styles(&response, lines.len(), request.columns)?;
             self.connected
                 .prepared
                 .frontend
                 ._endpoint
                 .frontend_config_root()?;
             let body = serde_json::json!({"handle":request.handle,"session":self.summary,
-                "lines":lines})
+                "lines":lines,"line_style_spans":styles})
             .to_string();
             if body.len() > BODY_LIMIT {
                 return Err(MezError::invalid_state(
@@ -155,6 +156,17 @@ fn project_view_lines(
                 .ok_or_else(|| MezError::invalid_state("outbound view line invalid"))
         })
         .collect()
+}
+
+/// Retains only decoded, geometry-bounded rendition fields from the peer view.
+fn project_view_styles(body: &str, line_count: usize, columns: u16) -> Result<serde_json::Value> {
+    let response: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_state("outbound view response invalid"))?;
+    let value = response
+        .pointer("/result/view/line_style_spans")
+        .ok_or_else(|| MezError::invalid_state("outbound view styles unavailable"))?;
+    let rows = crate::host::terminal::wire_styles::bounded_style_rows(value, line_count, columns)?;
+    Ok(crate::host::terminal::wire_styles::style_rows_value(&rows))
 }
 
 #[cfg(test)]

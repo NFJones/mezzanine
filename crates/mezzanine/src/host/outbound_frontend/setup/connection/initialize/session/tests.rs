@@ -255,16 +255,21 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             .await
             .unwrap();
         let local_response = async {
-            let frame = second_local.next().await.unwrap().unwrap();
+            let frame = second_local.next().await.transpose().unwrap()?;
             assert_eq!(frame.content_type, CONTENT_TYPE);
-            serde_json::from_str::<serde_json::Value>(&frame.body).unwrap()
+            Some(serde_json::from_str::<serde_json::Value>(&frame.body).unwrap())
         };
         let (delivered, view) = tokio::join!(second.deliver_view(), local_response);
         second = delivered.unwrap();
+        let view = view.unwrap();
         assert_eq!(view["session"], second.summary);
         assert_eq!(view["handle"], serde_json::to_value(&handle).unwrap());
         assert!(view["lines"].is_array());
-        assert_eq!(view.as_object().unwrap().len(), 3);
+        assert_eq!(
+            view["line_style_spans"].as_array().unwrap().len(),
+            view["lines"].as_array().unwrap().len()
+        );
+        assert_eq!(view.as_object().unwrap().len(), 4);
         drop(second);
         drop(first_local);
         drop(second_local);
@@ -310,6 +315,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
                 second_view["session"]
             );
             assert!(lines.len() <= 24);
+            assert_eq!(second.line_style_spans().len(), lines.len());
             let (second, _) = second
                 .snapshot(100, 30, Duration::from_secs(2))
                 .await

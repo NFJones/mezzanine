@@ -5,6 +5,25 @@
 
 use super::*;
 
+/// Style projection preserves layered cell coordinates and decoded colors, but
+/// removes unknown metadata before forwarding. Misaligned or out-of-range rows
+/// reject rather than expose unvalidated styling to a frontend renderer.
+#[test]
+fn outbound_view_styles_are_bounded_and_metadata_free() {
+    let original = serde_json::json!({"result":{"view":{"line_style_spans":[[
+        {"start":0,"length":8,"rendition":{"bold":true,"private":"discard"}},
+        {"start":2,"length":2,"rendition":{"foreground":{"kind":"indexed","index":7}}}
+    ]]}}});
+    let projected = project_view_styles(&original.to_string(), 1, 8).unwrap();
+    assert_eq!(projected[0][0]["start"], 0);
+    assert_eq!(projected[0][0]["length"], 8);
+    assert_eq!(projected[0][1]["start"], 2);
+    assert_eq!(projected[0][1]["rendition"]["foreground"]["index"], 7);
+    assert!(!projected.to_string().contains("discard"));
+    assert!(project_view_styles(&original.to_string(), 2, 8).is_err());
+    assert!(project_view_styles(&original.to_string(), 1, 7).is_err());
+}
+
 /// Correlation, role, client geometry and row count must match the retained
 /// session. Unknown fields are discarded rather than forwarded as authority.
 #[test]

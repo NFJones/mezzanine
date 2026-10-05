@@ -548,8 +548,11 @@ control survives retirement; this is not multi-process CLI acceptance. Event/X11
 forwarding, startup election and CLI activation remain unfinished.
 An internal display-only view exchange now carries bounded rendered lines and
 validated session identity across exact-handle local IPC. It does not provide
-styles, terminal input, presentation acknowledgement or the complete attached
+terminal input, presentation acknowledgement or the complete attached
 renderer. Failed exchanges dispose their owner instead of replaying requests.
+Snapshots also retain decoded style rows with finite span/cell bounds and
+original overlay order. Broker and client validate row alignment using the
+shared rendition interpretation; unknown style metadata is not forwarded.
 An independent internal primary-input exchange carries bounded bytes with the
 original mutation key and validates exact frontend/session acknowledgement.
 Reported byte acceptance is runtime evidence, not proof of process or model

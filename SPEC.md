@@ -4272,6 +4272,10 @@ and initialized session, accept only bounded geometry, and project correlated
 role/geometry-checked rendered lines. It MUST NOT acknowledge presentation,
 forward arbitrary control methods, retarget a connection or send terminal input.
 Failure consumes the owner rather than retrying a potentially desynchronized stream.
+Snapshot style rows MUST align with rendered lines, retain ordered overlay
+precedence, and enforce finite span counts and checked cell ranges. Both broker
+and client MUST use the shared rendition decoder; unknown style metadata MUST
+NOT cross IPC. Styled snapshots alone do not establish a complete renderer.
 The separate internal primary-input exchange MUST bind the exact frontend and
 initialized primary, bound geometry/input/key size, and retain the original
 terminal-step idempotency key. It MUST issue one mutation without automatic

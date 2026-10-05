@@ -31,12 +31,14 @@ struct Snapshot {
     handle: FrontendHandle,
     session: SessionSummary,
     lines: Vec<String>,
+    line_style_spans: serde_json::Value,
 }
 
 /// Client pinned to its first exact session settlement, with one retained stream.
 pub(crate) struct OutboundSessionClient {
     client: OutboundFrontendClient,
     summary: SessionSummary,
+    styles: Vec<Vec<mez_terminal::TerminalStyleSpan>>,
 }
 
 mod step;
@@ -103,6 +105,11 @@ impl OutboundFrontendClient {
                 OutboundSessionClient {
                     client: self,
                     summary: snapshot.session,
+                    styles: crate::host::terminal::wire_styles::bounded_style_rows(
+                        &snapshot.line_style_spans,
+                        snapshot.lines.len(),
+                        columns,
+                    )?,
                 },
                 snapshot.lines,
             ))
@@ -134,6 +141,11 @@ impl OutboundFrontendClient {
         let snapshot: Snapshot = serde_json::from_str(&frame.body)
             .map_err(|_| MezError::invalid_state("outbound snapshot invalid"))?;
         validate_snapshot(&snapshot, &self.handle, rows)?;
+        crate::host::terminal::wire_styles::bounded_style_rows(
+            &snapshot.line_style_spans,
+            snapshot.lines.len(),
+            columns,
+        )?;
         self.discovery.validate()?;
         Ok(snapshot)
     }
@@ -154,6 +166,11 @@ impl OutboundSessionClient {
             if snapshot.session != self.summary {
                 return Err(MezError::conflict("outbound session settlement changed"));
             }
+            self.styles = crate::host::terminal::wire_styles::bounded_style_rows(
+                &snapshot.line_style_spans,
+                snapshot.lines.len(),
+                columns,
+            )?;
             Ok((self, snapshot.lines))
         })
         .await
@@ -163,6 +180,12 @@ impl OutboundSessionClient {
     /// Returns inert exact identities, never credentials or execution authority.
     pub(crate) fn summary(&self) -> &SessionSummary {
         &self.summary
+    }
+
+    /// Borrows decoded cell styles aligned with the last returned snapshot.
+    /// This grants no renderer or presentation-acknowledgement authority.
+    pub(crate) fn line_style_spans(&self) -> &[Vec<mez_terminal::TerminalStyleSpan>] {
+        &self.styles
     }
 }
 
