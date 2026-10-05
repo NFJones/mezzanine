@@ -216,6 +216,8 @@ fn build_direct_resume_projection(
         .ok_or_else(|| MezError::invalid_state("direct resume projection screen disappeared"))?;
     Ok(crate::runtime::RuntimeDirectResumeProjection {
         screen,
+        steering_receipt_ids: projection
+            .replayed_steering_receipt_ids(&work.pane_id, &saved.summary.conversation_id),
         prompt_history,
         size: work.size,
         presentation_settings: work.presentation_settings.clone(),
@@ -733,6 +735,11 @@ impl RuntimeSessionService {
                     session_id.clone(),
                     projection.screen,
                 );
+                self.install_replayed_steering_receipt_ids(
+                    pane_id,
+                    &session_id,
+                    projection.steering_receipt_ids,
+                )?;
                 self.set_agent_prompt_history_for_pane(pane_id, projection.prompt_history);
                 // This is the presentation linearization point. The worker
                 // retained the durable conversation lock from its coherent
@@ -962,6 +969,7 @@ impl RuntimeSessionService {
             }
         };
         self.install_composer_saved_title(&composer_title_metadata);
+        self.request_steering_presentation(pane_id);
         Ok(AgentShellCommandOutcome::Mutated {
             command: "resume".to_string(),
             body: format!(

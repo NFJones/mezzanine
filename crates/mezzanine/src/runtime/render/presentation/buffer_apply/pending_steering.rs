@@ -50,6 +50,46 @@ pub(crate) struct SteeringPresentationSnapshot {
 }
 
 impl RuntimeSessionService {
+    /// Captures settled identities belonging to one worker-rendered surface.
+    /// These are display suppression only, never delivery acknowledgement.
+    pub(crate) fn replayed_steering_receipt_ids(
+        &self,
+        pane: &str,
+        conversation: &str,
+    ) -> std::collections::BTreeSet<String> {
+        self.presentation
+            .presented_steering_receipts
+            .iter()
+            .filter(|(owner, source, _)| owner == pane && source == conversation)
+            .map(|(_, _, id)| id.clone())
+            .collect()
+    }
+
+    /// Installs replay suppression with its already validated candidate screen.
+    /// Resume rollback retains the prior surface snapshot if later work fails.
+    pub(crate) fn install_replayed_steering_receipt_ids(
+        &mut self,
+        pane: &str,
+        conversation: &str,
+        ids: std::collections::BTreeSet<String>,
+    ) -> Result<()> {
+        if self.agent_pane_screen_lineage(pane, conversation).is_none()
+            || !self
+                .agent_shell_store()
+                .get(pane)
+                .is_some_and(|session| session.session_id == conversation)
+        {
+            return Err(MezError::invalid_state(
+                "steering replay candidate owner changed",
+            ));
+        }
+        self.presentation.presented_steering_receipts.extend(
+            ids.into_iter()
+                .map(|id| (pane.to_string(), conversation.to_string(), id)),
+        );
+        Ok(())
+    }
+
     /// Reconciles new receipt evidence without propagating display failure into
     /// execution. One retry is retained for the next persistence drain.
     pub(crate) fn request_steering_presentation(&mut self, pane: &str) {

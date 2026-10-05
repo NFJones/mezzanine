@@ -420,6 +420,8 @@ pub(crate) struct RuntimeDirectResumeProjectionWork {
 pub(crate) struct RuntimeDirectResumeProjection {
     /// Candidate screen ready for one actor-owned state replacement.
     pub(crate) screen: mez_terminal::TerminalScreen,
+    /// Settled occurrence identities replayed onto this exact candidate screen.
+    pub(crate) steering_receipt_ids: std::collections::BTreeSet<String>,
     /// Prompt history loaded from the resumed conversation.
     pub(crate) prompt_history: Vec<mez_mux::readline::ReadlineHistoryEntry>,
     /// Geometry captured before the worker rendered the candidate.

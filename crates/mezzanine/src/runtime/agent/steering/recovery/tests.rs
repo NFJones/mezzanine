@@ -246,7 +246,7 @@ fn steering_recovery_deferred_settlement_publishes_at_persistence_drain() {
 /// schedules old work, and restores the entire previous inert map on failure.
 #[test]
 fn steering_recovery_manual_resume_is_inert_and_transactional() {
-    for fail in [false, true] {
+    for (fail, worker) in [(false, false), (true, false), (false, true)] {
         let root = std::env::temp_dir().join(format!(
             "mez-steering-resume-{}",
             crate::storage::token_usage::new_token_usage_event_id()
@@ -295,6 +295,33 @@ fn steering_recovery_manual_resume_is_inert_and_transactional() {
                 content: "historical prompt".into(),
             })
             .unwrap();
+        if worker {
+            let mut receipt = target.steering_recovery[0].clone();
+            receipt.status = SteeringRecoveryStatus::AdmissionUnknown;
+            let source = crate::storage::transcript::steering::Source {
+                version: 1,
+                conversation_id: target.conversation_id.clone(),
+                receipt,
+            };
+            store
+                .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+                    conversation_id: target.conversation_id.clone(),
+                    sequence: 1,
+                    created_at_unix_seconds: 1,
+                    pane_id: "%1".into(),
+                    turn_id: Some("old-turn".into()),
+                    terminal_width: 80,
+                    style_names: vec!["user-prompt".into()],
+                    display_lines: vec!["user> [admission unknown] exact display".into()],
+                    copy_lines: Vec::new(),
+                    ansi_text: None,
+                    source_text: Some(source.encode().unwrap()),
+                    source_content_type: Some(
+                        crate::storage::transcript::steering::CONTENT_TYPE.into(),
+                    ),
+                })
+                .unwrap();
+        }
         store
             .save_agent_session_metadata(service.session().id.as_str(), &[target])
             .unwrap();
@@ -322,9 +349,19 @@ fn steering_recovery_manual_resume_is_inert_and_transactional() {
         if fail {
             service.fail_next_agent_resume_after_authority_restore_for_tests();
         }
-        let response = service
-            .execute_agent_shell_control_command(&primary, "/resume receipt-resume-target")
-            .unwrap();
+        let response = if worker {
+            service
+                .execute_agent_shell_command(&primary, "/resume receipt-resume-target")
+                .unwrap();
+            service
+                .run_pending_deferred_agent_command_for_tests()
+                .unwrap()
+                .unwrap()
+        } else {
+            service
+                .execute_agent_shell_control_command(&primary, "/resume receipt-resume-target")
+                .unwrap()
+        };
         if fail {
             assert!(response.contains("error"), "{response}");
             assert_eq!(service.snapshot_restored_steering_recovery(), before);
@@ -346,6 +383,18 @@ fn steering_recovery_manual_resume_is_inert_and_transactional() {
             assert_eq!(
                 recovered[0].status,
                 SteeringRecoveryStatus::AdmissionUnknown
+            );
+            service.request_steering_presentation("%1");
+            let text = service
+                .agent_pane_screen("%1")
+                .unwrap()
+                .normal_content_lines()
+                .join("\n");
+            assert_eq!(
+                text.matches("user> [admission unknown] exact display")
+                    .count(),
+                1,
+                "{text}"
             );
         }
         assert!(service.pending_agent_provider_tasks().is_empty());
@@ -540,6 +589,24 @@ fn steering_recovery_checkpoint_restart_is_inert_and_failure_preserves_receipts(
             .iter()
             .all(|entry| entry.status == SteeringRecoveryStatus::AdmissionUnknown)
     );
+    let text = restored
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        text.matches("user> [admission unknown] first display")
+            .count(),
+        1,
+        "{text}"
+    );
+    assert_eq!(
+        text.matches("user> [admission unknown] second display")
+            .count(),
+        1,
+        "{text}"
+    );
+    assert!(!text.contains("[pending]"), "{text}");
     assert!(restored.pending_agent_provider_tasks().is_empty());
     assert!(
         !restored
@@ -561,5 +628,40 @@ fn steering_recovery_checkpoint_restart_is_inert_and_failure_preserves_receipts(
             .steering_recovery,
         recovered
     );
+    for effect in restored
+        .drain_transcript_persistence_transition()
+        .side_effects
+    {
+        if let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { entry, .. } = effect
+        {
+            store.append_presentation_many(&[entry]).unwrap();
+        }
+    }
+    let mut again = crate::test_support::runtime::RuntimeServiceFixture::new()
+        .build_with_session(restored.session().clone());
+    again.set_agent_transcript_store(store.clone());
+    assert_eq!(
+        again
+            .restore_agent_sessions_from_transcript_store()
+            .unwrap(),
+        1
+    );
+    again.request_steering_presentation("%1");
+    let replayed = again
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    for display in ["first display", "second display"] {
+        assert_eq!(
+            replayed
+                .matches(&format!("user> [admission unknown] {display}"))
+                .count(),
+            1,
+            "{replayed}"
+        );
+    }
+    assert!(!replayed.contains("[pending]"), "{replayed}");
+    assert!(again.pending_agent_provider_tasks().is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }

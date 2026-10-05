@@ -631,6 +631,14 @@ impl RuntimeSessionService {
                 self.ensure_primary_agent_name(&pane)?;
             }
             self.checkpoint_agent_session_metadata()?;
+            let panes = self
+                .agent_shell_store()
+                .sessions()
+                .map(|session| session.pane_id.clone())
+                .collect::<Vec<_>>();
+            for pane in panes {
+                self.request_steering_presentation(&pane);
+            }
         }
         Ok(restored)
     }
