@@ -4231,6 +4231,9 @@ Cancelled or timed-out waits MUST retain the original shutdown future for retry;
 only completed teardown and endpoint disposal permit identity-lock release.
 Abandoned bind, owner or shutdown resources MUST withhold identity reuse until
 process exit when teardown is unproven, even at the cost of unavailable transport.
+Frontend discovery MUST revalidate the retained native configuration-root object
+and private-directory policy without recreating a missing pathname. Replacement
+or relocation MUST withhold discovery for the old endpoint owner.
 This resource alone does not implement frontend IPC or concurrent CLI attachment.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied

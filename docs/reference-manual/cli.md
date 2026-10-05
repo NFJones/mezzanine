@@ -518,6 +518,8 @@ to share the paired identity. The existing exclusive identity lock remains enfor
 Shutdown waits retain their original future across cancellation or timeout. An
 abandoned resource with unproven teardown withholds identity reuse until its
 owning process exits; another endpoint is never started as a cleanup fallback.
+The owner retains its configuration-root directory identity. Discovery checks
+are read-only and reject a relocated, replaced or no-longer-private root.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.

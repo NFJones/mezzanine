@@ -11,7 +11,8 @@
 //! quarantines the identity lock until process exit, never assuming dependency
 //! Drop or a closing flag proves transport teardown. No cleanup task is detached.
 
-use std::path::Path;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,8 +33,61 @@ pub(crate) struct OutboundEndpointOwner {
 struct EndpointResource {
     endpoint: iroh::Endpoint,
     identity: Option<RemoteClientIdentity>,
+    root: ConfigRootIdentity,
     slots: Arc<Semaphore>,
     setup_timeout: Duration,
+}
+
+/// Retained native directory identity, not a caller-authored routing label.
+/// A relocated/replaced root cannot publish a listener for the old key owner.
+struct ConfigRootIdentity {
+    path: PathBuf,
+    directory: std::fs::File,
+}
+
+impl ConfigRootIdentity {
+    /// Opens a private root without following a final symlink and retains it.
+    fn capture(path: &Path) -> Result<Self> {
+        crate::runtime::ensure_private_socket_directory(
+            path,
+            crate::runtime::current_effective_uid(),
+        )?;
+        let path = std::fs::canonicalize(path)?;
+        let descriptor = rustix::fs::open(
+            &path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        let root = Self {
+            path,
+            directory: descriptor.into(),
+        };
+        root.validate()?;
+        Ok(root)
+    }
+
+    /// Checks both physical object identity and current private-root policy.
+    fn validate(&self) -> Result<()> {
+        let retained = self.directory.metadata()?;
+        let current = std::fs::symlink_metadata(&self.path)?;
+        if !current.is_dir()
+            || current.file_type().is_symlink()
+            || current.uid() != crate::runtime::current_effective_uid()
+            || current.mode() & 0o077 != 0
+        {
+            return Err(MezError::forbidden(
+                "outbound configuration root must remain private",
+            ));
+        }
+        if retained.dev() != current.dev() || retained.ino() != current.ino() {
+            return Err(MezError::conflict("outbound configuration root changed"));
+        }
+        Ok(())
+    }
 }
 
 impl Drop for EndpointResource {
@@ -105,7 +159,9 @@ impl OutboundEndpointOwner {
                 "outbound endpoint budget unavailable",
             ));
         }
-        let identity = RemoteClientIdentity::load_or_create(config_root)?;
+        let root = ConfigRootIdentity::capture(config_root)?;
+        let identity = RemoteClientIdentity::load_or_create(&root.path)?;
+        root.validate()?;
         let key = identity.secret_key().clone();
         // Arm fail-closed ownership before entering cancellable transport bind.
         let mut identity = BindIdentityGuard(Some(identity));
@@ -114,6 +170,7 @@ impl OutboundEndpointOwner {
             inner: Arc::new(EndpointResource {
                 endpoint,
                 identity: identity.0.take(),
+                root,
                 slots: Arc::new(Semaphore::new(policy.max_connections)),
                 setup_timeout: policy.setup_timeout,
             }),
@@ -123,6 +180,13 @@ impl OutboundEndpointOwner {
     /// Returns public transport identity, never device or endpoint credentials.
     pub(crate) fn endpoint_id(&self) -> iroh::EndpointId {
         self.inner.endpoint.id()
+    }
+
+    /// Returns the validated retained root for owner-private frontend discovery.
+    /// This is not transport authority and never exposes identity credentials.
+    pub(crate) fn frontend_config_root(&self) -> Result<&Path> {
+        self.inner.root.validate()?;
+        Ok(&self.inner.root.path)
     }
 
     /// Admits a fresh independent connection without waiting on a full queue.

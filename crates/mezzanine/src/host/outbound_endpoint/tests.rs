@@ -6,6 +6,37 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 
+/// Frontend discovery must reject a relocated root without recreating the old
+/// pathname, and a replacement private directory cannot inherit the retained
+/// endpoint's identity. Restoring the original object permits discovery again.
+#[tokio::test]
+async fn outbound_endpoint_root_revalidation_is_read_only_and_object_scoped() {
+    let root =
+        std::env::temp_dir().join(format!("mez-outbound-root-{:032x}", rand::random::<u128>()));
+    let moved = root.with_extension("moved");
+    let owner = OutboundEndpointOwner::bind(&root, &RuntimeIrohTransportPolicy::default())
+        .await
+        .unwrap();
+    assert_eq!(owner.frontend_config_root().unwrap(), root);
+    std::fs::rename(&root, &moved).unwrap();
+    assert!(owner.frontend_config_root().is_err());
+    assert!(
+        !root.exists(),
+        "revalidation must not recreate a missing root"
+    );
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(owner.frontend_config_root().is_err());
+    std::fs::remove_dir(&root).unwrap();
+    std::fs::rename(&moved, &root).unwrap();
+    assert_eq!(owner.frontend_config_root().unwrap(), root);
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(owner.frontend_config_root().is_err());
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    owner.begin_shutdown().unwrap().finish().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Isolated process fixture for intentionally quarantined lock descriptors.
 /// It publishes only a static readiness marker after abandoning ownership and
 /// waits for parent input, keeping the fail-closed descriptor process-scoped.
