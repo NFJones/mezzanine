@@ -153,6 +153,82 @@ fn inert_client(
     (root, listener, peer, client)
 }
 
+/// Idle cursor phase changes repaint the already settled frame without a view
+/// or ACK request. A writer notification gates cancellation after the second
+/// local commit, rather than assuming that a buffered poll can be retracted.
+#[tokio::test]
+async fn outbound_foreground_idle_cursor_repaints_without_remote_work() {
+    let (root, listener, peer, mut client) = inert_client(Vec::new());
+    client.events_negotiated = true;
+    client.modes.cursor_visible = true;
+    client.modes.cursor_blink = true;
+    client.modes.cursor_blink_interval_ms = 2000;
+    let handle = client.client.handle.clone();
+    let summary = client.summary.clone();
+    let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+    for _ in 0..3 {
+        terminal.push_pending_input_read();
+    }
+    let written = std::sync::Arc::new(tokio::sync::Notify::new());
+    terminal.notify_on_write(written.clone());
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let foreground_stop = stop.clone();
+    let foreground = client.run_snapshot_foreground(
+        &mut terminal,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(2),
+        async move { foreground_stop.notified().await },
+    );
+    let responder = async {
+        let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+        written.notified().await;
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(request["operation"], "events");
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"action":"none","event_id":null
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_millis(500), written.notified())
+            .await
+            .expect("idle cursor phase must commit another local frame");
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(
+            request["operation"], "events",
+            "cursor repaint sends no view or ACK"
+        );
+        stop.notify_one();
+        assert!(peer.next().await.is_none());
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(foreground, responder)
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(terminal.written_frames.len(), 2);
+    assert!(mez_mux::attached_client::cursor_phase_visible(
+        terminal.written_frames[0].modes
+    ));
+    assert!(!mez_mux::attached_client::cursor_phase_visible(
+        terminal.written_frames[1].modes
+    ));
+    assert_eq!(
+        terminal.written_frames[0].lines,
+        terminal.written_frames[1].lines
+    );
+    assert_eq!(terminal.presentation_restores, 1);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Observer input requests a fresh view without forwarding terminal bytes or
 /// acquiring primary authority. The exact event poll settles first; cancellation
 /// during the following view request restores presentation without a mutation.

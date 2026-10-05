@@ -615,7 +615,11 @@ An explicit internal cursor-repaint API now refreshes receipt-settled output
 when effective local visibility changes, using the writer's shared phase rule.
 It preserves server rows, revision and the last painted health decoration,
 sends no IPC or receipt ACK, and skips unchanged phases. Replacement or writer
-invalidation clears eligibility; automatic scheduling remains unfinished.
+invalidation clears eligibility; production scheduling acceptance remains unfinished.
+The internal foreground now checks eligible visible blinking cursors after event
+settlement and repaints changed phase without server capture or receipt ACK.
+Replacement output takes precedence. Exact wake latency and physical-terminal
+blink conformance remain unqualified.
 Snapshots retain optional Iroh status-slot coordinates and renditions with bounds
 checked against delivered rows and viewport cells. Missing/null metadata clears
 the retained slot. This metadata-only boundary does not measure connection health

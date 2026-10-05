@@ -189,6 +189,15 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
             session = session.repaint_transport_status(terminal, budget).await?.0;
             health_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(1));
         }
+        if !render
+            && session.painted_cursor.is_some()
+            && session.receipts.is_empty()
+            && session.modes.cursor_visible
+            && session.modes.cursor_blink
+            && session.modes.cursor_blink_interval_ms != 0
+        {
+            session = session.repaint_cursor_phase(terminal, budget).await?.0;
+        }
     }
 }
 
