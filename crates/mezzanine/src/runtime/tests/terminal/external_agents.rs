@@ -6,6 +6,102 @@
 
 use super::*;
 
+/// An explicitly launched child reports through the inherited observation stream
+/// and owned coordinator into real capability-only runtime ingress. Primary
+/// issuance stays in the parent; the child receives neither token nor daemon
+/// routing. Exact retirement removes telemetry without changing client membership.
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_pi_launched_observer_uses_primary_issued_authority() {
+    use crate::host::async_runtime::{
+        AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
+        serve_async_runtime_control_connection,
+    };
+    use crate::integrations::bootstrap::{
+        pi_launch::{LaunchSpec, spawn},
+        pi_owner::LifecycleOwner,
+        pi_session::run_observer,
+        pi_transport::CapabilityTransport,
+    };
+    let root = temp_root("runtime-pi-launched-observer");
+    fs::create_dir_all(&root).unwrap();
+    let root = fs::canonicalize(root).unwrap();
+    let socket = root.join("control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let launch: serde_json::Value = serde_json::from_str(&service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"launch","method":"agent/external/launch","params":{"pane_id":"%1","harness":"pi","version":"1.0.2"}}"#, &primary,
+    )).unwrap();
+    let mut owner = LifecycleOwner::new("bound").unwrap();
+    let transport = CapabilityTransport::new(
+        &socket,
+        secrecy::SecretString::from(
+            launch["result"]["launch_token"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        ),
+        launch["result"]["generation"].as_u64().unwrap(),
+        &owner,
+    )
+    .unwrap();
+    let launched = spawn(LaunchSpec {
+        executable: "/bin/sh".into(), directory: root.clone(),
+        arguments: vec!["-c".into(), "test -z \"${MEZ_CONTROL_TOKEN+x}${MEZ_PANE+x}${HOME+x}\" && printf '%s\\n' '{\"type\":\"agent_start\"}' '{\"type\":\"agent_before_settle\",\"outcome\":\"completed\"}' '{\"type\":\"agent_settled\"}' '{\"type\":\"session_shutdown\",\"reason\":\"quit\"}' >&3".into()],
+        environment: Vec::new(), stdin: std::process::Stdio::null(),
+        stdout: std::process::Stdio::null(), stderr: std::process::Stdio::null(),
+    }).unwrap();
+    let mut child = launched.child;
+    let (_stop, cancellation) = tokio::sync::watch::channel(false);
+    let clients_before = service.session().clients().len();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let observer = run_observer(
+        &mut owner,
+        &transport,
+        "Pi fixture",
+        launched.observer,
+        cancellation,
+    );
+    let server = async {
+        for _ in 0..4 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut connection = ControlConnectionState::new(true, false);
+            serve_async_runtime_control_connection(
+                &mut stream,
+                &handle,
+                &mut connection,
+                AsyncRuntimeControlConnectionConfig::new(
+                    65536,
+                    crate::runtime::current_effective_uid(),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert!(!connection.initialized());
+            assert!(connection.caller_client_id().is_none());
+        }
+        handle.shutdown().await.unwrap();
+    };
+    let (result, status, (), mut exit) =
+        tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            tokio::join!(observer, child.wait(), server, actor.run())
+        })
+        .await
+        .unwrap();
+    result.unwrap();
+    assert!(status.unwrap().success());
+    assert!(owner.pending().is_none());
+    assert_eq!(exit.service.session().clients().len(), clients_before);
+    assert!(exit.service.external_agent_rows().is_empty());
+    exit.service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Pi lifecycle transport consumes an explicitly primary-issued capability over
 /// real Unix IPC, without attaching a client or minting authority itself. Each
 /// matching acknowledgment settles one exact owner report through production
