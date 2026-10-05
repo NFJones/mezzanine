@@ -16,171 +16,12 @@ use tokio::io::AsyncReadExt;
 
 use crate::runtime::{IrohCompressionPolicy, IrohStreamDecoder, RuntimeIrohCompressionCodec};
 
-const IROH_CLIENT_CLIPBOARD_MAX_BYTES: usize = 8 * 1024 * 1024;
-const IROH_CLIENT_CLIPBOARD_MAX_CHUNK_BYTES: usize = 256 * 1024;
-const IROH_CLIENT_CLIPBOARD_MAX_CHUNKS: usize =
-    IROH_CLIENT_CLIPBOARD_MAX_BYTES / IROH_CLIENT_CLIPBOARD_MAX_CHUNK_BYTES;
+use crate::host::terminal::iroh_clipboard::IrohClipboardAssembler;
 const IROH_RENDER_FRAGMENT_MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const IROH_RENDER_FRAGMENT_MAX_CHUNKS: usize = 16;
 /// One consumer-visible wakeup plus one decoder-local latest wakeup bounds
 /// presentation work without blocking ordered render-revision reconstruction.
 const IROH_RENDER_WAKEUP_CHANNEL_CAPACITY: usize = 1;
-
-/// One bounded in-progress client clipboard transfer.
-struct IrohClipboardTransfer {
-    sequence: u64,
-    total_bytes: usize,
-    chunk_count: usize,
-    next_index: usize,
-    bytes: Vec<u8>,
-    started_at: tokio::time::Instant,
-}
-
-/// Strict connection-local assembler for negotiated clipboard effect frames.
-#[derive(Default)]
-struct IrohClipboardAssembler {
-    last_sequence: u64,
-    transfer: Option<IrohClipboardTransfer>,
-}
-
-impl IrohClipboardAssembler {
-    /// Applies one clipboard notification and returns completed UTF-8 content.
-    fn apply(&mut self, body: &str) -> Result<Option<String>> {
-        self.discard_expired();
-        let value: serde_json::Value = serde_json::from_str(body)
-            .map_err(|_| MezError::invalid_args("invalid Iroh clipboard effect JSON"))?;
-        let method = value
-            .get("method")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| MezError::invalid_args("Iroh clipboard effect omitted method"))?;
-        let params = value
-            .get("params")
-            .and_then(serde_json::Value::as_object)
-            .ok_or_else(|| MezError::invalid_args("Iroh clipboard effect omitted params"))?;
-        let sequence = params
-            .get("sequence")
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| MezError::invalid_args("Iroh clipboard effect omitted sequence"))?;
-
-        match method {
-            "client/clipboard.begin" => {
-                self.transfer = None;
-                let total_bytes = params
-                    .get("total_bytes")
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|value| usize::try_from(value).ok())
-                    .ok_or_else(|| {
-                        MezError::invalid_args("Iroh clipboard begin omitted total byte count")
-                    })?;
-                let chunk_count = params
-                    .get("chunks")
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|value| usize::try_from(value).ok())
-                    .ok_or_else(|| {
-                        MezError::invalid_args("Iroh clipboard begin omitted chunk count")
-                    })?;
-                if sequence <= self.last_sequence
-                    || total_bytes > IROH_CLIENT_CLIPBOARD_MAX_BYTES
-                    || chunk_count == 0
-                    || chunk_count > IROH_CLIENT_CLIPBOARD_MAX_CHUNKS
-                {
-                    return Err(MezError::invalid_args(
-                        "Iroh clipboard begin exceeds sequence or size bounds",
-                    ));
-                }
-                self.transfer = Some(IrohClipboardTransfer {
-                    sequence,
-                    total_bytes,
-                    chunk_count,
-                    next_index: 0,
-                    bytes: Vec::with_capacity(total_bytes),
-                    started_at: tokio::time::Instant::now(),
-                });
-                Ok(None)
-            }
-            "client/clipboard.chunk" => {
-                let index = params
-                    .get("index")
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|value| usize::try_from(value).ok())
-                    .ok_or_else(|| MezError::invalid_args("Iroh clipboard chunk omitted index"))?;
-                let encoded = params
-                    .get("data_base64")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        MezError::invalid_args("Iroh clipboard chunk omitted encoded data")
-                    })?;
-                let transfer = self.transfer.as_mut().ok_or_else(|| {
-                    MezError::invalid_args("Iroh clipboard chunk has no active transfer")
-                })?;
-                if sequence != transfer.sequence
-                    || index != transfer.next_index
-                    || index >= transfer.chunk_count
-                {
-                    self.transfer = None;
-                    return Err(MezError::invalid_args(
-                        "Iroh clipboard chunk ordering is invalid",
-                    ));
-                }
-                let chunk = base64::engine::general_purpose::STANDARD
-                    .decode(encoded)
-                    .map_err(|_| MezError::invalid_args("Iroh clipboard chunk is not base64"))?;
-                if chunk.len() > IROH_CLIENT_CLIPBOARD_MAX_CHUNK_BYTES
-                    || transfer.bytes.len().saturating_add(chunk.len()) > transfer.total_bytes
-                {
-                    self.transfer = None;
-                    return Err(MezError::invalid_args(
-                        "Iroh clipboard chunk exceeds declared bounds",
-                    ));
-                }
-                transfer.bytes.extend_from_slice(&chunk);
-                transfer.next_index += 1;
-                Ok(None)
-            }
-            "client/clipboard.commit" => {
-                let transfer = self.transfer.take().ok_or_else(|| {
-                    MezError::invalid_args("Iroh clipboard commit has no active transfer")
-                })?;
-                if sequence != transfer.sequence
-                    || transfer.next_index != transfer.chunk_count
-                    || transfer.bytes.len() != transfer.total_bytes
-                {
-                    return Err(MezError::invalid_args(
-                        "Iroh clipboard commit does not match the declared transfer",
-                    ));
-                }
-                let content = String::from_utf8(transfer.bytes).map_err(|_| {
-                    MezError::invalid_args("Iroh clipboard transfer is not valid UTF-8")
-                })?;
-                self.last_sequence = sequence;
-                Ok(Some(content))
-            }
-            _ => Err(MezError::invalid_args(
-                "unsupported Iroh clipboard effect method",
-            )),
-        }
-    }
-
-    /// Discards a partial transfer after the bounded completion deadline.
-    fn discard_expired(&mut self) {
-        const TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-        if self
-            .transfer
-            .as_ref()
-            .is_some_and(|transfer| transfer.started_at.elapsed() >= TRANSFER_TIMEOUT)
-        {
-            self.transfer = None;
-        }
-    }
-
-    /// Returns the deadline for the current partial transfer, when present.
-    fn expiration_deadline(&self) -> Option<tokio::time::Instant> {
-        const TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-        self.transfer
-            .as_ref()
-            .map(|transfer| transfer.started_at + TRANSFER_TIMEOUT)
-    }
-}
 
 /// Starts one single-pending-value worker for client-local clipboard writes.
 fn spawn_iroh_client_clipboard_worker(
@@ -911,7 +752,7 @@ fn apply_negotiated_iroh_attach_frame(
                 }
             }
             Ok(None) => {}
-            Err(_) => assembler.transfer = None,
+            Err(_) => assembler.discard_partial(),
         }
         return Ok(IrohAttachRenderWakeup::new(AttachRenderAction::None, None));
     }
@@ -3572,7 +3413,7 @@ mod iroh_tests {
         tokio::time::advance(std::time::Duration::from_secs(5)).await;
         assembler.discard_expired();
 
-        assert!(assembler.transfer.is_none());
+        assert!(assembler.expiration_deadline().is_none());
         assert!(assembler
             .apply(r#"{"jsonrpc":"2.0","method":"client/clipboard.commit","params":{"sequence":11}}"#)
             .is_err());
