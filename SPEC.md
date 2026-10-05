@@ -4272,6 +4272,10 @@ and initialized session, accept only bounded geometry, and project correlated
 role/geometry-checked rendered lines. It MUST NOT acknowledge presentation,
 forward arbitrary control methods, retarget a connection or send terminal input.
 Failure consumes the owner rather than retrying a potentially desynchronized stream.
+The internal listener supervisor MUST bound accepted pipelines independently of
+admission capacity and retain their futures without detached forwarding tasks.
+Peer failure MUST retire only its pipeline; cancellation MUST dispose owned
+pipelines without replay. Listener disposal and endpoint shutdown remain caller-owned.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and

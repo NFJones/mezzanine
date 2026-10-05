@@ -10,6 +10,54 @@ use futures_util::{SinkExt, StreamExt};
 use std::os::unix::fs::PermissionsExt;
 use tokio_util::codec::Framed;
 
+/// The real supervisor must advance a later hello while an earlier peer is
+/// silent. Cancellation disposes both owned pipelines and releases capacity;
+/// listener disposal and graceful endpoint shutdown remain caller-owned.
+#[tokio::test]
+async fn outbound_frontend_supervisor_cancels_owned_stalled_pipelines() {
+    let root = std::env::temp_dir().join(format!("mez-supervisor-{:032x}", rand::random::<u128>()));
+    let endpoint = OutboundEndpointOwner::bind(&root, &RuntimeIrohTransportPolicy::default())
+        .await
+        .unwrap();
+    let listener =
+        OutboundFrontendListener::bind(endpoint.clone(), 2, std::time::Duration::from_secs(2))
+            .unwrap();
+    let path = listener.socket_path().unwrap().to_path_buf();
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let server_stop = stop.clone();
+    let serve = listener.serve(async move { server_stop.notified().await });
+    let client_work = async {
+        let _silent = tokio::net::UnixStream::connect(&path).await.unwrap();
+        let client = tokio::net::UnixStream::connect(&path).await.unwrap();
+        let mut client = Framed::new(
+            client,
+            ProtocolFrameCodec::new(super::super::HELLO_LIMIT).unwrap(),
+        );
+        client
+            .send(ProtocolFrame::new(
+                super::super::CONTENT_TYPE,
+                serde_json::json!({"protocol":super::super::PROTOCOL}).to_string(),
+            ))
+            .await
+            .unwrap();
+        let response = client.next().await.unwrap().unwrap();
+        assert!(response.body.contains("generation"));
+        stop.notify_one();
+        assert!(client.next().await.is_none());
+    };
+    let (served, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(serve, client_work)
+    })
+    .await
+    .unwrap();
+    assert_eq!(served.unwrap(), 2);
+    assert_eq!(listener.admission.slots.available_permits(), 2);
+    drop(listener);
+    assert!(!path.exists());
+    endpoint.begin_shutdown().unwrap().finish().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Publication must preserve live and non-socket entries. A rejected second
 /// listener does not release or replace the endpoint owner or its first socket.
 #[tokio::test]

@@ -24,6 +24,7 @@ pub(crate) struct OutboundFrontendListener {
     listener: tokio::net::UnixListener,
     admission: OutboundFrontendAdmission,
     publication: SocketPublication,
+    pipeline_limit: usize,
 }
 
 /// Held-parent cleanup evidence; does not depend on the root pathname surviving.
@@ -67,6 +68,7 @@ impl OutboundFrontendListener {
             listener: tokio::net::UnixListener::from_std(listener)?,
             admission,
             publication,
+            pipeline_limit: limit,
         })
     }
 
@@ -94,6 +96,48 @@ impl OutboundFrontendListener {
         stream: tokio::net::UnixStream,
     ) -> Result<super::AdmittedFrontend> {
         self.admission.admit(stream).await
+    }
+
+    /// Drives finite independent session/display pipelines until caller cancellation.
+    /// Futures remain owned here, not spawned. Peer failures retire only their
+    /// pipeline; cancellation drops local/remote owners without replay. Blocking
+    /// profile work retains its separately bounded slot until actual completion.
+    /// The caller still owns listener disposal and retained endpoint shutdown.
+    pub(crate) async fn serve<C>(&self, cancellation: C) -> Result<u64>
+    where
+        C: std::future::Future<Output = ()>,
+    {
+        use futures_util::{StreamExt, stream::FuturesUnordered};
+        let mut pipelines = FuturesUnordered::new();
+        let mut accepted_count = 0_u64;
+        tokio::pin!(cancellation);
+        loop {
+            tokio::select! {
+                biased;
+                () = &mut cancellation => return Ok(accepted_count),
+                _ = pipelines.next(), if !pipelines.is_empty() => {},
+                accepted = self.listener.accept(), if pipelines.len() < self.pipeline_limit => {
+                    let (stream, _) = accepted?;
+                    self.admission.endpoint.frontend_config_root()?;
+                    accepted_count = accepted_count.checked_add(1).ok_or_else(|| {
+                        MezError::invalid_state("outbound accepted count exhausted")
+                    })?;
+                    pipelines.push(self.serve_frontend(stream));
+                }
+            }
+        }
+    }
+
+    /// Runs exactly one consumed setup and initialized display connection.
+    /// No automatic reconnect, setup retry or generic control forwarding exists.
+    async fn serve_frontend(&self, stream: tokio::net::UnixStream) -> Result<()> {
+        let frontend = self.admit(stream).await?;
+        let prepared = frontend.prepare(self.admission.deadline).await?;
+        let connected = prepared.connect_pinned().await?;
+        let mut session = connected.initialize_session().await?;
+        loop {
+            session = session.deliver_view().await?;
+        }
     }
 }
 

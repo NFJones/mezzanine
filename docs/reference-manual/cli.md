@@ -550,6 +550,10 @@ An internal display-only view exchange now carries bounded rendered lines and
 validated session identity across exact-handle local IPC. It does not provide
 styles, terminal input, presentation acknowledgement or the complete attached
 renderer. Failed exchanges dispose their owner instead of replaying requests.
+An internal listener supervisor drives finitely many independent setup/display
+pipelines. Stalled peers do not serialize siblings; cancellation disposes owned
+pipelines without replay. The caller still disposes the listener and completes
+endpoint shutdown. Startup election and multi-process CLI activation remain unfinished.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.

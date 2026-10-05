@@ -207,6 +207,13 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
     let stop = std::sync::Arc::new(tokio::sync::Notify::new());
     let server_stop = stop.clone();
     let serve = host.serve_routed(router.clone(), async move { server_stop.notified().await });
+    let listener = crate::host::outbound_frontend::OutboundFrontendListener::bind(
+        endpoint.clone(),
+        2,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let socket = listener.socket_path().unwrap().to_path_buf();
     let client_work = async {
         let (first, first_local) = create_frontend(&admission, "first").await;
         let first = first
@@ -262,6 +269,43 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
         drop(first_local);
         drop(second_local);
         assert_eq!(admission.slots.available_permits(), 2);
+        // Also drive the actual supervising listener, not only direct owner APIs.
+        let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
+        let server_cancel = cancel.clone();
+        let supervised = listener.serve(async move { server_cancel.notified().await });
+        let clients = async {
+            let (first, _, first_view) = supervised_create(&socket, "supervised-first").await;
+            let (mut second, handle, second_view) =
+                supervised_create(&socket, "supervised-second").await;
+            assert_ne!(
+                first_view["session"]["session_id"],
+                second_view["session"]["session_id"]
+            );
+            assert_ne!(
+                first_view["session"]["lease_id"],
+                second_view["session"]["lease_id"]
+            );
+            assert_eq!(router.snapshots().await.unwrap().len(), 4);
+            drop(first);
+            second
+                .send(ProtocolFrame::new(
+                    CONTENT_TYPE,
+                    serde_json::json!({
+                        "handle":handle,"columns":80,"rows":24
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            let frame = second.next().await.unwrap().unwrap();
+            let next: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+            assert_eq!(next["session"], second_view["session"]);
+            assert_eq!(next["handle"], handle);
+            cancel.notify_one();
+            assert!(second.next().await.is_none());
+        };
+        let (accepted, ()) = tokio::join!(supervised, clients);
+        assert_eq!(accepted.unwrap(), 2);
         stop.notify_one();
     };
     let (served, ()) = tokio::time::timeout(Duration::from_secs(30), async {
@@ -269,13 +313,63 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
     })
     .await
     .unwrap();
-    assert_eq!(served.unwrap(), 2);
+    assert_eq!(served.unwrap(), 4);
     router
         .shutdown_all(true, Duration::from_secs(5))
         .await
         .unwrap();
+    drop(listener);
+    assert!(!socket.exists());
     drop(admission);
     endpoint.begin_shutdown().unwrap().finish().await.unwrap();
     drop(host);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Sends real listener hello/setup/view frames without direct admission calls.
+/// The response binds one fresh session to the exact local handle; no proof is
+/// supplied by or returned to this frontend.
+async fn supervised_create(
+    path: &std::path::Path,
+    name: &str,
+) -> (
+    Framed<tokio::net::UnixStream, ProtocolFrameCodec>,
+    serde_json::Value,
+    serde_json::Value,
+) {
+    let stream = tokio::net::UnixStream::connect(path).await.unwrap();
+    let mut client = Framed::new(stream, ProtocolFrameCodec::new(BODY_LIMIT).unwrap());
+    client
+        .send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({"protocol":PROTOCOL}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let hello = client.next().await.unwrap().unwrap();
+    let hello: serde_json::Value = serde_json::from_str(&hello.body).unwrap();
+    let handle = hello["handle"].clone();
+    client.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
+        "handle":handle,"profile":"creator","initialize":{
+            "client_name":name,"requested_version":3,"requested_role":"primary",
+            "session_intent":"create","idempotency_key":format!("create-{name}"),
+            "detach_primary_on_disconnect":true,
+            "client":{"name":name,"interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"},
+                "metadata":{"session_name":name}}
+        }
+    }).to_string())).await.unwrap();
+    client
+        .send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({"handle":handle,"columns":80,"rows":24}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let frame = client.next().await.unwrap().unwrap();
+    assert_eq!(frame.content_type, CONTENT_TYPE);
+    let view: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+    assert_eq!(view["handle"], handle);
+    assert!(view["lines"].is_array());
+    assert_eq!(view.as_object().unwrap().len(), 3);
+    (client, handle, view)
 }
