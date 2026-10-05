@@ -4,7 +4,7 @@
 //! command behavior, initializes default configuration, and dispatches local or
 //! control-socket-backed commands.
 
-use mez_mux::presentation::{AttachedTerminalOutputModes, ClientViewRole, TerminalCursorStyle};
+use mez_mux::presentation::{AttachedTerminalOutputModes, ClientViewRole};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
