@@ -1,6 +1,41 @@
 //! Shared status-slot interpretation, without terminal or transport effects.
 use super::*;
 
+/// Optional slots round-trip only decoded fields and must fit delivered rows
+/// and cells. Unknown metadata is stripped without implying measured health;
+/// absent slots remain absent and arithmetic overflow is rejected.
+#[test]
+fn wire_status_snapshot_bounds_and_round_trip_are_exact() {
+    let original = serde_json::json!({"row":0,"column":4,"width":4,
+        "good":{"bold":true,"private":"discard"},"degraded":{},
+        "poor":{},"unknown":{},"private":"discard"});
+    let slot = bounded_status_slot(Some(&original), 1, 8, 1).unwrap();
+    let projected = status_slot_value(slot);
+    assert!(!projected.to_string().contains("discard"));
+    assert_eq!(
+        bounded_status_slot(Some(&projected), 1, 8, 1).unwrap(),
+        slot
+    );
+    assert_eq!(bounded_status_slot(None, 1, 8, 1).unwrap(), None);
+    assert_eq!(
+        bounded_status_slot(Some(&serde_json::Value::Null), 1, 8, 1).unwrap(),
+        None
+    );
+    for (field, value) in [
+        ("row", serde_json::json!(1)),
+        ("column", serde_json::json!(5)),
+        ("width", serde_json::json!(0)),
+        ("column", serde_json::json!(u64::MAX)),
+    ] {
+        let mut invalid = original.clone();
+        invalid[field] = value;
+        assert!(bounded_status_slot(Some(&invalid), 1, 8, 1).is_err());
+    }
+    assert!(bounded_status_slot(Some(&original), 0, 8, 1).is_err());
+    assert!(bounded_status_slot(None, 2, 8, 1).is_err());
+    assert!(bounded_status_slot(None, 1, 0, 1).is_err());
+}
+
 /// Coordinates and all rendition categories retain existing decoding, including
 /// null default colors. Missing coordinates/renditions and invalid color bytes
 /// reject rather than inventing slot or health evidence.

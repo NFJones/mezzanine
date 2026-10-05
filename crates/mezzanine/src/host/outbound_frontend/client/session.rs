@@ -38,6 +38,7 @@ struct Snapshot {
     render_rate_limit_fps: Option<u64>,
     view_identity: Option<String>,
     event_cutoff: Option<u64>,
+    iroh_status_slot: Option<serde_json::Value>,
 }
 
 /// Client pinned to its first exact session settlement, with one retained stream.
@@ -56,6 +57,8 @@ pub(crate) struct OutboundSessionClient {
     snapshot_size: (u16, u16),
     /// Set only by successful complete-output presentation and receipt settlement.
     committed_view: Option<(String, u16, u16)>,
+    /// Optional server-owned presentation slot, not measured connection health.
+    iroh_status_slot: Option<crate::host::terminal::TerminalIrohStatusSlot>,
 }
 
 mod acknowledge;
@@ -127,6 +130,7 @@ impl OutboundFrontendClient {
                 OutboundSessionClient {
                     client: self,
                     modes: snapshot_modes(&snapshot, columns, rows)?,
+                    iroh_status_slot: snapshot_status_slot(&snapshot, columns, rows)?,
                     snapshot_size: (columns, rows),
                     committed_view: None,
                     events_negotiated: params.event_stream_version == Some(1),
@@ -173,6 +177,7 @@ impl OutboundFrontendClient {
             .map_err(|_| MezError::invalid_state("outbound snapshot invalid"))?;
         validate_snapshot(&snapshot, &self.handle, rows)?;
         snapshot_modes(&snapshot, columns, rows)?;
+        snapshot_status_slot(&snapshot, columns, rows)?;
         crate::host::terminal::wire_styles::bounded_style_rows(
             &snapshot.line_style_spans,
             snapshot.lines.len(),
@@ -204,6 +209,7 @@ impl OutboundSessionClient {
                 columns,
             )?;
             self.modes = snapshot_modes(&snapshot, columns, rows)?;
+            self.iroh_status_slot = snapshot_status_slot(&snapshot, columns, rows)?;
             self.receipts = snapshot.presentation_ids;
             self.lines = snapshot.lines.clone();
             self.render_rate_limit_fps = snapshot.render_rate_limit_fps;
@@ -245,6 +251,26 @@ impl OutboundSessionClient {
     pub(crate) fn revision_evidence(&self) -> (Option<&str>, Option<u64>) {
         (self.view_identity.as_deref(), self.event_cutoff)
     }
+
+    /// Returns the validated slot belonging to the last snapshot. Decoding it
+    /// neither measures connection health nor composes local output.
+    pub(crate) fn iroh_status_slot(&self) -> Option<crate::host::terminal::TerminalIrohStatusSlot> {
+        self.iroh_status_slot
+    }
+}
+
+/// Uses the same optional slot and cell bounds as the broker projection.
+fn snapshot_status_slot(
+    snapshot: &Snapshot,
+    columns: u16,
+    rows: u16,
+) -> Result<Option<crate::host::terminal::TerminalIrohStatusSlot>> {
+    crate::host::terminal::wire_status::bounded_status_slot(
+        snapshot.iroh_status_slot.as_ref(),
+        snapshot.lines.len(),
+        columns,
+        rows,
+    )
 }
 
 /// Uses the same viewport and mode interpretation as the broker projection.

@@ -5,6 +5,35 @@
 
 use super::*;
 
+/// Local snapshots independently validate optional status-slot geometry. Missing
+/// and null metadata cannot retain a previous slot, and a row outside the actual
+/// delivered lines rejects even when the viewport itself has room.
+#[test]
+fn outbound_client_snapshot_status_slot_is_viewport_scoped() {
+    let base = serde_json::json!({"handle":{"owner":"fixture","generation":1},
+        "session":{"selected_version":3,"granted_role":"primary","session_id":"$1",
+            "lease_id":"lease-one","client_id":"c1"},"lines":["base    tail"],
+        "line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},
+        "output_modes":{},"presentation_ids":[]});
+    let mut value = base.clone();
+    value["iroh_status_slot"] = serde_json::json!({"row":0,"column":4,"width":4,
+        "good":{},"degraded":{},"poor":{},"unknown":{}});
+    let snapshot: Snapshot = serde_json::from_value(value.clone()).unwrap();
+    let slot = snapshot_status_slot(&snapshot, 80, 24).unwrap().unwrap();
+    assert_eq!((slot.row, slot.column, slot.width), (0, 4, 4));
+    value["iroh_status_slot"]["row"] = serde_json::json!(1);
+    let invalid: Snapshot = serde_json::from_value(value).unwrap();
+    assert!(snapshot_status_slot(&invalid, 80, 24).is_err());
+    for value in [base.clone(), {
+        let mut value = base;
+        value["iroh_status_slot"] = serde_json::Value::Null;
+        value
+    }] {
+        let snapshot: Snapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(snapshot_status_slot(&snapshot, 80, 24).unwrap(), None);
+    }
+}
+
 /// Handle, role, numeric IDs, lease shape and row limits reject invalid replies
 /// before exposing line content. Unknown fields cannot smuggle device proof.
 #[test]

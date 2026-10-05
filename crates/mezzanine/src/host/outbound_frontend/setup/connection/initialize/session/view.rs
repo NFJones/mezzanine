@@ -130,6 +130,13 @@ impl InitializedSessionFrontend {
                 .map_err(|_| MezError::invalid_state("outbound view response invalid"))?;
             let render_rate = project_render_rate(&response_value)?;
             let (view_identity, event_cutoff) = project_revision(&response_value)?;
+            let slot = crate::host::terminal::wire_status::bounded_status_slot(
+                response_value.pointer("/result/view/iroh_status_slot"),
+                lines.len(),
+                request.columns,
+                request.rows,
+            )?;
+            let slot = crate::host::terminal::wire_status::status_slot_value(slot);
             let receipts = crate::host::terminal::wire_receipts::parse_receipts(
                 response_value
                     .pointer("/result/presentation_ids")
@@ -144,7 +151,8 @@ impl InitializedSessionFrontend {
                 "lines":lines,"line_style_spans":styles,
                 "cursor":modes["cursor"],"output_modes":modes["output_modes"],
                 "presentation_ids":receipts,"render_rate_limit_fps":render_rate,
-                "view_identity":view_identity,"event_cutoff":event_cutoff})
+                "view_identity":view_identity,"event_cutoff":event_cutoff,
+                "iroh_status_slot":slot})
             .to_string();
             if body.len() > BODY_LIMIT {
                 return Err(MezError::invalid_state(

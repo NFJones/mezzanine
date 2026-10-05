@@ -330,7 +330,11 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             view["view_identity"].as_str().unwrap()
         ));
         assert!(view["event_cutoff"].is_u64());
-        assert_eq!(view.as_object().unwrap().len(), 10);
+        assert!(
+            view["iroh_status_slot"].is_null(),
+            "zen snapshot must omit the slot"
+        );
+        assert_eq!(view.as_object().unwrap().len(), 11);
         drop(second);
         drop(first_local);
         drop(second_local);

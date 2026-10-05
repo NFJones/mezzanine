@@ -593,6 +593,10 @@ shared rendition interpretation; unknown style metadata is not forwarded.
 Snapshots retain decoded cursor and output-mode facts as well, with viewport
 bounds checked by broker and client. Transporting those facts does not apply
 host terminal modes or establish complete renderer or receipt support.
+Snapshots retain optional Iroh status-slot coordinates and renditions with bounds
+checked against delivered rows and viewport cells. Missing/null metadata clears
+the retained slot. This metadata-only boundary does not measure connection health
+or compose a client-local status pill.
 Snapshots also carry bounded receipt IDs without acknowledging them on delivery.
 An explicit post-output API binds the last delivered IDs, exact frontend/session
 and original mutation key. It must be called only after the renderer commits

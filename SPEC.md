@@ -4322,6 +4322,10 @@ Snapshot cursor and output-mode fields MUST use the shared attach interpretation
 and validate cursor coordinates against the requested viewport on both ends.
 Only decoded presentation fields MAY cross IPC; this transport MUST NOT apply
 host modes or grant input or presentation-acknowledgement authority.
+Optional snapshot Iroh status slots MUST use shared decoding and fit the delivered
+rows and requested cell geometry on both ends. Missing/null slots MUST clear
+retained slot metadata; only decoded coordinates and renditions MAY cross IPC.
+Slot retention MUST NOT imply measured connection health or local composition.
 Snapshots MUST retain bounded positive distinct presentation receipt IDs without
 arming them on IPC delivery. A separate explicit post-output acknowledgement MUST
 bind the exact frontend, session, last delivered receipt list and mutation key.

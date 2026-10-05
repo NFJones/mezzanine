@@ -145,6 +145,7 @@ fn inert_client(
         event_cutoff: None,
         snapshot_size: (80, 24),
         committed_view: None,
+        iroh_status_slot: None,
     };
     (root, listener, peer, client)
 }

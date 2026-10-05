@@ -90,6 +90,7 @@ impl OutboundSessionClient {
                     columns,
                 )?;
                 self.modes = snapshot_modes(&snapshot, columns, rows)?;
+                self.iroh_status_slot = snapshot_status_slot(&snapshot, columns, rows)?;
                 self.lines = snapshot.lines;
                 self.receipts = snapshot.presentation_ids;
                 self.view_identity = snapshot.view_identity;
