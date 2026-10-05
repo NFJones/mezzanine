@@ -3481,12 +3481,67 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
     let _ = fs::remove_dir_all(root);
 }
 
+/// Classifies only fixed POSIX-shell missing-command phrases while discarding
+/// output content. Prefix lengths survive chunk boundaries; neither environment
+/// values nor terminal/path text are retained. Other locales/shell diagnostics
+/// can remain unclassified, so false flags do not establish command success.
+#[derive(Default)]
+struct PaneReportCommandFailures {
+    matched: [usize; 3],
+    seen: [bool; 3],
+}
+
+impl PaneReportCommandFailures {
+    /// Consumes bytes into fixed-pattern prefix lengths and boolean evidence.
+    /// The patterns have no overlapping proper prefix/suffix, permitting this
+    /// bounded restart rule without storing arbitrary terminal content.
+    fn observe(&mut self, bytes: &[u8]) {
+        const PATTERNS: [&[u8]; 3] = [b"env: not found", b"mv: not found", b"cat: not found"];
+        for (index, pattern) in PATTERNS.iter().enumerate() {
+            if self.seen[index] {
+                continue;
+            }
+            for byte in bytes {
+                self.matched[index] = if *byte == pattern[self.matched[index]] {
+                    self.matched[index] + 1
+                } else {
+                    usize::from(*byte == pattern[0])
+                };
+                if self.matched[index] == pattern.len() {
+                    self.seen[index] = true;
+                    self.matched[index] = 0;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Fixed missing-command classifications survive every chunk boundary without
+/// retaining private output. Command echoes and unrelated text are not evidence
+/// of a missing executable; flags are diagnostic only, never acceptance filters.
+#[test]
+fn pane_report_failure_classifier_is_bounded_and_chunk_independent() {
+    let output = b"private-value\nenv > pending; mv pending report; exec cat\n/bin/sh: env: not found\n/bin/sh: mv: not found\n/bin/sh: exec: cat: not found\n";
+    for split in 0..=output.len() {
+        let mut failures = PaneReportCommandFailures::default();
+        failures.observe(&output[..split]);
+        failures.observe(&output[split..]);
+        assert_eq!(failures.seen, [true; 3]);
+    }
+    let mut failures = PaneReportCommandFailures::default();
+    failures.observe(b"env > pending; mv pending report; exec cat\nprivate-value");
+    assert_eq!(failures.seen, [false; 3]);
+    assert!(std::mem::size_of::<PaneReportCommandFailures>() <= 4 * std::mem::size_of::<usize>());
+}
+
 /// Waits for the first atomically published report while draining terminal
 /// output. The deadline bounds scheduling/startup latency, not report contents:
 /// a complete report with forbidden values is returned immediately, never retried.
 fn wait_for_first_pane_report(process: &mut mez_mux::process::PaneProcess, path: &Path) -> Vec<u8> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut observed_output_bytes = 0usize;
+    let mut failures = PaneReportCommandFailures::default();
     loop {
         match fs::read(path) {
             Ok(bytes) => return bytes,
@@ -3494,14 +3549,16 @@ fn wait_for_first_pane_report(process: &mut mez_mux::process::PaneProcess, path:
             Err(error) => panic!("pane report read failed: {error}"),
         }
         let sequence = process.output_activity_sequence();
-        observed_output_bytes = observed_output_bytes
-            .saturating_add(process.read_available_output(64 * 1024).unwrap().len());
+        let output = process.read_available_output(64 * 1024).unwrap();
+        observed_output_bytes = observed_output_bytes.saturating_add(output.len());
+        failures.observe(&output);
         if let Some(status) = process.poll_exit().unwrap() {
             return fs::read(path).unwrap_or_else(|error| {
                 panic!(
-                    "pane exited before publishing its report: status={status:?} read_kind={:?} observed_output_bytes={observed_output_bytes} report_parent_exists={}",
+                    "pane exited before publishing its report: status={status:?} read_kind={:?} observed_output_bytes={observed_output_bytes} report_parent_exists={} env_not_found={} mv_not_found={} cat_not_found={}",
                     error.kind(),
                     path.parent().is_some_and(Path::is_dir),
+                    failures.seen[0], failures.seen[1], failures.seen[2],
                 )
             });
         }
