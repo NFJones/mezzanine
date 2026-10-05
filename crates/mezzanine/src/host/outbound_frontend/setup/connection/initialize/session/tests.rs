@@ -269,7 +269,9 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             view["line_style_spans"].as_array().unwrap().len(),
             view["lines"].as_array().unwrap().len()
         );
-        assert_eq!(view.as_object().unwrap().len(), 4);
+        assert!(view["cursor"].is_object());
+        assert!(view["output_modes"].is_object());
+        assert_eq!(view.as_object().unwrap().len(), 6);
         drop(second);
         drop(first_local);
         drop(second_local);
@@ -316,6 +318,8 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             );
             assert!(lines.len() <= 24);
             assert_eq!(second.line_style_spans().len(), lines.len());
+            assert!(second.output_modes().cursor_row < 24);
+            assert!(second.output_modes().cursor_column < 80);
             let (second, _) = second
                 .snapshot(100, 30, Duration::from_secs(2))
                 .await

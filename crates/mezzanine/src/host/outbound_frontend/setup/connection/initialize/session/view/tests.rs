@@ -5,6 +5,22 @@
 
 use super::*;
 
+/// Broker snapshots project only decoded cursor/output modes after checking
+/// viewport bounds. Unknown peer metadata cannot become local terminal policy.
+#[test]
+fn outbound_view_modes_are_geometry_bound_and_metadata_free() {
+    let original = serde_json::json!({"result":{"view":{
+        "cursor":{"row":1,"column":7,"visible":true,"style":"underline","private":"discard"},
+        "output_modes":{"bracketed_paste":true,"private":"discard"}
+    }}});
+    let projected = project_view_modes(&original.to_string(), 8, 2).unwrap();
+    assert_eq!(projected["cursor"]["style"], "underline");
+    assert_eq!(projected["output_modes"]["bracketed_paste"], true);
+    assert!(!projected.to_string().contains("discard"));
+    assert!(project_view_modes(&original.to_string(), 7, 2).is_err());
+    assert!(project_view_modes(&original.to_string(), 8, 1).is_err());
+}
+
 /// Style projection preserves layered cell coordinates and decoded colors, but
 /// removes unknown metadata before forwarding. Misaligned or out-of-range rows
 /// reject rather than expose unvalidated styling to a frontend renderer.

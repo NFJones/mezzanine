@@ -553,6 +553,9 @@ renderer. Failed exchanges dispose their owner instead of replaying requests.
 Snapshots also retain decoded style rows with finite span/cell bounds and
 original overlay order. Broker and client validate row alignment using the
 shared rendition interpretation; unknown style metadata is not forwarded.
+Snapshots retain decoded cursor and output-mode facts as well, with viewport
+bounds checked by broker and client. Transporting those facts does not apply
+host terminal modes or establish complete renderer or receipt support.
 An independent internal primary-input exchange carries bounded bytes with the
 original mutation key and validates exact frontend/session acknowledgement.
 Reported byte acceptance is runtime evidence, not proof of process or model

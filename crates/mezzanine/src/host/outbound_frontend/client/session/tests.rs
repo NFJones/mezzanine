@@ -15,7 +15,8 @@ fn outbound_client_snapshot_validation_is_closed_and_identity_scoped() {
     };
     let original = serde_json::json!({"handle":handle,"session":{
         "selected_version":3,"granted_role":"primary","session_id":"$1",
-        "lease_id":"lease-one","client_id":"c1"},"lines":["one 雪","two"],"line_style_spans":[[],[]]});
+        "lease_id":"lease-one","client_id":"c1"},"lines":["one 雪","two"],"line_style_spans":[[],[]],
+        "cursor":{"row":0,"column":0,"visible":false},"output_modes":{}});
     let snapshot: Snapshot = serde_json::from_value(original.clone()).unwrap();
     validate_snapshot(&snapshot, &handle, 2).unwrap();
     for (pointer, value) in [

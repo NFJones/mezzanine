@@ -1,6 +1,28 @@
 //! Shared presentation-mode decoding without activating terminal or input modes.
 use super::*;
 
+/// Snapshot cursor coordinates must lie inside the requested viewport, even
+/// when hidden. Canonical projection preserves decoded presentation semantics
+/// without forwarding unknown fields or activating local keyboard modes.
+#[test]
+fn wire_modes_snapshot_bounds_and_projection_preserve_presentation() {
+    let view = serde_json::json!({
+        "cursor":{"row":1,"column":7,"visible":false,"style":"bar",
+            "blink":false,"blink_interval_ms":123,"private":"discard"},
+        "output_modes":{"bracketed_paste":true,"focus_events":true,
+            "animation_refresh_interval_ms":42,"private":"discard"}
+    });
+    let modes = bounded_view_output_modes(&view, 8, 2).unwrap();
+    let projection = output_modes_view_value(modes);
+    assert!(!projection.to_string().contains("discard"));
+    assert_eq!(bounded_view_output_modes(&projection, 8, 2).unwrap(), modes);
+    assert!(!modes.enhanced_keyboard_reporting);
+    for (columns, rows) in [(7, 2), (8, 1), (0, 2), (8, 0), (4097, 2)] {
+        assert!(bounded_view_output_modes(&view, columns, rows).is_err());
+    }
+    assert!(bounded_view_output_modes(&serde_json::json!({}), 8, 2).is_err());
+}
+
 /// Extraction preserves defaults, cursor shapes and each output-mode flag.
 /// Presentation values alone cannot change input authority or host state.
 #[test]

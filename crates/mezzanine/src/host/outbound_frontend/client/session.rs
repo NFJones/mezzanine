@@ -32,6 +32,8 @@ struct Snapshot {
     session: SessionSummary,
     lines: Vec<String>,
     line_style_spans: serde_json::Value,
+    cursor: serde_json::Value,
+    output_modes: serde_json::Value,
 }
 
 /// Client pinned to its first exact session settlement, with one retained stream.
@@ -39,6 +41,7 @@ pub(crate) struct OutboundSessionClient {
     client: OutboundFrontendClient,
     summary: SessionSummary,
     styles: Vec<Vec<mez_terminal::TerminalStyleSpan>>,
+    modes: mez_mux::presentation::AttachedTerminalOutputModes,
 }
 
 mod step;
@@ -104,6 +107,7 @@ impl OutboundFrontendClient {
             Ok((
                 OutboundSessionClient {
                     client: self,
+                    modes: snapshot_modes(&snapshot, columns, rows)?,
                     summary: snapshot.session,
                     styles: crate::host::terminal::wire_styles::bounded_style_rows(
                         &snapshot.line_style_spans,
@@ -141,6 +145,7 @@ impl OutboundFrontendClient {
         let snapshot: Snapshot = serde_json::from_str(&frame.body)
             .map_err(|_| MezError::invalid_state("outbound snapshot invalid"))?;
         validate_snapshot(&snapshot, &self.handle, rows)?;
+        snapshot_modes(&snapshot, columns, rows)?;
         crate::host::terminal::wire_styles::bounded_style_rows(
             &snapshot.line_style_spans,
             snapshot.lines.len(),
@@ -171,6 +176,7 @@ impl OutboundSessionClient {
                 snapshot.lines.len(),
                 columns,
             )?;
+            self.modes = snapshot_modes(&snapshot, columns, rows)?;
             Ok((self, snapshot.lines))
         })
         .await
@@ -187,6 +193,25 @@ impl OutboundSessionClient {
     pub(crate) fn line_style_spans(&self) -> &[Vec<mez_terminal::TerminalStyleSpan>] {
         &self.styles
     }
+
+    /// Returns validated presentation modes for the last snapshot without
+    /// applying them or granting terminal-input/presentation receipt authority.
+    pub(crate) fn output_modes(&self) -> mez_mux::presentation::AttachedTerminalOutputModes {
+        self.modes
+    }
+}
+
+/// Uses the same viewport and mode interpretation as the broker projection.
+fn snapshot_modes(
+    snapshot: &Snapshot,
+    columns: u16,
+    rows: u16,
+) -> Result<mez_mux::presentation::AttachedTerminalOutputModes> {
+    crate::host::terminal::wire_modes::bounded_view_output_modes(
+        &serde_json::json!({"cursor":snapshot.cursor,"output_modes":snapshot.output_modes}),
+        columns,
+        rows,
+    )
 }
 
 /// Keeps local request dimensions and deadlines within the server contract.

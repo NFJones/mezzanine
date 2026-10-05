@@ -96,5 +96,44 @@ pub(crate) fn parse_view_output_modes(
     }))
 }
 
+/// Requires cursor evidence within a finite snapshot viewport. Legacy attach
+/// parsing remains unchanged; this opt-in boundary never applies host modes.
+pub(crate) fn bounded_view_output_modes(
+    view: &serde_json::Value,
+    columns: u16,
+    rows: u16,
+) -> Result<AttachedTerminalOutputModes> {
+    if !(1..=4096).contains(&columns) || !(1..=4096).contains(&rows) {
+        return Err(MezError::invalid_state(
+            "snapshot output geometry unavailable",
+        ));
+    }
+    let modes = parse_view_output_modes(view)?
+        .ok_or_else(|| MezError::invalid_state("snapshot cursor evidence unavailable"))?;
+    if modes.cursor_row >= usize::from(rows) || modes.cursor_column >= usize::from(columns) {
+        return Err(MezError::invalid_state("snapshot cursor exceeds geometry"));
+    }
+    Ok(modes)
+}
+
+/// Projects only decoded cursor and output-mode fields into the established
+/// view shape. Local-only enhanced keyboard and blink phase are not exported.
+pub(crate) fn output_modes_view_value(modes: AttachedTerminalOutputModes) -> serde_json::Value {
+    let style = match modes.cursor_style {
+        TerminalCursorStyle::Block => "block",
+        TerminalCursorStyle::Underline => "underline",
+        TerminalCursorStyle::Bar => "bar",
+    };
+    serde_json::json!({
+        "cursor": {"row":modes.cursor_row,"column":modes.cursor_column,
+            "visible":modes.cursor_visible,"style":style,"blink":modes.cursor_blink,
+            "blink_interval_ms":modes.cursor_blink_interval_ms},
+        "output_modes": {"application_keypad":modes.application_keypad,
+            "bracketed_paste":modes.bracketed_paste,"focus_events":modes.focus_events,
+            "alternate_screen":modes.alternate_screen,"host_mouse_reporting":modes.host_mouse_reporting,
+            "animation_refresh_interval_ms":modes.animation_refresh_interval_ms}
+    })
+}
+
 #[cfg(test)]
 mod tests;

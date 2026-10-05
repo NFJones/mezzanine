@@ -4276,6 +4276,10 @@ Snapshot style rows MUST align with rendered lines, retain ordered overlay
 precedence, and enforce finite span counts and checked cell ranges. Both broker
 and client MUST use the shared rendition decoder; unknown style metadata MUST
 NOT cross IPC. Styled snapshots alone do not establish a complete renderer.
+Snapshot cursor and output-mode fields MUST use the shared attach interpretation
+and validate cursor coordinates against the requested viewport on both ends.
+Only decoded presentation fields MAY cross IPC; this transport MUST NOT apply
+host modes or grant input or presentation-acknowledgement authority.
 The separate internal primary-input exchange MUST bind the exact frontend and
 initialized primary, bound geometry/input/key size, and retain the original
 terminal-step idempotency key. It MUST issue one mutation without automatic

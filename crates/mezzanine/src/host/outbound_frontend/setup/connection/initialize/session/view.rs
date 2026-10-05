@@ -83,13 +83,15 @@ impl InitializedSessionFrontend {
             let response = read_exact_frame(self.bridge.stream_mut()).await?;
             let lines = project_view_lines(&response, &request, &self.summary)?;
             let styles = project_view_styles(&response, lines.len(), request.columns)?;
+            let modes = project_view_modes(&response, request.columns, request.rows)?;
             self.connected
                 .prepared
                 .frontend
                 ._endpoint
                 .frontend_config_root()?;
             let body = serde_json::json!({"handle":request.handle,"session":self.summary,
-                "lines":lines,"line_style_spans":styles})
+                "lines":lines,"line_style_spans":styles,
+                "cursor":modes["cursor"],"output_modes":modes["output_modes"]})
             .to_string();
             if body.len() > BODY_LIMIT {
                 return Err(MezError::invalid_state(
@@ -167,6 +169,19 @@ fn project_view_styles(body: &str, line_count: usize, columns: u16) -> Result<se
         .ok_or_else(|| MezError::invalid_state("outbound view styles unavailable"))?;
     let rows = crate::host::terminal::wire_styles::bounded_style_rows(value, line_count, columns)?;
     Ok(crate::host::terminal::wire_styles::style_rows_value(&rows))
+}
+
+/// Projects shared decoded presentation facts only after viewport validation.
+fn project_view_modes(body: &str, columns: u16, rows: u16) -> Result<serde_json::Value> {
+    let response: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_state("outbound view response invalid"))?;
+    let view = response
+        .pointer("/result/view")
+        .ok_or_else(|| MezError::invalid_state("outbound view unavailable"))?;
+    let modes = crate::host::terminal::wire_modes::bounded_view_output_modes(view, columns, rows)?;
+    Ok(crate::host::terminal::wire_modes::output_modes_view_value(
+        modes,
+    ))
 }
 
 #[cfg(test)]
