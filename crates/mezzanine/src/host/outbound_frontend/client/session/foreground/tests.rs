@@ -145,6 +145,66 @@ fn inert_client(
     (root, listener, peer, client)
 }
 
+/// Idle animation deadlines must trigger a fresh snapshot even without redraw
+/// events and while ordinary pacing is closed. This exercises retained IPC
+/// ownership, not physical visibility or the full production attach scheduler.
+#[tokio::test]
+async fn outbound_foreground_idle_animation_bypasses_ordinary_pacing() {
+    let (root, listener, peer, mut client) = inert_client(Vec::new());
+    client.events_negotiated = true;
+    client.render_rate_limit_fps = Some(2);
+    client.modes.animation_refresh_interval_ms = 100;
+    let handle = client.client.handle.clone();
+    let summary = serde_json::to_value(&client.summary).unwrap();
+    let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+    for _ in 0..3 {
+        terminal.push_pending_input_read();
+    }
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let foreground_stop = stop.clone();
+    let foreground = client.run_snapshot_foreground(
+        &mut terminal,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(1),
+        async move { foreground_stop.notified().await },
+    );
+    let responder = async {
+        let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(request["operation"], "events");
+        tokio::time::sleep(Duration::from_millis(110)).await;
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"action":"none","event_id":null
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert!(
+            request.get("operation").is_none(),
+            "idle animation must capture a fresh view"
+        );
+        assert_eq!(request["handle"], serde_json::to_value(&handle).unwrap());
+        stop.notify_one();
+        assert!(peer.next().await.is_none());
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(foreground, responder)
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(terminal.written_frames.len(), 1);
+    assert_eq!(terminal.presentation_restores, 1);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Ordinary redraw events retain one pending latest-state fetch until the
 /// advertised interval elapses. Idle replies cannot erase that pending request,
 /// and no snapshot may be captured before the observed cadence deadline.

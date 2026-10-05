@@ -585,6 +585,10 @@ Internal ordinary redraws now use the shared server-rate cadence after committed
 output, retaining one pending latest-state fetch across idle replies. Immediate
 redraws, input and resize bypass that pacing. Animation and full production
 scheduling acceptance remain separate from this ordinary-rate boundary.
+Internal animation refresh now uses the shared deadline after committed output,
+requesting a fresh snapshot when due even after idle event replies and while
+ordinary pacing is closed. Event exchanges still settle before reuse; exact wake
+latency and complete production animation acceptance remain unqualified.
 Primary resize admits the new geometry before snapshot capture, reusing an input
 step when available or sending an empty step otherwise. View requests alone do
 not establish authoritative primary resize, and no input is replayed.

@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::host::async_runtime::AsyncAttachedTerminalIo;
-use crate::host::terminal::cadence::AttachOrdinaryRenderRate;
+use crate::host::terminal::cadence::{AttachAnimationRefresh, AttachOrdinaryRenderRate};
 use crate::host::terminal::wire_events::AttachRenderAction;
 use mez_mux::layout::Size;
 
@@ -84,12 +84,14 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
     let mut sequence = 0_u64;
     let mut render = true;
     let mut ordinary_rate = AttachOrdinaryRenderRate::default();
+    let mut animation = AttachAnimationRefresh::default();
     let mut pending_ordinary = false;
     loop {
         if render {
             let key = next_key(nonce, &mut sequence)?;
             session = session.present(terminal, &key, budget).await?.0;
             ordinary_rate.update_from_rendered_view(session.render_rate_limit_fps);
+            animation.update_from_rendered_view(session.modes.animation_refresh_interval_ms);
         }
         let (input, action) = if session.events_negotiated {
             let (updated, input, action) = wait::negotiated(session, terminal, budget).await?;
@@ -108,7 +110,10 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
         render = matches!(
             action,
             AttachRenderAction::ImmediateView | AttachRenderAction::InvalidateAndView
-        ) || (pending_ordinary && ordinary_rate.ready());
+        ) || (pending_ordinary && ordinary_rate.ready())
+            || animation
+                .deadline()
+                .is_some_and(|deadline| deadline <= tokio::time::Instant::now());
         if action == AttachRenderAction::InvalidateAndView {
             terminal.invalidate_output_frame().await?;
         }

@@ -4313,6 +4313,10 @@ Internal ordinary redraw pacing MUST use the shared cadence owner, updated only
 after committed output. One pending latest-state fetch MUST survive idle replies
 until the server-resolved interval permits capture. Immediate redraw facts,
 primary input and geometry changes MUST bypass ordinary pacing without replay.
+Internal animation refresh MUST use the shared animation deadline, updated only
+after committed output. A due deadline MUST request a fresh snapshot even after
+an idle event reply and independently of ordinary pacing. Pending event exchanges
+remain settlement-owned; this does not guarantee exact animation wake latency.
 Changed primary geometry MUST be admitted through a terminal step before the
 next snapshot is captured. An input step carrying the new size MAY supply that
 admission; otherwise an empty step MUST precede capture without replaying input.
