@@ -45,6 +45,7 @@ pub(crate) struct OutboundSessionClient {
     modes: mez_mux::presentation::AttachedTerminalOutputModes,
     receipts: Vec<u64>,
     lines: Vec<String>,
+    events_negotiated: bool,
 }
 
 mod acknowledge;
@@ -115,6 +116,7 @@ impl OutboundFrontendClient {
                 OutboundSessionClient {
                     client: self,
                     modes: snapshot_modes(&snapshot, columns, rows)?,
+                    events_negotiated: params.event_stream_version == Some(1),
                     lines: snapshot.lines.clone(),
                     receipts: snapshot.presentation_ids,
                     summary: snapshot.session,

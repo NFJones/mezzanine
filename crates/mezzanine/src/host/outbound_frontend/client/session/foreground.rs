@@ -5,12 +5,16 @@
 //! retires its connection on cancellation/EOF/error, and attempts restoration on
 //! every explicit return. The caller's concrete terminal guard still owns raw
 //! mode and emergency restoration if this entire future is abandoned. This
-//! polling fixture path does not implement pushed events, X11, clipboard, local
+//! request-driven fixture path uses negotiated version-one redraw facts when
+//! available; it does not implement pushed renders, X11, clipboard, local
 //! health overlays or the complete production attach scheduling contract.
 
 use super::*;
 use crate::host::async_runtime::AsyncAttachedTerminalIo;
+use crate::host::terminal::wire_events::AttachRenderAction;
 use mez_mux::layout::Size;
+
+mod wait;
 
 /// Polling cadence for this internal snapshot path only; it is not advertised
 /// as the production event-driven attach loop or configured render-rate policy.
@@ -77,18 +81,37 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
 ) -> Result<()> {
     let nonce = rand::random::<u128>();
     let mut sequence = 0_u64;
+    let mut render = true;
     loop {
-        let key = next_key(nonce, &mut sequence)?;
-        session = session.present(terminal, &key, budget).await?.0;
-        let input = tokio::time::timeout(SNAPSHOT_POLL_INTERVAL, terminal.read_input(512)).await;
+        if render {
+            let key = next_key(nonce, &mut sequence)?;
+            session = session.present(terminal, &key, budget).await?.0;
+        }
+        let (input, action) = if session.events_negotiated {
+            let (updated, input, action) = wait::negotiated(session, terminal, budget).await?;
+            session = updated;
+            (input, action)
+        } else {
+            let input =
+                tokio::time::timeout(SNAPSHOT_POLL_INTERVAL, terminal.read_input(512)).await;
+            let input = match input {
+                Ok(input) => Some(input?),
+                Err(_) => None,
+            };
+            (input, AttachRenderAction::View)
+        };
+        render = action != AttachRenderAction::None;
+        if action == AttachRenderAction::InvalidateAndView {
+            terminal.invalidate_output_frame().await?;
+        }
         if let Some(updated) = terminal.terminal_size().await? {
+            render |= updated != size;
             size = updated;
             validate_budget(size.columns, size.rows, budget)?;
         }
         match input {
-            Ok(Err(error)) => return Err(error),
-            Ok(Ok(bytes)) if bytes.is_empty() => return Ok(()),
-            Ok(Ok(bytes)) if session.summary.granted_role == "primary" => {
+            Some(bytes) if bytes.is_empty() => return Ok(()),
+            Some(bytes) if session.summary.granted_role == "primary" => {
                 let key = next_key(nonce, &mut sequence)?;
                 let (updated, acknowledgement) = session
                     .step(size.columns, size.rows, &bytes, &key, budget)
@@ -97,12 +120,15 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
                 if acknowledgement.client_detached || acknowledgement.session_terminated {
                     return Ok(());
                 }
+                render = true;
             }
             // Observers drain local bytes without forwarding or acquiring input
             // authority. A timer requests another snapshot, not an input retry.
-            Ok(Ok(_)) | Err(_) => {}
+            Some(_) | None => {}
         }
-        session = session.snapshot(size.columns, size.rows, budget).await?.0;
+        if render {
+            session = session.snapshot(size.columns, size.rows, budget).await?.0;
+        }
     }
 }
 

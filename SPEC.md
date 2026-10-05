@@ -4300,6 +4300,11 @@ EOF, cancellation or error, attempt presentation restoration on explicit return,
 and retain distinct operation identities without replay. Whole-future abandonment
 still requires the caller's terminal guard. Its polling cadence does not certify
 production event-driven attachment, render scheduling, clipboard or X11 support.
+When version-one events are negotiated, internal foreground waits MUST settle
+the exact event reply before reusing the consumed session, even if local input
+arrives first. Event-first waits MUST preserve unread terminal input. Idle replies
+MUST NOT trigger unconditional snapshot redraws; this does not certify production
+render cadence, animation scheduling or ordinary CLI attachment.
 Presentation entry MUST be covered by cancellation and a finite deadline, with
 session ownership retired before cleanup. The concrete writer MUST retain a
 cleanup obligation before entry bytes can be emitted, even if entry is cancelled

@@ -139,8 +139,72 @@ fn inert_client(
         modes: mez_mux::presentation::AttachedTerminalOutputModes::default(),
         receipts,
         lines: vec!["exact snapshot".into()],
+        events_negotiated: false,
     };
     (root, listener, peer, client)
+}
+
+/// Input-first waits must settle the original event request before returning its
+/// client. Event-first waits must leave queued terminal bytes unread. Neither
+/// ordering may replay setup, submit input remotely, or lose stream ownership.
+#[tokio::test]
+async fn outbound_foreground_negotiated_wait_preserves_both_orderings() {
+    for input_first in [true, false] {
+        let (root, listener, peer, mut client) = inert_client(Vec::new());
+        client.events_negotiated = true;
+        let handle = client.client.handle.clone();
+        let summary = serde_json::to_value(&client.summary).unwrap();
+        let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+        if !input_first {
+            terminal.push_pending_input_read();
+        }
+        terminal.push_input(b"unread".to_vec());
+        let responder = async {
+            let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+            let request = peer.next().await.unwrap().unwrap();
+            assert_eq!(request.content_type, CONTENT_TYPE);
+            let request: serde_json::Value = serde_json::from_str(&request.body).unwrap();
+            assert_eq!(request["operation"], "events");
+            assert_eq!(request["handle"], serde_json::to_value(&handle).unwrap());
+            assert_eq!(request["wait_ms"], 25);
+            peer.send(ProtocolFrame::new(
+                CONTENT_TYPE,
+                serde_json::json!({
+                    "handle":handle,"session":summary,"action":"none","event_id":null
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+            peer
+        };
+        let ((client, input, action), mut peer) =
+            tokio::time::timeout(Duration::from_secs(2), async {
+                let (waited, peer) = tokio::join!(
+                    wait::negotiated(client, &mut terminal, Duration::from_secs(1)),
+                    responder
+                );
+                (waited.unwrap(), peer)
+            })
+            .await
+            .unwrap();
+        assert_eq!(action, AttachRenderAction::None);
+        if input_first {
+            assert_eq!(input, Some(b"unread".to_vec()));
+        } else {
+            assert_eq!(input, None);
+            assert_eq!(terminal.read_input(512).await.unwrap(), b"unread");
+        }
+        assert_eq!(client.client.handle, handle);
+        assert_eq!(serde_json::to_value(client.summary()).unwrap(), summary);
+        drop(client);
+        assert!(
+            peer.next().await.is_none(),
+            "no extra request or replay may follow settlement"
+        );
+        drop(listener);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 /// Cancellation before entry and failure of exact output commitment both restore

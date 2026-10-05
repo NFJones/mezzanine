@@ -574,6 +574,10 @@ bounded primary input and explicit presentation restoration. It preserves
 operation identity without replay; abandoning its entire future still requires
 the caller's terminal guard. This polling path is not ordinary CLI activation or
 qualification of pushed events, production render cadence, clipboard or X11.
+With version-one events negotiated, the internal foreground settles its exact
+event poll before reusing the session when input arrives first. Event-first waits
+preserve unread input, and idle replies do not redraw unconditionally. This still
+does not qualify production render cadence, animations or ordinary CLI attachment.
 Entry is cancellable and deadline-bound; session ownership retires before cleanup.
 The concrete writer retains reset responsibility before writing entry bytes, so
 cancelled or failed entry still attempts restoration. Reset delivery remains
