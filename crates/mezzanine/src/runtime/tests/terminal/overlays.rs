@@ -217,6 +217,26 @@ fn runtime_theme_browser_partial_failure_refreshes_actual_active_theme() {
             .iter()
             .any(|(key, value)| key == "Active" && value == "★ active")
     );
+    let failed = overlay
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .render_page()
+        .markdown;
+    assert!(failed.starts_with("Error:"), "{failed}");
+    input(&mut service, b"\r");
+    let succeeded = service
+        .primary_display_overlay()
+        .unwrap()
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .render_page()
+        .markdown;
+    assert!(succeeded.starts_with("Notice:"), "{succeeded}");
+    assert!(!succeeded.contains("Error:"), "{succeeded}");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -261,6 +281,16 @@ fn runtime_theme_browser_applies_and_refreshes_in_place() {
     assert_eq!(service.ui_theme().name, "dracula");
     let overlay = service.primary_display_overlay().unwrap();
     assert_eq!(overlay.search_query.as_deref(), Some("dracula"));
+    let feedback = overlay
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .render_page()
+        .markdown;
+    assert!(feedback.starts_with("Notice: theme=dracula"), "{feedback}");
+    assert!(feedback.contains("persisted=false"), "{feedback}");
+    assert!(!feedback.contains("Error:"), "{feedback}");
     assert!(
         !overlay
             .record_browser
@@ -292,6 +322,31 @@ fn runtime_theme_browser_applies_and_refreshes_in_place() {
             .unwrap()
     );
     assert_eq!(service.ui_theme().name, "kanagawa");
+    let feedback = service
+        .primary_display_overlay()
+        .unwrap()
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .render_page()
+        .markdown;
+    assert!(feedback.starts_with("Notice: theme=kanagawa"), "{feedback}");
+    assert!(!feedback.contains("Error:"), "{feedback}");
+    input(&mut service, b"r");
+    let refreshed = service
+        .primary_display_overlay()
+        .unwrap()
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .render_page()
+        .markdown;
+    assert!(
+        !refreshed.contains("Notice:") && !refreshed.contains("Error:"),
+        "{refreshed}"
+    );
     assert_eq!(
         service
             .primary_display_overlay()

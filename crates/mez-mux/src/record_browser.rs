@@ -223,6 +223,7 @@ pub struct RecordBrowser {
     detail_index: Option<usize>,
     prompt: Option<RecordBrowserPrompt>,
     error: Option<String>,
+    notice: Option<String>,
 }
 
 impl PartialEq for RecordBrowser {
@@ -253,6 +254,7 @@ impl PartialEq for RecordBrowser {
             && self.detail_index == other.detail_index
             && self.prompt == other.prompt
             && self.error == other.error
+            && self.notice == other.notice
     }
 }
 
@@ -307,12 +309,20 @@ impl RecordBrowser {
             detail_index: None,
             prompt: None,
             error: None,
+            notice: None,
         })
     }
 
     /// Replaces the pager error shown above list or detail content.
     pub fn set_error(&mut self, error: Option<String>) {
         self.error = error.filter(|value| !value.trim().is_empty());
+        self.notice = None;
+    }
+
+    /// Replaces neutral feedback and clears any stale error acknowledgement.
+    pub fn set_notice(&mut self, notice: Option<String>) {
+        self.notice = notice.filter(|value| !value.trim().is_empty());
+        self.error = None;
     }
 
     /// Replaces the scope label rendered near the browser title.
@@ -443,7 +453,7 @@ impl RecordBrowser {
             return None;
         };
         Some(RecordBrowserPromptSelection {
-            start_line: usize::from(self.error.is_some()) * 2 + 1,
+            start_line: usize::from(self.error.is_some() || self.notice.is_some()) * 2 + 1,
             option_count: options.len(),
             active_index: (*active_index).min(options.len().saturating_sub(1)),
         })
@@ -787,6 +797,9 @@ impl RecordBrowser {
             .as_ref()
             .map(|error| format!("Error: {}\n\n", escape_markdown_table(error)))
             .unwrap_or_default();
+        if let Some(notice) = &self.notice {
+            chrome.push_str(&format!("Notice: {}\n\n", escape_markdown_table(notice)));
+        }
         chrome.push_str(&list_chrome(self).join("\n"));
         if records.is_empty() {
             chrome.push_str(self.empty_message.as_deref().unwrap_or("No records found."));
@@ -866,6 +879,9 @@ impl RecordBrowser {
         if let Some(error) = &self.error {
             markdown.push_str(&format!("Error: {error}\n\n"));
         }
+        if let Some(notice) = &self.notice {
+            markdown.push_str(&format!("Notice: {notice}\n\n"));
+        }
         if let Some(prompt) = &self.prompt {
             markdown.push_str(&format!("{}\n\n", prompt_block(prompt)));
         }
@@ -889,6 +905,9 @@ impl RecordBrowser {
         let mut markdown = String::new();
         if let Some(error) = &self.error {
             markdown.push_str(&format!("Error: {error}\n\n"));
+        }
+        if let Some(notice) = &self.notice {
+            markdown.push_str(&format!("Notice: {notice}\n\n"));
         }
         if let Some(prompt) = &self.prompt {
             markdown.push_str(&format!("{}\n\n", prompt_block(prompt)));
@@ -1204,6 +1223,84 @@ mod tests {
             metadata: vec![("project".to_string(), "/repo".to_string())],
             markdown: format!("Body for {title}"),
         }
+    }
+
+    /// Neutral feedback clears stale errors without changing canonical exports,
+    /// survives list/detail rendering, and reserves the same selector offset as
+    /// error feedback. Later errors must replace rather than coexist with notice.
+    #[test]
+    fn record_browser_notice_preserves_exports_and_selector_offsets() {
+        let mut browser = RecordBrowser::new(
+            "Issues",
+            vec![browser_record("issue-1", "First")],
+            vec![RecordBrowserFilterChoice {
+                label: "all".into(),
+                value: String::new(),
+            }],
+        )
+        .unwrap();
+        let raw = browser.render_page().raw_markdown;
+        browser.set_error(Some("failure".into()));
+        browser.set_notice(Some("selection applied".into()));
+        let page = browser.render_page();
+        assert!(page.markdown.starts_with("Notice: selection applied\n\n"));
+        assert!(!page.markdown.contains("Error:"));
+        assert_eq!(page.raw_markdown, raw);
+        assert_eq!(browser.clone(), browser);
+        let theme = crate::render::RichTextTheme {
+            heading: mez_terminal::TerminalColor::Indexed(7),
+            structural: mez_terminal::TerminalColor::Indexed(7),
+            link: mez_terminal::TerminalColor::Indexed(7),
+            inline_code: mez_terminal::TerminalColor::Indexed(7),
+            table_alternate_row: mez_terminal::TerminalColor::Indexed(7),
+            diff_addition: mez_terminal::TerminalColor::Indexed(2),
+            diff_deletion: mez_terminal::TerminalColor::Indexed(1),
+            syntax: None,
+        };
+        for width in [12, 35, 80] {
+            let layout = browser.render_list_layout("", width, &theme).unwrap();
+            assert!(
+                layout
+                    .lines
+                    .iter()
+                    .any(|line| line.display.contains("Notice:"))
+            );
+            assert!(
+                !layout
+                    .lines
+                    .iter()
+                    .any(|line| line.display.contains("Error:"))
+            );
+            for range in layout.record_ranges {
+                assert_eq!(range.row, 0);
+                assert!(range.line < layout.lines.len());
+            }
+        }
+        browser
+            .apply_action(RecordBrowserAction::StartFilter(
+                RecordBrowserFilterField::Kind,
+            ))
+            .unwrap();
+        assert_eq!(browser.prompt_selection().unwrap().start_line, 3);
+        browser
+            .apply_action(RecordBrowserAction::BackToList)
+            .unwrap();
+        browser.show_first_record_detail();
+        assert!(
+            browser
+                .render_page()
+                .markdown
+                .starts_with("Notice: selection applied")
+        );
+        assert!(!browser.render_page().raw_markdown.contains("Notice:"));
+        browser.set_error(Some("later failure".into()));
+        assert!(
+            browser
+                .render_page()
+                .markdown
+                .starts_with("Error: later failure")
+        );
+        assert!(!browser.render_page().markdown.contains("Notice:"));
     }
 
     /// Verifies cloned navigation state shares immutable record payloads until

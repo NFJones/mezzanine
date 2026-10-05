@@ -97,8 +97,11 @@ rather than attaching one chooser to unrelated rows.
 shows active/source/palette metadata, initially highlights the active theme,
 and refreshes in place after explicit keyboard or identifier-cell activation.
 Search and viewport are retained where possible. Browse, search and dismissal
-never mutate configuration; dismissal does not undo applied selections. Errors
-remain visible with actual active state after partial settlement.
+never mutate configuration; dismissal does not undo applied selections. Successful
+selection shows neutral notice feedback and clears a previous error; refresh clears
+the acknowledgement. Actual failures remain errors, including partial settlement
+whose active state was reconciled successfully. Feedback does not enter canonical
+record copy or saved Markdown exports.
 
 ## Selected command contracts
 

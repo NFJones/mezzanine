@@ -52,12 +52,7 @@ impl RuntimeSessionService {
                 name: "set-theme".into(),
                 args: vec![name],
             };
-            Some(
-                match crate::runtime::runtime_set_theme_command(self, &invocation) {
-                    Ok(response) => response,
-                    Err(error) => error.message().to_string(),
-                },
-            )
+            Some(crate::runtime::runtime_set_theme_command(self, &invocation))
         };
         let mut browser = match self.theme_record_browser() {
             Ok(browser) => browser,
@@ -70,7 +65,11 @@ impl RuntimeSessionService {
         if let Some(id) = retained {
             browser.set_active_record_id(&id);
         }
-        browser.set_error(status);
+        match status {
+            Some(Ok(response)) => browser.set_notice(Some(response)),
+            Some(Err(error)) => browser.set_error(Some(error.message().to_string())),
+            None => browser.set_notice(None),
+        }
         if let Some(state) = self
             .presentation
             .primary_display_overlay
