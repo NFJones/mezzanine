@@ -2,6 +2,119 @@
 
 use super::*;
 
+/// A resize worker captured before newer steering must not erase that receipt,
+/// and a later conversation replacement must reject the same stale candidate.
+#[test]
+fn runtime_pending_steering_rejects_stale_resize_and_rebound_candidates() {
+    for rebound in [false, true] {
+        let mut service = test_runtime_service();
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service.start_agent_prompt_turn("%1", "initial").unwrap();
+        service.set_agent_transcript_store(AgentTranscriptStore::new(temp_root(
+            "pending-stale-resize",
+        )));
+        service
+            .append_agent_user_prompt_to_terminal_buffer("%1", "durable source")
+            .unwrap();
+        service
+            .apply_pane_resize_completion_event("%1", Size::new(40, 24).unwrap())
+            .unwrap();
+        let work = service
+            .take_agent_presentation_resize_work("%1")
+            .unwrap()
+            .unwrap();
+        let result = RuntimeSessionService::build_agent_presentation_resize(work)
+            .unwrap()
+            .unwrap();
+        service
+            .execute_agent_shell_control_command(&primary, "new pending guidance")
+            .unwrap();
+        if rebound {
+            service
+                .agent_shell_store_mut()
+                .finish_turn("%1", "turn-1")
+                .unwrap();
+            service
+                .agent_shell_store_mut()
+                .start_new_conversation("%1")
+                .unwrap();
+            service
+                .append_agent_status_text_to_terminal_buffer("%1", "replacement source")
+                .unwrap();
+        }
+        assert!(
+            !service
+                .apply_agent_presentation_resize_result(result)
+                .unwrap()
+        );
+        let text = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        if rebound {
+            assert!(text.contains("replacement source"), "{text}");
+            assert!(!text.contains("new pending guidance"), "{text}");
+        } else {
+            assert_eq!(text.matches("new pending guidance").count(), 1, "{text}");
+        }
+    }
+}
+
+/// An overflow group retains equal submissions as distinct ordered occurrences
+/// in source copy, emitting the complete group once when its tail is selected.
+#[test]
+fn runtime_pending_steering_multi_occurrence_overflow_source_copy_is_ordered() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(40, 8).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.start_agent_prompt_turn("%1", "initial").unwrap();
+    service
+        .resize_agent_screen_with_pending_steering("%1", Size::new(40, 8).unwrap())
+        .unwrap();
+    let display = "equal source\r\n".repeat(12);
+    for _ in 0..2 {
+        service
+            .execute_agent_shell_command_with_display(&primary, "equal input", &display, &[])
+            .unwrap();
+    }
+    let screen = service.agent_pane_screen("%1").unwrap();
+    let last = screen
+        .normal_styled_content_lines()
+        .iter()
+        .rposition(|row| {
+            row.copy_text
+                .as_deref()
+                .is_some_and(|source| source.starts_with(mez_mux::copy::COPY_SOURCE_LINE_PREFIX))
+        })
+        .unwrap();
+    let mut copy = crate::host::terminal::CopyMode::from_screen(screen, 8).unwrap();
+    copy.scroll_to_top();
+    copy.move_cursor_by(last as isize, 0);
+    copy.begin_keyboard_selection();
+    copy.move_cursor_to_line_end();
+    assert_eq!(
+        copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap(),
+        format!("{display}\n\n{display}")
+    );
+    let receipts = service.steering_presentation_receipts("%1").unwrap();
+    assert_eq!(receipts.len(), 2);
+    assert_ne!(receipts[0].id, receipts[1].id);
+    assert!(receipts[0].acceptance_order < receipts[1].acceptance_order);
+}
+
 /// Historical browsing retains its viewport and selection while new output
 /// relocates the pending tail. Capture reads the live agent surface, and the
 /// independent process screen must remain unchanged throughout.
