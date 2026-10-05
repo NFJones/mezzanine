@@ -16,6 +16,12 @@ use crate::host::outbound_frontend::OutboundFrontendListener;
 )]
 mod election;
 
+#[allow(
+    dead_code,
+    reason = "ordinary frontend activation follows startup orchestration qualification"
+)]
+mod startup;
+
 /// Runs one foreground owner until cancellation, with explicit teardown on
 /// normal/error return. Cancellation of this entire future remains fail-closed
 /// under the resource quarantine contract, not proof of graceful shutdown.

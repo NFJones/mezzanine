@@ -573,6 +573,11 @@ The internal readiness connector authenticates the Unix peer and negotiates a
 bounded hello while retaining the exact local stream. Discovery checks private
 root/socket identity without creating or replacing state; socket existence alone
 does not establish readiness or remote session authority.
+Internal startup composition now joins election and readiness under one deadline,
+invoking at most one caller-supplied launcher for missing/refused discovery. It
+reprobes after election and retains the guard until readiness. Protocol and
+permission failures are not replacement signals. Production launcher selection
+and ordinary CLI consumer migration remain unfinished.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.

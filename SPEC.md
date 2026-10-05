@@ -4294,6 +4294,11 @@ Internal broker readiness MUST authenticate the kernel Unix peer before hello
 exchange, bound negotiation, and revalidate retained private root/socket identity.
 Readiness MUST retain the admitted stream and exact inert handle; socket existence
 alone is insufficient. Failed discovery MUST NOT create, replace or launch state.
+Internal startup composition MAY invoke one caller-supplied launcher only after
+missing/refused discovery and protected election. It MUST reprobe after election,
+retain and revalidate the guard through readiness, and bound asynchronous retries
+by one deadline. Protocol or permission failures MUST NOT trigger replacement.
+This composition alone does not select a production launcher or reroute CLI consumers.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and
