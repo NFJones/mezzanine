@@ -4300,6 +4300,10 @@ Snapshots MAY retain the optional server-resolved ordinary render rate as typed
 metadata. Missing or zero rate MUST NOT imply a guessed ceiling; malformed
 explicit rates MUST reject before publication. Retention alone does not activate
 foreground pacing or certify production scheduling.
+Snapshots MAY retain optional server view identity and event cutoff as typed
+evidence. Identity MUST use the shared lowercase SHA-256 representation check;
+malformed explicit metadata MUST reject before publication. Receiving this
+evidence MUST NOT establish a committed conditional-rendering baseline.
 Snapshot style rows MUST align with rendered lines, retain ordered overlay
 precedence, and enforce finite span counts and checked cell ranges. Both broker
 and client MUST use the shared rendition decoder; unknown style metadata MUST

@@ -5,6 +5,45 @@
 
 use super::*;
 
+/// Server revision evidence stays optional and exact. Invalid digest shapes or
+/// cutoff types reject before publication; this projection does not prove that
+/// a local frame committed or permit conditional baseline reuse.
+#[test]
+fn outbound_view_revision_evidence_is_typed_and_optional() {
+    assert_eq!(
+        project_revision(&serde_json::json!({})).unwrap(),
+        (None, None)
+    );
+    let identity = "a".repeat(64);
+    for cutoff in [0_u64, u64::MAX] {
+        assert_eq!(
+            project_revision(&serde_json::json!({"result":{
+                "view_identity":identity,"event_cutoff":cutoff
+            }}))
+            .unwrap(),
+            (Some(identity.clone()), Some(cutoff))
+        );
+    }
+    for invalid in [
+        serde_json::json!("A".repeat(64)),
+        serde_json::json!("a".repeat(63)),
+        serde_json::json!("g".repeat(64)),
+        serde_json::Value::Null,
+        serde_json::json!(7),
+    ] {
+        assert!(
+            project_revision(&serde_json::json!({"result":{"view_identity":invalid}})).is_err()
+        );
+    }
+    for invalid in [
+        serde_json::json!(-1),
+        serde_json::json!("7"),
+        serde_json::Value::Null,
+    ] {
+        assert!(project_revision(&serde_json::json!({"result":{"event_cutoff":invalid}})).is_err());
+    }
+}
+
 /// Missing cadence remains unavailable, while zero and reported rates retain
 /// their exact values. Malformed explicit metadata cannot become a scheduling
 /// policy or cross IPC as an invented default.

@@ -20,6 +20,24 @@ fn outbound_client_snapshot_validation_is_closed_and_identity_scoped() {
     let snapshot: Snapshot = serde_json::from_value(original.clone()).unwrap();
     validate_snapshot(&snapshot, &handle, 2).unwrap();
     assert_eq!(snapshot.render_rate_limit_fps, None);
+    assert_eq!(
+        (snapshot.view_identity, snapshot.event_cutoff),
+        (None, None)
+    );
+    let mut revision = original.clone();
+    revision["view_identity"] = serde_json::json!("b".repeat(64));
+    revision["event_cutoff"] = serde_json::json!(u64::MAX);
+    let reported: Snapshot = serde_json::from_value(revision.clone()).unwrap();
+    validate_snapshot(&reported, &handle, 2).unwrap();
+    assert_eq!(reported.event_cutoff, Some(u64::MAX));
+    for identity in ["B".repeat(64), "b".repeat(63), "z".repeat(64)] {
+        revision["view_identity"] = serde_json::json!(identity);
+        let invalid: Snapshot = serde_json::from_value(revision.clone()).unwrap();
+        assert!(validate_snapshot(&invalid, &handle, 2).is_err());
+    }
+    revision["view_identity"] = serde_json::json!("b".repeat(64));
+    revision["event_cutoff"] = serde_json::json!("7");
+    assert!(serde_json::from_value::<Snapshot>(revision).is_err());
     for fps in [0_u64, 30, u64::MAX] {
         let mut reported = original.clone();
         reported["render_rate_limit_fps"] = serde_json::json!(fps);

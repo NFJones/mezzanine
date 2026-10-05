@@ -236,10 +236,7 @@ pub(super) fn conditional_view_response(
 
 /// Restricts client-supplied identities to the exact wire digest shape.
 fn valid_view_identity(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    crate::host::terminal::wire_identity::valid_view_identity(value)
 }
 
 #[cfg(test)]

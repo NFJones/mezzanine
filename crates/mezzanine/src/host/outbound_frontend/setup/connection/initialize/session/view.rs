@@ -103,6 +103,7 @@ impl InitializedSessionFrontend {
             let response_value: serde_json::Value = serde_json::from_str(&response)
                 .map_err(|_| MezError::invalid_state("outbound view response invalid"))?;
             let render_rate = project_render_rate(&response_value)?;
+            let (view_identity, event_cutoff) = project_revision(&response_value)?;
             let receipts = crate::host::terminal::wire_receipts::parse_receipts(
                 response_value
                     .pointer("/result/presentation_ids")
@@ -116,7 +117,8 @@ impl InitializedSessionFrontend {
             let body = serde_json::json!({"handle":request.handle,"session":self.summary,
                 "lines":lines,"line_style_spans":styles,
                 "cursor":modes["cursor"],"output_modes":modes["output_modes"],
-                "presentation_ids":receipts,"render_rate_limit_fps":render_rate})
+                "presentation_ids":receipts,"render_rate_limit_fps":render_rate,
+                "view_identity":view_identity,"event_cutoff":event_cutoff})
             .to_string();
             if body.len() > BODY_LIMIT {
                 return Err(MezError::invalid_state(
@@ -224,4 +226,28 @@ fn project_render_rate(response: &serde_json::Value) -> Result<Option<u64>> {
                 .ok_or_else(|| MezError::invalid_state("outbound view render rate invalid"))
         })
         .transpose()
+}
+
+/// Retains only typed server revision evidence. Missing metadata stays absent;
+/// malformed explicit values reject without inventing a rendering baseline.
+fn project_revision(response: &serde_json::Value) -> Result<(Option<String>, Option<u64>)> {
+    let identity = response
+        .pointer("/result/view_identity")
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| crate::host::terminal::wire_identity::valid_view_identity(value))
+                .map(str::to_string)
+                .ok_or_else(|| MezError::invalid_state("outbound view identity invalid"))
+        })
+        .transpose()?;
+    let cutoff = response
+        .pointer("/result/event_cutoff")
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| MezError::invalid_state("outbound view event cutoff invalid"))
+        })
+        .transpose()?;
+    Ok((identity, cutoff))
 }

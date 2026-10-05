@@ -326,7 +326,11 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             serde_json::from_value::<Vec<u64>>(view["presentation_ids"].clone()).unwrap()
         );
         assert!(view["render_rate_limit_fps"].is_u64());
-        assert_eq!(view.as_object().unwrap().len(), 8);
+        assert!(crate::host::terminal::wire_identity::valid_view_identity(
+            view["view_identity"].as_str().unwrap()
+        ));
+        assert!(view["event_cutoff"].is_u64());
+        assert_eq!(view.as_object().unwrap().len(), 10);
         drop(second);
         drop(first_local);
         drop(second_local);

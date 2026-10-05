@@ -36,6 +36,8 @@ struct Snapshot {
     output_modes: serde_json::Value,
     presentation_ids: Vec<u64>,
     render_rate_limit_fps: Option<u64>,
+    view_identity: Option<String>,
+    event_cutoff: Option<u64>,
 }
 
 /// Client pinned to its first exact session settlement, with one retained stream.
@@ -48,6 +50,8 @@ pub(crate) struct OutboundSessionClient {
     lines: Vec<String>,
     events_negotiated: bool,
     render_rate_limit_fps: Option<u64>,
+    view_identity: Option<String>,
+    event_cutoff: Option<u64>,
 }
 
 mod acknowledge;
@@ -120,6 +124,8 @@ impl OutboundFrontendClient {
                     modes: snapshot_modes(&snapshot, columns, rows)?,
                     events_negotiated: params.event_stream_version == Some(1),
                     render_rate_limit_fps: snapshot.render_rate_limit_fps,
+                    view_identity: snapshot.view_identity,
+                    event_cutoff: snapshot.event_cutoff,
                     lines: snapshot.lines.clone(),
                     receipts: snapshot.presentation_ids,
                     summary: snapshot.session,
@@ -194,6 +200,8 @@ impl OutboundSessionClient {
             self.receipts = snapshot.presentation_ids;
             self.lines = snapshot.lines.clone();
             self.render_rate_limit_fps = snapshot.render_rate_limit_fps;
+            self.view_identity = snapshot.view_identity;
+            self.event_cutoff = snapshot.event_cutoff;
             Ok((self, snapshot.lines))
         })
         .await
@@ -221,6 +229,12 @@ impl OutboundSessionClient {
     /// Only a renderer's completed terminal write may justify the explicit ACK.
     pub(crate) fn presentation_ids(&self) -> &[u64] {
         &self.receipts
+    }
+
+    /// Borrows server revision evidence for the last snapshot, without claiming
+    /// that output committed or authorizing conditional reuse of a baseline.
+    pub(crate) fn revision_evidence(&self) -> (Option<&str>, Option<u64>) {
+        (self.view_identity.as_deref(), self.event_cutoff)
     }
 }
 
@@ -253,6 +267,15 @@ fn validate_budget(columns: u16, rows: u16, deadline: Duration) -> Result<()> {
 /// Checks closed snapshot identities and row count before exposing any lines.
 fn validate_snapshot(snapshot: &Snapshot, handle: &FrontendHandle, rows: u16) -> Result<()> {
     crate::host::terminal::wire_receipts::validate_receipts(&snapshot.presentation_ids)?;
+    if snapshot
+        .view_identity
+        .as_deref()
+        .is_some_and(|value| !crate::host::terminal::wire_identity::valid_view_identity(value))
+    {
+        return Err(MezError::invalid_state(
+            "outbound snapshot identity invalid",
+        ));
+    }
     let summary = &snapshot.session;
     if snapshot.handle != *handle
         || summary.selected_version != 3
