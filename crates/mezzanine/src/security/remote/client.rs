@@ -141,6 +141,17 @@ impl RemoteClientIdentity {
         &self.secret_key
     }
 
+    /// Withholds identity reuse until process exit when transport teardown is
+    /// unproven. Retains only the lock descriptor, not secret key material. No
+    /// background cleanup or pathname unlink can establish teardown evidence.
+    pub(crate) fn quarantine_until_process_exit(self) {
+        let Self {
+            secret_key: _,
+            _lock,
+        } = self;
+        std::mem::forget(_lock);
+    }
+
     /// Returns the stable client endpoint identity.
     #[cfg(test)]
     pub(crate) fn endpoint_id(&self) -> iroh::EndpointId {

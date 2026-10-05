@@ -511,6 +511,13 @@ session.
 CLI mutation keys use a fresh random nonce per logical operation rather than a
 process ID. Prepared request retries retain their original key; starting a new
 command is a new operation, not recovery of an ambiguous earlier creation.
+An internal shared endpoint resource now retains one protected identity across
+bounded independent connection leases. Frontend IPC and CLI consumer migration
+remain unfinished: this component does not yet permit simultaneous CLI processes
+to share the paired identity. The existing exclusive identity lock remains enforced.
+Shutdown waits retain their original future across cancellation or timeout. An
+abandoned resource with unproven teardown withholds identity reuse until its
+owning process exits; another endpoint is never started as a cleanup fallback.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.

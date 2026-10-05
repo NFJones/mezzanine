@@ -4223,7 +4223,16 @@ after successful replacement.
 The client MUST persist its endpoint key, server profile, and device credential
 under owner-only protected paths. A live client endpoint
 identity MUST retain an exclusive lock, and profile database reads and writes
-MUST be serialized under a protected lock. The client MUST publish a profile
+MUST be serialized under a protected lock. The internal shared outbound endpoint
+resource MUST retain that lock through all connection leases, bound connecting
+and connected leases, and close only the retiring connection on lease disposal.
+Shared endpoint shutdown MUST reject while sibling owners or leases remain.
+Cancelled or timed-out waits MUST retain the original shutdown future for retry;
+only completed teardown and endpoint disposal permit identity-lock release.
+Abandoned bind, owner or shutdown resources MUST withhold identity reuse until
+process exit when teardown is unproven, even at the cost of unavailable transport.
+This resource alone does not implement frontend IPC or concurrent CLI attachment.
+The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and
 display metadata; it MUST NOT participate in authentication or authorization.
