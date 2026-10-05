@@ -145,6 +145,72 @@ fn inert_client(
     (root, listener, peer, client)
 }
 
+/// Ordinary redraw events retain one pending latest-state fetch until the
+/// advertised interval elapses. Idle replies cannot erase that pending request,
+/// and no snapshot may be captured before the observed cadence deadline.
+#[tokio::test]
+async fn outbound_foreground_ordinary_redraw_waits_for_server_cadence() {
+    let (root, listener, peer, mut client) = inert_client(Vec::new());
+    client.events_negotiated = true;
+    client.render_rate_limit_fps = Some(2);
+    let handle = client.client.handle.clone();
+    let summary = serde_json::to_value(&client.summary).unwrap();
+    let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+    for _ in 0..4 {
+        terminal.push_pending_input_read();
+    }
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let foreground_stop = stop.clone();
+    let foreground = client.run_snapshot_foreground(
+        &mut terminal,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(1),
+        async move { foreground_stop.notified().await },
+    );
+    let responder = async {
+        let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+        let started = tokio::time::Instant::now();
+        for (action, delay) in [("view", 0), ("none", 10), ("none", 510)] {
+            let frame = peer.next().await.unwrap().unwrap();
+            let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+            assert_eq!(
+                request["operation"], "events",
+                "ordinary snapshot must wait for cadence"
+            );
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            peer.send(ProtocolFrame::new(
+                CONTENT_TYPE,
+                serde_json::json!({
+                    "handle":handle,"session":summary,"action":action,"event_id":7
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        }
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert!(
+            request.get("operation").is_none(),
+            "pending redraw survives idle replies"
+        );
+        assert!(started.elapsed() >= Duration::from_millis(500));
+        assert_eq!(request["columns"], 80);
+        stop.notify_one();
+        assert!(peer.next().await.is_none());
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(foreground, responder)
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(terminal.written_frames.len(), 1);
+    assert_eq!(terminal.presentation_restores, 1);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// A primary geometry change must be admitted as an empty terminal step before
 /// fetching its next view. A view request alone cannot resize authoritative
 /// primary state. The mutation retains its exact key and does not forward input.

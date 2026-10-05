@@ -581,6 +581,10 @@ With version-one events negotiated, the internal foreground settles its exact
 event poll before reusing the session when input arrives first. Event-first waits
 preserve unread input, and idle replies do not redraw unconditionally. This still
 does not qualify production render cadence, animations or ordinary CLI attachment.
+Internal ordinary redraws now use the shared server-rate cadence after committed
+output, retaining one pending latest-state fetch across idle replies. Immediate
+redraws, input and resize bypass that pacing. Animation and full production
+scheduling acceptance remain separate from this ordinary-rate boundary.
 Primary resize admits the new geometry before snapshot capture, reusing an input
 step when available or sending an empty step otherwise. View requests alone do
 not establish authoritative primary resize, and no input is replayed.

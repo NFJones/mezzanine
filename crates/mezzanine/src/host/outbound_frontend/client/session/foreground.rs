@@ -11,6 +11,7 @@
 
 use super::*;
 use crate::host::async_runtime::AsyncAttachedTerminalIo;
+use crate::host::terminal::cadence::AttachOrdinaryRenderRate;
 use crate::host::terminal::wire_events::AttachRenderAction;
 use mez_mux::layout::Size;
 
@@ -82,10 +83,13 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
     let nonce = rand::random::<u128>();
     let mut sequence = 0_u64;
     let mut render = true;
+    let mut ordinary_rate = AttachOrdinaryRenderRate::default();
+    let mut pending_ordinary = false;
     loop {
         if render {
             let key = next_key(nonce, &mut sequence)?;
             session = session.present(terminal, &key, budget).await?.0;
+            ordinary_rate.update_from_rendered_view(session.render_rate_limit_fps);
         }
         let (input, action) = if session.events_negotiated {
             let (updated, input, action) = wait::negotiated(session, terminal, budget).await?;
@@ -100,7 +104,11 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
             };
             (input, AttachRenderAction::View)
         };
-        render = action != AttachRenderAction::None;
+        pending_ordinary |= action == AttachRenderAction::View;
+        render = matches!(
+            action,
+            AttachRenderAction::ImmediateView | AttachRenderAction::InvalidateAndView
+        ) || (pending_ordinary && ordinary_rate.ready());
         if action == AttachRenderAction::InvalidateAndView {
             terminal.invalidate_output_frame().await?;
         }
@@ -142,6 +150,7 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
         }
         if render {
             session = session.snapshot(size.columns, size.rows, budget).await?.0;
+            pending_ordinary = false;
         }
     }
 }
