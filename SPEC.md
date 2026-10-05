@@ -4285,6 +4285,11 @@ profile workers release ownership. Outbound profile-lock acquisition MUST use
 bounded nonblocking contention handling, not an indefinitely blocking flock.
 Retirement deadline exhaustion MUST fail closed; stalled filesystem syscalls
 remain an explicitly unqualified host-I/O boundary, not guaranteed bounded exit.
+Internal startup election MUST use a private nonblocking lock at the canonical
+configuration root, independent of frontend runtime directories. Root and named
+lock objects MUST be revalidated before startup effects; unsafe or replaced
+objects MUST reject without unlinking them. Election does not replace the
+endpoint identity's exclusive lifetime lock or itself launch a broker.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and

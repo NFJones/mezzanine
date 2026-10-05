@@ -10,6 +10,12 @@ use super::{CliEnv, Result};
 use crate::host::outbound_endpoint::OutboundEndpointOwner;
 use crate::host::outbound_frontend::OutboundFrontendListener;
 
+#[allow(
+    dead_code,
+    reason = "frontend startup integration follows election qualification"
+)]
+mod election;
+
 /// Runs one foreground owner until cancellation, with explicit teardown on
 /// normal/error return. Cancellation of this entire future remains fail-closed
 /// under the resource quarantine contract, not proof of graceful shutdown.

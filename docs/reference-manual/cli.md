@@ -564,6 +564,11 @@ profile-lock contention uses bounded nonblocking acquisition, including when a
 holder never releases its lock. Retirement deadline exhaustion fails closed.
 This does not guarantee process exit during arbitrary stalled filesystem I/O;
 Tokio runtime destruction can still wait for genuinely stuck blocking syscalls.
+An internal startup-election guard now coordinates launcher ownership at the
+canonical configuration root, not a frontend runtime directory. It revalidates
+private root/lock objects without replacing them. The guard alone launches no
+process and does not replace the endpoint's exclusive identity lock; automatic
+startup and ordinary CLI consumer migration remain unfinished.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.
