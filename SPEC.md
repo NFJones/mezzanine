@@ -5930,7 +5930,9 @@ Settled display source MUST carry occurrence identity for replay and exact
 persistence retry; retries MUST NOT resubmit input or repeat visible promotion.
 Pending rows MUST remain absent from ordinary durable presentation sources and
 lower-layer baselines. Visible pending rows use the existing composer log geometry
-and bounded overflow projection, not forced viewport pinning. Source selection
+and bounded overflow projection, not forced viewport pinning. Layouts without
+room for the fixed gutter and a body cell or usable log rows MUST omit the
+transient preview without discarding accepted receipt source. Source selection
 MUST preserve the complete occurrence display source, including CRLF and trailing
 newlines, independently of rendered labels and wrapping. Overflow summary and
 tail rows MUST retain an explicit full-source association; selecting the group

@@ -326,6 +326,12 @@ impl RuntimeSessionService {
             return Ok((screen, 0));
         }
         let size = screen.size();
+        // A fixed gutter plus at least one body cell must fit physically.
+        // Otherwise terminal wrapping would exceed the owned suffix row count.
+        // Keep accepted source in receipts until a usable layout is available.
+        if usize::from(size.columns) <= UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX) {
+            return Ok((screen, 0));
+        }
         let budget = self
             .agent_composer_layout_for_pane(pane, usize::from(size.columns), usize::from(size.rows))
             .log

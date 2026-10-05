@@ -87,7 +87,9 @@ receipt-driven: steering uses `user> [pending]` at the live log tail while later
 output arrives. Local admission replaces that occurrence with one normal user
 entry; terminal not-sent and restart admission-unknown evidence keep explicit
 labels. This is log-tail placement, not forced viewport pinning while browsing.
-Visible rows are bounded using composer log geometry. Pending text is not saved
+Visible rows are bounded using composer log geometry. When the gutter or log
+rows cannot fit, the preview is omitted while accepted receipt source remains.
+Pending text is not saved
 as ordinary acknowledged prompt history; settled rows carry occurrence identity
 for replay and bounded persistence-only retry. Source-copy selection retains exact
 display text, including authored CRLF and trailing newlines. Selecting an overflow

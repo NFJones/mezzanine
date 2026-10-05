@@ -5,6 +5,44 @@
 
 use super::*;
 
+/// Pending suffix cleanup must remove every physical row it owns even when
+/// the normal two-cell gutter cannot fit. A durable predecessor must remain.
+#[test]
+fn pending_steering_tiny_width_suffix_cleanup_preserves_predecessor() {
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.start_agent_prompt_turn("%1", "initial").unwrap();
+    service
+        .inject_agent_steering_with_display("%1", "input", "pending source")
+        .unwrap();
+    let conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    for columns in [1, 2, 3, 4] {
+        let mut baseline = TerminalScreen::new(Size::new(columns, 24).unwrap(), 120).unwrap();
+        baseline.feed(b"D\r\n");
+        let (mut composite, rows) = service
+            .compose_pending_steering_suffix("%1", &conversation, baseline)
+            .unwrap();
+        if rows > 0 {
+            let suffix = composite.capture_transient_suffix(rows, true).unwrap();
+            assert!(composite.clear_transient_suffix(suffix));
+        }
+        let retained = composite
+            .normal_content_lines()
+            .into_iter()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(retained, vec!["D"], "columns={columns}");
+    }
+}
+
 /// Actual pending overflow and settled promotion retain a single full source
 /// anchor in bounded terminal history, not one payload per rendered row. Run
 /// this only after the helper-level linear bound has established safe metadata.
