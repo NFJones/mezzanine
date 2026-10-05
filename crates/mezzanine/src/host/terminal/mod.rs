@@ -21,6 +21,7 @@ use mez_terminal::{
     TerminalStyledLine, parse_sgr_mouse,
 };
 
+pub(crate) mod cadence;
 /// Exposes the client loop module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
