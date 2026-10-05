@@ -24,6 +24,15 @@ pub(crate) struct ConnectedFrontend {
 
 mod initialize;
 
+impl ConnectedFrontend {
+    /// Reports the validated initialization intent without exposing profile proof
+    /// or mutable setup fields. Initialization still enforces host-only authority.
+    pub(crate) fn host_only_requested(&self) -> Result<bool> {
+        let params = initialize_params_from_json(&self.prepared.initialize.to_string())?;
+        Ok(params.session_intent == Some(SessionIntent::HostOnly))
+    }
+}
+
 impl PreparedFrontend {
     /// Connects only to this owner-resolved profile's pinned direct address.
     /// A single total deadline bounds all pre-stream codec attempts. Failure or

@@ -540,6 +540,11 @@ activation remain unfinished; unsupported policy rejects without another endpoin
 An internal host-only initialization transition sends one owner-authenticated
 request and validates correlated observer/host-only settlement. Private proof
 and raw peer responses stay inside the owner; only allowlisted facts are retained.
+An internal host-list exchange now returns bounded validated lease summaries
+through exact-handle IPC using the fixed read-only host method. It exposes no
+device proof or private principal/checkpoint metadata and retires only the
+management connection. Real-host fixtures qualify listing beside a live sibling
+without session allocation; ordinary CLI consumer migration remains unfinished.
 Errors after writing never automatically replay initialization. Session
 creation/attachment uses a separate internal transition retaining the original
 intent/key and validating exact client/session/active-lease evidence. A loopback

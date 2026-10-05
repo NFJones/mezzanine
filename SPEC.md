@@ -4262,6 +4262,11 @@ host-only settlement, and retain only allowlisted response facts. Device proof
 MUST NOT enter frontend IPC or diagnostics. Failure after writing MUST NOT
 automatically replay initialization. Session creation/attachment, event and X11
 forwarding remain excluded from this host-only transition.
+The internal host-list exchange MUST use one fixed read-only host method and
+the exact frontend handle, returning only bounded validated lease summaries.
+Credentials, private principal/checkpoint facts and arbitrary peer metadata MUST
+NOT cross IPC. Listing MUST retire only its management connection and MUST NOT
+allocate sessions or disturb sibling attachments. Ordinary CLI migration remains separate.
 The separate internal session initialization MUST retain the original routing
 intent and invocation key, validate correlated role/client/session/active-lease
 evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection

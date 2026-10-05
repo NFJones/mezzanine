@@ -334,6 +334,29 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
                 "negotiated events must cross local IPC"
             );
             drop(first);
+            // A management frontend must use the same protected endpoint while
+            // its sibling attachment remains live; listing allocates no session.
+            let management =
+                crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
+                    socket.parent().unwrap(),
+                    Duration::from_secs(2),
+                )
+                .await
+                .unwrap();
+            let listed = management
+                .list_sessions("creator", Duration::from_secs(2))
+                .await
+                .unwrap();
+            assert_eq!(listed.len(), 4);
+            let listed = serde_json::to_value(&listed).unwrap();
+            assert!(
+                listed
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["session_id"] == second_view["session"]["session_id"])
+            );
+            assert_eq!(router.snapshots().await.unwrap().len(), 4);
             let (second, _, second_event) = second
                 .poll_events(25, Duration::from_secs(2))
                 .await
@@ -463,7 +486,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             cancel.notify_one();
         };
         let (accepted, ()) = tokio::join!(supervised, clients);
-        assert_eq!(accepted.unwrap(), 2);
+        assert_eq!(accepted.unwrap(), 3);
         stop.notify_one();
     };
     let (served, ()) = tokio::time::timeout(Duration::from_secs(30), async {
@@ -471,7 +494,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
     })
     .await
     .unwrap();
-    assert_eq!(served.unwrap(), 4);
+    assert_eq!(served.unwrap(), 5);
     router
         .shutdown_all(true, Duration::from_secs(5))
         .await

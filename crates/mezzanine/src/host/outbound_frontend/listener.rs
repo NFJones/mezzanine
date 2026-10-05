@@ -134,6 +134,9 @@ impl OutboundFrontendListener {
         let frontend = self.admit(stream).await?;
         let prepared = frontend.prepare(self.admission.deadline).await?;
         let connected = prepared.connect_pinned().await?;
+        if connected.host_only_requested()? {
+            return connected.initialize_host_only().await?.deliver_list().await;
+        }
         let mut session = connected.initialize_session().await?;
         loop {
             session = session.deliver_view().await?;

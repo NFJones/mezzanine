@@ -24,6 +24,7 @@ pub(crate) struct InitializedHostFrontend {
     summary: serde_json::Value,
 }
 
+mod listing;
 mod session;
 
 impl ConnectedFrontend {

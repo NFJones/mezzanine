@@ -17,6 +17,7 @@ use super::*;
 
 const SOCKET_NAME: &str = "outbound.sock";
 
+mod listing;
 mod session;
 #[allow(
     unused_imports,
