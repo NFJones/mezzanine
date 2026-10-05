@@ -77,6 +77,30 @@ fn config_store_commands_mutate_primary_config_and_apply_source_file() {
     let paths = ConfigPaths::from_root(root.clone());
     let config_path = paths.ensure_default_config().unwrap();
 
+    for mode in ["alien", "machine", "human", "literal"] {
+        execute_config_store_command(
+            &paths,
+            &parse_command_sequence(&format!("set-option agents.name_mode {mode}"))
+                .unwrap()
+                .remove(0),
+        )
+        .unwrap();
+        let before = fs::read(&config_path).unwrap();
+        assert!(String::from_utf8_lossy(&before).contains(&format!("name_mode = \"{mode}\"")));
+        for invalid in ["nonhuman", "Alien", "robot", "7"] {
+            assert!(
+                execute_config_store_command(
+                    &paths,
+                    &parse_command_sequence(&format!("set-option agents.name_mode {invalid}"))
+                        .unwrap()
+                        .remove(0)
+                )
+                .is_err()
+            );
+            assert_eq!(fs::read(&config_path).unwrap(), before);
+        }
+    }
+
     let set = display_body(
         execute_config_store_command(
             &paths,

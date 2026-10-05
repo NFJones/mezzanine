@@ -2,6 +2,62 @@
 
 use super::*;
 
+/// Public control mutations admit all four naming policies and preserve disk
+/// bytes and configuration generation on retired, mistyped or non-string input.
+/// The generic mutation route must not require category-specific dispatch.
+#[test]
+fn config_control_name_mode_acceptance_is_transactional() {
+    let (mut session, primary) = test_session();
+    let root = temp_root("config-name-mode");
+    let path = root.join("config.toml");
+    fs::write(&path, "[agents]\nname_mode = \"machine\"\n").unwrap();
+    let mut cache = ControlIdempotencyCache::default();
+    for mode in ["alien", "machine", "human", "literal"] {
+        let request = serde_json::json!({"jsonrpc":"2.0","id":mode,"method":"config/set",
+            "params":{"path":"agents.name_mode","value":mode,
+            "persist":{"scope":"user","path":path.to_string_lossy()},
+            "idempotency_key":format!("name-{mode}")}})
+        .to_string();
+        let response = dispatch_control_request_for_client_with_config(
+            &request,
+            &mut session,
+            &primary,
+            &[],
+            &mut cache,
+        );
+        assert!(response.contains("\"persisted\":true"), "{response}");
+        let before = fs::read(&path).unwrap();
+        assert!(String::from_utf8_lossy(&before).contains(&format!("name_mode = \"{mode}\"")));
+        let generation = session.config_generation;
+        for (index, value) in [
+            serde_json::json!("nonhuman"),
+            serde_json::json!("Alien"),
+            serde_json::json!("robot"),
+            serde_json::json!(7),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let request = serde_json::json!({"jsonrpc":"2.0","id":index,"method":"config/set",
+                "params":{"path":"agents.name_mode","value":value,
+                "persist":{"scope":"user","path":path.to_string_lossy()},
+                "idempotency_key":format!("invalid-{mode}-{index}")}})
+            .to_string();
+            let response = dispatch_control_request_for_client_with_config(
+                &request,
+                &mut session,
+                &primary,
+                &[],
+                &mut cache,
+            );
+            assert!(response.contains("\"error\""), "{response}");
+            assert_eq!(fs::read(&path).unwrap(), before);
+            assert_eq!(session.config_generation, generation);
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies successful no-op persistence responses do not advance live config
 /// generation merely because a persistent target was selected.
 ///

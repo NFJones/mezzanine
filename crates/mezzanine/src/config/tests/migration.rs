@@ -10,6 +10,21 @@ fn agent_name_mode_migrates_schema_99_with_canonical_precedence() {
     for (format, text, expected) in [
         (
             ConfigFormat::Toml,
+            "version = 99\nagents = { subagent_name_mode = \"human\", name_mode = \"nonhuman\" }\n",
+            "machine",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":99,"agents":{"subagent_name_mode":"nonhuman"}}"#,
+            "machine",
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 99\nagents:\n  subagent_name_mode: nonhuman\n  name_mode: alien\n",
+            "alien",
+        ),
+        (
+            ConfigFormat::Toml,
             "version = 99\n[agents]\nsubagent_name_mode = \"human\"\n",
             "human",
         ),

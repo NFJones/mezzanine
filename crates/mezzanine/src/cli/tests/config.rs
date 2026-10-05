@@ -162,6 +162,60 @@ fn config_set_and_unset_persist_user_private_config() {
     let mut set_stdout = Vec::new();
     let mut stderr = Vec::new();
 
+    for mode in ["alien", "machine", "human", "literal"] {
+        run_with(
+            vec![
+                "mez".into(),
+                "config".into(),
+                "set".into(),
+                "agents.name_mode".into(),
+                mode.into(),
+            ],
+            env.clone(),
+            false,
+            &mut Vec::new(),
+            &mut stderr,
+        )
+        .unwrap();
+        let path = home.join(".config/mezzanine/config.toml");
+        let before = fs::read(&path).unwrap();
+        assert!(String::from_utf8_lossy(&before).contains(&format!("name_mode = \"{mode}\"")));
+        for invalid in ["nonhuman", "Alien", "robot", "7"] {
+            assert!(
+                run_with(
+                    vec![
+                        "mez".into(),
+                        "config".into(),
+                        "set".into(),
+                        "agents.name_mode".into(),
+                        invalid.into()
+                    ],
+                    env.clone(),
+                    false,
+                    &mut Vec::new(),
+                    &mut stderr
+                )
+                .is_err()
+            );
+            assert_eq!(fs::read(&path).unwrap(), before);
+        }
+    }
+    run_with(
+        vec![
+            "mez".into(),
+            "config".into(),
+            "unset".into(),
+            "agents.name_mode".into(),
+        ],
+        env.clone(),
+        false,
+        &mut Vec::new(),
+        &mut stderr,
+    )
+    .unwrap();
+    let text = fs::read_to_string(home.join(".config/mezzanine/config.toml")).unwrap();
+    assert!(!text.contains("name_mode ="));
+
     run_with(
         vec![
             "mez".to_string(),
@@ -1071,6 +1125,7 @@ fn startup_config_layers_migrate_existing_primary_config() {
         effective.get("terminal.nested_multiplexer"),
         Some("disabled")
     );
+    assert_eq!(effective.get("agents.name_mode"), Some("machine"));
     assert!(
         effective
             .get("agents.implementation_pressure_after_shell_actions")
