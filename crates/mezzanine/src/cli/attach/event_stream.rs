@@ -224,20 +224,7 @@ pub(super) struct AttachedClientInputPoll {
     pub(super) pushed_snapshot: Option<IrohPushedRenderSnapshot>,
 }
 
-/// Render action requested by an attached runtime event stream notification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::cli) enum AttachRenderAction {
-    /// No visible attached-terminal redraw is needed.
-    None,
-    /// Request a fresh `terminal/view` while preserving the diff-render base.
-    View,
-    /// Refresh the logical view immediately without discarding the physical diff base.
-    ImmediateView,
-    /// Invalidate the diff-render base before requesting a fresh view.
-    InvalidateAndView,
-    /// The auxiliary event stream disconnected.
-    Disconnect,
-}
+pub(in crate::cli) use crate::host::terminal::wire_events::AttachRenderAction;
 
 /// One Iroh redraw wakeup paired with its ordered server event identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,28 +347,6 @@ impl IrohAttachRenderWakeup {
     fn is_covered_by(&self, event_cutoff: Option<u64>) -> bool {
         self.action == AttachRenderAction::View
             && matches!((self.event_id, event_cutoff), (Some(event_id), Some(cutoff)) if event_id <= cutoff)
-    }
-}
-
-impl AttachRenderAction {
-    /// Combines two actions, preserving the strongest action for an event burst.
-    const fn combine(self, other: Self) -> Self {
-        if self.rank() >= other.rank() {
-            self
-        } else {
-            other
-        }
-    }
-
-    /// Returns the precedence rank for this action.
-    const fn rank(self) -> u8 {
-        match self {
-            Self::None => 0,
-            Self::View => 1,
-            Self::ImmediateView => 2,
-            Self::InvalidateAndView => 3,
-            Self::Disconnect => 4,
-        }
     }
 }
 
@@ -1428,35 +1393,8 @@ fn parse_iroh_pushed_render_sparse(
 }
 
 fn strict_iroh_attach_render_action(body: &str) -> Result<IrohAttachRenderWakeup> {
-    let value: serde_json::Value = serde_json::from_str(body)
-        .map_err(|_| MezError::invalid_state("Iroh event stream contained invalid JSON"))?;
-    if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0") {
-        return Err(MezError::invalid_state(
-            "Iroh event stream notification omitted JSON-RPC 2.0",
-        ));
-    }
-    let method = value
-        .get("method")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|method| method.strip_prefix("event/"))
-        .ok_or_else(|| MezError::invalid_state("Iroh event stream contained a non-event frame"))?;
-    let params = value
-        .get("params")
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| MezError::invalid_state("Iroh event stream omitted params"))?;
-    let event_type = params
-        .get("event_type")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| MezError::invalid_state("Iroh event stream omitted event_type"))?;
-    if method != event_type {
-        return Err(MezError::invalid_state(
-            "Iroh event stream method and event_type did not match",
-        ));
-    }
-    Ok(IrohAttachRenderWakeup::new(
-        attach_render_action_for_event_type(event_type),
-        params.get("event_id").and_then(serde_json::Value::as_u64),
-    ))
+    let (action, event_id) = crate::host::terminal::wire_events::strict_event_action(body)?;
+    Ok(IrohAttachRenderWakeup::new(action, event_id))
 }
 
 /// Reads auxiliary runtime event notifications and returns the coalesced action.
@@ -1668,14 +1606,7 @@ pub(super) fn event_type_from_notification(value: &serde_json::Value) -> Option<
 
 /// Maps a runtime event type onto the attached client's render needs.
 pub(super) fn attach_render_action_for_event_type(event_type: &str) -> AttachRenderAction {
-    match event_type {
-        "diagnostic" | "snapshot_changed" => AttachRenderAction::None,
-        "config_changed" => AttachRenderAction::ImmediateView,
-        "client_attached" | "client_detached" | "window_changed" => AttachRenderAction::View,
-        "agent_status" | "approval_changed" | "hook_failed" | "mcp_server_changed" | "message"
-        | "pane_changed" => AttachRenderAction::View,
-        _ => AttachRenderAction::View,
-    }
+    crate::host::terminal::wire_events::action_for_event_type(event_type)
 }
 
 #[cfg(test)]
