@@ -643,6 +643,9 @@ With version-one events negotiated, the internal foreground settles its exact
 event poll before reusing the session when input arrives first. Event-first waits
 preserve unread input, and idle replies do not redraw unconditionally. This still
 does not qualify production render cadence, animations or ordinary CLI attachment.
+Identified ordinary events already represented by an exact committed snapshot
+cutoff skip redundant capture. Received metadata or unsettled receipts do not
+establish coverage; unknown/new IDs and immediate/invalidation actions remain live.
 Internal ordinary redraws now use the shared server-rate cadence after committed
 output, retaining one pending latest-state fetch across idle replies. Immediate
 redraws, input and resize bypass that pacing. Animation and full production

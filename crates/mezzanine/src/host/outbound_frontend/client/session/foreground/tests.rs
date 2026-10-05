@@ -222,6 +222,144 @@ async fn outbound_foreground_input_full_redraw_invalidates_committed_base() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// An identified ordinary event already represented by committed output must
+/// not fetch another snapshot. The cutoff is not sufficient before commitment;
+/// cancellation of a later event poll still retires the exact session.
+/// Coverage requires exact committed identity/geometry and settled receipts.
+/// Unknown/new event identities and stronger actions remain live in the actual
+/// negotiated exchange, even when their numeric ID is below the retained cutoff.
+#[tokio::test]
+async fn outbound_foreground_cutoff_preserves_uncommitted_and_stronger_actions() {
+    for (condition, action, id, expected) in [
+        ("committed", "view", Some(42), AttachRenderAction::None),
+        ("received", "view", Some(41), AttachRenderAction::View),
+        ("receipts", "view", Some(41), AttachRenderAction::View),
+        ("geometry", "view", Some(41), AttachRenderAction::View),
+        ("identity", "view", Some(41), AttachRenderAction::View),
+        ("committed", "view", None, AttachRenderAction::View),
+        ("committed", "view", Some(43), AttachRenderAction::View),
+        (
+            "committed",
+            "immediate_view",
+            Some(41),
+            AttachRenderAction::ImmediateView,
+        ),
+        (
+            "committed",
+            "invalidate_and_view",
+            Some(41),
+            AttachRenderAction::InvalidateAndView,
+        ),
+    ] {
+        let (root, listener, peer, mut client) = inert_client(Vec::new());
+        let identity = "a".repeat(64);
+        client.view_identity = Some(identity.clone());
+        client.event_cutoff = Some(42);
+        if condition != "received" {
+            client.committed_view = Some((identity, 80, 24));
+        }
+        match condition {
+            "receipts" => client.receipts = vec![7],
+            "geometry" => client.snapshot_size = (81, 24),
+            "identity" => client.view_identity = Some("b".repeat(64)),
+            _ => {}
+        }
+        let handle = client.client.handle.clone();
+        let summary = client.summary.clone();
+        let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+        terminal.push_pending_input_read();
+        let responder = async {
+            let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+            let frame = peer.next().await.unwrap().unwrap();
+            let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+            assert_eq!(request["operation"], "events");
+            peer.send(ProtocolFrame::new(
+                CONTENT_TYPE,
+                serde_json::json!({
+                    "handle":handle,"session":summary,"action":action,"event_id":id
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+            peer
+        };
+        let (result, mut peer) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(
+                wait::negotiated(client, &mut terminal, Duration::from_secs(1)),
+                responder
+            )
+        })
+        .await
+        .unwrap();
+        let (client, input, actual) = result.unwrap();
+        assert_eq!(actual, expected, "{condition}/{action}/{id:?}");
+        assert_eq!(input, None);
+        drop(client);
+        assert!(peer.next().await.is_none());
+        drop(listener);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// An identified ordinary event already represented by committed output must
+/// not fetch another snapshot. The cutoff is not sufficient before commitment;
+/// cancellation of a later event poll still retires the exact session.
+#[tokio::test]
+async fn outbound_foreground_committed_cutoff_skips_covered_view_events() {
+    let (root, listener, peer, mut client) = inert_client(Vec::new());
+    client.events_negotiated = true;
+    client.view_identity = Some("a".repeat(64));
+    client.event_cutoff = Some(42);
+    let handle = client.client.handle.clone();
+    let summary = client.summary.clone();
+    let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+    for _ in 0..3 {
+        terminal.push_pending_input_read();
+    }
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let foreground_stop = stop.clone();
+    let foreground = client.run_snapshot_foreground(
+        &mut terminal,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(1),
+        async move { foreground_stop.notified().await },
+    );
+    let responder = async {
+        let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(request["operation"], "events");
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"action":"view","event_id":41
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(
+            request["operation"], "events",
+            "committed cutoff must avoid redundant view capture"
+        );
+        stop.notify_one();
+        assert!(peer.next().await.is_none());
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(foreground, responder)
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(terminal.written_frames.len(), 1);
+    assert_eq!(terminal.presentation_restores, 1);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Idle coarse-health changes must repaint the settled local decoration without
 /// fetching server rows or acknowledging receipts again. The original health
 /// exchange supplies initial presentation, and cancellation retires a later poll.

@@ -22,12 +22,37 @@ pub(super) async fn negotiated<I: AsyncAttachedTerminalIo>(
         biased;
         input = terminal.read_input(512) => {
             let input = input?;
-            let (session, action, _) = event.await?;
+            let (session, action, id) = event.await?;
+            let action = settled_action(&session, action, id);
             Ok((session, Some(input), action))
         }
         result = &mut event => {
-            let (session, action, _) = result?;
+            let (session, action, id) = result?;
+            let action = settled_action(&session, action, id);
             Ok((session, None, action))
         }
+    }
+}
+
+/// Suppresses only identified ordinary redraws represented by exact committed
+/// output. Received metadata, unsettled receipts or foreign geometry cannot
+/// establish coverage; immediate/invalidation actions remain independently live.
+fn settled_action(
+    session: &OutboundSessionClient,
+    action: AttachRenderAction,
+    event_id: Option<u64>,
+) -> AttachRenderAction {
+    let committed = session.committed_view.as_ref().is_some_and(|base| {
+        session.receipts.is_empty()
+            && (base.1, base.2) == session.snapshot_size
+            && session.view_identity.as_deref() == Some(base.0.as_str())
+    });
+    if committed
+        && action == AttachRenderAction::View
+        && matches!((event_id, session.event_cutoff), (Some(id), Some(cutoff)) if id <= cutoff)
+    {
+        AttachRenderAction::None
+    } else {
+        action
     }
 }

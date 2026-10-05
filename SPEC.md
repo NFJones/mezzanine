@@ -4377,6 +4377,10 @@ the exact event reply before reusing the consumed session, even if local input
 arrives first. Event-first waits MUST preserve unread terminal input. Idle replies
 MUST NOT trigger unconditional snapshot redraws; this does not certify production
 render cadence, animation scheduling or ordinary CLI attachment.
+Identified ordinary redraws covered by the exact committed snapshot cutoff MAY
+be suppressed after event settlement. Received revision metadata or unsettled
+receipts MUST NOT establish coverage. Unknown/new identities, immediate redraw
+and invalidation requirements MUST remain actionable.
 Internal ordinary redraw pacing MUST use the shared cadence owner, updated only
 after committed output. One pending latest-state fetch MUST survive idle replies
 until the server-resolved interval permits capture. Immediate redraw facts,
