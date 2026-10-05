@@ -550,6 +550,11 @@ An internal display-only view exchange now carries bounded rendered lines and
 validated session identity across exact-handle local IPC. It does not provide
 styles, terminal input, presentation acknowledgement or the complete attached
 renderer. Failed exchanges dispose their owner instead of replaying requests.
+An independent internal primary-input exchange carries bounded bytes with the
+original mutation key and validates exact frontend/session acknowledgement.
+Reported byte acceptance is runtime evidence, not proof of process or model
+delivery. Errors consume ownership without automatic replay; full rendering,
+events, X11, presentation acknowledgement and ordinary CLI migration remain unfinished.
 An internal listener supervisor drives finitely many independent setup/display
 pipelines. Stalled peers do not serialize siblings; cancellation disposes owned
 pipelines without replay. The caller still disposes the listener and completes

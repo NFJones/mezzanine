@@ -4272,6 +4272,12 @@ and initialized session, accept only bounded geometry, and project correlated
 role/geometry-checked rendered lines. It MUST NOT acknowledge presentation,
 forward arbitrary control methods, retarget a connection or send terminal input.
 Failure consumes the owner rather than retrying a potentially desynchronized stream.
+The separate internal primary-input exchange MUST bind the exact frontend and
+initialized primary, bound geometry/input/key size, and retain the original
+terminal-step idempotency key. It MUST issue one mutation without automatic
+replay and validate correlated accepted-byte and lifecycle evidence. Runtime
+acceptance MUST NOT be described as proof of process or model delivery. Input
+forwarding MUST NOT acknowledge presentation or enable arbitrary control methods.
 The internal listener supervisor MUST bound accepted pipelines independently of
 admission capacity and retain their futures without detached forwarding tasks.
 Peer failure MUST retire only its pipeline; cancellation MUST dispose owned

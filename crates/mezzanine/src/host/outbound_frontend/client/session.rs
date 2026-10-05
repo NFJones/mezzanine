@@ -39,6 +39,8 @@ pub(crate) struct OutboundSessionClient {
     summary: SessionSummary,
 }
 
+mod step;
+
 impl OutboundFrontendClient {
     /// Consumes readiness once and sends credential-free setup plus initial view.
     /// Returns the exact session owner and a line snapshot, never retrying setup.

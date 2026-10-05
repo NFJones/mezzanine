@@ -286,6 +286,21 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             );
             assert_eq!(router.snapshots().await.unwrap().len(), 4);
             drop(first);
+            // Literal bytes without a line terminator cannot execute a shell
+            // command; acceptance is qualified independently of physical echo.
+            let (second, acknowledgement) = second
+                .step(
+                    80,
+                    24,
+                    b"fixture",
+                    "exact-fixture-input",
+                    Duration::from_secs(2),
+                )
+                .await
+                .unwrap();
+            assert_eq!(acknowledgement.input_bytes, 7);
+            assert!(!acknowledgement.client_detached);
+            assert!(!acknowledgement.session_terminated);
             let (second, lines) = second
                 .snapshot(80, 24, Duration::from_secs(2))
                 .await
