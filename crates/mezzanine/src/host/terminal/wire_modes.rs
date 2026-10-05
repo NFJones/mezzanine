@@ -135,5 +135,16 @@ pub(crate) fn output_modes_view_value(modes: AttachedTerminalOutputModes) -> ser
     })
 }
 
+/// Applies the established client-local blink phase to a copied mode snapshot.
+/// Wire metadata never supplies this epoch; saturation preserves attach behavior
+/// for elapsed durations beyond the integer representation.
+pub(crate) fn with_cursor_blink_epoch(
+    mut modes: AttachedTerminalOutputModes,
+    epoch: std::time::Instant,
+) -> AttachedTerminalOutputModes {
+    modes.cursor_blink_elapsed_ms = u64::try_from(epoch.elapsed().as_millis()).unwrap_or(u64::MAX);
+    modes
+}
+
 #[cfg(test)]
 mod tests;

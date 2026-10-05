@@ -634,12 +634,10 @@ fn terminal_view_control_request_with_identity(
 
 /// Computes elapsed cursor blink phase for a retained local presentation.
 pub(super) fn control_socket_cursor_blink_elapsed(
-    mut modes: AttachedTerminalOutputModes,
+    modes: AttachedTerminalOutputModes,
     cursor_blink_epoch: std::time::Instant,
 ) -> AttachedTerminalOutputModes {
-    modes.cursor_blink_elapsed_ms =
-        u64::try_from(cursor_blink_epoch.elapsed().as_millis()).unwrap_or(u64::MAX);
-    modes
+    crate::host::terminal::wire_modes::with_cursor_blink_epoch(modes, cursor_blink_epoch)
 }
 
 #[cfg(test)]

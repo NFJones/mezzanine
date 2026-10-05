@@ -27,6 +27,7 @@ struct PartialWriter {
     lines: Vec<String>,
     styles: Vec<Vec<TerminalStyleSpan>>,
     completion: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    modes: AttachedTerminalOutputModes,
 }
 
 impl AsyncAttachedTerminalIo for PartialWriter {
@@ -72,7 +73,7 @@ impl AsyncAttachedTerminalIo for PartialWriter {
         &'a mut self,
         lines: Vec<String>,
         spans: Vec<Vec<TerminalStyleSpan>>,
-        _modes: AttachedTerminalOutputModes,
+        modes: AttachedTerminalOutputModes,
         receipts: Vec<u64>,
         _max_bytes: usize,
     ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
@@ -80,6 +81,7 @@ impl AsyncAttachedTerminalIo for PartialWriter {
             self.frames += 1;
             self.lines = lines;
             self.styles = spans;
+            self.modes = modes;
             self.pending = 2;
             self.queued_receipts = receipts;
             Ok(AsyncTerminalOutputWriteReport {

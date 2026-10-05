@@ -1,6 +1,32 @@
 //! Shared presentation-mode decoding without activating terminal or input modes.
 use super::*;
 
+/// Local elapsed time replaces only the copied blink phase, never server mode
+/// evidence. Wire serialization deliberately excludes the local epoch/phase.
+#[test]
+fn wire_modes_blink_phase_is_local_and_preserves_base() {
+    let base = AttachedTerminalOutputModes {
+        cursor_blink_elapsed_ms: 9,
+        ..Default::default()
+    };
+    let epoch = std::time::Instant::now() - std::time::Duration::from_secs(2);
+    let phased = with_cursor_blink_epoch(base, epoch);
+    assert!(phased.cursor_blink_elapsed_ms >= 2000);
+    assert_eq!(
+        AttachedTerminalOutputModes {
+            cursor_blink_elapsed_ms: 9,
+            ..phased
+        },
+        base
+    );
+    assert_eq!(base.cursor_blink_elapsed_ms, 9);
+    assert!(
+        !output_modes_view_value(phased)
+            .to_string()
+            .contains("elapsed")
+    );
+}
+
 /// Snapshot cursor coordinates must lie inside the requested viewport, even
 /// when hidden. Canonical projection preserves decoded presentation semantics
 /// without forwarding unknown fields or activating local keyboard modes.

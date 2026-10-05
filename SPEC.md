@@ -4337,6 +4337,10 @@ Snapshot cursor and output-mode fields MUST use the shared attach interpretation
 and validate cursor coordinates against the requested viewport on both ends.
 Only decoded presentation fields MAY cross IPC; this transport MUST NOT apply
 host modes or grant input or presentation-acknowledgement authority.
+Outbound presentation MUST apply cursor blink phase from a retained client-local
+epoch to copied output modes. Snapshot replacement MUST NOT reset that epoch or
+modify retained server mode evidence. Transport metadata MUST NOT supply local
+blink phase; this alone does not qualify idle cursor repaint scheduling.
 Optional snapshot Iroh status slots MUST use shared decoding and fit the delivered
 rows and requested cell geometry on both ends. Missing/null slots MUST clear
 retained slot metadata; only decoded coordinates and renditions MAY cross IPC.

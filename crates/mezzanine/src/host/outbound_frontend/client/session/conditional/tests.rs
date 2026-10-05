@@ -8,6 +8,7 @@ use super::*;
 #[tokio::test]
 async fn outbound_conditional_geometry_replacement_requires_new_commit() {
     let (root, listener, peer, owner) = fixture();
+    let epoch = owner.cursor_blink_epoch;
     let handle = owner.client.handle.clone();
     let summary = owner.summary.clone();
     let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
@@ -47,6 +48,7 @@ async fn outbound_conditional_geometry_replacement_requires_new_commit() {
     assert!(modified);
     assert_eq!(owner.lines, ["replacement 雪"]);
     assert_eq!(owner.snapshot_size, (81, 24));
+    assert_eq!(owner.cursor_blink_epoch, epoch);
     assert!(committed_base(&owner, 81, 24).is_none());
     assert_eq!(terminal.written_frames.len(), 1);
     let (owner, _) = owner
@@ -110,6 +112,7 @@ fn fixture() -> (
         committed_view: None,
         iroh_status_slot: None,
         painted_health: None,
+        cursor_blink_epoch: std::time::Instant::now(),
     };
     (root, listener, peer, owner)
 }

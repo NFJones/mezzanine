@@ -607,6 +607,10 @@ shared rendition interpretation; unknown style metadata is not forwarded.
 Snapshots retain decoded cursor and output-mode facts as well, with viewport
 bounds checked by broker and client. Transporting those facts does not apply
 host terminal modes or establish complete renderer or receipt support.
+Outbound output applies the existing attach blink-phase calculation from a
+retained client-local epoch. Replacement snapshots preserve the epoch and server
+mode evidence; remote metadata cannot set local phase. Idle cursor repaint
+scheduling and physical-terminal qualification remain separate.
 Snapshots retain optional Iroh status-slot coordinates and renditions with bounds
 checked against delivered rows and viewport cells. Missing/null metadata clears
 the retained slot. This metadata-only boundary does not measure connection health

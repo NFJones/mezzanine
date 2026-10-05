@@ -72,6 +72,7 @@ fn fixture() -> (
         snapshot_size: (80, 24),
         committed_view: None,
         painted_health: None,
+        cursor_blink_epoch: std::time::Instant::now(),
         iroh_status_slot: Some(crate::host::terminal::TerminalIrohStatusSlot {
             row: 0,
             column: 3,
@@ -91,7 +92,9 @@ fn fixture() -> (
 #[tokio::test]
 async fn outbound_present_status_repaint_preserves_settlement_without_ack() {
     for mode in ["changed", "same", "down", "output-failure"] {
-        let (root, listener, peer, owner) = fixture();
+        let (root, listener, peer, mut owner) = fixture();
+        owner.cursor_blink_epoch = std::time::Instant::now() - Duration::from_secs(2);
+        let epoch = owner.cursor_blink_epoch;
         let handle = owner.client.handle.clone();
         let summary = owner.summary.clone();
         let mut terminal = PartialWriter::default();
@@ -164,6 +167,9 @@ async fn outbound_present_status_repaint_preserves_settlement_without_ack() {
             assert_eq!(owner.committed_view, base);
             assert_eq!(owner.lines, lines);
             assert_eq!(owner.styles, styles);
+            assert_eq!(owner.cursor_blink_epoch, epoch);
+            assert_eq!(owner.modes.cursor_blink_elapsed_ms, 0);
+            assert!(terminal.modes.cursor_blink_elapsed_ms >= 2000);
             assert!(owner.receipts.is_empty());
             assert_eq!(terminal.frames, if painted { 2 } else { 1 });
             assert_eq!(terminal.pending, 0);
@@ -202,7 +208,9 @@ async fn outbound_present_status_repaint_preserves_settlement_without_ack() {
 #[tokio::test]
 async fn outbound_present_status_uses_exact_health_and_commits_before_ack() {
     for mode in ["success", "unknown", "down", "foreign", "output-failure"] {
-        let (root, listener, peer, owner) = fixture();
+        let (root, listener, peer, mut owner) = fixture();
+        owner.cursor_blink_epoch = std::time::Instant::now() - Duration::from_secs(2);
+        let epoch = owner.cursor_blink_epoch;
         let handle = owner.client.handle.clone();
         let summary = owner.summary.clone();
         let lines = owner.lines.clone();
@@ -277,6 +285,9 @@ async fn outbound_present_status_uses_exact_health_and_commits_before_ack() {
             assert!(acknowledged);
             assert_eq!(owner.lines, lines);
             assert_eq!(owner.styles, styles);
+            assert_eq!(owner.cursor_blink_epoch, epoch);
+            assert_eq!(owner.modes.cursor_blink_elapsed_ms, 0);
+            assert!(terminal.modes.cursor_blink_elapsed_ms >= 2000);
             assert!(owner.receipts.is_empty());
             assert!(owner.committed_view.is_some());
             assert_eq!(

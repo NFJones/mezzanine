@@ -55,7 +55,11 @@ impl OutboundSessionClient {
             } else {
                 (self.lines.clone(), self.styles.clone())
             };
-            commit_snapshot(terminal, &lines, &styles, self.modes, &self.receipts).await?;
+            let modes = crate::host::terminal::wire_modes::with_cursor_blink_epoch(
+                self.modes,
+                self.cursor_blink_epoch,
+            );
+            commit_snapshot(terminal, &lines, &styles, modes, &self.receipts).await?;
             self.client.discovery.validate()?;
             let remaining = expires.saturating_duration_since(tokio::time::Instant::now());
             if remaining < Duration::from_millis(100) {
@@ -119,7 +123,11 @@ impl OutboundSessionClient {
                 connected,
                 quality,
             );
-            commit_snapshot(terminal, &lines, &styles, self.modes, &[]).await?;
+            let modes = crate::host::terminal::wire_modes::with_cursor_blink_epoch(
+                self.modes,
+                self.cursor_blink_epoch,
+            );
+            commit_snapshot(terminal, &lines, &styles, modes, &[]).await?;
             self.client.discovery.validate()?;
             self.painted_health = Some(quality);
             Ok((self, true))

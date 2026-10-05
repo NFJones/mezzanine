@@ -147,6 +147,7 @@ fn inert_client(
         committed_view: None,
         iroh_status_slot: None,
         painted_health: None,
+        cursor_blink_epoch: std::time::Instant::now(),
     };
     (root, listener, peer, client)
 }
