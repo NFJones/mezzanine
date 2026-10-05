@@ -4300,6 +4300,12 @@ session ownership retired before cleanup. The concrete writer MUST retain a
 cleanup obligation before entry bytes can be emitted, even if entry is cancelled
 or fails before its complete frame commits. Restoration remains bounded and
 best-effort when the output endpoint cannot accept reset bytes.
+The internal version-one event reader MUST retain incremental framing and codec
+history in caller-owned state, enforce the exact preface and finite frame limits,
+and project only shared redraw classification and event identity. Cancelled read
+waiters MUST NOT discard buffered bytes; malformed or truncated framing MUST
+poison the reader. Reader construction alone does not negotiate events, forward
+them to frontends, or grant input or presentation authority.
 The separate internal primary-input exchange MUST bind the exact frontend and
 initialized primary, bound geometry/input/key size, and retain the original
 terminal-step idempotency key. It MUST issue one mutation without automatic

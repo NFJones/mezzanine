@@ -574,6 +574,11 @@ Entry is cancellable and deadline-bound; session ownership retires before cleanu
 The concrete writer retains reset responsibility before writing entry bytes, so
 cancelled or failed entry still attempts restoration. Reset delivery remains
 bounded and best-effort on an unavailable or backpressured output endpoint.
+An internal caller-owned version-one event reader now validates the exact
+preface, bounded framing and negotiated codecs without spawning workers. It
+retains buffered bytes across cancelled reads and rejects reuse after malformed
+or truncated framing. Codec and QUIC fixtures qualify decoding and stream-scoped
+setup, not broker event negotiation, frontend forwarding or ordinary CLI support.
 An independent internal primary-input exchange carries bounded bytes with the
 original mutation key and validates exact frontend/session acknowledgement.
 Reported byte acceptance is runtime evidence, not proof of process or model
