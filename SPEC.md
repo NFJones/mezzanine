@@ -10698,6 +10698,12 @@ The persistent-host CLI contract is:
 - `mez lease list|show|release|revoke|gc` for local durable lease
   administration.
 
+Remote fresh-session creation MUST require a protected host-scoped profile or
+invitation. Legacy session-scoped targets, including invitations without scope
+metadata, MUST reject creation before X11 preparation, endpoint-key acquisition,
+pairing, dialing or initialization rather than silently attaching. Ordinary
+legacy attachment remains supported; scope MUST NOT be inferred from reachability.
+
 Host-only initialization MUST advertise exactly the host methods granted to the
 principal. `host/session/kill` requires a primary role ceiling, separately
 granted force-kill authority, `force=true`, an idempotency key, and an explicit

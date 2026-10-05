@@ -525,6 +525,17 @@ pub(super) enum IrohSessionRouting {
 }
 
 impl IrohSessionRouting {
+    /// Rejects fresh creation when the protected target cannot route host sessions.
+    /// Legacy attachment remains supported; scope is never inferred from reachability.
+    fn validate_target_scope(&self, scope: RemoteClientProfileScope) -> Result<()> {
+        if matches!(self, Self::Create { .. }) && scope != RemoteClientProfileScope::Host {
+            return Err(MezError::invalid_args(
+                "remote new sessions require a host-scoped Iroh profile or invitation; legacy session targets support attach only",
+            ));
+        }
+        Ok(())
+    }
+
     fn intent(&self) -> &'static str {
         match self {
             Self::Create { .. } => "create",
@@ -718,12 +729,11 @@ pub(super) async fn open_persistent_iroh_control_channel(
             "X11 forwarding requires a primary attachment",
         ));
     }
-    let x11_client = match x11_request {
-        Some((mode, _takeover)) => Some(super::x11::prepare_x11_client(mode).await?),
-        None => None,
-    };
     let mut target = resolve_iroh_control_target(control_target, paths.root())?;
     ensure_iroh_attach_role_allowed(target.role(), requested_role)?;
+    if let Some(routing) = routing {
+        routing.validate_target_scope(target.scope())?;
+    }
     if let IrohControlTarget::Invitation {
         expires_at_unix_seconds,
         ..
@@ -735,6 +745,10 @@ pub(super) async fn open_persistent_iroh_control_channel(
         ));
     }
 
+    let x11_client = match x11_request {
+        Some((mode, _takeover)) => Some(super::x11::prepare_x11_client(mode).await?),
+        None => None,
+    };
     let mut retained_identity = None;
     if matches!(
         &target,
@@ -1816,6 +1830,113 @@ mod outbound_policy_tests {
             role: RemoteRoleCeiling::Observer,
             scope: RemoteClientProfileScope::LegacySession,
             expires_at_unix_seconds: u64::MAX,
+        }
+    }
+
+    /// Legacy targets must reject fresh creation before key acquisition or
+    /// dialing. Route-less fixtures ensure even pre-fix execution stays offline;
+    /// omitted invitation scope is conservatively legacy, never host authority.
+    #[tokio::test(flavor = "current_thread")]
+    async fn legacy_iroh_create_rejects_before_outbound_setup() {
+        for invitation in [false, true] {
+            let root =
+                std::env::temp_dir().join(format!("mez-legacy-create-{}", rand::random::<u64>()));
+            fs::create_dir_all(&root).unwrap();
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+            let env = crate::cli::CliEnv {
+                home: Some(root.clone()),
+                ..Default::default()
+            };
+            let config = env.config_paths().unwrap();
+            let addr = EndpointAddr::new(iroh::SecretKey::generate().public());
+            let target =
+                if invitation {
+                    let path = root.join("invitation.json");
+                    fs::write(&path, serde_json::to_vec(&serde_json::json!({
+                    "format_version":1,"profile_name":"legacy","server_addr":addr,
+                    "role":"primary","token":"fixture-only","expires_at_unix_seconds":u64::MAX
+                })).unwrap()).unwrap();
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+                    crate::cli::ControlTargetSelection::IrohInvitation {
+                        path,
+                        save_as: None,
+                    }
+                } else {
+                    RemoteClientProfileStore::under_config_root(config.root())
+                        .save(&RemoteClientProfile {
+                            name: "legacy".into(),
+                            server_addr: addr,
+                            role: RemoteRoleCeiling::Primary,
+                            scope: RemoteClientProfileScope::LegacySession,
+                            device_credential: SecretString::from("fixture-only".to_string()),
+                        })
+                        .unwrap();
+                    crate::cli::ControlTargetSelection::IrohProfile("legacy".into())
+                };
+            let routing = IrohSessionRouting::Create {
+                name: Some("fresh".into()),
+                idempotency_key: "fresh-key".into(),
+            };
+            for x11 in [
+                None,
+                Some((crate::runtime::x11::X11ForwardingMode::Untrusted, false)),
+            ] {
+                let error = match open_persistent_iroh_control_channel(
+                    &target,
+                    &env,
+                    "primary",
+                    Some(&routing),
+                    80,
+                    24,
+                    "xterm",
+                    x11,
+                )
+                .await
+                {
+                    Err(error) => error,
+                    Ok(_) => panic!("legacy Create cannot attach"),
+                };
+                assert!(error.message().contains("host-scoped"), "{error:?}");
+                assert!(!config.root().join("remote/client/endpoint.key").exists());
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    /// Scope admission rejects only guaranteed-fresh creation on a legacy
+    /// target. Ordinary legacy attachment and every host routing intent retain
+    /// their existing semantics, including the original operation key and name.
+    #[test]
+    fn iroh_routing_scope_preserves_host_create_and_legacy_attach() {
+        for routing in [
+            IrohSessionRouting::Create {
+                name: None,
+                idempotency_key: "fresh-key".into(),
+            },
+            IrohSessionRouting::Create {
+                name: Some("fresh".into()),
+                idempotency_key: "named-key".into(),
+            },
+            IrohSessionRouting::ResolveOrCreate {
+                idempotency_key: "resolve-key".into(),
+            },
+            IrohSessionRouting::Attach {
+                target: "existing".into(),
+            },
+            IrohSessionRouting::Default,
+        ] {
+            let before = routing.clone();
+            routing
+                .validate_target_scope(RemoteClientProfileScope::Host)
+                .unwrap();
+            assert_eq!(routing, before);
+            assert_eq!(
+                routing
+                    .validate_target_scope(RemoteClientProfileScope::LegacySession)
+                    .is_err(),
+                matches!(routing, IrohSessionRouting::Create { .. })
+            );
+            assert_eq!(routing, before);
         }
     }
 

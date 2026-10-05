@@ -509,6 +509,11 @@ without scope metadata remain legacy and are not granted host authority. Lease
 release, lease revocation, runtime kill, and client-trust revocation remain
 distinct.
 
+Remote `mez new` requires a host-scoped profile or invitation. A legacy target
+(including an invitation without scope metadata) fails before X11 preparation,
+endpoint-key acquisition, pairing or connection setup; it never silently attaches
+to the existing session. Use ordinary `attach` for a legacy session target.
+
 Interactive remote attach requires a terminal. A `primary` profile may attach
 as primary or observer; an `observer` profile cannot attach as primary.
 Compatible clients negotiate supported features, but authentication and
