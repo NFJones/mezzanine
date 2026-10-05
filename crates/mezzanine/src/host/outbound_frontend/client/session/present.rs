@@ -33,14 +33,26 @@ impl OutboundSessionClient {
         tokio::time::timeout_at(expires, async move {
             self.committed_view = None;
             self.client.discovery.validate()?;
-            commit_snapshot(
-                terminal,
-                &self.lines,
-                &self.styles,
-                self.modes,
-                &self.receipts,
-            )
-            .await?;
+            let (lines, styles) = if self.iroh_status_slot.is_some() {
+                let remaining = expires.saturating_duration_since(tokio::time::Instant::now());
+                let (owner, connected, quality) = self.sample_transport_health(remaining).await?;
+                self = owner;
+                if !connected {
+                    return Err(MezError::invalid_state(
+                        "outbound connection closed before presentation; reattach required",
+                    ));
+                }
+                crate::host::terminal::iroh_pill::compose(
+                    &self.lines,
+                    &self.styles,
+                    self.iroh_status_slot,
+                    connected,
+                    quality,
+                )
+            } else {
+                (self.lines.clone(), self.styles.clone())
+            };
+            commit_snapshot(terminal, &lines, &styles, self.modes, &self.receipts).await?;
             self.client.discovery.validate()?;
             let remaining = expires.saturating_duration_since(tokio::time::Instant::now());
             if remaining < Duration::from_millis(100) {

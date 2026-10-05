@@ -4345,6 +4345,12 @@ finish the exact frame without replacement, and require matching writer-reported
 committed receipt IDs before remote acknowledgement. Partial output, foreign
 writer ownership, failure or timeout MUST NOT arm presentation. Terminal restoration
 and any already-started output tail remain caller-owned after failure.
+When a retained snapshot has an Iroh status slot, the internal presenter MUST
+obtain exact-session health evidence before composing that slot through the
+shared pill renderer. Composition MUST preserve the server base rows/styles and
+the original receipt list. Invalid health, known disconnection or incomplete
+output MUST NOT acknowledge presentation. This does not certify health-driven
+idle repaint, physical visibility or ordinary CLI attachment.
 The internal request-driven foreground composition MUST retire its session on
 EOF, cancellation or error, attempt presentation restoration on explicit return,
 and retain distinct operation identities without replay. Whole-future abandonment

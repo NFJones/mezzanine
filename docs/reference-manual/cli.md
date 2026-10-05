@@ -612,6 +612,11 @@ and original mutation key. It must be called only after the renderer commits
 output; false settlement stays false and uncertain exchanges are not replayed.
 The internal retained-snapshot presenter uses the existing terminal writer and
 acknowledges only after the complete frame commits with matching receipt IDs.
+For snapshots with an Iroh status slot, it first obtains exact-session health
+evidence and composes the shared pill into a copy of the retained frame. Server
+rows/styles and receipt identity remain unchanged. Invalid health or known
+disconnection prevents output/ACK; incomplete output never acknowledges. This
+does not qualify health-driven idle repaint or ordinary CLI attachment.
 Partial or failed output never arms presentation; terminal restoration and
 started output tails remain caller-owned. Unix-fd fixtures qualify byte commitment,
 not visibility in a physical terminal or complete interactive attachment support.

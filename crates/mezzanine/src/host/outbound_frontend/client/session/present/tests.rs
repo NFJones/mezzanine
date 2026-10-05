@@ -24,6 +24,9 @@ struct PartialWriter {
     zero_progress: bool,
     input_reads: usize,
     readiness_polls: usize,
+    lines: Vec<String>,
+    styles: Vec<Vec<TerminalStyleSpan>>,
+    completion: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl AsyncAttachedTerminalIo for PartialWriter {
@@ -67,14 +70,16 @@ impl AsyncAttachedTerminalIo for PartialWriter {
 
     fn write_owned_styled_output_with_modes_bounded_and_receipts<'a>(
         &'a mut self,
-        _lines: Vec<String>,
-        _spans: Vec<Vec<TerminalStyleSpan>>,
+        lines: Vec<String>,
+        spans: Vec<Vec<TerminalStyleSpan>>,
         _modes: AttachedTerminalOutputModes,
         receipts: Vec<u64>,
         _max_bytes: usize,
     ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
         Box::pin(async move {
             self.frames += 1;
+            self.lines = lines;
+            self.styles = spans;
             self.pending = 2;
             self.queued_receipts = receipts;
             Ok(AsyncTerminalOutputWriteReport {
@@ -105,6 +110,9 @@ impl AsyncAttachedTerminalIo for PartialWriter {
                 } else {
                     std::mem::take(&mut self.queued_receipts)
                 };
+                if let Some(completion) = &self.completion {
+                    completion.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
             }
             Ok(AsyncTerminalOutputWriteReport {
                 bytes_written: 1,
@@ -118,6 +126,8 @@ impl AsyncAttachedTerminalIo for PartialWriter {
         std::mem::take(&mut self.committed)
     }
 }
+
+mod status;
 
 /// Persistent unread input must not starve a previously stalled output frame.
 /// The writer can progress on its next bounded flush even though shared readiness
