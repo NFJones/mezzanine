@@ -4234,7 +4234,12 @@ process exit when teardown is unproven, even at the cost of unavailable transpor
 Frontend discovery MUST revalidate the retained native configuration-root object
 and private-directory policy without recreating a missing pathname. Replacement
 or relocation MUST withhold discovery for the old endpoint owner.
-This resource alone does not implement frontend IPC or concurrent CLI attachment.
+Local frontend admission MUST authenticate kernel Unix peer UID before decoding
+a bounded `mez-outbound/1` hello. Handshake and retained frontend capacity MUST
+be finite, with a total admission deadline. Unknown hello fields and unsupported
+versions MUST reject; handles MUST bind an owner incarnation and nonreused
+generation without exporting endpoint or device credentials. Admission alone
+does not implement listener publication, remote forwarding or concurrent CLI attachment.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and

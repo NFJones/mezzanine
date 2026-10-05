@@ -15,6 +15,11 @@ pub(crate) mod iroh;
     reason = "outbound frontend IPC integration follows the shared endpoint lifetime checkpoint"
 )]
 pub(crate) mod outbound_endpoint;
+#[allow(
+    dead_code,
+    reason = "outbound listener and CLI consumer integration follows protected frontend admission"
+)]
+pub(crate) mod outbound_frontend;
 pub(crate) mod ownership;
 #[allow(
     dead_code,
