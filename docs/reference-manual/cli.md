@@ -565,6 +565,15 @@ acknowledges only after the complete frame commits with matching receipt IDs.
 Partial or failed output never arms presentation; terminal restoration and
 started output tails remain caller-owned. Unix-fd fixtures qualify byte commitment,
 not visibility in a physical terminal or complete interactive attachment support.
+An internal request-driven foreground composition now handles EOF/cancellation,
+bounded primary input and explicit presentation restoration. It preserves
+operation identity without replay; abandoning its entire future still requires
+the caller's terminal guard. This polling path is not ordinary CLI activation or
+qualification of pushed events, production render cadence, clipboard or X11.
+Entry is cancellable and deadline-bound; session ownership retires before cleanup.
+The concrete writer retains reset responsibility before writing entry bytes, so
+cancelled or failed entry still attempts restoration. Reset delivery remains
+bounded and best-effort on an unavailable or backpressured output endpoint.
 An independent internal primary-input exchange carries bounded bytes with the
 original mutation key and validates exact frontend/session acknowledgement.
 Reported byte acceptance is runtime evidence, not proof of process or model

@@ -405,7 +405,24 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
                 0,
                 "explicit acknowledgement must arm once, without renewing on duplicate"
             );
-            drop(second);
+            // A completed snapshot with cleared receipts can enter the internal
+            // foreground and exit on local EOF without recreating session work.
+            // The fake records explicit presentation entry and restoration; the
+            // production fd commitment was exercised immediately above.
+            let mut foreground = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+            second
+                .run_snapshot_foreground(
+                    &mut foreground,
+                    mez_mux::layout::Size::new(100, 30).unwrap(),
+                    Duration::from_secs(2),
+                    std::future::pending(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(foreground.presentation_entries, 1);
+            assert_eq!(foreground.presentation_restores, 1);
+            assert_eq!(foreground.written_frames.len(), 1);
+            assert_eq!(router.snapshots().await.unwrap().len(), 4);
             cancel.notify_one();
         };
         let (accepted, ()) = tokio::join!(supervised, clients);

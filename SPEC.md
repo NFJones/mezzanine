@@ -4290,6 +4290,16 @@ finish the exact frame without replacement, and require matching writer-reported
 committed receipt IDs before remote acknowledgement. Partial output, foreign
 writer ownership, failure or timeout MUST NOT arm presentation. Terminal restoration
 and any already-started output tail remain caller-owned after failure.
+The internal request-driven foreground composition MUST retire its session on
+EOF, cancellation or error, attempt presentation restoration on explicit return,
+and retain distinct operation identities without replay. Whole-future abandonment
+still requires the caller's terminal guard. Its polling cadence does not certify
+production event-driven attachment, render scheduling, clipboard or X11 support.
+Presentation entry MUST be covered by cancellation and a finite deadline, with
+session ownership retired before cleanup. The concrete writer MUST retain a
+cleanup obligation before entry bytes can be emitted, even if entry is cancelled
+or fails before its complete frame commits. Restoration remains bounded and
+best-effort when the output endpoint cannot accept reset bytes.
 The separate internal primary-input exchange MUST bind the exact frontend and
 initialized primary, bound geometry/input/key size, and retain the original
 terminal-step idempotency key. It MUST issue one mutation without automatic

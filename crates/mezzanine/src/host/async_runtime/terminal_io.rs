@@ -363,6 +363,9 @@ pub struct AsyncAttachedTerminalFdLoopIo {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     presentation_active: bool,
+    /// Cleanup obligation armed before entry writes; retained across cancelled
+    /// or failed entry even when the entire entry frame did not complete.
+    presentation_entry_pending: bool,
 }
 
 impl AsyncAttachedTerminalFdLoopIo {
@@ -394,6 +397,7 @@ impl AsyncAttachedTerminalFdLoopIo {
             output_write_limit_bytes: DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
             completed_output_flushes_since_short_write: 0,
             presentation_active: false,
+            presentation_entry_pending: false,
         })
     }
 
@@ -834,12 +838,13 @@ impl Drop for AsyncAttachedTerminalFdLoopIo {
             );
             self.enhanced_keyboard_reporting_committed = false;
         }
-        if self.presentation_active {
+        if self.presentation_active || self.presentation_entry_pending {
             let _ = write_all_raw_fd_best_effort(
                 output_fd,
                 attached_terminal_restore_presentation_frame(),
             );
             self.presentation_active = false;
+            self.presentation_entry_pending = false;
         }
         for (fd, flags) in &self.original_flags {
             let _ = fcntl_setfl(borrow_async_raw_fd(*fd), *flags);
@@ -1130,8 +1135,10 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
             if self.presentation_active {
                 return Ok(());
             }
+            self.presentation_entry_pending = true;
             write_all_async_fd(&self.output, attached_terminal_enter_presentation_frame()).await?;
             self.presentation_active = true;
+            self.presentation_entry_pending = false;
             Ok(())
         })
     }
@@ -1147,7 +1154,10 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
             self.deferred_output_frame = None;
             self.pending_output_invalidates_next_frame = false;
             self.previous_output_frame = None;
-            if !self.presentation_active && !self.enhanced_keyboard_reporting_committed {
+            if !self.presentation_active
+                && !self.presentation_entry_pending
+                && !self.enhanced_keyboard_reporting_committed
+            {
                 return Ok(());
             }
             let mut restore_bytes = Vec::new();
@@ -1155,7 +1165,7 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
                 restore_bytes
                     .extend_from_slice(attached_terminal_enhanced_keyboard_reporting_frame(false));
             }
-            if self.presentation_active {
+            if self.presentation_active || self.presentation_entry_pending {
                 restore_bytes.extend_from_slice(attached_terminal_restore_presentation_frame());
             }
             let restore = tokio::time::timeout(
@@ -1164,6 +1174,7 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
             )
             .await;
             self.presentation_active = false;
+            self.presentation_entry_pending = false;
             self.enhanced_keyboard_reporting_committed = false;
             match restore {
                 Ok(Ok(())) | Err(_) => Ok(()),

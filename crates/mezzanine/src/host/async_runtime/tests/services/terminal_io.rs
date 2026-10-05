@@ -2,6 +2,56 @@
 
 use super::super::*;
 
+/// Cancelling entry while output is full must retain a restoration obligation,
+/// even though the complete entry frame has not committed. Once the peer drains
+/// output, explicit cleanup must emit the ordinary presentation reset bytes.
+/// This uses actual nonblocking descriptors, not a physical terminal emulator.
+#[tokio::test]
+async fn async_fd_cancelled_presentation_entry_retains_cleanup() {
+    let (driver, mut peer) = StdUnixStream::pair().unwrap();
+    let mut driver_output = driver.try_clone().unwrap();
+    let mut io =
+        AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
+            .unwrap();
+    let filler = vec![b'x'; 64 * 1024];
+    loop {
+        match driver_output.write(&filler) {
+            Ok(0) => panic!("fixture output made no progress"),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("fixture output fill failed: {error}"),
+        }
+    }
+    let mut entry = Box::pin(io.enter_presentation());
+    assert!(matches!(
+        futures_util::poll!(&mut entry),
+        std::task::Poll::Pending
+    ));
+    drop(entry);
+    peer.set_nonblocking(true).unwrap();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        match peer.read(&mut buffer) {
+            Ok(0) => panic!("fixture output unexpectedly closed"),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("fixture output drain failed: {error}"),
+        }
+    }
+    io.restore_presentation().await.unwrap();
+    drop(io);
+    drop(driver_output);
+    drop(driver);
+    peer.set_nonblocking(false).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut restored = Vec::new();
+    peer.read_to_end(&mut restored).unwrap();
+    assert_eq!(
+        restored,
+        mez_mux::attached_client::attached_terminal_restore_presentation_frame()
+    );
+}
+
 /// Verifies that the deterministic async attached-terminal fake behaves like an
 /// ordered terminal endpoint: readiness, input truncation, size responses,
 /// presentation guards, invalidation, and styled-frame writes are all visible
