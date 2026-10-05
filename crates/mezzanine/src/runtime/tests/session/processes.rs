@@ -3486,6 +3486,7 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
 /// a complete report with forbidden values is returned immediately, never retried.
 fn wait_for_first_pane_report(process: &mut mez_mux::process::PaneProcess, path: &Path) -> Vec<u8> {
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut observed_output_bytes = 0usize;
     loop {
         match fs::read(path) {
             Ok(bytes) => return bytes,
@@ -3493,9 +3494,16 @@ fn wait_for_first_pane_report(process: &mut mez_mux::process::PaneProcess, path:
             Err(error) => panic!("pane report read failed: {error}"),
         }
         let sequence = process.output_activity_sequence();
-        let _ = process.read_available_output(64 * 1024).unwrap();
-        if process.poll_exit().unwrap().is_some() {
-            return fs::read(path).expect("pane exited before publishing its report");
+        observed_output_bytes = observed_output_bytes
+            .saturating_add(process.read_available_output(64 * 1024).unwrap().len());
+        if let Some(status) = process.poll_exit().unwrap() {
+            return fs::read(path).unwrap_or_else(|error| {
+                panic!(
+                    "pane exited before publishing its report: status={status:?} read_kind={:?} observed_output_bytes={observed_output_bytes} report_parent_exists={}",
+                    error.kind(),
+                    path.parent().is_some_and(Path::is_dir),
+                )
+            });
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         assert!(
