@@ -126,6 +126,9 @@ profile, or the selected scoped profile when idle. An unset reasoning level is
 come from validated launch bindings; their model and reasoning remain unavailable
 under the current telemetry contract. Metadata grants no lifecycle authority.
 
+List help and feedback wrap to the available width without changing record
+identity or saved Markdown. Long unbreakable help tokens may split across rows.
+
 The **Project** column replaces the visible Controls column. It shows the full
 currently trusted root for each live pane's canonical observed working directory
 as of opening or refreshing the list. A deeper rejected, revoked or pending

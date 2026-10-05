@@ -804,7 +804,16 @@ impl RecordBrowser {
         if records.is_empty() {
             chrome.push_str(self.empty_message.as_deref().unwrap_or("No records found."));
         }
-        let mut lines = crate::render::render_markdown(&chrome, theme, Some(width.max(1)));
+        let mut lines = crate::render::render_markdown(&chrome, theme, Some(width.max(1)))
+            .into_iter()
+            .flat_map(|line| {
+                crate::render::wrap_rich_text_line_to_width_with_continuation_indent_hard(
+                    line,
+                    width.max(1),
+                    "",
+                )
+            })
+            .collect::<Vec<_>>();
         let mut record_ranges = Vec::new();
         if !records.is_empty() && !self.table_columns.is_empty() {
             let headers = std::iter::once(self.table_id_column.clone())
@@ -1239,6 +1248,8 @@ mod tests {
             }],
         )
         .unwrap();
+        browser.set_help(Some("**Keys:** Enter focus · i interrupt · p pause/resume · d confirm close · r refresh · / search · s save · Esc dismiss. Children may continue while their parent is paused.".into()), None);
+        browser.set_table_columns(vec!["project".into()]);
         let raw = browser.render_page().raw_markdown;
         browser.set_error(Some("failure".into()));
         browser.set_notice(Some("selection applied".into()));
@@ -1259,6 +1270,16 @@ mod tests {
         };
         for width in [12, 35, 80] {
             let layout = browser.render_list_layout("", width, &theme).unwrap();
+            assert!(
+                layout
+                    .lines
+                    .iter()
+                    .all(
+                        |line| unicode_width::UnicodeWidthStr::width(line.display.as_str())
+                            <= width
+                    ),
+                "chrome exceeds width={width}"
+            );
             assert!(
                 layout
                     .lines

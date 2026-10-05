@@ -2273,6 +2273,9 @@ Pane, Window, Group, Role, Objective and Project, in that order. Full execution
 values MUST remain searchable and included in Markdown exports; Controls remains
 hidden metadata. Explicit refresh retains selected identity and query while
 replacing the snapshot and invalidating stale confirmations.
+Record-browser list chrome, including key help and feedback, MUST wrap within
+the available width before record-action offsets are calculated. Unbreakable
+chrome tokens MAY split at grapheme boundaries; raw Markdown exports remain unchanged.
 
 Layout-affecting terminal commands, key bindings, control requests, and MAAP
 actions MUST converge on the same runtime pane/window creation, resize, and pty

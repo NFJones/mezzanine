@@ -79,12 +79,6 @@ fn runtime_agent_browser_execution_metadata_is_identity_and_profile_scoped() {
             .render_list_layout("routed-model", width, &theme)
             .unwrap();
         assert!(!layout.record_ranges.is_empty());
-        let payload_start = layout
-            .record_ranges
-            .iter()
-            .map(|range| range.line)
-            .min()
-            .unwrap();
         for range in layout.record_ranges {
             assert_eq!(browser.records()[range.row].id, "agent-%1");
             assert!(range.line < layout.lines.len());
@@ -93,9 +87,8 @@ fn runtime_agent_browser_execution_metadata_is_identity_and_profile_scoped() {
             layout
                 .lines
                 .iter()
-                .skip(payload_start)
                 .all(|line| unicode_width::UnicodeWidthStr::width(line.display.as_str()) <= width),
-            "execution table payload exceeds width={width}"
+            "browser chrome or table exceeds width={width}"
         );
     }
     let mut effective = service
