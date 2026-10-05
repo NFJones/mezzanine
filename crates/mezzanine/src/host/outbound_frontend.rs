@@ -27,6 +27,7 @@ const PROTOCOL: &str = "mez-outbound/1";
 const CONTENT_TYPE: &str = "application/vnd.mezzanine.outbound+json";
 const HELLO_LIMIT: usize = 4096;
 
+pub(crate) mod client;
 mod listener;
 mod setup;
 #[allow(

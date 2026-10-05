@@ -569,6 +569,10 @@ canonical configuration root, not a frontend runtime directory. It revalidates
 private root/lock objects without replacing them. The guard alone launches no
 process and does not replace the endpoint's exclusive identity lock; automatic
 startup and ordinary CLI consumer migration remain unfinished.
+The internal readiness connector authenticates the Unix peer and negotiates a
+bounded hello while retaining the exact local stream. Discovery checks private
+root/socket identity without creating or replacing state; socket existence alone
+does not establish readiness or remote session authority.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.

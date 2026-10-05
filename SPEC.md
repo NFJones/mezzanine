@@ -4290,6 +4290,10 @@ configuration root, independent of frontend runtime directories. Root and named
 lock objects MUST be revalidated before startup effects; unsafe or replaced
 objects MUST reject without unlinking them. Election does not replace the
 endpoint identity's exclusive lifetime lock or itself launch a broker.
+Internal broker readiness MUST authenticate the kernel Unix peer before hello
+exchange, bound negotiation, and revalidate retained private root/socket identity.
+Readiness MUST retain the admitted stream and exact inert handle; socket existence
+alone is insufficient. Failed discovery MUST NOT create, replace or launch state.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and
