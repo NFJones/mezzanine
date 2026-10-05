@@ -1,9 +1,10 @@
-//! Caller-owned bounded version-one event stream, not frontend negotiation.
+//! Caller-owned bounded version-one/two event decoding, not frontend negotiation.
 //!
 //! Accepts only the established event preface on a retained pinned connection.
 //! Framing/compression use the existing codecs; payloads are discarded after
-//! classification. No worker is spawned, no clipboard/render extension is
-//! negotiated, and this reader cannot authorize input or acknowledge output.
+//! classification. Version-two clipboard assembly requires an explicit caller
+//! gate; no worker, host clipboard write or session negotiation occurs here.
+//! This reader cannot authorize input or acknowledge output.
 //! Partial reads stay in the owner across cancellation. Invalid framing poisons
 //! the owner rather than allowing reuse of ambiguous codec history. The caller
 //! must retain the connection lease and dispose it on terminal reader failure.
@@ -17,6 +18,15 @@ use crate::runtime::{IrohCompressionPolicy, IrohStreamDecoder, RuntimeIrohCompre
 const BODY_LIMIT: usize = 1024 * 1024;
 const DECODED_LIMIT: usize = BODY_LIMIT + 1024;
 
+/// One decoded connection-owned item. Clipboard content is deliberately not
+/// Debug-formatted; callers must retain negotiated authority and bound delivery.
+pub(crate) enum OutboundEventItem {
+    /// Content-free redraw facts from an ordinary event notification.
+    Redraw(AttachRenderAction, Option<u64>),
+    /// Complete UTF-8 clipboard effect, not permission to write a host clipboard.
+    Clipboard(String),
+}
+
 /// One direction-local reader retaining bounded framing and codec history.
 /// The generic I/O seam supports deterministic fragmentation/cancellation tests.
 pub(crate) struct OutboundEventReader<R> {
@@ -26,15 +36,37 @@ pub(crate) struct OutboundEventReader<R> {
     pending: Vec<u8>,
     ended: bool,
     failed: bool,
+    clipboard: Option<crate::host::terminal::iroh_clipboard::IrohClipboardAssembler>,
 }
 
 impl OutboundEventReader<iroh::endpoint::RecvStream> {
+    /// Accepts an explicitly negotiated version-two clipboard stream. Callers
+    /// must validate primary role and the returned clipboard capability first.
+    /// Construction grants no authority and starts no clipboard worker.
+    pub(crate) async fn accept_clipboard(
+        connection: &iroh::endpoint::Connection,
+        compression: IrohCompressionPolicy,
+        budget: std::time::Duration,
+    ) -> Result<Self> {
+        Self::accept_version(connection, compression, budget, true).await
+    }
+
     /// Accepts one version-one stream and exact preface within a setup deadline.
     /// Cancellation owns no detached work; this method never closes siblings.
     pub(crate) async fn accept(
         connection: &iroh::endpoint::Connection,
         compression: IrohCompressionPolicy,
         budget: std::time::Duration,
+    ) -> Result<Self> {
+        Self::accept_version(connection, compression, budget, false).await
+    }
+
+    /// Bounds stream acceptance and exact negotiated preface checking together.
+    async fn accept_version(
+        connection: &iroh::endpoint::Connection,
+        compression: IrohCompressionPolicy,
+        budget: std::time::Duration,
+        clipboard: bool,
     ) -> Result<Self> {
         if !(std::time::Duration::from_millis(100)..=std::time::Duration::from_secs(120))
             .contains(&budget)
@@ -48,7 +80,7 @@ impl OutboundEventReader<iroh::endpoint::RecvStream> {
                 result = connection.accept_uni() => result.map_err(|_| MezError::invalid_state("outbound event stream unavailable"))?,
                 _ = connection.closed() => return Err(MezError::invalid_state("outbound connection closed before event setup")),
             };
-            Self::from_stream(stream, compression).await
+            Self::from_stream_version(stream, compression, clipboard).await
         }).await.map_err(|_| MezError::invalid_state("outbound event setup timed out"))?
     }
 }
@@ -56,8 +88,23 @@ impl OutboundEventReader<iroh::endpoint::RecvStream> {
 impl<R: AsyncRead + Unpin> OutboundEventReader<R> {
     /// Checks the exact preface before constructing reusable reader state.
     /// Setup callers own the timeout; failed/cancelled setup disposes the stream.
-    async fn from_stream(mut stream: R, compression: IrohCompressionPolicy) -> Result<Self> {
-        let expected = crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE;
+    #[cfg(test)]
+    async fn from_stream(stream: R, compression: IrohCompressionPolicy) -> Result<Self> {
+        Self::from_stream_version(stream, compression, false).await
+    }
+
+    /// Checks the exact caller-selected preface. The clipboard gate must come
+    /// from independently validated primary capability, never remote frames.
+    async fn from_stream_version(
+        mut stream: R,
+        compression: IrohCompressionPolicy,
+        clipboard: bool,
+    ) -> Result<Self> {
+        let expected = if clipboard {
+            crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE
+        } else {
+            crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE
+        };
         let mut preface = vec![0; expected.len()];
         stream
             .read_exact(&mut preface)
@@ -80,6 +127,7 @@ impl<R: AsyncRead + Unpin> OutboundEventReader<R> {
             pending: Vec::new(),
             ended: false,
             failed: false,
+            clipboard: clipboard.then(Default::default),
         })
     }
 
@@ -87,24 +135,46 @@ impl<R: AsyncRead + Unpin> OutboundEventReader<R> {
     /// preserves complete/partial pending frames; malformed/truncated data makes
     /// the reader permanently unavailable without leaking peer payloads.
     pub(crate) async fn next(&mut self) -> Result<Option<(AttachRenderAction, Option<u64>)>> {
+        if self.clipboard.is_some() {
+            return Err(MezError::invalid_state(
+                "clipboard reader requires item-aware consumption",
+            ));
+        }
+        match self.next_item().await? {
+            Some(OutboundEventItem::Redraw(action, id)) => Ok(Some((action, id))),
+            Some(OutboundEventItem::Clipboard(_)) => {
+                Err(MezError::invalid_state("unexpected clipboard item"))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Returns exactly one bounded decoded item. Partial or rejected clipboard
+    /// effects produce a neutral redraw fact, preserving bounded burst handling.
+    /// Clipboard validation errors discard partial content without killing the
+    /// event stream, matching existing attach behavior. Framing errors poison it.
+    pub(crate) async fn next_item(&mut self) -> Result<Option<OutboundEventItem>> {
         if self.failed {
             return Err(MezError::invalid_state("outbound event reader unavailable"));
         }
         let result = self.next_inner().await;
         if result.is_err() {
             self.failed = true;
+            if let Some(assembler) = &mut self.clipboard {
+                assembler.discard_partial();
+            }
         }
         result
     }
 
     /// Reads at most the remaining wire budget, keeping read-ahead in this owner.
-    async fn next_inner(&mut self) -> Result<Option<(AttachRenderAction, Option<u64>)>> {
+    async fn next_inner(&mut self) -> Result<Option<OutboundEventItem>> {
         if self.ended {
             return Ok(None);
         }
         loop {
             if let Some((body, consumed)) = self.decode_pending()? {
-                let event = strict_event_action(&body)?;
+                let event = self.classify_item(&body)?;
                 self.pending.drain(..consumed);
                 return Ok(Some(event));
             }
@@ -124,11 +194,24 @@ impl<R: AsyncRead + Unpin> OutboundEventReader<R> {
                 ));
             }
             let mut bytes = [0_u8; 8192];
-            let count = self
-                .stream
-                .read(&mut bytes[..available])
-                .await
-                .map_err(|_| MezError::invalid_state("outbound event read unavailable"))?;
+            let expiration = self
+                .clipboard
+                .as_ref()
+                .and_then(|assembler| assembler.expiration_deadline());
+            let count = if let Some(deadline) = expiration {
+                tokio::select! {
+                    read = self.stream.read(&mut bytes[..available]) => read,
+                    _ = tokio::time::sleep_until(deadline) => {
+                        if let Some(assembler) = &mut self.clipboard {
+                            assembler.discard_expired();
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                self.stream.read(&mut bytes[..available]).await
+            }
+            .map_err(|_| MezError::invalid_state("outbound event read unavailable"))?;
             if count == 0 {
                 if !self.pending.is_empty() {
                     return Err(MezError::invalid_state(
@@ -136,10 +219,43 @@ impl<R: AsyncRead + Unpin> OutboundEventReader<R> {
                     ));
                 }
                 self.ended = true;
+                if let Some(assembler) = &mut self.clipboard {
+                    assembler.discard_partial();
+                }
                 return Ok(None);
             }
             self.pending.extend_from_slice(&bytes[..count]);
         }
+    }
+
+    /// Classifies a complete notification without exposing unknown payloads.
+    /// Clipboard frames are inert unless the caller selected the v2 gate.
+    fn classify_item(&mut self, body: &str) -> Result<OutboundEventItem> {
+        let value: serde_json::Value = serde_json::from_str(body)
+            .map_err(|_| MezError::invalid_state("outbound event JSON invalid"))?;
+        if value
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|method| method.starts_with("client/clipboard."))
+        {
+            let assembler = self.clipboard.as_mut().ok_or_else(|| {
+                MezError::invalid_state("outbound clipboard effect was not negotiated")
+            })?;
+            if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0") {
+                assembler.discard_partial();
+                return Ok(OutboundEventItem::Redraw(AttachRenderAction::None, None));
+            }
+            return Ok(match assembler.apply(body) {
+                Ok(Some(content)) => OutboundEventItem::Clipboard(content),
+                Ok(None) => OutboundEventItem::Redraw(AttachRenderAction::None, None),
+                Err(_) => {
+                    assembler.discard_partial();
+                    OutboundEventItem::Redraw(AttachRenderAction::None, None)
+                }
+            });
+        }
+        let (action, id) = strict_event_action(body)?;
+        Ok(OutboundEventItem::Redraw(action, id))
     }
 
     /// Decodes exactly one bounded record with the shared transport codecs.

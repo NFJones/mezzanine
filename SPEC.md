@@ -4420,6 +4420,13 @@ and project only shared redraw classification and event identity. Cancelled read
 waiters MUST NOT discard buffered bytes; malformed or truncated framing MUST
 poison the reader. Reader construction alone does not negotiate events, forward
 them to frontends, or grant input or presentation authority.
+The separate version-two reader constructor MUST require caller-validated primary
+clipboard capability and the exact version-two preface. Item-aware consumption
+MUST preserve bounded shared clipboard assembly, cancellation-safe framing and
+idle partial-transfer expiry. Malformed clipboard effects MUST discard partial
+content without impersonating stream EOF; unnegotiated effects MUST NOT acquire
+clipboard authority. Reader construction MUST NOT write a host clipboard or
+activate session negotiation, frontend delivery or ordinary attachment routing.
 The internal requested event exchange MUST bind the exact frontend/session and
 bounded wait, coalesce at most 64 redraw facts without returning raw payloads,
 and preserve unknown burst cutoffs. Idle waits MUST retain incremental reader

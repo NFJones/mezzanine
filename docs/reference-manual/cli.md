@@ -682,6 +682,13 @@ preface, bounded framing and negotiated codecs without spawning workers. It
 retains buffered bytes across cancelled reads and rejects reuse after malformed
 or truncated framing. Codec and QUIC fixtures qualify decoding and stream-scoped
 setup, not broker event negotiation, frontend forwarding or ordinary CLI support.
+An explicitly gated version-two reader now assembles bounded clipboard effects
+through the shared transfer owner. Its caller must first validate primary role
+and clipboard capability; item-aware reads preserve codec history and cancelled
+framing, and partial clipboard content expires while the stream remains live.
+Malformed effects discard partial content without becoming transport EOF. This
+component does not write a host clipboard or activate session negotiation,
+frontend clipboard delivery or ordinary attachment routing.
 An internal requested event exchange now forwards bounded coalesced redraw facts
 and optional event identity across exact-session IPC, without raw event payloads
 or unsolicited reply interleaving. Idle waits retain the reader; terminal errors

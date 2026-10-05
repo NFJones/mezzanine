@@ -7,6 +7,8 @@ use super::*;
 use crate::runtime::{IrohFrameCompressionMode, IrohStreamEncoder};
 use tokio::io::AsyncWriteExt;
 
+mod clipboard;
+
 /// Actual QUIC setup is deadline-bound, rejects an incorrect stream preface,
 /// and disposes only that stream. A later valid stream on the retained connection
 /// remains usable; no endpoint shutdown, detached worker or reconnect is needed.
