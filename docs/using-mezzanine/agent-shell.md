@@ -203,6 +203,11 @@ conversations; do not put secrets in peer-visible text.
 
 ## Review actions and context
 
+Created and Updated dates in record browsers use RFC3339 UTC (a trailing `Z`),
+including detail and saved Markdown views. Stored timestamps and chronological
+ordering remain numeric and unchanged. Missing approval dates show `unknown`;
+dates outside the supported four-digit year range show `unavailable`.
+
 The agent may request file reads, bounded commands, patches, configured MCP
 calls, or scoped subagent work. Shell, network, destructive, configuration,
 and some MCP actions can require approval. Approval policy does not itself

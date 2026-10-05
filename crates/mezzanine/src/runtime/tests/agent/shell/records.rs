@@ -1921,6 +1921,11 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
         "{}",
         page.raw_markdown
     );
+    assert!(
+        page.raw_markdown.contains("1970-01-01T00:00:01Z"),
+        "{}",
+        page.raw_markdown
+    );
     assert_eq!(
         overlay
             .selections

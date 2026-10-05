@@ -10138,7 +10138,11 @@ The baseline command capabilities are:
   request represented by the focused link once, and use `d` to deny it.
 - `/show-context`: Browse durable transcript entries for the current pane conversation
   in transcript order. Its list MUST be a table with one selectable stable
-  sequence-id link in the left-most column for each entry. It MUST support
+  sequence-id link per entry. Existing record-browser Created/Updated values
+  MUST display RFC3339 UTC dates in list, detail and Markdown exports without
+  changing stored numeric timestamps or chronological ordering. Missing approval
+  dates remain unknown; dates outside the four-digit year range are unavailable.
+  The sequence link MUST occupy the left-most column. It MUST support
   arrow-key selection, `Enter` for entry details, `/` search, `e` to edit the
   selected entry content in the configured external editor, and `d` to delete
   the selected entry from durable context.

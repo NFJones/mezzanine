@@ -22,6 +22,9 @@ use std::{fs, path::PathBuf};
 
 const DEFAULT_SHOW_RECORD_LIMIT: usize = 100;
 
+#[cfg(test)]
+mod timestamp_tests;
+
 impl RuntimeSessionService {
     /// Executes `/show-approvals` by projecting the live pending queue into the
     /// shared retained record browser.
@@ -1014,7 +1017,7 @@ fn configure_context_record_browser(browser: &mut RecordBrowser) {
         ("Role".to_string(), "role".to_string()),
         ("Turn".to_string(), "turn_id".to_string()),
         ("Agent".to_string(), "agent_id".to_string()),
-        ("Created".to_string(), "created_at_unix_seconds".to_string()),
+        ("Created".to_string(), "Created".to_string()),
     ]);
     browser.set_help(
         Some(
@@ -1334,7 +1337,7 @@ fn configure_issue_record_browser(browser: &mut RecordBrowser, closed_toggle_ena
         ("Kind".to_string(), "kind".to_string()),
         ("State".to_string(), "state".to_string()),
         ("Priority".to_string(), "priority".to_string()),
-        ("Updated".to_string(), "updated_at_unix_seconds".to_string()),
+        ("Updated".to_string(), "Updated".to_string()),
     ]);
     let closed_toggle_help = if closed_toggle_enabled {
         " · `r` closed/active"
@@ -1361,7 +1364,7 @@ fn configure_memory_record_browser(browser: &mut RecordBrowser) {
         ("Kind".to_string(), "kind".to_string()),
         ("State".to_string(), "state".to_string()),
         ("Priority".to_string(), "priority".to_string()),
-        ("Updated".to_string(), "updated_at_unix_seconds".to_string()),
+        ("Updated".to_string(), "Updated".to_string()),
     ]);
     browser.set_help(
         Some("**Keys:** `↑`/`↓` focus memory UUID · `Enter` open · `y` copy · `e` edit · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
@@ -1481,7 +1484,7 @@ fn approval_browser_record(
             "Created".to_string(),
             approval
                 .created_at_unix_seconds
-                .map(|value| value.to_string())
+                .map(record_timestamp_display)
                 .unwrap_or_else(|| "unknown".to_string()),
         ),
     ];
@@ -1700,6 +1703,15 @@ fn parse_show_limit(value: &str) -> Result<usize> {
     Ok(limit.min(DEFAULT_SHOW_RECORD_LIMIT))
 }
 
+/// Formats display-only dates as RFC3339 UTC within the four-digit year range.
+/// Values beyond that range remain explicitly unavailable rather than fabricated.
+fn record_timestamp_display(seconds: u64) -> String {
+    if seconds > 253_402_300_799 {
+        return "unavailable (outside RFC3339 range)".to_string();
+    }
+    crate::control::unix_seconds_to_rfc3339(seconds)
+}
+
 fn context_browser_record(entry: mez_agent::transcript::TranscriptEntry) -> RecordBrowserRecord {
     let role = match entry.role {
         mez_agent::transcript::TranscriptRole::User => "user",
@@ -1725,8 +1737,8 @@ fn context_browser_record(entry: mez_agent::transcript::TranscriptEntry) -> Reco
             ("agent_id".to_string(), entry.agent_id),
             ("pane_id".to_string(), entry.pane_id),
             (
-                "created_at_unix_seconds".to_string(),
-                entry.created_at_unix_seconds.to_string(),
+                "Created".to_string(),
+                record_timestamp_display(entry.created_at_unix_seconds),
             ),
         ],
         markdown: entry.content,
@@ -1751,12 +1763,12 @@ fn issue_browser_record(record: mez_agent::issues::IssueRecord) -> RecordBrowser
                 serde_json::json!(record.depends_on).to_string(),
             ),
             (
-                "created_at_unix_seconds".to_string(),
-                record.created_at_unix_seconds.to_string(),
+                "Created".to_string(),
+                record_timestamp_display(record.created_at_unix_seconds),
             ),
             (
-                "updated_at_unix_seconds".to_string(),
-                record.updated_at_unix_seconds.to_string(),
+                "Updated".to_string(),
+                record_timestamp_display(record.updated_at_unix_seconds),
             ),
         ],
         markdown,
@@ -1796,12 +1808,12 @@ fn memory_browser_record(record: mez_agent::memory::MemoryRecord) -> RecordBrows
             ("source".to_string(), source_name(record.source).to_string()),
             ("priority".to_string(), record.priority.to_string()),
             (
-                "created_at_unix_seconds".to_string(),
-                record.created_at_unix_seconds.to_string(),
+                "Created".to_string(),
+                record_timestamp_display(record.created_at_unix_seconds),
             ),
             (
-                "updated_at_unix_seconds".to_string(),
-                record.updated_at_unix_seconds.to_string(),
+                "Updated".to_string(),
+                record_timestamp_display(record.updated_at_unix_seconds),
             ),
         ],
         markdown: record.content,
