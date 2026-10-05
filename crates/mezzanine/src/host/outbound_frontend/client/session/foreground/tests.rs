@@ -144,6 +144,77 @@ fn inert_client(
     (root, listener, peer, client)
 }
 
+/// A primary geometry change must be admitted as an empty terminal step before
+/// fetching its next view. A view request alone cannot resize authoritative
+/// primary state. The mutation retains its exact key and does not forward input.
+#[tokio::test]
+async fn outbound_foreground_primary_resize_precedes_snapshot() {
+    let (root, listener, peer, mut client) = inert_client(Vec::new());
+    client.events_negotiated = true;
+    let handle = client.client.handle.clone();
+    let summary = serde_json::to_value(&client.summary).unwrap();
+    let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+    for _ in 0..3 {
+        terminal.push_pending_input_read();
+    }
+    terminal.push_terminal_size(Some(Size::new(100, 30).unwrap()));
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let foreground_stop = stop.clone();
+    let foreground = client.run_snapshot_foreground(
+        &mut terminal,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(1),
+        async move { foreground_stop.notified().await },
+    );
+    let responder = async {
+        let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+        let poll = peer.next().await.unwrap().unwrap();
+        let poll: serde_json::Value = serde_json::from_str(&poll.body).unwrap();
+        assert_eq!(poll["operation"], "events");
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"action":"none","event_id":null
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let mutation = peer.next().await.unwrap().unwrap();
+        let mutation: serde_json::Value = serde_json::from_str(&mutation.body).unwrap();
+        assert_eq!(
+            mutation["operation"], "step",
+            "resize must be admitted before view capture"
+        );
+        assert_eq!(mutation["handle"], serde_json::to_value(&handle).unwrap());
+        assert_eq!(mutation["columns"], 100);
+        assert_eq!(mutation["rows"], 30);
+        assert_eq!(mutation["input_bytes"], serde_json::json!([]));
+        assert!(!mutation["idempotency_key"].as_str().unwrap().is_empty());
+        peer.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
+            "handle":handle,"session":summary,"idempotency_key":mutation["idempotency_key"],
+            "acknowledgement":{"input_bytes":0,"client_detached":false,"session_terminated":false}
+        }).to_string())).await.unwrap();
+        let view = peer.next().await.unwrap().unwrap();
+        let view: serde_json::Value = serde_json::from_str(&view.body).unwrap();
+        assert!(view.get("operation").is_none());
+        assert_eq!(view["columns"], 100);
+        assert_eq!(view["rows"], 30);
+        stop.notify_one();
+        assert!(peer.next().await.is_none());
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(foreground, responder)
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(terminal.written_frames.len(), 1);
+    assert_eq!(terminal.presentation_restores, 1);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Repeated negotiated idle replies must keep the initial committed frame rather
 /// than redraw or fetch snapshots on each poll. Cancellation retires the same
 /// stream and restores presentation without replaying setup or terminal input.

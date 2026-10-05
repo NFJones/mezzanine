@@ -578,6 +578,9 @@ With version-one events negotiated, the internal foreground settles its exact
 event poll before reusing the session when input arrives first. Event-first waits
 preserve unread input, and idle replies do not redraw unconditionally. This still
 does not qualify production render cadence, animations or ordinary CLI attachment.
+Primary resize admits the new geometry before snapshot capture, reusing an input
+step when available or sending an empty step otherwise. View requests alone do
+not establish authoritative primary resize, and no input is replayed.
 Entry is cancellable and deadline-bound; session ownership retires before cleanup.
 The concrete writer retains reset responsibility before writing entry bytes, so
 cancelled or failed entry still attempts restoration. Reset delivery remains

@@ -4305,6 +4305,9 @@ the exact event reply before reusing the consumed session, even if local input
 arrives first. Event-first waits MUST preserve unread terminal input. Idle replies
 MUST NOT trigger unconditional snapshot redraws; this does not certify production
 render cadence, animation scheduling or ordinary CLI attachment.
+Changed primary geometry MUST be admitted through a terminal step before the
+next snapshot is captured. An input step carrying the new size MAY supply that
+admission; otherwise an empty step MUST precede capture without replaying input.
 Presentation entry MUST be covered by cancellation and a finite deadline, with
 session ownership retired before cleanup. The concrete writer MUST retain a
 cleanup obligation before entry bytes can be emitted, even if entry is cancelled

@@ -104,11 +104,14 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
         if action == AttachRenderAction::InvalidateAndView {
             terminal.invalidate_output_frame().await?;
         }
+        let mut size_changed = false;
         if let Some(updated) = terminal.terminal_size().await? {
-            render |= updated != size;
+            size_changed = updated != size;
+            render |= size_changed;
             size = updated;
             validate_budget(size.columns, size.rows, budget)?;
         }
+        let mut input_step_applied = false;
         match input {
             Some(bytes) if bytes.is_empty() => return Ok(()),
             Some(bytes) if session.summary.granted_role == "primary" => {
@@ -120,11 +123,22 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
                 if acknowledgement.client_detached || acknowledgement.session_terminated {
                     return Ok(());
                 }
+                input_step_applied = true;
                 render = true;
             }
             // Observers drain local bytes without forwarding or acquiring input
             // authority. A timer requests another snapshot, not an input retry.
             Some(_) | None => {}
+        }
+        if size_changed && !input_step_applied && session.summary.granted_role == "primary" {
+            let key = next_key(nonce, &mut sequence)?;
+            let (updated, acknowledgement) = session
+                .step(size.columns, size.rows, &[], &key, budget)
+                .await?;
+            session = updated;
+            if acknowledgement.client_detached || acknowledgement.session_terminated {
+                return Ok(());
+            }
         }
         if render {
             session = session.snapshot(size.columns, size.rows, budget).await?.0;
