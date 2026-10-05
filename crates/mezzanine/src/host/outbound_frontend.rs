@@ -27,6 +27,13 @@ const PROTOCOL: &str = "mez-outbound/1";
 const CONTENT_TYPE: &str = "application/vnd.mezzanine.outbound+json";
 const HELLO_LIMIT: usize = 4096;
 
+mod listener;
+#[allow(
+    unused_imports,
+    reason = "CLI broker integration follows listener publication qualification"
+)]
+pub(crate) use listener::OutboundFrontendListener;
+
 /// Content-free protocol negotiation; extra fields cannot smuggle operations.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

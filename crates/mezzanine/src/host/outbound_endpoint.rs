@@ -189,6 +189,13 @@ impl OutboundEndpointOwner {
         Ok(&self.inner.root.path)
     }
 
+    /// Clones the retained root descriptor for directory-relative publication
+    /// inspection and cleanup. This does not grant remote transport authority.
+    pub(crate) fn frontend_root_directory(&self) -> Result<std::fs::File> {
+        self.inner.root.validate()?;
+        Ok(self.inner.root.directory.try_clone()?)
+    }
+
     /// Admits a fresh independent connection without waiting on a full queue.
     /// The caller owns application authentication and exact target selection.
     /// Cancellation releases the attempt slot; errors omit endpoint addresses.

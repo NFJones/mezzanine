@@ -522,8 +522,11 @@ The owner retains its configuration-root directory identity. Discovery checks
 are read-only and reject a relocated, replaced or no-longer-private root.
 An internal local admission component authenticates Unix peers and accepts only
 a bounded versioned hello under a finite deadline. Its exact frontend handles
-retain endpoint ownership but grant no remote authority. Listener publication,
-startup election, remote forwarding and CLI consumer migration remain unfinished.
+retain endpoint ownership but grant no remote authority. Internal listener
+publication uses private socket permissions and held-parent, identity-checked
+cleanup; replacement entries are preserved. This is not an atomic bind or unlink
+against hostile same-user renames. Startup election, remote forwarding and CLI
+consumer migration remain unfinished.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.

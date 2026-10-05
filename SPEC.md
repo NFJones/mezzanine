@@ -4239,7 +4239,12 @@ a bounded `mez-outbound/1` hello. Handshake and retained frontend capacity MUST
 be finite, with a total admission deadline. Unknown hello fields and unsupported
 versions MUST reject; handles MUST bind an owner incarnation and nonreused
 generation without exporting endpoint or device credentials. Admission alone
-does not implement listener publication, remote forwarding or concurrent CLI attachment.
+does not implement remote forwarding or concurrent CLI attachment. Internal
+listener publication MUST revalidate the retained root before and after bind,
+use owner-private socket permissions, and preserve live or unsafe existing entries.
+Cleanup MUST inspect socket identity through the retained parent directory and
+withhold removal of replacements. Pathname bind and check/unlink cleanup are
+cooperative same-user boundaries, not atomic protection against hostile renames.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and
