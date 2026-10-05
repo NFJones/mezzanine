@@ -554,6 +554,11 @@ Host-scoped `remote profile check NAME` also reuses an authenticated active brok
 Its authentication-only exchange requires no session-list permission and creates
 no session. Outbound veto and unsafe/protocol/operation failures remain terminal;
 only absent/refused discovery retains direct fallback. Legacy checks are unchanged.
+Paired-profile `kill --force TARGET` reuses an authenticated active broker too,
+preserving the exact target and invocation key through a fixed host kill request.
+The host still enforces destructive authority and visibility. Only correlated
+revoked-lease evidence reports success; uncertain exchanges never replay or fall
+back to a competing endpoint. Invitation operations and attach/new remain separate.
 Errors after writing never automatically replay initialization. Session
 creation/attachment uses a separate internal transition retaining the original
 intent/key and validating exact client/session/active-lease evidence. A loopback

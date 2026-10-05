@@ -1507,18 +1507,51 @@ pub(super) async fn force_kill_iroh_host_session(
     env: &super::CliEnv,
     target: &str,
 ) -> Result<String> {
-    exchange_iroh_host_request(
+    let key = super::cli_idempotency_key("remote-session-kill");
+    if let super::ControlTargetSelection::IrohProfile(profile) = control_target {
+        let paths = env.config_paths()?;
+        let layers = super::load_runtime_config_layers(&paths)?;
+        let structured = crate::runtime::runtime_effective_config_value(&layers)?;
+        let policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+        if !policy.outbound_enabled {
+            return Err(MezError::config(
+                "outbound Iroh connections are disabled by transport.iroh.outbound_enabled",
+            ));
+        }
+        match crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
+            paths.root(),
+            policy.setup_timeout,
+        )
+        .await
+        {
+            Ok(client) => {
+                let settlement = client
+                    .kill_session(profile, target, &key, policy.setup_timeout)
+                    .await?;
+                return Ok(
+                    serde_json::json!({"jsonrpc":"2.0","id":"cli","result":settlement}).to_string(),
+                );
+            }
+            Err(error)
+                if matches!(
+                    error.io_kind(),
+                    Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
+                ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Box::pin(exchange_iroh_host_request(
         control_target,
         env,
         "host/session/kill",
         serde_json::json!({
             "target": target,
             "force": true,
-            "idempotency_key": super::cli_idempotency_key("remote-session-kill"),
+            "idempotency_key": key,
         }),
         "session-kill",
         "session kill",
-    )
+    ))
     .await
 }
 

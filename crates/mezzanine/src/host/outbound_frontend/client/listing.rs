@@ -11,10 +11,20 @@ use crate::host::outbound_frontend::listing::{ListedSession, validate_sessions};
 /// Closed host-only settlement facts, with no returned proof or remote payload.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct HostSummary {
+pub(super) struct HostSummary {
     selected_version: u32,
     granted_role: String,
     host_only: bool,
+}
+
+impl HostSummary {
+    /// Validates closed host-only facts without exposing remote credentials.
+    pub(super) fn validate(&self) -> Result<()> {
+        if self.selected_version != 3 || self.granted_role != "observer" || !self.host_only {
+            return Err(MezError::forbidden("outbound host-only settlement changed"));
+        }
+        Ok(())
+    }
 }
 
 /// Exact local listing reply tied to this authenticated frontend stream.

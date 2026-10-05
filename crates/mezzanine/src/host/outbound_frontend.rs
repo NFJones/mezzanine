@@ -29,6 +29,7 @@ const HELLO_LIMIT: usize = 4096;
 
 pub(crate) mod client;
 mod events;
+mod killing;
 mod listener;
 mod listing;
 mod setup;

@@ -4276,6 +4276,11 @@ Host-scoped profile health MUST likewise reuse an authenticated active broker
 when available, with the current outbound veto and the same fail-closed discovery
 boundary. Authentication-only management MUST issue no session-list follow-up,
 require no list permission, and allocate no session. Legacy checks remain separate.
+Paired-profile force-kill MUST reuse an authenticated active broker when available
+under the same discovery boundary. The closed mutation MUST preserve the exact
+target and invocation key, issue only host/session/kill with force=true, and
+validate correlated revoked-lease evidence. Host destructive authority remains
+mandatory; uncertain exchanges MUST NOT reconnect, fall back or replay a kill.
 The separate internal session initialization MUST retain the original routing
 intent and invocation key, validate correlated role/client/session/active-lease
 evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection

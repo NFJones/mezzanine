@@ -8,6 +8,8 @@ use super::*;
 
 const LIST_ID: &str = "outbound-host-list";
 
+mod killing;
+
 /// Exact local handle is the only frontend-controlled listing parameter.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +35,11 @@ impl InitializedHostFrontend {
             let frame = self.connected.prepared.frontend.stream.next().await.transpose()?
                 .ok_or_else(|| MezError::invalid_state("outbound host-list request unavailable"))?;
             if frame.content_type != CONTENT_TYPE { return Err(MezError::invalid_args("outbound host-list type unsupported")); }
+            let envelope: serde_json::Value = serde_json::from_str(&frame.body)
+                .map_err(|_| MezError::invalid_args("outbound management request invalid"))?;
+            if envelope.get("operation").is_some() {
+                return killing::deliver_kill(self, &frame.body).await;
+            }
             let request: ListRequest = serde_json::from_str(&frame.body)
                 .map_err(|_| MezError::invalid_args("outbound host-list request invalid"))?;
             if request.handle != self.connected.prepared.frontend.handle { return Err(MezError::conflict("outbound host-list handle changed")); }

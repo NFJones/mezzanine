@@ -196,7 +196,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             RemoteRoleCeiling::Primary,
             RemoteHostRoutingAuthority {
                 session_create: true,
-                session_kill: false,
+                session_kill: true,
                 session_list: true,
                 session_attach_scope: RemoteSessionAttachScope::Own,
                 max_active_leases: 4,
@@ -237,7 +237,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
     .unwrap();
     let socket = listener.socket_path().unwrap().to_path_buf();
     let client_work = Box::pin(async {
-        let (first, first_local) = create_frontend(&admission, "first").await;
+        let (first, first_local) = create_frontend(&admission, "lease-work").await;
         let mut first = first
             .connect_pinned()
             .await
@@ -245,7 +245,9 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             .initialize_session()
             .await
             .unwrap();
-        let (second, second_local) = create_frontend(&admission, "second").await;
+        let first_session_id = first.summary["session_id"].as_str().unwrap().to_string();
+        let first_lease_id = first.summary["lease_id"].as_str().unwrap().to_string();
+        let (second, second_local) = create_frontend(&admission, "$999").await;
         let mut second = second
             .connect_pinned()
             .await
@@ -255,10 +257,15 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             .unwrap();
         assert_ne!(first.summary["session_id"], second.summary["session_id"]);
         assert_ne!(first.summary["lease_id"], second.summary["lease_id"]);
+        let second_session_id = second.summary["session_id"].as_str().unwrap().to_string();
+        assert_ne!(
+            second_session_id, "$999",
+            "name fixture must not match an actual ID"
+        );
         assert_eq!(router.snapshots().await.unwrap().len(), 2);
         assert_eq!(
             first.connected.prepared.initialize["idempotency_key"],
-            "create-first"
+            "create-lease-work"
         );
         let first_event = tokio::time::timeout(Duration::from_secs(2), first.next_event())
             .await
@@ -329,7 +336,9 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
         let server_cancel = cancel.clone();
         let supervised = listener.serve(async move { server_cancel.notified().await });
         let clients = async {
-            let (first, first_view) = supervised_create(&socket, "supervised-first").await;
+            // This name collides with another lease's actual session ID. The
+            // host must reject that ambiguous untyped target before revocation.
+            let (first, first_view) = supervised_create(&socket, &first_session_id).await;
             let (second, second_view) = supervised_create(&socket, "supervised-second").await;
             assert_ne!(
                 first_view["session"]["session_id"],
@@ -416,6 +425,83 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             assert_eq!(health["authenticated"], true);
             assert_eq!(health["reachable"], true);
             assert_eq!(router.snapshots().await.unwrap().len(), 4);
+            cli_output.clear();
+            let ambiguous = crate::cli::run_with(
+                vec![
+                    "mez".into(),
+                    "--iroh-profile".into(),
+                    "creator".into(),
+                    "--json".into(),
+                    "kill".into(),
+                    "--force".into(),
+                    first_session_id.clone(),
+                ],
+                cli_env.clone(),
+                false,
+                &mut cli_output,
+                &mut cli_error,
+            )
+            .await;
+            assert!(
+                ambiguous.is_err(),
+                "ambiguous name/ID must not report a kill"
+            );
+            assert!(cli_output.is_empty());
+            let management =
+                crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
+                    socket.parent().unwrap(),
+                    Duration::from_secs(2),
+                )
+                .await
+                .unwrap();
+            let before = management
+                .list_sessions("creator", Duration::from_secs(2))
+                .await
+                .unwrap();
+            assert!(
+                serde_json::to_value(&before)
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|row| row["state"] == "active"),
+                "ambiguous request must leave every lease active"
+            );
+            for (target, expected_session) in [
+                ("lease-work", first_session_id.as_str()),
+                ("$999", second_session_id.as_str()),
+                (
+                    first_view["session"]["session_id"].as_str().unwrap(),
+                    first_view["session"]["session_id"].as_str().unwrap(),
+                ),
+            ] {
+                cli_output.clear();
+                let code = crate::cli::run_with(
+                    vec![
+                        "mez".into(),
+                        "--iroh-profile".into(),
+                        "creator".into(),
+                        "--json".into(),
+                        "kill".into(),
+                        "--force".into(),
+                        target.into(),
+                    ],
+                    cli_env.clone(),
+                    false,
+                    &mut cli_output,
+                    &mut cli_error,
+                )
+                .await
+                .expect("remote kill must reuse the live paired broker");
+                assert_eq!(code, 0);
+                let killed: serde_json::Value = serde_json::from_slice(&cli_output).unwrap();
+                assert_eq!(killed["result"]["killed"], true);
+                assert_eq!(killed["result"]["session_id"], expected_session);
+                assert_eq!(killed["result"]["state"], "revoked");
+                if target == "lease-work" {
+                    assert_eq!(killed["result"]["lease_id"], first_lease_id);
+                }
+            }
             let (second, _, second_event) = second
                 .poll_events(25, Duration::from_secs(2))
                 .await
@@ -545,7 +631,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             cancel.notify_one();
         };
         let (accepted, ()) = tokio::join!(supervised, clients);
-        assert_eq!(accepted.unwrap(), 5);
+        assert_eq!(accepted.unwrap(), 10);
         stop.notify_one();
     });
     let (served, ()) = tokio::time::timeout(Duration::from_secs(30), async {
@@ -553,7 +639,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
     })
     .await
     .unwrap();
-    assert_eq!(served.unwrap(), 7);
+    assert_eq!(served.unwrap(), 12);
     router
         .shutdown_all(true, Duration::from_secs(5))
         .await
