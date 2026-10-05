@@ -4285,6 +4285,11 @@ arming them on IPC delivery. A separate explicit post-output acknowledgement MUS
 bind the exact frontend, session, last delivered receipt list and mutation key.
 Only the renderer's completed output may justify requesting it; false settlement
 MUST remain false, and uncertain failures MUST consume ownership without replay.
+The internal retained-snapshot presenter MUST use the existing terminal writer,
+finish the exact frame without replacement, and require matching writer-reported
+committed receipt IDs before remote acknowledgement. Partial output, foreign
+writer ownership, failure or timeout MUST NOT arm presentation. Terminal restoration
+and any already-started output tail remain caller-owned after failure.
 The separate internal primary-input exchange MUST bind the exact frontend and
 initialized primary, bound geometry/input/key size, and retain the original
 terminal-step idempotency key. It MUST issue one mutation without automatic

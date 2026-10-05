@@ -44,9 +44,11 @@ pub(crate) struct OutboundSessionClient {
     styles: Vec<Vec<mez_terminal::TerminalStyleSpan>>,
     modes: mez_mux::presentation::AttachedTerminalOutputModes,
     receipts: Vec<u64>,
+    lines: Vec<String>,
 }
 
 mod acknowledge;
+mod present;
 mod step;
 
 impl OutboundFrontendClient {
@@ -111,6 +113,7 @@ impl OutboundFrontendClient {
                 OutboundSessionClient {
                     client: self,
                     modes: snapshot_modes(&snapshot, columns, rows)?,
+                    lines: snapshot.lines.clone(),
                     receipts: snapshot.presentation_ids,
                     summary: snapshot.session,
                     styles: crate::host::terminal::wire_styles::bounded_style_rows(
@@ -182,6 +185,7 @@ impl OutboundSessionClient {
             )?;
             self.modes = snapshot_modes(&snapshot, columns, rows)?;
             self.receipts = snapshot.presentation_ids;
+            self.lines = snapshot.lines.clone();
             Ok((self, snapshot.lines))
         })
         .await

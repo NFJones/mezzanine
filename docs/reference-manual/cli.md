@@ -560,6 +560,11 @@ Snapshots also carry bounded receipt IDs without acknowledging them on delivery.
 An explicit post-output API binds the last delivered IDs, exact frontend/session
 and original mutation key. It must be called only after the renderer commits
 output; false settlement stays false and uncertain exchanges are not replayed.
+The internal retained-snapshot presenter uses the existing terminal writer and
+acknowledges only after the complete frame commits with matching receipt IDs.
+Partial or failed output never arms presentation; terminal restoration and
+started output tails remain caller-owned. Unix-fd fixtures qualify byte commitment,
+not visibility in a physical terminal or complete interactive attachment support.
 An independent internal primary-input exchange carries bounded bytes with the
 original mutation key and validates exact frontend/session acknowledgement.
 Reported byte acceptance is runtime evidence, not proof of process or model

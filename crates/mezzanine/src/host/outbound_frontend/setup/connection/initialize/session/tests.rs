@@ -4,6 +4,7 @@
 //! allocate shell-backed sessions only; no provider calls or user input replay.
 
 use super::*;
+use crate::host::async_runtime::AsyncAttachedTerminalIo;
 
 /// Supplies one valid correlated active-lease response for validator probes.
 fn response(server: iroh::EndpointId) -> serde_json::Value {
@@ -364,12 +365,32 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
                 .unwrap()
                 .unwrap();
             assert_eq!(pending.presentation_ids, receipts);
-            // The explicit API is called only to simulate a renderer's completed
-            // write. Snapshot delivery above does not send this mutation itself.
+            // Commit the exact retained snapshot through the production fd
+            // writer before forwarding its receipt. A disposable Unix endpoint
+            // qualifies byte commitment, not visibility in a physical terminal.
+            use std::os::fd::AsRawFd;
+            let (output, mut output_peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            let output_clone = output.try_clone().unwrap();
+            output_peer
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut terminal = crate::host::async_runtime::AsyncAttachedTerminalFdLoopIo::new(
+                output.as_raw_fd(),
+                output_clone.as_raw_fd(),
+                None,
+            )
+            .unwrap();
             let (second, acknowledged) = second
-                .acknowledge_presented("exact-output-commit", Duration::from_secs(2))
+                .present(&mut terminal, "exact-output-commit", Duration::from_secs(2))
                 .await
                 .unwrap();
+            assert_eq!(terminal.pending_output_bytes(), 0);
+            drop(terminal);
+            drop(output_clone);
+            drop(output);
+            let mut committed_bytes = Vec::new();
+            std::io::Read::read_to_end(&mut output_peer, &mut committed_bytes).unwrap();
+            assert!(!committed_bytes.is_empty());
             assert!(
                 acknowledged,
                 "delivery alone must leave the receipt unarmed"
