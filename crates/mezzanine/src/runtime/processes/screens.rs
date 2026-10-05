@@ -112,6 +112,7 @@ impl RuntimeSessionService {
         screen: TerminalScreen,
     ) {
         let pane_id = pane_id.into();
+        self.reset_steering_presentation_surface(&pane_id);
         self.process.next_agent_pane_screen_lineage = self
             .process
             .next_agent_pane_screen_lineage
@@ -141,6 +142,11 @@ impl RuntimeSessionService {
         conversation_id: &str,
         mut screen: TerminalScreen,
     ) -> Option<u64> {
+        self.agent_pane_screen_lineage(pane_id, conversation_id)?;
+        let (composite, pending_rows) = self
+            .compose_pending_steering_suffix(pane_id, conversation_id, screen)
+            .ok()?;
+        screen = composite;
         let current = self.process.agent_pane_screens.get_mut(pane_id)?;
         if current.conversation_id != conversation_id {
             return None;
@@ -153,11 +159,16 @@ impl RuntimeSessionService {
             .max(1);
         current.lineage = self.process.next_agent_pane_screen_lineage;
         current.screen = screen;
+        self.presentation.pending_steering_suffixes.insert(
+            pane_id.to_string(),
+            (conversation_id.to_string(), current.lineage, pending_rows),
+        );
         Some(current.lineage)
     }
 
     /// Removes one pane's retained agent screen during replacement rollback.
     pub(crate) fn remove_agent_pane_screen(&mut self, pane_id: &str) {
+        self.reset_steering_presentation_surface(pane_id);
         self.clear_interaction_state_for_surface(pane_id, PaneSurfaceKind::Agent);
         self.process.agent_pane_screens.remove(pane_id);
     }

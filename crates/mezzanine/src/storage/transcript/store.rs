@@ -1893,6 +1893,9 @@ impl AgentTranscriptStore {
     pub fn append_presentation(&self, entry: &AgentPresentationEntry) -> Result<()> {
         let entry = entry.normalized_for_agent_log_wrap();
         entry.validate()?;
+        if entry.source_content_type.as_deref() == Some(super::steering::CONTENT_TYPE) {
+            return self.append_presentation_many(&[entry]).map(|_| ());
+        }
         let _conversation_lock = self.acquire_conversation_lock(&entry.conversation_id)?;
         self.ensure_session_dir(&entry.conversation_id)?;
         let path = self.presentation_path_for(&entry.conversation_id)?;
@@ -1929,6 +1932,26 @@ impl AgentTranscriptStore {
             ));
         }
         let _conversation_lock = self.acquire_conversation_lock(&first.conversation_id)?;
+        let mut steering_sources = BTreeMap::new();
+        if entries.iter().any(|entry| {
+            entry.source_content_type.as_deref() == Some(super::steering::CONTENT_TYPE)
+        }) {
+            for entry in self.inspect_presentation_unlocked(&first.conversation_id)? {
+                if entry.source_content_type.as_deref() == Some(super::steering::CONTENT_TYPE) {
+                    let source = super::steering::Source::decode(
+                        entry.source_text.as_deref().unwrap_or_default(),
+                    )?;
+                    if let Some(previous) =
+                        steering_sources.insert(source.receipt.id.clone(), source.clone())
+                        && previous != source
+                    {
+                        return Err(MezError::invalid_state(
+                            "conflicting durable steering occurrence",
+                        ));
+                    }
+                }
+            }
+        }
         let mut sequence = self.next_presentation_sequence(&first.conversation_id)?;
         let mut normalized = Vec::with_capacity(entries.len());
         let mut encoded = String::new();
@@ -1936,10 +1959,27 @@ impl AgentTranscriptStore {
             let mut entry = entry.normalized_for_agent_log_wrap();
             entry.sequence = sequence;
             entry.validate()?;
+            if entry.source_content_type.as_deref() == Some(super::steering::CONTENT_TYPE) {
+                let source = super::steering::Source::decode(
+                    entry.source_text.as_deref().unwrap_or_default(),
+                )?;
+                if let Some(previous) = steering_sources.get(&source.receipt.id) {
+                    if previous != &source {
+                        return Err(MezError::invalid_state(
+                            "conflicting steering occurrence retry",
+                        ));
+                    }
+                    continue;
+                }
+                steering_sources.insert(source.receipt.id.clone(), source);
+            }
             encoded.push_str(&entry.encode()?);
             encoded.push('\n');
             normalized.push(entry);
             sequence = sequence.saturating_add(1);
+        }
+        if normalized.is_empty() {
+            return Ok(0);
         }
         self.ensure_session_dir(&first.conversation_id)?;
         let path = self.presentation_path_for(&first.conversation_id)?;

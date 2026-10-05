@@ -607,6 +607,13 @@ pub(crate) struct RuntimePresentationComponent {
     /// Executor-owned action progress, separate from provider and shell-preview state.
     action_presentation_progress:
         std::collections::BTreeMap<String, RuntimeActionPresentationProgressPresentation>,
+    /// Final receipt-owned suffix; source and delivery authority stay in the agent.
+    pub(in crate::runtime) pending_steering_suffixes:
+        std::collections::BTreeMap<String, (String, u64, usize)>,
+    /// Settled occurrences installed once on the current conversation surface.
+    pub(super) presented_steering_receipts: std::collections::BTreeSet<(String, String, String)>,
+    /// One bounded display-only retry, fenced to the original conversation.
+    pub(super) steering_presentation_retries: std::collections::BTreeSet<(String, String)>,
     /// Source-backed provider `say` output awaiting validated completion.
     agent_streaming_say_presentations:
         std::collections::BTreeMap<String, RuntimeStreamingSayPresentation>,
@@ -1398,6 +1405,8 @@ pub(crate) struct RuntimeAgentResumePresentationSnapshot {
     /// Exact pane generation that owned accepted header handoffs at capture.
     header_owner: Option<(String, u64)>,
     prompt_input: Option<RuntimeAgentPromptInput>,
+    pending_steering_suffix: Option<(String, u64, usize)>,
+    presented_steering_receipts: std::collections::BTreeSet<(String, String, String)>,
     shell_output_previews: Option<RuntimeAgentShellPreviewPresentation>,
     action_presentation_progress: Option<RuntimeActionPresentationProgressPresentation>,
     streaming_say_presentation: Option<RuntimeStreamingSayPresentation>,
@@ -1841,6 +1850,9 @@ impl RuntimePresentationComponent {
         self.agent_prompt_selector_refreshes
             .retain(|(_, candidate), _| candidate != pane_id);
         self.agent_shell_output_previews.remove(pane_id);
+        self.pending_steering_suffixes.remove(pane_id);
+        self.presented_steering_receipts
+            .retain(|(pane, _, _)| pane != pane_id);
         self.action_presentation_progress.remove(pane_id);
         self.agent_streaming_say_presentations.remove(pane_id);
         self.agent_pending_final_say_previews.remove(pane_id);
@@ -2360,6 +2372,18 @@ impl RuntimeSessionService {
                 .agent_prompt_inputs
                 .get(pane_id)
                 .map(|input| (**input).clone()),
+            pending_steering_suffix: self
+                .presentation
+                .pending_steering_suffixes
+                .get(pane_id)
+                .cloned(),
+            presented_steering_receipts: self
+                .presentation
+                .presented_steering_receipts
+                .iter()
+                .filter(|(pane, _, _)| pane == pane_id)
+                .cloned()
+                .collect(),
             shell_output_previews: self
                 .presentation
                 .agent_shell_output_previews
@@ -2495,6 +2519,24 @@ impl RuntimeSessionService {
         if snapshot.streaming_say_presentation.is_none() {
             snapshot.promoted_streaming_say_actions.clear();
         }
+        self.presentation.pending_steering_suffixes.remove(pane_id);
+        self.presentation
+            .presented_steering_receipts
+            .retain(|(pane, _, _)| pane != pane_id);
+        if let Some((owner, _, rows)) = snapshot.pending_steering_suffix
+            && current_conversation.as_deref() == Some(owner.as_str())
+            && let Some(lineage) = current_lineage
+        {
+            self.presentation
+                .pending_steering_suffixes
+                .insert(pane_id.to_string(), (owner, lineage, rows));
+        }
+        self.presentation.presented_steering_receipts.extend(
+            snapshot
+                .presented_steering_receipts
+                .into_iter()
+                .filter(|(_, owner, _)| current_conversation.as_deref() == Some(owner.as_str())),
+        );
         self.presentation.agent_prompt_inputs.remove(pane_id);
         self.presentation
             .agent_prompt_selector_refreshes

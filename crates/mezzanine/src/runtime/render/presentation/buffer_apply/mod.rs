@@ -9,6 +9,7 @@
 
 mod geometry;
 mod outbound_messages;
+mod pending_steering;
 mod replay;
 mod resize;
 mod say_rendering;
@@ -1190,6 +1191,23 @@ impl RuntimeSessionService {
                 return;
             }
         }
+        if entry.source_content_type.as_deref()
+            == Some(crate::storage::transcript::steering::CONTENT_TYPE)
+        {
+            let Ok(source) = crate::storage::transcript::steering::Source::decode(
+                entry.source_text.as_deref().unwrap_or_default(),
+            ) else {
+                return;
+            };
+            entry.turn_id = source.receipt.turn_id;
+            if let Err(_error) = self.persistence.queue_steering_presentation(store, entry) {
+                let _ = self.append_lifecycle_event(
+                    crate::runtime::EventKind::Diagnostic,
+                    r#"{"diagnostic":"settled steering persistence unavailable; visible occurrence retained"}"#.to_string(),
+                );
+            }
+            return;
+        }
         if self.persistence.transcript_uses_adapter() {
             let Ok(path) = store.presentation_path(&entry.conversation_id) else {
                 return;
@@ -1900,9 +1918,11 @@ impl RuntimeSessionService {
         pane_id: &str,
         conversation_id: &str,
     ) -> Result<TerminalScreen> {
-        let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-            MezError::invalid_state("streaming presentation screen was not initialized")
-        })?;
+        let current_screen = self
+            .agent_screen_without_pending_steering(pane_id, conversation_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("streaming presentation screen was not initialized")
+            })?;
         let current_lineage = self
             .agent_pane_screen_lineage(pane_id, conversation_id)
             .ok_or_else(|| {

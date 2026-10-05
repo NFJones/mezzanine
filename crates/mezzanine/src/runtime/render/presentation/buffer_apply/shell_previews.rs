@@ -112,7 +112,13 @@ impl RuntimeSessionService {
         if self.agent_pane_screen_lineage(pane_id, conversation_id) != Some(installed_lineage) {
             return None;
         }
-        let mut screen = self.agent_pane_screen(pane_id)?.clone();
+        let mut screen = self.agent_screen_without_pending_steering(pane_id, conversation_id)?;
+        let pending_rows = self
+            .presentation
+            .pending_steering_suffixes
+            .get(pane_id)
+            .filter(|(owner, lineage, _)| owner == conversation_id && *lineage == installed_lineage)
+            .map_or(0, |(_, _, rows)| *rows);
         if progress_rows > 0 {
             let suffix = screen.capture_transient_suffix(progress_rows, true)?;
             if !screen.clear_transient_suffix(suffix) {
@@ -120,7 +126,8 @@ impl RuntimeSessionService {
             }
         }
         if preview_rows > 0 {
-            let suffix = screen.capture_transient_suffix(preview_rows, progress_rows > 0)?;
+            let suffix = screen
+                .capture_transient_suffix(preview_rows, progress_rows > 0 || pending_rows > 0)?;
             if !screen.clear_transient_suffix(suffix) {
                 return None;
             }
@@ -142,9 +149,11 @@ impl RuntimeSessionService {
         Option<RuntimeAgentShellPreviewPresentation>,
     )> {
         let (conversation_id, _) = self.agent_presentation_target(pane_id)?;
-        let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-            MezError::invalid_state("agent terminal presentation screen was not initialized")
-        })?;
+        let current_screen = self
+            .agent_screen_without_pending_steering(pane_id, &conversation_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("agent terminal presentation screen was not initialized")
+            })?;
         let current_lineage = self
             .agent_pane_screen_lineage(pane_id, &conversation_id)
             .ok_or_else(|| {
@@ -297,9 +306,11 @@ impl RuntimeSessionService {
             return Ok(());
         }
         let (conversation_id, _) = self.agent_presentation_target(pane_id)?;
-        let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-            MezError::invalid_state("agent terminal presentation screen was not initialized")
-        })?;
+        let current_screen = self
+            .agent_screen_without_pending_steering(pane_id, &conversation_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("agent terminal presentation screen was not initialized")
+            })?;
         let current_lineage = self
             .agent_pane_screen_lineage(pane_id, &conversation_id)
             .ok_or_else(|| {

@@ -19,6 +19,8 @@ mod archive;
 
 /// Versioned identity-bearing presentation source, separate from model context.
 pub(crate) mod activity;
+/// Exact settled steering occurrences, never pending execution input.
+pub(crate) mod steering;
 
 /// Exposes the encoding module boundary.
 ///

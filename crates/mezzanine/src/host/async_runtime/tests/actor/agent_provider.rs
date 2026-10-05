@@ -1447,6 +1447,16 @@ async fn async_actor_defers_agent_prompt_history_to_persistence_worker() {
         assert!(steering.contains("injected_user_input"), "{steering}");
 
         let pending = handle.drain_persistence_side_effects(16).await.unwrap();
+        assert!(
+            pending.iter().all(|effect| match effect {
+                RuntimeSideEffect::PersistPresentationEntries { entries, .. } =>
+                    entries.iter().all(|entry| {
+                        entry.source_text.as_deref() != Some("keep the latest checkpoint")
+                    }),
+                _ => true,
+            }),
+            "pending steering must not be persisted as an ordinary prompt: {pending:?}"
+        );
         assert_eq!(
             pending
                 .iter()
@@ -1489,7 +1499,7 @@ async fn async_actor_defers_agent_prompt_history_to_persistence_worker() {
         )
         .await
         .unwrap();
-        assert_eq!(persistence.drained, 9);
+        assert_eq!(persistence.drained, 8);
         assert_eq!(persistence.completed, 6);
         assert_eq!(persistence.failed, 1);
         assert!(persistence.bytes_written > 0);

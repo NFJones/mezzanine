@@ -57,7 +57,7 @@ impl RuntimeSessionService {
         }
         if self
             .persistence
-            .presentation_write_pending(&conversation_id)
+            .presentation_reconstruction_pending(&conversation_id)
         {
             return Ok(None);
         }

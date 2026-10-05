@@ -255,6 +255,51 @@ impl RuntimeSessionService {
                 })
                 .to_string()
             }
+            crate::runtime::PersistenceEvent::SteeringPresentationSettled {
+                conversation_id,
+                receipt_id,
+                generation,
+                path,
+                success,
+            } => {
+                if !self.persistence.settle_steering_presentation(
+                    &conversation_id,
+                    &receipt_id,
+                    generation,
+                    &path,
+                    success,
+                ) {
+                    return Ok(crate::runtime::RuntimeTransition::default());
+                }
+                queued_metadata_retry = !success;
+                self.presentation
+                    .invalidate_agent_presentation_replay_cache(&conversation_id);
+                if success
+                    && !self
+                        .persistence
+                        .presentation_reconstruction_pending(&conversation_id)
+                {
+                    let panes = self
+                        .agent_shell_store()
+                        .sessions()
+                        .filter(|session| {
+                            !session.ephemeral && session.session_id == conversation_id
+                        })
+                        .map(|session| session.pane_id.clone())
+                        .collect::<Vec<_>>();
+                    for pane in panes {
+                        self.presentation
+                            .redispatch_pending_agent_presentation_resize(&pane);
+                    }
+                    redispatch_presentation_resizes = true;
+                }
+                serde_json::json!({
+                    "worker":"async-persistence", "target":"steering-presentation",
+                    "conversation_id":conversation_id, "generation":generation,
+                    "state":if success { "completed" } else { "failed" },
+                })
+                .to_string()
+            }
             crate::runtime::PersistenceEvent::PresentationCompleted {
                 conversation_id,
                 path,

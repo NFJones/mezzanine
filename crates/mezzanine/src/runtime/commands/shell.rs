@@ -541,12 +541,19 @@ impl RuntimeSessionService {
             self.ensure_runtime_mcp_transports_discovered_blocking()?;
         }
         let is_prompt = !input.trim().is_empty() && !input.trim().starts_with('/');
+        let receipt_prompt = is_prompt
+            && (self.agent_is_compacting(&pane_id)
+                || self
+                    .agent_shell_store()
+                    .get(&pane_id)
+                    .and_then(|session| session.running_turn_id.as_ref())
+                    .is_some());
         self.persist_agent_prompt_history_entry(
             &pane_id,
             &history_entry,
             queue_external_effects_for_adapter,
         )?;
-        if is_prompt {
+        if is_prompt && !receipt_prompt {
             self.append_agent_user_prompt_to_terminal_buffer(&pane_id, display_input)?;
         }
         if is_prompt

@@ -174,6 +174,18 @@ model = "invalid-model"
     let receipts = exit.service.steering_receipts_for_tests(&task.turn_id);
     assert_eq!(receipts.len(), 1);
     assert_eq!(format!("{:?}", receipts[0].status), "Admitted(1)");
+    let presented = exit
+        .service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!presented.contains("[pending]"), "{presented}");
+    assert_eq!(
+        presented.matches("user> claim receipt").count(),
+        1,
+        "{presented}"
+    );
     // A newer equal-text occurrence is not consumed by the earlier snapshot.
     exit.service
         .execute_agent_shell_command(&primary, "claim receipt")

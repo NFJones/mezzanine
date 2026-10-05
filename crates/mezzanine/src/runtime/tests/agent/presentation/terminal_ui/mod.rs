@@ -14,6 +14,7 @@ mod history_reconstruction;
 mod intervening_writes;
 mod peer_messages;
 mod pending_messages;
+mod pending_steering;
 mod resize_admission;
 mod resize_surfaces;
 mod streaming_identity;

@@ -2677,6 +2677,7 @@ impl RuntimeSessionService {
                 receipt: steering::Receipt::deferred(prompt, display, process, acceptance_order),
             });
         self.publish_steering_recovery_checkpoint();
+        self.request_steering_presentation(pane_id);
         Ok(())
     }
 

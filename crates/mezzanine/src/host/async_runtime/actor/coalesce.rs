@@ -426,6 +426,7 @@ pub(super) fn runtime_side_effect_is_durable_persistence(effect: &RuntimeSideEff
             | RuntimeSideEffect::PersistTranscriptEntries { .. }
             | RuntimeSideEffect::PersistAgentSessionMetadata { .. }
             | RuntimeSideEffect::PersistPresentationEntries { .. }
+            | RuntimeSideEffect::PersistSteeringPresentation { .. }
             | RuntimeSideEffect::PersistSessionArchive { .. }
             | RuntimeSideEffect::PersistSavedSessionRetention { .. }
             | RuntimeSideEffect::PersistPromptHistory { .. }
@@ -471,6 +472,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::PersistTranscriptEntries { .. } => "persist-transcript",
         RuntimeSideEffect::PersistAgentSessionMetadata { .. } => "persist-agent-session-metadata",
         RuntimeSideEffect::PersistPresentationEntries { .. } => "persist-presentation",
+        RuntimeSideEffect::PersistSteeringPresentation { .. } => "persist-steering-presentation",
         RuntimeSideEffect::PersistSessionArchive { .. } => "persist-session-archive",
         RuntimeSideEffect::PersistSavedSessionRetention { .. } => "persist-saved-session-retention",
         RuntimeSideEffect::PersistTokenUsage { .. } => "persist-token-usage",

@@ -21,6 +21,8 @@ use super::RuntimeSideEffect;
 mod adapters;
 mod bookkeeping;
 mod effects;
+/// Exact settled-occurrence persistence ownership, separate from screen state.
+mod steering;
 mod stores;
 
 /// One worker-owned transcript append awaiting exact-path settlement.
@@ -71,6 +73,10 @@ pub(crate) struct RuntimePersistenceComponent {
     queued_program_hook_effects: Vec<RuntimeSideEffect>,
     deferred_transcript_next_sequences: BTreeMap<String, u64>,
     pending_presentation_entries: BTreeMap<String, usize>,
+    /// Immutable steering writes retained until exact acknowledgement or retry exhaustion.
+    steering_presentation_writes: BTreeMap<(String, String), RuntimeSideEffect>,
+    /// Monotonic persistence attempt identity for stale-result rejection.
+    next_steering_presentation_generation: u64,
     pane_transcript_refs: BTreeMap<String, Vec<String>>,
     audit_effects_use_adapter: bool,
     pane_pipe_effects_use_adapter: bool,

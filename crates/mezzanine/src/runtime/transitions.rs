@@ -660,6 +660,19 @@ pub enum PersistenceEvent {
         error: String,
     },
     /// One ordered durable presentation append completed.
+    /// Exact settled steering write result, independent of visible promotion.
+    SteeringPresentationSettled {
+        /// Conversation and occurrence originally admitted by the actor.
+        conversation_id: String,
+        receipt_id: String,
+        /// Unique persistence attempt, never reconstructed from display text.
+        generation: u64,
+        /// Exact destination used by the worker.
+        path: PathBuf,
+        /// Positive durable acknowledgement; failure permits only bounded retry.
+        success: bool,
+    },
+    /// One ordered durable presentation append completed.
     PresentationCompleted {
         /// Durable conversation receiving the presentation entries.
         conversation_id: String,
@@ -1149,6 +1162,18 @@ pub enum RuntimeSideEffect {
         path: PathBuf,
         /// Unsequenced entries to append in actor enqueue order.
         entries: Vec<crate::storage::transcript::AgentPresentationEntry>,
+    },
+    /// Execute one saved-session archive lifecycle operation on a blocking worker.
+    /// Persist one immutable settled steering occurrence with exact acknowledgement.
+    PersistSteeringPresentation {
+        /// Store and destination captured at initial publication.
+        store: AgentTranscriptStore,
+        path: PathBuf,
+        /// Identity-bearing source; never pending input.
+        entry: crate::storage::transcript::AgentPresentationEntry,
+        /// Actor-owned attempt fence and bounded retry count.
+        generation: u64,
+        retry_attempt: u8,
     },
     /// Execute one saved-session archive lifecycle operation on a blocking worker.
     #[allow(

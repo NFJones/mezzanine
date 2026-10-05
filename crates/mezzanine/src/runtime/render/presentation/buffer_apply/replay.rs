@@ -24,6 +24,26 @@ impl RuntimeSessionService {
             let mut sorted_entries = entries.iter().collect::<Vec<_>>();
             sorted_entries.sort_by_key(|entry| entry.sequence);
             for entry in sorted_entries {
+                if entry.source_content_type.as_deref()
+                    == Some(crate::storage::transcript::steering::CONTENT_TYPE)
+                {
+                    let source = crate::storage::transcript::steering::Source::decode(
+                        entry.source_text.as_deref().unwrap_or_default(),
+                    )?;
+                    if source.conversation_id != entry.conversation_id
+                        || source.receipt.turn_id != entry.turn_id
+                    {
+                        return Err(MezError::invalid_args("steering replay ownership changed"));
+                    }
+                    let key = (
+                        pane_id.to_string(),
+                        source.conversation_id.clone(),
+                        source.receipt.id.clone(),
+                    );
+                    self.append_settled_steering_source(pane_id, &source)?;
+                    self.presentation.presented_steering_receipts.insert(key);
+                    continue;
+                }
                 let activity = if entry.source_content_type.as_deref()
                     == Some(crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE)
                 {
@@ -315,6 +335,7 @@ impl RuntimeSessionService {
         }
         let previous_screen = self.agent_pane_screen(pane_id).cloned();
         let previous_lineage = self.agent_pane_screen_lineage(pane_id, &session_id);
+        let previous_steering = self.snapshot_steering_presentation_surface(pane_id);
         let previous_preview = self
             .presentation
             .agent_shell_output_previews
@@ -339,9 +360,11 @@ impl RuntimeSessionService {
             )?;
             self.set_agent_pane_screen(pane_id.to_string(), session_id.clone(), rebuilt);
             self.replay_agent_presentation_entries_to_terminal_buffer(pane_id, entries)?;
-            let durable_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-                MezError::invalid_state("resized agent presentation screen disappeared")
-            })?;
+            let durable_screen = self
+                .agent_screen_without_pending_steering(pane_id, &session_id)
+                .ok_or_else(|| {
+                    MezError::invalid_state("resized agent presentation screen disappeared")
+                })?;
             let durable_lineage = self
                 .agent_pane_screen_lineage(pane_id, &session_id)
                 .ok_or_else(|| {
@@ -417,6 +440,7 @@ impl RuntimeSessionService {
                     .agent_streaming_say_presentations
                     .insert(pane_id.to_string(), streaming);
             }
+            self.restore_steering_presentation_surface(pane_id, previous_steering);
             return Err(error);
         }
         self.presentation

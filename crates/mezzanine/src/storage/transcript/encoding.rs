@@ -166,6 +166,17 @@ impl AgentPresentationEntry {
         if let Some(content_type) = self.source_content_type.as_deref() {
             validate_non_empty("presentation source content type", content_type)?;
         }
+        if self.source_content_type.as_deref() == Some(super::steering::CONTENT_TYPE) {
+            let source =
+                super::steering::Source::decode(self.source_text.as_deref().unwrap_or_default())?;
+            if source.conversation_id != self.conversation_id
+                || source.receipt.turn_id != self.turn_id
+            {
+                return Err(MezError::invalid_args(
+                    "steering source differs from presentation owner",
+                ));
+            }
+        }
         if self.source_content_type.as_deref() == Some(super::activity::ACTIVITY_CONTENT_TYPE) {
             let source = super::activity::ActivitySource::decode(
                 self.source_text.as_deref().unwrap_or_default(),

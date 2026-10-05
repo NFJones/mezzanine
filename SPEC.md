@@ -5919,8 +5919,19 @@ canonical transfer and terminal settlement MUST mark the recovery snapshot dirty
 for publication through the existing persistence drain. Failed direct publication
 MUST retain that fence for a later drain; adapter publication retains the existing
 generation-fenced bounded retry. Recovery remains active-binding checkpoint
-evidence, not a durable archive of every closed conversation. Pending-log
-promotion remains unfinished.
+evidence, not a durable archive of every closed conversation. Steering display
+MUST project accepted pending occurrences at the live log tail with a textual
+`user> [pending]` label, separately from canonical input. Durable output and
+provider, shell-preview and executor progress MUST compose before that suffix.
+Positive local admission MUST replace the pending occurrence with one ordinary
+user entry; terminal not-sent and recovered admission-unknown evidence MUST keep
+truthful textual labels. Equal text submissions remain distinct occurrences.
+Settled display source MUST carry occurrence identity for replay and exact
+persistence retry; retries MUST NOT resubmit input or repeat visible promotion.
+Pending rows MUST remain absent from ordinary durable presentation sources and
+lower-layer baselines. Visible pending rows use the existing composer log geometry
+and bounded overflow projection, not forced viewport pinning. Full interaction,
+copy/overflow, restart and failure qualification remains in progress.
 The display-only receipt view MUST select the currently bound conversation,
 deduplicate by occurrence identity, and preserve acceptance order independently
 of status, turn-map order or equal display text. Restored order MUST advance the

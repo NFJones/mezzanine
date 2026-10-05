@@ -4290,36 +4290,13 @@ impl RuntimeSessionService {
         {
             screen.resize(size)?;
         }
-        let agent_session_id = self
-            .agent_shell_store()
-            .get(&pane_id)
-            .map(|session| session.session_id.clone());
         let agent_screen_size = self.agent_pane_screen(&pane_id).map(TerminalScreen::size);
         if agent_screen_size.is_some_and(|current| current != size) {
             if agent_screen_size.is_some_and(|current| current.columns != size.columns) {
                 self.presentation
                     .defer_agent_presentation_resize(&pane_id, size);
             }
-            let previous_lineage = agent_session_id
-                .as_deref()
-                .and_then(|session_id| self.agent_pane_screen_lineage(&pane_id, session_id));
-            if let Some(screen) = self.agent_pane_screen_mut(&pane_id) {
-                screen.resize(size)?;
-            }
-            let resized_lineage = agent_session_id
-                .as_deref()
-                .and_then(|session_id| self.agent_pane_screen_lineage(&pane_id, session_id));
-            if let (Some(previous_lineage), Some(resized_lineage)) =
-                (previous_lineage, resized_lineage)
-            {
-                self.presentation
-                    .rebase_agent_presentations_after_provisional_resize(
-                        &pane_id,
-                        previous_lineage,
-                        resized_lineage,
-                        size,
-                    )?;
-            }
+            self.resize_agent_screen_with_pending_steering(&pane_id, size)?;
         }
         if let Some(screen) = self
             .process

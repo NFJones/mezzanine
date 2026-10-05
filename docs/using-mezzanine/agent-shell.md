@@ -83,7 +83,14 @@ evidence if its transaction fails. Deferred transitions publish their newest
 evidence through the persistence drain; failed direct writes remain eligible for
 a later drain and adapter writes use bounded checkpoint retry. This does not
 archive every closed conversation's receipts. Pending-tail labels remain
-unfinished; the current visible prompt echo remains.
+receipt-driven: steering uses `user> [pending]` at the live log tail while later
+output arrives. Local admission replaces that occurrence with one normal user
+entry; terminal not-sent and restart admission-unknown evidence keep explicit
+labels. This is log-tail placement, not forced viewport pinning while browsing.
+Visible rows are bounded using composer log geometry. Pending text is not saved
+as ordinary acknowledged prompt history; settled rows carry occurrence identity
+for replay and bounded persistence-only retry. Interaction, copy/overflow,
+restart and failure qualification is still in progress.
 After steering is canonically accepted, a status-display or trace failure does
 not reject it or require resubmission.
 Deferred transfer diagnostics cannot strand accepted guidance before scheduling.

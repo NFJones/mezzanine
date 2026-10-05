@@ -1230,6 +1230,35 @@ where
                         }
                     }
                 }
+                RuntimeSideEffect::PersistSteeringPresentation {
+                    store,
+                    path,
+                    entry,
+                    generation,
+                    ..
+                } => {
+                    let conversation_id = entry.conversation_id.clone();
+                    let source = crate::storage::transcript::steering::Source::decode(
+                        entry.source_text.as_deref().unwrap_or_default(),
+                    )?;
+                    let result = store.append_presentation_many_async(&[entry]).await;
+                    let success = result.is_ok();
+                    if let Ok(bytes) = result {
+                        report.completed = report.completed.saturating_add(1);
+                        report.bytes_written = report.bytes_written.saturating_add(bytes);
+                    } else {
+                        report.failed = report.failed.saturating_add(1);
+                    }
+                    batch.push(RuntimeEvent::Persistence(
+                        PersistenceEvent::SteeringPresentationSettled {
+                            conversation_id,
+                            receipt_id: source.receipt.id,
+                            generation,
+                            path,
+                            success,
+                        },
+                    ));
+                }
                 RuntimeSideEffect::PersistSessionArchive {
                     store,
                     conversation_id,

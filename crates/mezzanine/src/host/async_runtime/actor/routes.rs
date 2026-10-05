@@ -360,6 +360,7 @@ impl RuntimeSideEffectRouter {
                 | RuntimeSideEffect::PersistTranscriptEntries { .. }
                 | RuntimeSideEffect::PersistAgentSessionMetadata { .. }
                 | RuntimeSideEffect::PersistPresentationEntries { .. }
+                | RuntimeSideEffect::PersistSteeringPresentation { .. }
                 | RuntimeSideEffect::PersistSessionArchive { .. }
                 | RuntimeSideEffect::PersistSavedSessionRetention { .. }
                 | RuntimeSideEffect::PersistPromptHistory { .. }

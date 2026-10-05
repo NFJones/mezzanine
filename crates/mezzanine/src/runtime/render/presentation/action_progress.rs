@@ -107,9 +107,11 @@ impl RuntimeSessionService {
         }
         self.ensure_current_agent_presentation_screen(&pane_id)?;
         let (conversation_id, _) = self.agent_presentation_target(&pane_id)?;
-        let current_screen = self.agent_pane_screen(&pane_id).cloned().ok_or_else(|| {
-            MezError::invalid_state("executor progress pane screen was not initialized")
-        })?;
+        let current_screen = self
+            .agent_screen_without_pending_steering(&pane_id, &conversation_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("executor progress pane screen was not initialized")
+            })?;
         let current_lineage = self
             .agent_pane_screen_lineage(&pane_id, &conversation_id)
             .ok_or_else(|| {
@@ -1085,7 +1087,8 @@ impl RuntimeSessionService {
         {
             return None;
         }
-        let mut screen = self.agent_pane_screen(pane_id)?.clone();
+        let mut screen =
+            self.agent_screen_without_pending_steering(pane_id, &presentation.conversation_id)?;
         if presentation.transient_rows == 0 {
             return Some(screen);
         }

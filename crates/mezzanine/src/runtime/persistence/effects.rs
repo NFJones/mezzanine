@@ -439,6 +439,16 @@ impl RuntimePersistenceComponent {
             .is_some_and(|pending| *pending > 0)
     }
 
+    /// Blocks reconstruction while visible source lacks durable acknowledgement,
+    /// including exhausted steering writes. This is not peer retry liveness.
+    pub(crate) fn presentation_reconstruction_pending(&self, conversation_id: &str) -> bool {
+        self.presentation_write_pending(conversation_id)
+            || self
+                .steering_presentation_writes
+                .keys()
+                .any(|(owner, _)| owner == conversation_id)
+    }
+
     /// Settles persisted presentation entries and reports when the conversation is clear.
     pub(crate) fn finish_presentation_write(
         &mut self,
@@ -453,7 +463,7 @@ impl RuntimePersistenceComponent {
             return false;
         }
         self.pending_presentation_entries.remove(conversation_id);
-        true
+        !self.presentation_write_pending(conversation_id)
     }
 
     /// Drains queued transcript and prompt-history effects.

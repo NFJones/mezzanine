@@ -445,6 +445,7 @@ impl RuntimeSessionService {
                 process: owner.process.clone(),
             });
             self.publish_steering_recovery_checkpoint();
+            self.request_steering_presentation(&turn.pane_id);
         }
     }
 
@@ -497,6 +498,7 @@ impl RuntimeSessionService {
         {
             owner.admit(dispatch.claim_generation, &sequences);
             self.publish_steering_recovery_checkpoint();
+            self.request_steering_presentation(&dispatch.turn.pane_id);
         }
     }
 
@@ -548,7 +550,9 @@ impl RuntimeSessionService {
     pub(crate) fn settle_steering_receipts(&mut self, turn_id: &str) {
         if let Some(owner) = self.agent.steering_receipts.get_mut(turn_id) {
             owner.settle();
+            let pane = owner.turn.pane_id.clone();
             self.publish_steering_recovery_checkpoint();
+            self.request_steering_presentation(&pane);
         }
     }
 

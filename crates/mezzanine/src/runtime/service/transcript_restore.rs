@@ -1375,6 +1375,17 @@ impl RuntimeSessionService {
 
     /// Drains transcript and prompt-history persistence through one runtime transition.
     pub(crate) fn drain_transcript_persistence_transition(&mut self) -> RuntimeTransition {
+        self.retry_steering_presentations();
+        if self.steering_recovery_needs_publication() {
+            let panes = self
+                .agent_shell_store()
+                .sessions()
+                .map(|session| session.pane_id.clone())
+                .collect::<Vec<_>>();
+            for pane in panes {
+                self.request_steering_presentation(&pane);
+            }
+        }
         if self.steering_recovery_needs_publication()
             && self.persistence.transcript_store().is_some()
         {

@@ -2,6 +2,151 @@
 
 use super::*;
 
+/// A visible promoted occurrence cannot be reconstructed from older durable
+/// history while its exact write is outstanding. Settlement releases resize
+/// admission, and the worker then preserves exactly one normal user row.
+#[test]
+fn steering_receipts_promoted_write_fences_async_resize_until_settlement() {
+    let (mut service, turn) = fixture();
+    let root = std::env::temp_dir().join(format!(
+        "mez-steering-resize-fence-{}",
+        crate::storage::token_usage::new_token_usage_event_id()
+    ));
+    let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+    service.set_agent_transcript_store(store.clone());
+    service
+        .append_agent_user_prompt_to_terminal_buffer("%1", "earlier durable source")
+        .unwrap();
+    service
+        .inject_agent_steering_with_display("%1", "exact input", "promoted guidance")
+        .unwrap();
+    let sequence = service.steering_receipts_for_tests(&turn.turn_id)[0].sequence;
+    service
+        .agent
+        .steering_receipts
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .admit(7, &BTreeSet::from([sequence]));
+    service.request_steering_presentation("%1");
+    let effect = service
+        .drain_transcript_persistence_transition()
+        .side_effects
+        .into_iter()
+        .find(|effect| {
+            matches!(
+                effect,
+                crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { .. }
+            )
+        })
+        .unwrap();
+    service
+        .apply_pane_resize_completion_event("%1", mez_mux::layout::Size::new(40, 24).unwrap())
+        .unwrap();
+    assert!(
+        service
+            .take_agent_presentation_resize_work("%1")
+            .unwrap()
+            .is_none()
+    );
+    let text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(text.matches("user> promoted guidance").count(), 1, "{text}");
+    let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation {
+        entry,
+        generation,
+        path,
+        ..
+    } = effect
+    else {
+        unreachable!();
+    };
+    store
+        .append_presentation_many(std::slice::from_ref(&entry))
+        .unwrap();
+    let source =
+        crate::storage::transcript::steering::Source::decode(entry.source_text.as_deref().unwrap())
+            .unwrap();
+    let transition = service
+        .apply_persistence_transition(
+            crate::runtime::PersistenceEvent::SteeringPresentationSettled {
+                conversation_id: turn.conversation_id.clone(),
+                receipt_id: source.receipt.id,
+                generation,
+                path,
+                success: true,
+            },
+        )
+        .unwrap();
+    assert!(transition.side_effects.iter().any(|effect| matches!(
+        effect,
+        crate::runtime::RuntimeSideEffect::DispatchAgentPresentationResize { .. }
+    )));
+    let work = service
+        .take_agent_presentation_resize_work("%1")
+        .unwrap()
+        .unwrap();
+    let result = RuntimeSessionService::build_agent_presentation_resize(work)
+        .unwrap()
+        .unwrap();
+    assert!(
+        service
+            .apply_agent_presentation_resize_result(result)
+            .unwrap()
+    );
+    let text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(text.matches("user> promoted guidance").count(), 1, "{text}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Partial acknowledgement removes only the consumed occurrence. A failed
+/// promotion install retries on the persistence drain without duplicating its
+/// user row, acknowledging newer equal text, or changing canonical chronology.
+#[test]
+fn steering_receipts_promotion_failure_retries_only_display_once() {
+    let (mut service, turn) = fixture();
+    for display in ["first display", "second display"] {
+        service
+            .inject_agent_steering_with_display("%1", "same input", display)
+            .unwrap();
+    }
+    let before = service.agent_turn_contexts()[&turn.turn_id].clone();
+    let sequence = service.steering_receipts_for_tests(&turn.turn_id)[0].sequence;
+    service
+        .agent
+        .steering_receipts
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .admit(7, &BTreeSet::from([sequence]));
+    service.fail_agent_presentation_install_for_tests(0);
+    service.request_steering_presentation("%1");
+    service.drain_transcript_persistence_transition();
+    service.request_steering_presentation("%1");
+    let text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(text.matches("user> first display").count(), 1, "{text}");
+    assert_eq!(
+        text.matches("user> [pending] second display").count(),
+        1,
+        "{text}"
+    );
+    assert!(!text.contains("[pending] first display"), "{text}");
+    assert_eq!(service.agent_turn_contexts()[&turn.turn_id], before);
+    assert_eq!(
+        service.steering_receipts_for_tests(&turn.turn_id)[1].status,
+        Status::Pending
+    );
+}
+
 /// A failed post-transfer commit with no peer mail must terminally settle its
 /// exact partial turn rather than leave pending input without runnable ownership.
 #[test]
@@ -186,8 +331,9 @@ fn steering_receipts_terminal_commit_settles_before_trace_failure() {
             .agent_shell_store_mut()
             .set_log_level("%1", mez_agent::AgentLogLevel::Debug)
             .unwrap();
-        // Bound completion installs its footer before the transition trace.
-        service.fail_agent_presentation_install_for_tests(if rebound { 0 } else { 1 });
+        // Bound completion installs its footer and settled steering occurrence
+        // before the transition trace; target that trace, not the new promotion.
+        service.fail_agent_presentation_install_for_tests(if rebound { 0 } else { 2 });
         let result = if rebound {
             service
                 .finish_agent_turn_without_shell_session(

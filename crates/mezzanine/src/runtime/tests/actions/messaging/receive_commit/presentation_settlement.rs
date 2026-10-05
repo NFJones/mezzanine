@@ -1056,6 +1056,61 @@ fn runtime_partial_presentation_drain_defers_and_deduplicates_receipt_retry() {
         .start_agent_prompt_turn("%1", "receive two durable peer messages")
         .unwrap();
     service.use_transcript_effect_adapter();
+    // An exhausted steering write must fence reconstruction, not independent
+    // peer-message persistence retries or their exactly-once visible delivery.
+    service
+        .append_settled_steering_source(
+            "%1",
+            &crate::storage::transcript::steering::Source {
+                version: 1,
+                conversation_id: conversation_id.clone(),
+                receipt: mez_agent::transcript::SteeringRecoveryReceipt {
+                    id: "exhausted-steering".into(),
+                    acceptance_order: 1,
+                    turn_id: None,
+                    event_sequence: None,
+                    display: "steering evidence".into(),
+                    status: mez_agent::transcript::SteeringRecoveryStatus::NotSent,
+                },
+            },
+        )
+        .unwrap();
+    let mut effects = service
+        .drain_transcript_persistence_transition()
+        .side_effects;
+    for _ in 0..2 {
+        let effect = effects
+            .into_iter()
+            .find(|effect| {
+                matches!(
+                    effect,
+                    RuntimeSideEffect::PersistSteeringPresentation { .. }
+                )
+            })
+            .unwrap();
+        let RuntimeSideEffect::PersistSteeringPresentation {
+            generation, path, ..
+        } = effect
+        else {
+            unreachable!();
+        };
+        effects = service
+            .apply_persistence_transition(
+                crate::runtime::PersistenceEvent::SteeringPresentationSettled {
+                    conversation_id: conversation_id.clone(),
+                    receipt_id: "exhausted-steering".into(),
+                    generation,
+                    path,
+                    success: false,
+                },
+            )
+            .unwrap()
+            .side_effects;
+    }
+    assert!(effects.iter().all(|effect| !matches!(
+        effect,
+        RuntimeSideEffect::PersistSteeringPresentation { .. }
+    )));
     let sender = service
         .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
         .unwrap();
