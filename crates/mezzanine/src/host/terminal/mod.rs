@@ -42,6 +42,7 @@ mod fd;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod host_clipboard;
+pub(crate) mod iroh_pill;
 /// Exposes the mouse module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

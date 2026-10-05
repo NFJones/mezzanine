@@ -84,52 +84,13 @@ impl AttachClientFrame {
         connected: bool,
         quality: crate::host::terminal::TerminalIrohStatusQuality,
     ) -> (Vec<String>, Vec<Vec<TerminalStyleSpan>>) {
-        let mut lines = self.lines.clone();
-        let mut spans = self.line_style_spans.clone();
-        let Some(slot) = self.iroh_status_slot else {
-            return (lines, spans);
-        };
-        let Some(line) = lines.get_mut(slot.row) else {
-            return (lines, spans);
-        };
-        let label = if connected { " up " } else { " dn " };
-        let prefix = mez_mux::render::line_slice(line, 0, slot.column);
-        let suffix =
-            mez_mux::render::line_slice(line, slot.column.saturating_add(slot.width), usize::MAX);
-        *line = format!(
-            "{prefix}{}{suffix}",
-            mez_mux::render::fit_width(label, slot.width)
-        );
-        spans.resize(lines.len(), Vec::new());
-        let row_spans = &mut spans[slot.row];
-        *row_spans = row_spans
-            .iter()
-            .flat_map(|span| {
-                let slot_end = slot.column.saturating_add(slot.width);
-                if mez_mux::render::style_span_overlaps_columns(*span, slot.column, slot_end) {
-                    mez_mux::render::style_span_segments_outside_range(*span, slot.column, slot_end)
-                } else {
-                    vec![*span]
-                }
-            })
-            .collect();
-        let rendition = if connected {
-            match quality {
-                crate::host::terminal::TerminalIrohStatusQuality::Good => slot.good,
-                crate::host::terminal::TerminalIrohStatusQuality::Degraded => slot.degraded,
-                crate::host::terminal::TerminalIrohStatusQuality::Poor => slot.poor,
-                crate::host::terminal::TerminalIrohStatusQuality::Unknown => slot.unknown,
-            }
-        } else {
-            slot.unknown
-        };
-        row_spans.push(TerminalStyleSpan {
-            start: slot.column,
-            length: slot.width,
-            rendition,
-        });
-        row_spans.sort_unstable_by_key(|span| span.start);
-        (lines, spans)
+        crate::host::terminal::iroh_pill::compose(
+            &self.lines,
+            &self.line_style_spans,
+            self.iroh_status_slot,
+            connected,
+            quality,
+        )
     }
 }
 
