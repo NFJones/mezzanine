@@ -7,6 +7,7 @@
 //! one bounded frame, preserving bytes of subsequent frames in the bridge.
 
 use super::*;
+use crate::control::CONTROL_CONTENT_TYPE;
 use crate::protocol::framing::{ProtocolFrame, decode_frame, encode_frame};
 use crate::runtime::IrohCompressionBridge;
 use secrecy::ExposeSecret;
@@ -62,7 +63,10 @@ impl ConnectedFrontend {
             .to_string();
             bridge
                 .stream_mut()
-                .write_all(&encode_frame(&ProtocolFrame::new("application/json", body)))
+                .write_all(&encode_frame(&ProtocolFrame::new(
+                    CONTROL_CONTENT_TYPE,
+                    body,
+                )))
                 .await
                 .map_err(|_| {
                     MezError::invalid_state(
@@ -128,7 +132,7 @@ async fn read_exact_frame(stream: &mut tokio::io::DuplexStream) -> Result<String
         .map_err(|_| MezError::invalid_state("outbound response incomplete; outcome unknown"))?;
     let (frame, _) = decode_frame(&bytes, BODY_LIMIT)
         .map_err(|_| MezError::invalid_state("outbound response framing invalid"))?;
-    if frame.content_type != "application/json" {
+    if frame.content_type != CONTROL_CONTENT_TYPE {
         return Err(MezError::invalid_state(
             "outbound response content type unsupported",
         ));

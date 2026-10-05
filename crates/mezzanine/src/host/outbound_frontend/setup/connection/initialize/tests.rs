@@ -6,6 +6,136 @@
 use super::*;
 use crate::runtime::{RuntimeIrohCompressionCodec, RuntimeIrohTransportPolicy};
 
+/// Real host dispatch must accept the endpoint-bound durable device proof and
+/// deny its later revocation. Pairing is seeded through the protected test store,
+/// not provider work; both attempts remain host-only with no session allocation.
+#[tokio::test]
+async fn outbound_host_initialize_real_trust_accepts_then_rejects_revocation() {
+    use crate::host::iroh::HostIrohRuntime;
+    use crate::security::remote::{RemoteRoleCeiling, RemoteTrustStore};
+    use std::os::unix::fs::PermissionsExt;
+
+    let root =
+        std::env::temp_dir().join(format!("mez-owner-trust-{:032x}", rand::random::<u128>()));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let host_root = root.join("host");
+    let client_root = root.join("client");
+    let policy = RuntimeIrohTransportPolicy {
+        compression_codecs: vec![RuntimeIrohCompressionCodec::None],
+        ..Default::default()
+    };
+    let host = HostIrohRuntime::bind(
+        &host_root,
+        RuntimeIrohTransportPolicy {
+            enabled: true,
+            ..policy.clone()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let endpoint = OutboundEndpointOwner::bind(&client_root, &policy)
+        .await
+        .unwrap();
+    let admission =
+        OutboundFrontendAdmission::new(endpoint.clone(), 1, Duration::from_secs(2)).unwrap();
+    let trust = RemoteTrustStore::under_host_config_root(&host_root).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let invitation = trust
+        .create_invitation(host.endpoint_id(), RemoteRoleCeiling::Observer, 600, now)
+        .unwrap();
+    let redemption = trust
+        .redeem_invitation(
+            &invitation.token,
+            host.endpoint_id(),
+            &endpoint.endpoint_id().to_string(),
+            "owner fixture",
+            RequestedRole::Observer,
+            now,
+        )
+        .unwrap();
+    RemoteClientProfileStore::under_config_root(&client_root)
+        .save(&RemoteClientProfile {
+            name: "real-host".into(),
+            server_addr: host.endpoint_addr().unwrap(),
+            role: RemoteRoleCeiling::Observer,
+            scope: RemoteClientProfileScope::Host,
+            device_credential: redemption.device_credential.clone(),
+        })
+        .unwrap();
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let server_stop = stop.clone();
+    let serve = host.serve(async move { server_stop.notified().await });
+    let client_work = async {
+        for revoked in [false, true] {
+            if revoked {
+                trust
+                    .revoke_record(&redemption.record.id, Some("fixture revocation"), now)
+                    .unwrap();
+            }
+            let (server, client) = tokio::net::UnixStream::pair().unwrap();
+            let mut client = Framed::new(client, ProtocolFrameCodec::new(HELLO_LIMIT).unwrap());
+            client
+                .send(ProtocolFrame::new(
+                    CONTENT_TYPE,
+                    serde_json::json!({"protocol":PROTOCOL}).to_string(),
+                ))
+                .await
+                .unwrap();
+            let frontend = admission.admit(server).await.unwrap();
+            client.next().await.unwrap().unwrap();
+            client
+                .send(ProtocolFrame::new(
+                    CONTENT_TYPE,
+                    serde_json::json!({
+                        "handle":frontend.handle(), "profile":"real-host", "initialize": {
+                            "client_name":"owner fixture", "requested_version":3,
+                            "requested_role":"observer", "session_intent":"host_only"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            let prepared = frontend.prepare(Duration::from_secs(2)).await.unwrap();
+            let connected = prepared.connect_pinned().await.unwrap();
+            let initialized = connected.initialize_host_only().await;
+            if revoked {
+                assert_eq!(initialized.err().unwrap().kind(), MezErrorKind::Forbidden);
+            } else {
+                let initialized = initialized.unwrap();
+                assert_eq!(
+                    initialized.summary,
+                    serde_json::json!({"selected_version":3,"granted_role":"observer","host_only":true})
+                );
+                drop(initialized);
+            }
+            assert_eq!(admission.slots.available_permits(), 1);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), client.next())
+                    .await
+                    .is_ok_and(|result| result.is_none()),
+                "local frontend receives no remote proof or reply"
+            );
+        }
+        stop.notify_one();
+    };
+    let (served, ()) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(serve, client_work)
+    })
+    .await
+    .unwrap();
+    assert_eq!(served.unwrap(), 2);
+    drop(admission);
+    endpoint.begin_shutdown().unwrap().finish().await.unwrap();
+    drop(host);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Produces the minimal synthetic host-only response for one pinned identity.
 fn response(server: iroh::EndpointId) -> serde_json::Value {
     serde_json::json!({"jsonrpc":"2.0","id":REQUEST_ID,"result":{
@@ -61,8 +191,8 @@ fn outbound_host_initialize_settlement_is_correlated_and_allowlisted() {
 #[tokio::test]
 async fn outbound_host_initialize_frame_reads_are_exact_and_bounded() {
     let (mut reader, mut writer) = tokio::io::duplex(32768);
-    let first = encode_frame(&ProtocolFrame::new("application/json", "first"));
-    let second = encode_frame(&ProtocolFrame::new("application/json", "second"));
+    let first = encode_frame(&ProtocolFrame::new(CONTROL_CONTENT_TYPE, "first"));
+    let second = encode_frame(&ProtocolFrame::new(CONTROL_CONTENT_TYPE, "second"));
     writer.write_all(&[first, second].concat()).await.unwrap();
     assert_eq!(read_exact_frame(&mut reader).await.unwrap(), "first");
     assert_eq!(read_exact_frame(&mut reader).await.unwrap(), "second");
@@ -124,10 +254,10 @@ async fn outbound_host_initialize_keeps_proof_owner_side_and_trailing_frame() {
             .write_all(
                 &[
                     encode_frame(&ProtocolFrame::new(
-                        "application/json",
+                        CONTROL_CONTENT_TYPE,
                         response(server.id()).to_string(),
                     )),
-                    encode_frame(&ProtocolFrame::new("application/json", "trailing")),
+                    encode_frame(&ProtocolFrame::new(CONTROL_CONTENT_TYPE, "trailing")),
                 ]
                 .concat(),
             )
