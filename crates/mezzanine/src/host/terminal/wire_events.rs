@@ -24,6 +24,31 @@ pub(crate) enum AttachRenderAction {
 }
 
 impl AttachRenderAction {
+    /// Returns the closed local IPC spelling of a redraw fact, never a method.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::View => "view",
+            Self::ImmediateView => "immediate_view",
+            Self::InvalidateAndView => "invalidate_and_view",
+            Self::Disconnect => "disconnect",
+        }
+    }
+
+    /// Decodes only the closed redraw vocabulary; unknown values grant no action.
+    pub(crate) fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "none" => Ok(Self::None),
+            "view" => Ok(Self::View),
+            "immediate_view" => Ok(Self::ImmediateView),
+            "invalidate_and_view" => Ok(Self::InvalidateAndView),
+            "disconnect" => Ok(Self::Disconnect),
+            _ => Err(MezError::invalid_state(
+                "outbound redraw action unsupported",
+            )),
+        }
+    }
+
     /// Combines actions, preserving the strongest requirement for an event burst.
     pub(crate) const fn combine(self, other: Self) -> Self {
         if self.rank() >= other.rank() {

@@ -4311,6 +4311,11 @@ and project only shared redraw classification and event identity. Cancelled read
 waiters MUST NOT discard buffered bytes; malformed or truncated framing MUST
 poison the reader. Reader construction alone does not negotiate events, forward
 them to frontends, or grant input or presentation authority.
+The internal requested event exchange MUST bind the exact frontend/session and
+bounded wait, coalesce at most 64 redraw facts without returning raw payloads,
+and preserve unknown burst cutoffs. Idle waits MUST retain incremental reader
+state; EOF, framing errors or uncertain reply delivery MUST retire ownership
+without reconnect or replay. Unsolicited frames MUST NOT interleave with replies.
 The separate internal primary-input exchange MUST bind the exact frontend and
 initialized primary, bound geometry/input/key size, and retain the original
 terminal-step idempotency key. It MUST issue one mutation without automatic

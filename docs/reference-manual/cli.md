@@ -583,6 +583,11 @@ preface, bounded framing and negotiated codecs without spawning workers. It
 retains buffered bytes across cancelled reads and rejects reuse after malformed
 or truncated framing. Codec and QUIC fixtures qualify decoding and stream-scoped
 setup, not broker event negotiation, frontend forwarding or ordinary CLI support.
+An internal requested event exchange now forwards bounded coalesced redraw facts
+and optional event identity across exact-session IPC, without raw event payloads
+or unsolicited reply interleaving. Idle waits retain the reader; terminal errors
+consume ownership without replay. Real-host sibling fixtures qualify this exchange,
+not full event-driven foreground scheduling or ordinary CLI attachment.
 An independent internal primary-input exchange carries bounded bytes with the
 original mutation key and validates exact frontend/session acknowledgement.
 Reported byte acceptance is runtime evidence, not proof of process or model

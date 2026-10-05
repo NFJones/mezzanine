@@ -48,6 +48,7 @@ pub(crate) struct OutboundSessionClient {
 }
 
 mod acknowledge;
+mod events;
 mod foreground;
 mod present;
 mod step;

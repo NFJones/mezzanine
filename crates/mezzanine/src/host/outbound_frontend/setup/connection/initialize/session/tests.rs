@@ -326,7 +326,22 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
                 second_view["session"]["lease_id"]
             );
             assert_eq!(router.snapshots().await.unwrap().len(), 4);
+            let (first, _, first_event) =
+                first.poll_events(25, Duration::from_secs(2)).await.unwrap();
+            assert!(
+                first_event.is_some(),
+                "negotiated events must cross local IPC"
+            );
             drop(first);
+            let (second, _, second_event) = second
+                .poll_events(25, Duration::from_secs(2))
+                .await
+                .unwrap();
+            assert!(second_event.is_some(), "sibling events survive retirement");
+            assert_eq!(
+                serde_json::to_value(second.summary()).unwrap(),
+                second_view["session"]
+            );
             // Literal bytes without a line terminator cannot execute a shell
             // command; acceptance is qualified independently of physical echo.
             let (second, acknowledgement) = second
@@ -488,6 +503,7 @@ async fn supervised_create(
             "client_name":name,"requested_version":3,"requested_role":"primary",
             "session_intent":"create","idempotency_key":format!("create-{name}"),
             "detach_primary_on_disconnect":true,
+            "event_stream_version":1,
             "client":{"name":name,"interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"},
                 "metadata":{"session_name":name}}
     }), 80, 24, Duration::from_secs(2)).await.unwrap();
