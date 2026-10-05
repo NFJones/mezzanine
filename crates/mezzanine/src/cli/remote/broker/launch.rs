@@ -19,6 +19,43 @@ use crate::error::{MezError, Result};
 
 const DIAGNOSTIC_NAME: &str = "outbound.diagnostics.log";
 
+/// Connects through protected election/readiness with an explicitly selected
+/// executable. The caller retains any spawned child even when readiness fails
+/// or this future is cancelled; no socket observation authorizes killing it.
+/// This is not ordinary attach/new activation or a background reaper.
+pub(super) async fn connect_owned(
+    executable: &Path,
+    env: &CliEnv,
+    budget: std::time::Duration,
+    child: &mut Option<LaunchedBroker>,
+) -> Result<crate::host::outbound_frontend::client::OutboundFrontendClient> {
+    if !(std::time::Duration::from_millis(100)..=std::time::Duration::from_secs(120))
+        .contains(&budget)
+    {
+        return Err(MezError::invalid_args(
+            "outbound startup deadline unavailable",
+        ));
+    }
+    let paths = env.config_paths()?;
+    let layers = crate::cli::load_runtime_config_layers(&paths)?;
+    let structured = crate::runtime::runtime_effective_config_value(&layers)?;
+    let policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+    if !policy.outbound_enabled {
+        return Err(MezError::forbidden("Iroh outbound transport is disabled"));
+    }
+    paths.ensure_default_config()?;
+    super::startup::connect_with_launcher(paths.root(), budget, |election| {
+        if child.is_some() {
+            return Err(MezError::conflict(
+                "outbound startup child already retained; inspect it before retrying",
+            ));
+        }
+        *child = Some(LaunchedBroker::spawn(executable, env, election)?);
+        Ok(())
+    })
+    .await
+}
+
 /// One exact spawned child. Drop does not kill it; Tokio's best-effort reaper
 /// is not a guarantee of bounded reaping. Deliberate callers should wait for exit.
 pub(super) struct LaunchedBroker {

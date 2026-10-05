@@ -583,6 +583,10 @@ the elected root, uses fixed argv and a cleared environment, and validates priva
 diagnostics through the held directory. It returns an exact child handle for
 observation and reaping; dropping it does not kill a broker shared by siblings.
 This is not yet automatic startup or ordinary CLI activation.
+Owned startup now composes that launcher with election/readiness, preserving any
+spawned child in caller state even on failure or cancellation. An explicit
+fresh-binary fixture qualifies actual broker readiness reuse and SIGTERM/reaping
+under the isolated environment; this is not full remote CLI attachment acceptance.
 An internal client session API consumes readiness once, sends credential-free
 setup, and pins session/client/lease identities from the initial line snapshot.
 Subsequent snapshots retain the same settlement and stream buffers. Failed

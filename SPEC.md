@@ -4305,6 +4305,10 @@ private regular diagnostics through the retained root without following links.
 Its exact child MUST remain caller-owned for observation and reaping; frontend
 disposal MUST NOT implicitly kill a potentially shared broker. Launcher creation
 alone does not establish readiness or completed ordinary CLI integration.
+Owned startup composition MUST retain any spawned child in caller-owned state
+across readiness failure or cancellation. Reusing an authenticated ready owner
+MUST NOT spawn another child. A retained failed child MUST NOT be silently
+replaced by a subsequent startup attempt.
 The internal client session transition MUST consume readiness once, send only
 credential-free setup, and pin validated session/client/lease identities from its
 first snapshot. Later snapshots MUST retain those exact identities. Codec changes

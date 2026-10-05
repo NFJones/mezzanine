@@ -6,6 +6,129 @@
 use super::*;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
+/// Explicit released-binary fixture: the caller supplies a freshly built trusted
+/// executable. Two authenticated readiness clients reuse one launched broker;
+/// disposing them does not kill it. The test deliberately signals and reaps its
+/// exact child, falling back to explicit termination on failure. No remote
+/// sessions or provider work occur, and ordinary CLI routing is not qualified.
+#[tokio::test]
+#[ignore = "requires explicit MEZ_BROKER_EXECUTABLE for actual process qualification"]
+async fn outbound_launcher_actual_broker_retains_child_and_reuses_readiness() {
+    let executable = std::path::PathBuf::from(
+        std::env::var_os("MEZ_BROKER_EXECUTABLE").expect("explicit broker executable required"),
+    );
+    assert!(executable.is_absolute());
+    let (home, env, election) = fixture();
+    drop(election);
+    let mut child = None;
+    let qualified = async {
+        let first = connect_owned(
+            &executable,
+            &env,
+            std::time::Duration::from_secs(10),
+            &mut child,
+        )
+        .await?;
+        let mut sibling_child = None;
+        let second = connect_owned(
+            Path::new("/nonexistent/unused-broker"),
+            &env,
+            std::time::Duration::from_secs(2),
+            &mut sibling_child,
+        )
+        .await?;
+        assert!(
+            sibling_child.is_none(),
+            "ready owner must not launch a sibling endpoint"
+        );
+        assert_ne!(first.handle()?, second.handle()?);
+        drop(first);
+        drop(second);
+        let launched = child.as_mut().expect("elected caller retains child");
+        assert!(launched.try_wait()?.is_none());
+        let pid = launched
+            .child
+            .id()
+            .and_then(|id| i32::try_from(id).ok())
+            .and_then(rustix::process::Pid::from_raw)
+            .expect("owned live child PID");
+        rustix::process::kill_process(pid, rustix::process::Signal::TERM)
+            .map_err(std::io::Error::from)?;
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), launched.wait())
+            .await
+            .map_err(|_| MezError::invalid_state("fixture graceful broker shutdown timed out"))??;
+        assert!(status.success());
+        Ok::<(), MezError>(())
+    }
+    .await;
+    if let Some(launched) = child.as_mut()
+        && launched.try_wait().unwrap().is_none()
+    {
+        tokio::time::timeout(std::time::Duration::from_secs(5), launched.terminate())
+            .await
+            .expect("fixture child cleanup must finish")
+            .unwrap();
+    }
+    qualified.unwrap();
+    let paths = env.config_paths().unwrap();
+    assert!(!paths.root().join("outbound.sock").exists());
+    drop(crate::security::remote::RemoteClientIdentity::load_or_create(paths.root()).unwrap());
+    drop(child);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+/// An exited launcher with no published socket must remain caller-owned after
+/// readiness timeout. The caller reaps it explicitly, and a second startup
+/// attempt cannot silently replace the retained process evidence.
+#[tokio::test]
+async fn outbound_launcher_owned_startup_retains_failed_child() {
+    let (home, env, election) = fixture();
+    drop(election);
+    let mut child = None;
+    let result = connect_owned(
+        Path::new("/bin/true"),
+        &env,
+        std::time::Duration::from_millis(200),
+        &mut child,
+    )
+    .await;
+    assert!(result.is_err());
+    let launched = child
+        .as_mut()
+        .expect("spawned child must survive readiness failure");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), launched.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        connect_owned(
+            Path::new("/bin/true"),
+            &env,
+            std::time::Duration::from_secs(1),
+            &mut child
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        child
+            .as_mut()
+            .unwrap()
+            .try_wait()
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    drop(child);
+    let paths = env.config_paths().unwrap();
+    assert!(!paths.root().join("outbound.sock").exists());
+    drop(StartupElection::acquire(paths.root()).unwrap().unwrap());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
 /// Creates a private primary root and retains its elected launcher guard.
 fn fixture() -> (std::path::PathBuf, CliEnv, StartupElection) {
     let home = std::env::temp_dir().join(format!("mez-launch-{:032x}", rand::random::<u128>()));
