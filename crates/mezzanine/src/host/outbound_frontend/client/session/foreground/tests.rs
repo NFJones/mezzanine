@@ -144,6 +144,75 @@ fn inert_client(
     (root, listener, peer, client)
 }
 
+/// Repeated negotiated idle replies must keep the initial committed frame rather
+/// than redraw or fetch snapshots on each poll. Cancellation retires the same
+/// stream and restores presentation without replaying setup or terminal input.
+#[tokio::test]
+async fn outbound_foreground_idle_events_keep_one_committed_frame() {
+    let (root, listener, peer, mut client) = inert_client(Vec::new());
+    client.events_negotiated = true;
+    let handle = client.client.handle.clone();
+    let summary = serde_json::to_value(&client.summary).unwrap();
+    let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+    for _ in 0..4 {
+        terminal.push_pending_input_read();
+    }
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let foreground_stop = stop.clone();
+    let foreground = client.run_snapshot_foreground(
+        &mut terminal,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(1),
+        async move { foreground_stop.notified().await },
+    );
+    let responder = async {
+        let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+        for _ in 0..3 {
+            let frame = peer.next().await.unwrap().unwrap();
+            assert_eq!(frame.content_type, CONTENT_TYPE);
+            let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+            assert_eq!(
+                request["operation"], "events",
+                "idle replies must not fetch snapshots"
+            );
+            assert_eq!(request["handle"], serde_json::to_value(&handle).unwrap());
+            peer.send(ProtocolFrame::new(
+                CONTENT_TYPE,
+                serde_json::json!({
+                    "handle":handle,"session":summary,"action":"none","event_id":null
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        }
+        // Observe the next poll before cancelling: already-buffered request
+        // bytes are permitted, but no reply or subsequent request is needed
+        // to retire the consumed owner.
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(request["operation"], "events");
+        assert_eq!(request["handle"], serde_json::to_value(&handle).unwrap());
+        stop.notify_one();
+        assert!(
+            peer.next().await.is_none(),
+            "cancellation must retire the exact stream without another reply"
+        );
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(foreground, responder)
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(terminal.written_frames.len(), 1);
+    assert_eq!(terminal.written_frames[0].lines, ["exact snapshot"]);
+    assert_eq!(terminal.presentation_entries, 1);
+    assert_eq!(terminal.presentation_restores, 1);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Input-first waits must settle the original event request before returning its
 /// client. Event-first waits must leave queued terminal bytes unread. Neither
 /// ordering may replay setup, submit input remotely, or lose stream ownership.
