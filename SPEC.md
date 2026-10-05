@@ -2260,6 +2260,15 @@ audit requirements as that method. Interactive commands MAY omit explicit
 idempotency key to each non-idempotent operation before sending it to the
 control endpoint.
 
+Administrative agent-browser snapshots MUST retain identity-aware execution
+metadata without expanding model discovery or lifecycle authority. Native
+Harness is `mezzanine`; Model and Reasoning MUST come from one effective active
+profile or the selected scoped idle profile. Known unset reasoning is `—`;
+missing evidence is `unavailable`. External Harness MUST come from validated
+launch metadata; external Model and Reasoning remain unavailable under the
+current telemetry contract. Generic pane or capability claims MUST NOT borrow
+native profile evidence. These values are captured only at snapshot boundaries.
+
 Layout-affecting terminal commands, key bindings, control requests, and MAAP
 actions MUST converge on the same runtime pane/window creation, resize, and pty
 synchronization paths for equivalent operations. In particular, `new-window`,

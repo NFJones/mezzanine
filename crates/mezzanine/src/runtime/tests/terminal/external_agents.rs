@@ -489,6 +489,21 @@ fn runtime_external_presentation_immediate_root_replacement_hides_old_owner() {
             .metadata
             .contains(&("Project".into(), root.to_string_lossy().into_owned()))
     );
+    assert!(
+        external
+            .metadata
+            .contains(&("Harness".into(), "codex".into()))
+    );
+    assert!(
+        external
+            .metadata
+            .contains(&("Model".into(), "unavailable".into()))
+    );
+    assert!(
+        external
+            .metadata
+            .contains(&("Reasoning".into(), "unavailable".into()))
+    );
     assert!(targets[&external.id].lifecycle.is_none());
     service.terminate_all_pane_processes().unwrap();
     let descriptor = service.find_pane_descriptor("%1").unwrap();

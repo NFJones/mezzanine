@@ -3191,6 +3191,24 @@ fn runtime_subagent_scope_override_governs_child_turn_resolution() {
     assert_eq!(turn_profile.model, "deepseek-v4-flash");
     assert_eq!(turn_profile.reasoning_profile.as_deref(), Some("low"));
 
+    let (browser, _) = service.agent_management_browser(&primary).unwrap();
+    let child = browser
+        .records()
+        .iter()
+        .find(|record| record.id == child_agent_id)
+        .unwrap();
+    assert!(
+        child
+            .metadata
+            .contains(&("Harness".into(), "mezzanine".into()))
+    );
+    assert!(
+        child
+            .metadata
+            .contains(&("Model".into(), "deepseek-v4-flash".into()))
+    );
+    assert!(child.metadata.contains(&("Reasoning".into(), "low".into())));
+
     service
         .integration
         .model_profile_overrides_mut()

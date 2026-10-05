@@ -65,6 +65,98 @@ pub(crate) struct AgentCloseConfirmation {
 }
 
 impl RuntimeSessionService {
+    /// Resolves inert execution evidence for one exact registered identity.
+    /// External launch metadata takes precedence on shared panes. Native evidence
+    /// requires the pane-derived identity and a qualified current conversation;
+    /// generic role/capability/pane claims cannot borrow its selected profile.
+    fn agent_browser_execution_metadata(
+        &self,
+        id: &str,
+        pane: Option<&str>,
+        external: Option<&serde_json::Value>,
+    ) -> (String, String, String) {
+        let unavailable = || {
+            (
+                "unavailable".into(),
+                "unavailable".into(),
+                "unavailable".into(),
+            )
+        };
+        if let Some(external) = external {
+            return (
+                external["harness"].as_str().unwrap_or("unavailable").into(),
+                "unavailable".into(),
+                "unavailable".into(),
+            );
+        }
+        let Some(pane) = pane.filter(|pane| {
+            id == format!("agent-{pane}") && self.find_pane_descriptor(pane).is_some()
+        }) else {
+            return unavailable();
+        };
+        if self.runtime_agent_kind(id) == mez_agent::AgentKind::Internal {
+            return unavailable();
+        }
+        let Some(session) = self.agent_shell_store().get(pane) else {
+            return unavailable();
+        };
+        let current_turns = || {
+            self.agent_turn_ledger().turns().iter().filter(|turn| {
+                turn.agent_id == id
+                    && turn.pane_id == pane
+                    && turn.conversation_id == session.session_id
+            })
+        };
+        if session.allowed_actions.is_none()
+            && session.display_name.is_none()
+            && self.subagent_lineage(id).is_none()
+            && current_turns().next().is_none()
+        {
+            return unavailable();
+        }
+        let mut active = current_turns().filter(|turn| {
+            matches!(
+                turn.state,
+                AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+            )
+        });
+        let turn = active.next();
+        if active.next().is_some() {
+            return (
+                "mezzanine".into(),
+                "unavailable".into(),
+                "unavailable".into(),
+            );
+        }
+        let profile = if let Some(turn) = turn {
+            self.agent_turn_model_profile(&turn.turn_id)
+                .cloned()
+                .or_else(|| {
+                    self.provider_registry()
+                        .resolve_profile(&turn.model_profile)
+                        .ok()
+                })
+        } else {
+            self.active_model_profile_for_pane(pane, id, None)
+                .ok()
+                .map(|(_, profile)| profile)
+        };
+        match profile {
+            Some(profile) => (
+                "mezzanine".into(),
+                profile.model.clone(),
+                profile
+                    .reasoning_display_value()
+                    .unwrap_or_else(|| "—".into()),
+            ),
+            None => (
+                "mezzanine".into(),
+                "unavailable".into(),
+                "unavailable".into(),
+            ),
+        }
+    }
+
     /// Builds an uncapped live-registration snapshot without saved conversations.
     pub(crate) fn agent_management_browser(
         &mut self,
@@ -173,9 +265,14 @@ impl RuntimeSessionService {
             } else {
                 "unavailable/no pane"
             };
+            let (harness, model, reasoning) =
+                self.agent_browser_execution_metadata(&id, pane, external.as_ref());
             let metadata = vec![
                 ("Name".into(), name.clone()),
                 ("Kind".into(), self.runtime_agent_kind(&id).as_str().into()),
+                ("Harness".into(), harness),
+                ("Model".into(), model),
+                ("Reasoning".into(), reasoning),
                 ("State".into(), status),
                 ("Pane".into(), pane.unwrap_or("unavailable").into()),
                 (

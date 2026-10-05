@@ -2,6 +2,90 @@
 
 use super::*;
 
+/// Browser execution evidence uses one effective active profile rather than
+/// mixing routed model and next-selection reasoning. Generic registrations on
+/// the same pane cannot borrow native profile evidence.
+#[test]
+fn runtime_agent_browser_execution_metadata_is_identity_and_profile_scoped() {
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "primary".into(), path: None, format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"work\"\n[providers.openai]\nkind = \"openai\"\nmodels = [\"configured-model\"]\ndefault_model = \"configured-model\"\n[model_profiles.work]\nprovider = \"openai\"\nmodel = \"configured-model\"\nreasoning_profile = \"high\"\n".into(),
+    }]).unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "initial").unwrap();
+    let mut effective = service
+        .agent_turn_model_profile(&started.turn_id)
+        .unwrap()
+        .clone();
+    effective.model = "routed-model".into();
+    effective.reasoning_profile = None;
+    effective.provider_options.remove("reasoning_effort");
+    service.set_agent_turn_model_profile(&started.turn_id, effective);
+    let unknown = service.message_service_mut().register_agent(
+        mez_core::ids::PaneId::opaque("%1"),
+        None,
+        "generic",
+        vec!["agent-harness".into()],
+    );
+    let inspect = |service: &mut RuntimeSessionService, id: &str| {
+        service
+            .agent_management_browser(&primary)
+            .unwrap()
+            .0
+            .records()
+            .iter()
+            .find(|record| record.id == id)
+            .unwrap()
+            .metadata
+            .clone()
+    };
+    let active = inspect(&mut service, "agent-%1");
+    assert!(active.contains(&("Harness".into(), "mezzanine".into())));
+    assert!(active.contains(&("Model".into(), "routed-model".into())));
+    assert!(active.contains(&("Reasoning".into(), "—".into())));
+    let mut effective = service
+        .agent_turn_model_profile(&started.turn_id)
+        .unwrap()
+        .clone();
+    effective
+        .provider_options
+        .insert("reasoning_effort".into(), "medium".into());
+    service.set_agent_turn_model_profile(&started.turn_id, effective.clone());
+    assert!(inspect(&mut service, "agent-%1").contains(&("Reasoning".into(), "medium".into())));
+    effective.reasoning_profile = Some("low".into());
+    service.set_agent_turn_model_profile(&started.turn_id, effective);
+    assert!(inspect(&mut service, "agent-%1").contains(&("Reasoning".into(), "low".into())));
+    let foreign = inspect(&mut service, unknown.agent_id.as_str());
+    for key in ["Harness", "Model", "Reasoning"] {
+        assert!(
+            foreign.contains(&(key.into(), "unavailable".into())),
+            "{foreign:?}"
+        );
+    }
+    service
+        .finish_agent_turn("%1", &started.turn_id, AgentTurnState::Completed)
+        .unwrap();
+    let idle = inspect(&mut service, "agent-%1");
+    assert!(idle.contains(&("Model".into(), "configured-model".into())));
+    assert!(idle.contains(&("Reasoning".into(), "high".into())));
+    service
+        .agent_shell_store_mut()
+        .start_new_conversation("%1")
+        .unwrap();
+    service.ensure_primary_agent_name("%1").unwrap();
+    let rebound = inspect(&mut service, "agent-%1");
+    assert!(rebound.contains(&("Model".into(), "configured-model".into())));
+    assert!(!rebound.contains(&("Model".into(), "routed-model".into())));
+}
+
 /// Project labels follow each live pane's canonical current directory and
 /// deepest trust snapshot, not token mappings, titles or inherited projects.
 /// Moving the pane and withholding nested trust must refresh only inert labels

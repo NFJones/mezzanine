@@ -116,6 +116,13 @@ controllers and external harnesses, not saved conversations or the model-facing
 64-row audience projection. Rows retain canonical IDs, location, state, objective
 and operation availability separately from clipped display text.
 
+The snapshot also retains identity-aware execution metadata. Runtime-owned native
+agents use Harness `mezzanine`; Model and Reasoning come from one effective active
+profile, or the selected scoped profile when idle. An unset reasoning level is
+`—`, not off. Unknown profile evidence is `unavailable`. External harness labels
+come from validated launch bindings; their model and reasoning remain unavailable
+under the current telemetry contract. Metadata grants no lifecycle authority.
+
 The **Project** column replaces the visible Controls column. It shows the full
 currently trusted root for each live pane's canonical observed working directory
 as of opening or refreshing the list. A deeper rejected, revoked or pending
