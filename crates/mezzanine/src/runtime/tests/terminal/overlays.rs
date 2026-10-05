@@ -51,6 +51,53 @@ fn runtime_agent_browser_execution_metadata_is_identity_and_profile_scoped() {
     assert!(active.contains(&("Harness".into(), "mezzanine".into())));
     assert!(active.contains(&("Model".into(), "routed-model".into())));
     assert!(active.contains(&("Reasoning".into(), "—".into())));
+    let (browser, _) = service.agent_management_browser(&primary).unwrap();
+    let markdown = browser.render_page().raw_markdown;
+    assert!(markdown.contains("| ID | Name | Kind | Harness | Model | Reasoning | State | Pane | Window | Group | Role | Objective | Project |"), "{markdown}");
+    assert!(markdown.contains("routed-model"), "{markdown}");
+    assert!(!markdown.contains("| Controls |"), "{markdown}");
+    for query in ["mezzanine", "routed-model"] {
+        let filtered = browser.render_page_matching(query).raw_markdown;
+        assert!(filtered.contains("agent-%1"), "{filtered}");
+        assert!(
+            !filtered.contains(&format!("**{}**", unknown.agent_id)),
+            "{filtered}"
+        );
+    }
+    let theme = mez_mux::render::RichTextTheme {
+        heading: mez_terminal::TerminalColor::Indexed(7),
+        structural: mez_terminal::TerminalColor::Indexed(7),
+        link: mez_terminal::TerminalColor::Indexed(7),
+        inline_code: mez_terminal::TerminalColor::Indexed(7),
+        table_alternate_row: mez_terminal::TerminalColor::Indexed(7),
+        diff_addition: mez_terminal::TerminalColor::Indexed(2),
+        diff_deletion: mez_terminal::TerminalColor::Indexed(1),
+        syntax: None,
+    };
+    for width in [52, 53, 80, 100, 120, 240] {
+        let layout = browser
+            .render_list_layout("routed-model", width, &theme)
+            .unwrap();
+        assert!(!layout.record_ranges.is_empty());
+        let payload_start = layout
+            .record_ranges
+            .iter()
+            .map(|range| range.line)
+            .min()
+            .unwrap();
+        for range in layout.record_ranges {
+            assert_eq!(browser.records()[range.row].id, "agent-%1");
+            assert!(range.line < layout.lines.len());
+        }
+        assert!(
+            layout
+                .lines
+                .iter()
+                .skip(payload_start)
+                .all(|line| unicode_width::UnicodeWidthStr::width(line.display.as_str()) <= width),
+            "execution table payload exceeds width={width}"
+        );
+    }
     let mut effective = service
         .agent_turn_model_profile(&started.turn_id)
         .unwrap()
@@ -63,6 +110,44 @@ fn runtime_agent_browser_execution_metadata_is_identity_and_profile_scoped() {
     effective.reasoning_profile = Some("low".into());
     service.set_agent_turn_model_profile(&started.turn_id, effective);
     assert!(inspect(&mut service, "agent-%1").contains(&("Reasoning".into(), "low".into())));
+    service
+        .execute_attached_display_command(&primary, "list-agents")
+        .unwrap();
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"/agent-%1\r".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    let mut changed = service
+        .agent_turn_model_profile(&started.turn_id)
+        .unwrap()
+        .clone();
+    changed.model = "long-provider-model-with-searchable-suffix-雪".into();
+    changed.reasoning_profile = Some("medium".into());
+    service.set_agent_turn_model_profile(&started.turn_id, changed);
+    service.refresh_agent_management_overlay(&primary).unwrap();
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(overlay.search_query.as_deref(), Some("agent-%1"));
+    let refreshed = &overlay.record_browser.as_ref().unwrap().browser;
+    assert_eq!(refreshed.active_record_id(), Some("agent-%1"));
+    for query in ["searchable-suffix-雪", "medium"] {
+        let page = refreshed.render_page_matching(query).raw_markdown;
+        assert!(page.contains("agent-%1"), "{page}");
+        assert!(
+            page.contains("long-provider-model-with-searchable-suffix-雪"),
+            "{page}"
+        );
+    }
     let foreign = inspect(&mut service, unknown.agent_id.as_str());
     for key in ["Harness", "Model", "Reasoning"] {
         assert!(

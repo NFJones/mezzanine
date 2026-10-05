@@ -2268,6 +2268,11 @@ missing evidence is `unavailable`. External Harness MUST come from validated
 launch metadata; external Model and Reasoning remain unavailable under the
 current telemetry contract. Generic pane or capability claims MUST NOT borrow
 native profile evidence. These values are captured only at snapshot boundaries.
+The visible columns MUST be ID, Name, Kind, Harness, Model, Reasoning, State,
+Pane, Window, Group, Role, Objective and Project, in that order. Full execution
+values MUST remain searchable and included in Markdown exports; Controls remains
+hidden metadata. Explicit refresh retains selected identity and query while
+replacing the snapshot and invalidating stale confirmations.
 
 Layout-affecting terminal commands, key bindings, control requests, and MAAP
 actions MUST converge on the same runtime pane/window creation, resize, and pty

@@ -18,13 +18,20 @@ impl RuntimeSessionService {
             .presentation
             .primary_display_overlay
             .as_ref()
-            .and_then(|overlay| overlay.record_browser.as_ref())
-            .and_then(|state| match state.source.as_ref()? {
-                RuntimeRecordBrowserOverlaySource::Agents { client_id, .. } => Some((
-                    client_id.clone(),
-                    state.browser.active_record_id().map(str::to_string),
-                )),
-                _ => None,
+            .and_then(|overlay| {
+                let state = overlay.record_browser.as_ref()?;
+                let RuntimeRecordBrowserOverlaySource::Agents { client_id, .. } =
+                    state.source.as_ref()?
+                else {
+                    return None;
+                };
+                let selected = overlay
+                    .active_selection_index
+                    .and_then(|index| overlay.selections.get(index))
+                    .and_then(|selection| state.browser.records().get(selection.logical_id))
+                    .map(|record| record.id.clone())
+                    .or_else(|| state.browser.active_record_id().map(str::to_string));
+                Some((client_id.clone(), selected))
             })
             .ok_or_else(|| MezError::conflict("agent browser unavailable"))?;
         if owner != client.as_str() {

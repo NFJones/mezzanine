@@ -340,6 +340,9 @@ impl RuntimeSessionService {
         browser.set_table_columns(vec![
             "Name".into(),
             "Kind".into(),
+            "Harness".into(),
+            "Model".into(),
+            "Reasoning".into(),
             "State".into(),
             "Pane".into(),
             "Window".into(),

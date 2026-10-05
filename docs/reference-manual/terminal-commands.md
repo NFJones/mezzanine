@@ -116,7 +116,10 @@ controllers and external harnesses, not saved conversations or the model-facing
 64-row audience projection. Rows retain canonical IDs, location, state, objective
 and operation availability separately from clipped display text.
 
-The snapshot also retains identity-aware execution metadata. Runtime-owned native
+The visible columns are ID, Name, Kind, Harness, Model, Reasoning, State, Pane,
+Window, Group, Role, Objective and Project. Full values remain searchable and
+included in saved Markdown; Controls remains hidden metadata. Opening the list
+or explicit `r` refresh captures identity-aware execution metadata. Runtime-owned native
 agents use Harness `mezzanine`; Model and Reasoning come from one effective active
 profile, or the selected scoped profile when idle. An unset reasoning level is
 `—`, not off. Unknown profile evidence is `unavailable`. External harness labels
