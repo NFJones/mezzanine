@@ -675,18 +675,31 @@ async fn pi_session_released_extension_uses_inherited_descriptor() {
     let mut fixture = Fixture::new();
     let home = fixture.root.join("home");
     std::fs::create_dir(&home).unwrap();
+    let artifact_root = fixture.root.join("agent");
+    std::fs::create_dir(&artifact_root).unwrap();
+    super::super::installer::plan(
+        &artifact_root,
+        &super::super::pi_artifact::candidate_manifest(),
+        super::super::installer::Operation::Install,
+    )
+    .unwrap()
+    .apply()
+    .unwrap();
     let launched = spawn(LaunchSpec {
         executable: node.clone(),
-        directory: repository.into(),
+        directory: fixture.root.clone(),
         arguments: vec![
             repository
                 .join("scripts/qualify-pi-inherited-stream.mjs")
                 .into_os_string(),
             package.into_os_string(),
+            artifact_root.into_os_string(),
         ],
         environment: vec![
             ("HOME".into(), home.into_os_string()),
             ("PATH".into(), node.parent().unwrap().as_os_str().into()),
+            ("MEZ_PI_OBSERVER_FD".into(), "3".into()),
+            ("MEZ_PI_OBSERVER_SESSION".into(), "bound".into()),
         ],
         stdin: Stdio::null(),
         stdout: Stdio::null(),

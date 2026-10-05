@@ -3,6 +3,36 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { createPiStreamExtension } from "../crates/mezzanine/src/integrations/bootstrap/pi_extension.mjs";
+import { registerInheritedObserver } from "../crates/mezzanine/src/integrations/bootstrap/pi_entry.mjs";
+
+test("candidate entry stays inert without explicit valid binding and opens only at matching start", () => {
+  for (const binding of [{}, { descriptor: "4", session: "bound" },
+    { descriptor: "3", session: "../private" }, { descriptor: "3", session: "bad\n" }]) {
+    registerInheritedObserver({ on() { assert.fail("invalid binding registered callbacks"); } }, binding,
+      () => assert.fail("factory opened a descriptor"));
+  }
+  const handlers = new Map();
+  let opened = 0;
+  const stream = new EventEmitter();
+  stream.writableLength = 0;
+  stream.write = () => true;
+  registerInheritedObserver({ on(type, handler) {
+    const list = handlers.get(type) ?? [];
+    list.push(handler);
+    handlers.set(type, list);
+  } }, { descriptor: "3", session: "bound" }, () => {
+    opened++;
+    return { stream, close() { stream.emit("close"); } };
+  });
+  assert.equal(opened, 0);
+  for (const session of ["other", "bound", "bound"]) {
+    for (const handler of handlers.get("session_start")) {
+      assert.equal(handler({ type: "session_start", reason: "startup" },
+        { sessionManager: { getSessionId: () => session } }), undefined);
+    }
+  }
+  assert.equal(opened, 1);
+});
 
 function fixture(open) {
   const handlers = new Map();

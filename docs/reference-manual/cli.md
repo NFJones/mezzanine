@@ -202,6 +202,15 @@ semantics. Errors and cancellation preserve pending reducer evidence without
 automatic reconnect or vendor replay. Production authorization, reload/replacement
 orchestration and installation are still separate, unfinished work.
 
+An internal compiled artifact candidate owns five files under
+`extensions/mezzanine/` in an explicit agent-directory root. A package manifest
+selects one entry point; private `.mjs` siblings are not independently discovered
+as extensions. The entry is registration-only during loading and opens descriptor
+3 only at matching session start with explicit observation markers and a socket
+check. These markers carry no daemon capability. Temporary-root repeat, conflict
+and uninstall checks and an offline Pi 1.0.2 discovery/runner fixture qualify the
+candidate, not a public installation: the certified registry remains disabled.
+
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.

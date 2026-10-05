@@ -359,6 +359,13 @@ accepted facts through an ordered end fence, then stop renewal without inventing
 deregistration or process death. Invalid input, cancellation and delivery failure
 MUST preserve caller-owned reducer evidence without reconnecting or replaying
 vendor work. Reload orchestration and authorization remain separate boundaries.
+The compiled Pi artifact candidate MUST own only its directory-package entry and
+private sibling modules under an explicitly supplied agent-directory root. Its
+factory MUST remain inert without explicit observer markers; markers are not
+daemon authority. Only matching session start may validate and open descriptor 3
+as an observation socket. Duplicate loads MUST NOT wrap that descriptor twice.
+Temporary-root ownership and released-loader fixtures MUST NOT enable the public
+certified registry or imply production launch, reload or platform acceptance.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow

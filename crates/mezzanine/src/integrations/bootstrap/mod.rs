@@ -29,6 +29,11 @@ pub(crate) mod opencode;
 pub(crate) mod pi;
 #[allow(
     dead_code,
+    reason = "owned Pi artifacts await private-launch and assembled certification"
+)]
+pub(crate) mod pi_artifact;
+#[allow(
+    dead_code,
     reason = "Pi observer IPC awaits private launcher integration"
 )]
 pub(crate) mod pi_ipc;
