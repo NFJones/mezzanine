@@ -4276,6 +4276,15 @@ The internal listener supervisor MUST bound accepted pipelines independently of
 admission capacity and retain their futures without detached forwarding tasks.
 Peer failure MUST retire only its pipeline; cancellation MUST dispose owned
 pipelines without replay. Listener disposal and endpoint shutdown remain caller-owned.
+The internal foreground outbound owner MUST respect outbound policy before
+identity creation, retain one endpoint/listener, and dispose publication before
+completed endpoint shutdown on normal return. Starting that owner MUST NOT itself
+allocate a remote session or change ordinary attach/new routing.
+Foreground cancellation MUST retain its teardown-capable owner while retired
+profile workers release ownership. Outbound profile-lock acquisition MUST use
+bounded nonblocking contention handling, not an indefinitely blocking flock.
+Retirement deadline exhaustion MUST fail closed; stalled filesystem syscalls
+remain an explicitly unqualified host-I/O boundary, not guaranteed bounded exit.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and

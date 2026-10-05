@@ -97,7 +97,8 @@ impl AdmittedFrontend {
         let profile = tokio::task::spawn_blocking(move || {
             let _slot = slot;
             endpoint.frontend_config_root()?;
-            let result = RemoteClientProfileStore::under_config_root(&root).load(&setup.profile);
+            let result = RemoteClientProfileStore::under_config_root(&root)
+                .load_for_outbound(&setup.profile);
             endpoint.frontend_config_root()?;
             result
         })

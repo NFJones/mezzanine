@@ -244,6 +244,23 @@ impl OutboundEndpointOwner {
             resource: Some(resource),
         })
     }
+
+    /// Retains the teardown-capable owner while retired frontend workers release
+    /// their clones. A bounded busy outcome withholds identity reuse through
+    /// quarantine rather than consuming the owner on the first expected conflict.
+    /// Cancellation of this wait preserves the existing fail-closed Drop policy.
+    pub(crate) async fn retire_and_shutdown(self) -> Result<OutboundEndpointShutdown> {
+        let deadline = tokio::time::Instant::now() + self.inner.setup_timeout;
+        while Arc::strong_count(&self.inner) != 1 {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(MezError::conflict(
+                    "outbound workers did not retire before shutdown deadline",
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        self.begin_shutdown()
+    }
 }
 
 /// A cancelled or failed bind may have started dependency-owned tasks. Withhold

@@ -230,6 +230,22 @@ impl RemoteClientProfileStore {
         ensure_client_directory_chain(&self.directory)?;
         let lock = open_private_lock(&self.directory.join(PROFILES_LOCK_FILE_NAME))?;
         flock(&lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        self.load_locked(name)
+    }
+
+    /// Loads a protected profile with bounded nonblocking lock acquisition for
+    /// outbound workers. Contention cannot indefinitely retain a blocking task;
+    /// filesystem syscalls themselves remain subject to host I/O availability.
+    pub(crate) fn load_for_outbound(&self, name: &str) -> Result<Option<RemoteClientProfile>> {
+        validate_profile_name(name)?;
+        ensure_client_directory_chain(&self.directory)?;
+        let lock = open_private_lock(&self.directory.join(PROFILES_LOCK_FILE_NAME))?;
+        acquire_identity_lock(&lock, "outbound profile lock remained busy")?;
+        self.load_locked(name)
+    }
+
+    /// Reads one profile while its caller retains the protected database lock.
+    fn load_locked(&self, name: &str) -> Result<Option<RemoteClientProfile>> {
         let database = self.load_database()?;
         let Some(stored) = database
             .profiles

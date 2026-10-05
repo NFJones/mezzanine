@@ -12,6 +12,8 @@ use super::{
 };
 use crate::security::remote::{RemoteClientProfileStore, write_remote_invitation_file_new};
 
+mod broker;
+
 /// Typed process CLI arguments for `mez remote`.
 #[derive(Debug, Clone, Args)]
 pub(super) struct RemoteCliArgs {
@@ -23,6 +25,9 @@ pub(super) struct RemoteCliArgs {
 /// Local-only remote transport administration commands.
 #[derive(Debug, Clone, Subcommand)]
 enum RemoteCliCommand {
+    /// Internal foreground outbound owner; not a terminal attachment command.
+    #[command(hide = true)]
+    OutboundServe,
     /// Shows remote transport and endpoint status.
     Status,
     /// Creates a short-lived, single-use pairing invitation.
@@ -145,6 +150,9 @@ pub(super) async fn run_remote<W: Write>(
     stdout: &mut W,
 ) -> Result<()> {
     match args.command {
+        RemoteCliCommand::OutboundServe => broker::run(env, broker::shutdown_signal())
+            .await
+            .map(|_| ()),
         RemoteCliCommand::Status => {
             let body = request_remote_administration(
                 env,

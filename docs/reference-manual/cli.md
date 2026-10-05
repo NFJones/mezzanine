@@ -554,6 +554,16 @@ An internal listener supervisor drives finitely many independent setup/display
 pipelines. Stalled peers do not serialize siblings; cancellation disposes owned
 pipelines without replay. The caller still disposes the listener and completes
 endpoint shutdown. Startup election and multi-process CLI activation remain unfinished.
+The hidden internal `remote outbound-serve` foreground entry composes these
+owners and respects the outbound veto before identity creation. Normal return
+removes publication before completing endpoint shutdown. Starting it alone
+does not create a remote session or change ordinary attach/new routing; it is
+not a supported replacement for full terminal attachment.
+Cancellation retains the shutdown owner while profile workers retire. Outbound
+profile-lock contention uses bounded nonblocking acquisition, including when a
+holder never releases its lock. Retirement deadline exhaustion fails closed.
+This does not guarantee process exit during arbitrary stalled filesystem I/O;
+Tokio runtime destruction can still wait for genuinely stuck blocking syscalls.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.
