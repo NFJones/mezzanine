@@ -2,6 +2,72 @@
 
 use super::*;
 
+/// Historical browsing retains its viewport and selection while new output
+/// relocates the pending tail. Capture reads the live agent surface, and the
+/// independent process screen must remain unchanged throughout.
+#[test]
+fn runtime_pending_steering_preserves_scrollback_and_live_capture() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut process = TerminalScreen::new(Size::new(80, 24).unwrap(), 120).unwrap();
+    process.feed(b"independent process source");
+    service.set_process_pane_screen("%1", process);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.start_agent_prompt_turn("%1", "initial").unwrap();
+    for index in 0..35 {
+        service
+            .append_agent_status_text_to_terminal_buffer("%1", &format!("history-{index}"))
+            .unwrap();
+    }
+    service
+        .execute_agent_shell_control_command(&primary, "pending guidance")
+        .unwrap();
+    let frozen = {
+        let copy = service.ensure_active_copy_mode("%1").unwrap();
+        copy.scroll_to_top();
+        copy.select_range(
+            mez_mux::copy::CopyPosition { line: 0, column: 0 },
+            mez_mux::copy::CopyPosition { line: 0, column: 5 },
+        )
+        .unwrap();
+        copy.clone()
+    };
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "later live output")
+        .unwrap();
+    assert_eq!(
+        service
+            .active_copy_mode_for_presented_surface("%1")
+            .unwrap(),
+        &frozen
+    );
+    let text = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"pending-capture","method":"pane/capture","params":{"target":{"pane_id":"%1"},"include_history":true,"range":{"origin":"combined","start":"start","end":"end"}}}"#,
+        &primary,
+    );
+    assert_eq!(text.matches("pending guidance").count(), 1, "{text}");
+    assert!(
+        text.find("later live output").unwrap() < text.find("pending guidance").unwrap(),
+        "{text}"
+    );
+    assert_eq!(
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .iter()
+            .filter(|line| !line.is_empty())
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["independent process source"]
+    );
+}
+
 /// Source selection preserves trailing authored newlines rather than inheriting
 /// peer-message trim policy. A frozen copy snapshot remains unchanged while
 /// later pane output relocates the live pending suffix.

@@ -129,6 +129,57 @@ fn transaction_progress(
     )
 }
 
+/// Executor revisions and retirement must preserve one pending steering tail
+/// without capturing it in a progress baseline or changing canonical chronology.
+#[test]
+fn runtime_executor_progress_keeps_pending_steering_at_tail() {
+    let (mut service, turn) =
+        running_action_progress_fixture(shell_action(), "marker-steering", "sleep 1");
+    service
+        .inject_agent_steering_with_display("%1", "exact guidance", "pending guidance")
+        .unwrap();
+    let context = service.agent_turn_contexts()[&turn.turn_id].clone();
+    for revision in [1, 2] {
+        assert!(
+            service
+                .apply_action_presentation_progress(transaction_progress(
+                    &turn.turn_id,
+                    "shell-1",
+                    "marker-steering",
+                    revision,
+                    ActionPresentationComponentIdentity::ShellOutput,
+                    &format!("executor revision {revision}"),
+                ))
+                .unwrap()
+        );
+        let text = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        assert_eq!(text.matches("pending guidance").count(), 1, "{text}");
+        assert!(
+            text.find(&format!("executor revision {revision}")).unwrap()
+                < text.find("pending guidance").unwrap(),
+            "{text}"
+        );
+    }
+    service
+        .retire_action_presentation_progress_for_turn(&turn.turn_id)
+        .unwrap();
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "after retirement")
+        .unwrap();
+    let text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(text.matches("pending guidance").count(), 1, "{text}");
+    assert!(!text.contains("executor revision"), "{text}");
+    assert_eq!(service.agent_turn_contexts()[&turn.turn_id], context);
+}
+
 /// Verifies a row-only pane resize rebases retained action-progress state so a
 /// later revision cannot restore the previous screen height.
 #[test]
