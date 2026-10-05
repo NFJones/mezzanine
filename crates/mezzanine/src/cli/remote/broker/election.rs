@@ -87,6 +87,13 @@ impl StartupElection {
         }
         Ok(())
     }
+
+    /// Returns the retained root after validating launcher ownership. The
+    /// descriptor is borrowed only for fixed-name diagnostic publication.
+    pub(super) fn launch_root(&self) -> Result<(&Path, &File)> {
+        self.validate()?;
+        Ok((&self.root_path, &self.root))
+    }
 }
 
 /// Checks retained directory identity through read-only metadata observation.

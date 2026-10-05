@@ -22,6 +22,12 @@ mod election;
 )]
 mod startup;
 
+#[allow(
+    dead_code,
+    reason = "production startup integration follows launcher qualification"
+)]
+mod launch;
+
 /// Runs one foreground owner until cancellation, with explicit teardown on
 /// normal/error return. Cancellation of this entire future remains fail-closed
 /// under the resource quarantine contract, not proof of graceful shutdown.

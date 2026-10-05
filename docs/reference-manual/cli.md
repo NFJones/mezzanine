@@ -578,6 +578,11 @@ invoking at most one caller-supplied launcher for missing/refused discovery. It
 reprobes after election and retains the guard until readiness. Protocol and
 permission failures are not replacement signals. Production launcher selection
 and ordinary CLI consumer migration remain unfinished.
+An internal explicit launcher accepts an absolute executable and HOME matching
+the elected root, uses fixed argv and a cleared environment, and validates private
+diagnostics through the held directory. It returns an exact child handle for
+observation and reaping; dropping it does not kill a broker shared by siblings.
+This is not yet automatic startup or ordinary CLI activation.
 An internal client session API consumes readiness once, sends credential-free
 setup, and pins session/client/lease identities from the initial line snapshot.
 Subsequent snapshots retain the same settlement and stream buffers. Failed

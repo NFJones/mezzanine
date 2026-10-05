@@ -4299,6 +4299,12 @@ missing/refused discovery and protected election. It MUST reprobe after election
 retain and revalidate the guard through readiness, and bound asynchronous retries
 by one deadline. Protocol or permission failures MUST NOT trigger replacement.
 This composition alone does not select a production launcher or reroute CLI consumers.
+The internal explicit launcher MUST require an absolute executable and HOME
+matching its elected root, use fixed argv and a cleared environment, and open
+private regular diagnostics through the retained root without following links.
+Its exact child MUST remain caller-owned for observation and reaping; frontend
+disposal MUST NOT implicitly kill a potentially shared broker. Launcher creation
+alone does not establish readiness or completed ordinary CLI integration.
 The internal client session transition MUST consume readiness once, send only
 credential-free setup, and pin validated session/client/lease identities from its
 first snapshot. Later snapshots MUST retain those exact identities. Codec changes
