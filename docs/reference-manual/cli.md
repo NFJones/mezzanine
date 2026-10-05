@@ -646,6 +646,9 @@ does not qualify production render cadence, animations or ordinary CLI attachmen
 Identified ordinary events already represented by an exact committed snapshot
 cutoff skip redundant capture. Received metadata or unsettled receipts do not
 establish coverage; unknown/new IDs and immediate/invalidation actions remain live.
+Observer input requests a fresh view after event settlement without forwarding
+bytes or issuing a primary mutation. This view-only interaction bypasses ordinary
+pacing; EOF still retires the retained frontend and restores presentation.
 Internal ordinary redraws now use the shared server-rate cadence after committed
 output, retaining one pending latest-state fetch across idle replies. Immediate
 redraws, input and resize bypass that pacing. Animation and full production

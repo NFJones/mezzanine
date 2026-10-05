@@ -151,6 +151,66 @@ fn inert_client(
     (root, listener, peer, client)
 }
 
+/// Observer input requests a fresh view without forwarding terminal bytes or
+/// acquiring primary authority. The exact event poll settles first; cancellation
+/// during the following view request restores presentation without a mutation.
+#[tokio::test]
+async fn outbound_foreground_observer_input_refreshes_without_mutation() {
+    let (root, listener, peer, mut client) = inert_client(Vec::new());
+    client.events_negotiated = true;
+    client.summary.granted_role = "observer".into();
+    client.view_identity = Some("a".repeat(64));
+    client.render_rate_limit_fps = Some(1);
+    let handle = client.client.handle.clone();
+    let summary = client.summary.clone();
+    let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+    terminal.push_input(b"observer-only".to_vec());
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let foreground_stop = stop.clone();
+    let foreground = client.run_snapshot_foreground(
+        &mut terminal,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(1),
+        async move { foreground_stop.notified().await },
+    );
+    let responder = async {
+        let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(request["operation"], "events");
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"action":"none","event_id":null
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert!(
+            request.get("operation").is_none(),
+            "observer input must request a view, never a mutation"
+        );
+        assert!(request.get("input_bytes").is_none());
+        assert_eq!(request["if_view_identity"], "a".repeat(64));
+        assert_eq!(request["handle"], serde_json::to_value(&handle).unwrap());
+        stop.notify_one();
+        assert!(peer.next().await.is_none());
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(foreground, responder)
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(terminal.written_frames.len(), 1);
+    assert_eq!(terminal.presentation_restores, 1);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Input requesting a full redraw must invalidate physical writer state and
 /// suppress conditional reuse of the previously committed identity. The exact
 /// mutation is admitted once; cancellation during replacement capture restores

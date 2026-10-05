@@ -4381,6 +4381,9 @@ Identified ordinary redraws covered by the exact committed snapshot cutoff MAY
 be suppressed after event settlement. Received revision metadata or unsettled
 receipts MUST NOT establish coverage. Unknown/new identities, immediate redraw
 and invalidation requirements MUST remain actionable.
+Observer input MUST request a fresh view after exact event settlement without
+forwarding its bytes or acquiring primary mutation authority. This view-only
+refresh MAY bypass ordinary pacing; observer EOF MUST still retire ownership.
 Internal ordinary redraw pacing MUST use the shared cadence owner, updated only
 after committed output. One pending latest-state fetch MUST survive idle replies
 until the server-resolved interval permits capture. Immediate redraw facts,

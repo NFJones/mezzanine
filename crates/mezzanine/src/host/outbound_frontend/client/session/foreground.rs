@@ -148,9 +148,10 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
                 input_step_applied = true;
                 render = true;
             }
-            // Observers drain local bytes without forwarding or acquiring input
-            // authority. A timer requests another snapshot, not an input retry.
-            Some(_) | None => {}
+            // Observer input requests a fresh view, as in the existing attach
+            // loop, without forwarding bytes or acquiring mutation authority.
+            Some(_) => render = true,
+            None => {}
         }
         if size_changed && !input_step_applied && session.summary.granted_role == "primary" {
             let key = next_key(nonce, &mut sequence)?;
