@@ -55,11 +55,18 @@ impl ConnectedFrontend {
                 "outbound session initialization mode unsupported",
             ));
         }
+        #[cfg(test)]
+        let mut diagnostics =
+            crate::host::outbound_frontend::listener::setup_diagnostics::SetupDiagnostics::new();
+        #[cfg(test)]
+        diagnostics.advance("initialize-reply");
         let (connected, bridge, summary) = self
             .initialize_once(|body, connected| {
                 validate_session_response(body, connected.prepared.profile.server_addr.id, &params)
             })
             .await?;
+        #[cfg(test)]
+        diagnostics.advance("event-preface");
         let events = if params.event_stream_version == Some(1) {
             let endpoint = &connected.prepared.frontend._endpoint;
             endpoint.frontend_config_root()?;
@@ -74,6 +81,8 @@ impl ConnectedFrontend {
         } else {
             None
         };
+        #[cfg(test)]
+        diagnostics.complete();
         Ok(InitializedSessionFrontend {
             connected,
             bridge,

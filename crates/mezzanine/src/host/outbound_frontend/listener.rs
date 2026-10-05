@@ -18,6 +18,9 @@ use crate::error::{MezError, Result};
 
 const SOCKET_NAME: &str = "outbound.sock";
 
+#[cfg(test)]
+pub(super) mod setup_diagnostics;
+
 /// Published local front door retaining the endpoint and socket cleanup owner.
 /// Drop removes only its positively identified socket, never a replacement.
 pub(crate) struct OutboundFrontendListener {
@@ -131,15 +134,33 @@ impl OutboundFrontendListener {
     /// Runs exactly one consumed setup and initialized display connection.
     /// No automatic reconnect, setup retry or generic control forwarding exists.
     async fn serve_frontend(&self, stream: tokio::net::UnixStream) -> Result<()> {
+        #[cfg(test)]
+        let mut diagnostics = setup_diagnostics::SetupDiagnostics::new();
         let frontend = self.admit(stream).await?;
+        #[cfg(test)]
+        diagnostics.advance("profile");
         let prepared = frontend.prepare(self.admission.deadline).await?;
+        #[cfg(test)]
+        diagnostics.advance("connect");
         let connected = prepared.connect_pinned().await?;
+        #[cfg(test)]
+        diagnostics.advance("initialize");
         if connected.host_only_requested()? {
-            return connected.initialize_host_only().await?.deliver_list().await;
+            let initialized = connected.initialize_host_only().await?;
+            #[cfg(test)]
+            diagnostics.advance("host-only-delivery");
+            initialized.deliver_list().await?;
+            #[cfg(test)]
+            diagnostics.complete();
+            return Ok(());
         }
         let mut session = connected.initialize_session().await?;
+        #[cfg(test)]
+        diagnostics.advance("first-view");
         loop {
             session = session.deliver_view().await?;
+            #[cfg(test)]
+            diagnostics.complete();
             if session.is_detached() {
                 return Ok(());
             }
