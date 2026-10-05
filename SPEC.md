@@ -4245,6 +4245,12 @@ use owner-private socket permissions, and preserve live or unsafe existing entri
 Cleanup MUST inspect socket identity through the retained parent directory and
 withhold removal of replacements. Pathname bind and check/unlink cleanup are
 cooperative same-user boundaries, not atomic protection against hostile renames.
+Each admitted frontend setup MUST be consumed once and bind its exact handle,
+protected profile alias and credential-free initialization parameters. The owner
+MUST reuse control initialization validation and enforce profile role/scope;
+frontends MUST NOT supply device proof or route addresses. Blocking profile work
+MUST retain finite capacity and endpoint ownership until it exits, even after
+its waiter times out. Prepared setup is not remote authentication or creation.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and

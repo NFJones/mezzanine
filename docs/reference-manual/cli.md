@@ -527,6 +527,11 @@ publication uses private socket permissions and held-parent, identity-checked
 cleanup; replacement entries are preserved. This is not an atomic bind or unlink
 against hostile same-user renames. Startup election, remote forwarding and CLI
 consumer migration remain unfinished.
+Internal setup consumes an exact frontend handle and resolves its protected
+profile inside the owner. Caller credentials are rejected; existing control
+initialization and profile role/scope validation remain authoritative. A timed-out
+profile waiter does not cancel blocking I/O: its finite slot stays occupied until
+the worker exits. This preparation does not dial or create a remote session.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.

@@ -28,6 +28,7 @@ const CONTENT_TYPE: &str = "application/vnd.mezzanine.outbound+json";
 const HELLO_LIMIT: usize = 4096;
 
 mod listener;
+mod setup;
 #[allow(
     unused_imports,
     reason = "CLI broker integration follows listener publication qualification"
@@ -42,7 +43,8 @@ struct Hello {
 }
 
 /// Inert identity for one admitted frontend, scoped to this broker incarnation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FrontendHandle {
     owner: String,
     generation: u64,
@@ -64,7 +66,7 @@ pub(crate) struct AdmittedFrontend {
     handle: FrontendHandle,
     stream: Framed<tokio::net::UnixStream, ProtocolFrameCodec>,
     _endpoint: OutboundEndpointOwner,
-    _slot: OwnedSemaphorePermit,
+    _slot: Arc<OwnedSemaphorePermit>,
 }
 
 impl OutboundFrontendAdmission {
@@ -145,7 +147,7 @@ impl OutboundFrontendAdmission {
             handle,
             stream,
             _endpoint: self.endpoint.clone(),
-            _slot: slot,
+            _slot: Arc::new(slot),
         })
     }
 
