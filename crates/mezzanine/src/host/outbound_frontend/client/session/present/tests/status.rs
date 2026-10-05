@@ -73,6 +73,7 @@ fn fixture() -> (
         committed_view: None,
         painted_health: None,
         cursor_blink_epoch: std::time::Instant::now(),
+        painted_cursor: None,
         iroh_status_slot: Some(crate::host::terminal::TerminalIrohStatusSlot {
             row: 0,
             column: 3,
@@ -84,6 +85,114 @@ fn fixture() -> (
         }),
     };
     (root, listener, peer, owner)
+}
+
+/// Cursor phase repaint follows actual receipt settlement, preserves the last
+/// health decoration and server base, and emits no IPC. Identical phases skip
+/// output; invalidating the writer removes repaint eligibility before any write.
+#[tokio::test]
+async fn outbound_present_cursor_repaint_preserves_settlement_without_ipc() {
+    let (root, listener, peer, mut owner) = fixture();
+    owner.modes.cursor_visible = true;
+    owner.modes.cursor_blink = true;
+    owner.modes.cursor_blink_interval_ms = 10000;
+    let handle = owner.client.handle.clone();
+    let summary = owner.summary.clone();
+    let mut terminal = PartialWriter::default();
+    let initial = async {
+        let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+        let request = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&request.body).unwrap();
+        assert_eq!(request["operation"], "health");
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"connected":true,"quality":"degraded"
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let request = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&request.body).unwrap();
+        assert_eq!(request["operation"], "acknowledge");
+        assert_eq!(request["presentation_ids"], serde_json::json!([7]));
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"idempotency_key":"initial",
+                "presentation_ids":[7],"acknowledged":true
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        peer
+    };
+    let (result, mut peer) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(
+            owner.present(&mut terminal, "initial", Duration::from_secs(1)),
+            initial
+        )
+    })
+    .await
+    .unwrap();
+    let (mut owner, acknowledged) = result.unwrap();
+    assert!(acknowledged);
+    assert!(owner.receipts.is_empty());
+    let base = owner.committed_view.clone();
+    let lines = owner.lines.clone();
+    let styles = owner.styles.clone();
+    owner.cursor_blink_epoch = std::time::Instant::now() - Duration::from_millis(7500);
+    owner.painted_cursor = Some(true);
+    let (owner, painted) = owner
+        .repaint_cursor_phase(&mut terminal, Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert!(painted);
+    assert_eq!(terminal.frames, 2);
+    assert!(!mez_mux::attached_client::cursor_phase_visible(
+        terminal.modes
+    ));
+    assert_eq!(owner.painted_cursor, Some(false));
+    assert_eq!(owner.committed_view, base);
+    assert_eq!(owner.lines, lines);
+    assert_eq!(owner.styles, styles);
+    assert_eq!(owner.modes.cursor_blink_elapsed_ms, 0);
+    assert_eq!(terminal.lines, ["雪a up tail"]);
+    assert_eq!(
+        terminal.styles[0]
+            .iter()
+            .find(|span| span.start == 3)
+            .unwrap()
+            .rendition
+            .background,
+        Some(TerminalColor::Indexed(3))
+    );
+    let (mut owner, painted) = owner
+        .repaint_cursor_phase(&mut terminal, Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert!(!painted);
+    assert_eq!(terminal.frames, 2);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), peer.next())
+            .await
+            .is_err(),
+        "cursor repaint must send no health, view or ACK request"
+    );
+    owner.invalidate_committed_view();
+    assert!(
+        owner
+            .repaint_cursor_phase(&mut terminal, Duration::from_secs(1))
+            .await
+            .is_err()
+    );
+    assert_eq!(terminal.frames, 2);
+    assert!(peer.next().await.is_none());
+    drop(peer);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// A settled frame can repaint changed health without another ACK or snapshot.

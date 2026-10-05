@@ -148,6 +148,7 @@ fn inert_client(
         iroh_status_slot: None,
         painted_health: None,
         cursor_blink_epoch: std::time::Instant::now(),
+        painted_cursor: None,
     };
     (root, listener, peer, client)
 }

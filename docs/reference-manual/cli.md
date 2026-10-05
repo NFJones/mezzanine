@@ -611,6 +611,11 @@ Outbound output applies the existing attach blink-phase calculation from a
 retained client-local epoch. Replacement snapshots preserve the epoch and server
 mode evidence; remote metadata cannot set local phase. Idle cursor repaint
 scheduling and physical-terminal qualification remain separate.
+An explicit internal cursor-repaint API now refreshes receipt-settled output
+when effective local visibility changes, using the writer's shared phase rule.
+It preserves server rows, revision and the last painted health decoration,
+sends no IPC or receipt ACK, and skips unchanged phases. Replacement or writer
+invalidation clears eligibility; automatic scheduling remains unfinished.
 Snapshots retain optional Iroh status-slot coordinates and renditions with bounds
 checked against delivered rows and viewport cells. Missing/null metadata clears
 the retained slot. This metadata-only boundary does not measure connection health

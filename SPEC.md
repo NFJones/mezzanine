@@ -4341,6 +4341,12 @@ Outbound presentation MUST apply cursor blink phase from a retained client-local
 epoch to copied output modes. Snapshot replacement MUST NOT reset that epoch or
 modify retained server mode evidence. Transport metadata MUST NOT supply local
 blink phase; this alone does not qualify idle cursor repaint scheduling.
+The explicit internal cursor-repaint API MUST require receipt-settled output and
+use the terminal writer's effective visibility rule. Changed phase MAY repaint
+the retained base with no receipts or IPC; unchanged phase MUST NOT write.
+Replacement or writer invalidation MUST clear eligibility. The last painted
+health decoration and server revision MUST remain intact; automatic scheduling
+and physical-terminal qualification remain separate boundaries.
 Optional snapshot Iroh status slots MUST use shared decoding and fit the delivered
 rows and requested cell geometry on both ends. Missing/null slots MUST clear
 retained slot metadata; only decoded coordinates and renditions MAY cross IPC.

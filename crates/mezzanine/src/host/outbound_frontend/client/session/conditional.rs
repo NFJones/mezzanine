@@ -29,6 +29,7 @@ impl OutboundSessionClient {
     pub(crate) fn invalidate_committed_view(&mut self) {
         self.committed_view = None;
         self.painted_health = None;
+        self.painted_cursor = None;
     }
 
     /// Fetches one view, optionally reusing the exact committed identity/geometry.
@@ -100,6 +101,7 @@ impl OutboundSessionClient {
                 self.snapshot_size = (columns, rows);
                 self.committed_view = None;
                 self.painted_health = None;
+                self.painted_cursor = None;
                 true
             };
             self.client.discovery.validate()?;

@@ -1016,12 +1016,9 @@ fn cursor_presentation_sequence(lines: &[String], modes: AttachedTerminalOutputM
     format!("\x1b[?25l\x1b[0m\x1b[{style} q\x1b[{row};{column}H\x1b[?25h")
 }
 
-/// Runs the cursor phase visible operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn cursor_phase_visible(modes: AttachedTerminalOutputModes) -> bool {
+/// Returns the writer's effective cursor visibility at the supplied local blink
+/// phase. Hidden cursors stay hidden; disabled or zero-interval blink stays visible.
+pub fn cursor_phase_visible(modes: AttachedTerminalOutputModes) -> bool {
     if !modes.cursor_visible {
         return false;
     }

@@ -18,7 +18,7 @@ pub use output::{
     AttachedTerminalModeTransitions, AttachedTerminalOutputFrameState,
     attached_terminal_enhanced_keyboard_reporting_frame,
     attached_terminal_enter_presentation_frame, attached_terminal_restore_presentation_frame,
-    encode_attached_terminal_output_frame_with_styles,
+    cursor_phase_visible, encode_attached_terminal_output_frame_with_styles,
     encode_attached_terminal_output_frame_with_styles_and_transitions,
     encode_attached_terminal_output_update_frame_with_styles,
     encode_attached_terminal_output_update_frame_with_styles_and_transitions,

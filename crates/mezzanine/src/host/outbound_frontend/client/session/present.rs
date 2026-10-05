@@ -33,6 +33,7 @@ impl OutboundSessionClient {
         tokio::time::timeout_at(expires, async move {
             self.committed_view = None;
             self.painted_health = None;
+            self.painted_cursor = None;
             self.client.discovery.validate()?;
             let mut painted_health = None;
             let (lines, styles) = if self.iroh_status_slot.is_some() {
@@ -70,6 +71,7 @@ impl OutboundSessionClient {
             let (mut owner, acknowledged) = self.acknowledge_presented(key, remaining).await?;
             if acknowledged {
                 owner.painted_health = painted_health;
+                owner.painted_cursor = Some(mez_mux::attached_client::cursor_phase_visible(modes));
                 owner.committed_view = owner
                     .view_identity
                     .clone()
@@ -130,11 +132,64 @@ impl OutboundSessionClient {
             commit_snapshot(terminal, &lines, &styles, modes, &[]).await?;
             self.client.discovery.validate()?;
             self.painted_health = Some(quality);
+            self.painted_cursor = Some(mez_mux::attached_client::cursor_phase_visible(modes));
             Ok((self, true))
         })
         .await
         .map_err(|_| {
             MezError::invalid_state("outbound status repaint timed out; output may be incomplete")
+        })?
+    }
+}
+
+impl OutboundSessionClient {
+    /// Repaints a changed local cursor phase on receipt-settled output without
+    /// remote requests or acknowledgements. It preserves the last painted status
+    /// decoration, server rows and revision. Writer changes require explicit
+    /// invalidation; failure consumes ownership and leaves tail cleanup to callers.
+    pub(crate) async fn repaint_cursor_phase<I: AsyncAttachedTerminalIo>(
+        mut self,
+        terminal: &mut I,
+        budget: Duration,
+    ) -> Result<(Self, bool)> {
+        validate_budget(1, 1, budget)?;
+        if self.painted_cursor.is_none()
+            || !self.receipts.is_empty()
+            || (self.iroh_status_slot.is_some() && self.painted_health.is_none())
+        {
+            return Err(MezError::conflict(
+                "outbound cursor repaint requires settled output",
+            ));
+        }
+        tokio::time::timeout(budget, async move {
+            self.client.discovery.validate()?;
+            let modes = crate::host::terminal::wire_modes::with_cursor_blink_epoch(
+                self.modes,
+                self.cursor_blink_epoch,
+            );
+            let visible = mez_mux::attached_client::cursor_phase_visible(modes);
+            if self.painted_cursor == Some(visible) {
+                return Ok((self, false));
+            }
+            let (lines, styles) = if let Some(quality) = self.painted_health {
+                crate::host::terminal::iroh_pill::compose(
+                    &self.lines,
+                    &self.styles,
+                    self.iroh_status_slot,
+                    true,
+                    quality,
+                )
+            } else {
+                (self.lines.clone(), self.styles.clone())
+            };
+            commit_snapshot(terminal, &lines, &styles, modes, &[]).await?;
+            self.client.discovery.validate()?;
+            self.painted_cursor = Some(visible);
+            Ok((self, true))
+        })
+        .await
+        .map_err(|_| {
+            MezError::invalid_state("outbound cursor repaint timed out; output may be incomplete")
         })?
     }
 }

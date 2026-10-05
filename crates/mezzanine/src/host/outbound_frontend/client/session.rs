@@ -63,6 +63,8 @@ pub(crate) struct OutboundSessionClient {
     painted_health: Option<crate::host::terminal::TerminalIrohStatusQuality>,
     /// Local presentation clock retained across snapshots, never decoded from IPC.
     cursor_blink_epoch: std::time::Instant,
+    /// Effective cursor visibility from the last receipt-settled output frame.
+    painted_cursor: Option<bool>,
 }
 
 mod acknowledge;
@@ -141,6 +143,7 @@ impl OutboundFrontendClient {
                     committed_view: None,
                     painted_health: None,
                     cursor_blink_epoch: std::time::Instant::now(),
+                    painted_cursor: None,
                     events_negotiated: params.event_stream_version == Some(1),
                     render_rate_limit_fps: snapshot.render_rate_limit_fps,
                     view_identity: snapshot.view_identity,
@@ -226,6 +229,7 @@ impl OutboundSessionClient {
             self.snapshot_size = (columns, rows);
             self.committed_view = None;
             self.painted_health = None;
+            self.painted_cursor = None;
             Ok((self, snapshot.lines))
         })
         .await
