@@ -89,8 +89,11 @@ entry; terminal not-sent and restart admission-unknown evidence keep explicit
 labels. This is log-tail placement, not forced viewport pinning while browsing.
 Visible rows are bounded using composer log geometry. Pending text is not saved
 as ordinary acknowledged prompt history; settled rows carry occurrence identity
-for replay and bounded persistence-only retry. Interaction, copy/overflow,
-restart and failure qualification is still in progress.
+for replay and bounded persistence-only retry. Source-copy selection retains exact
+display text, including authored CRLF and trailing newlines. Selecting an overflow
+summary or tail row recovers the complete pending source group once; rendered
+copy still selects visible cells. Captured copy views stay frozen during output
+and promotion. Interaction, restart and failure qualification is still in progress.
 After steering is canonically accepted, a status-display or trace failure does
 not reject it or require resubmission.
 Deferred transfer diagnostics cannot strand accepted guidance before scheduling.

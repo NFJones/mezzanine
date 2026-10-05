@@ -2,6 +2,61 @@
 
 use super::*;
 
+/// Promotion retains exact authored CRLF/trailing newlines in source selection,
+/// while an already captured pending selection remains frozen and independently
+/// copyable. Reading either view cannot acknowledge or reinsert model input.
+#[test]
+fn steering_receipts_source_copy_survives_promotion_and_frozen_selection() {
+    let (mut service, turn) = fixture();
+    let display = "雪e\u{301} exact source\r\nsecond line\n\n";
+    service
+        .inject_agent_steering_with_display("%1", "exact input", display)
+        .unwrap();
+    let select = |screen: &mez_terminal::TerminalScreen, label: &str| {
+        let row = screen
+            .normal_content_lines()
+            .iter()
+            .position(|line| line.contains(label))
+            .unwrap();
+        let mut copy = crate::host::terminal::CopyMode::from_screen(screen, 24).unwrap();
+        copy.set_agent_surface(true);
+        copy.scroll_to_top();
+        copy.move_cursor_by(row as isize, 0);
+        copy.begin_keyboard_selection();
+        copy.scroll_to_bottom();
+        copy
+    };
+    let pending = select(service.agent_pane_screen("%1").unwrap(), "[pending]");
+    let frozen = pending.clone();
+    let context = service.agent_turn_contexts()[&turn.turn_id].clone();
+    let sequence = service.steering_receipts_for_tests(&turn.turn_id)[0].sequence;
+    service
+        .agent
+        .steering_receipts
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .admit(7, &BTreeSet::from([sequence]));
+    service.request_steering_presentation("%1");
+    let promoted = select(service.agent_pane_screen("%1").unwrap(), "user> 雪");
+    for copy in [&pending, &promoted] {
+        assert_eq!(
+            copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                .unwrap(),
+            display
+        );
+    }
+    assert_eq!(pending, frozen);
+    assert_eq!(service.agent_turn_contexts()[&turn.turn_id], context);
+    assert!(
+        !service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("[pending]")
+    );
+}
+
 /// A visible promoted occurrence cannot be reconstructed from older durable
 /// history while its exact write is outstanding. Settlement releases resize
 /// admission, and the worker then preserves exactly one normal user row.

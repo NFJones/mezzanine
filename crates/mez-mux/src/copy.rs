@@ -17,6 +17,8 @@ use std::ops::{Deref, DerefMut};
 pub const COPY_SKIP_LINE: &str = "\u{1e}mez-copy-skip-line";
 /// Prefix carrying one rich-text source-line identity and raw text.
 pub const COPY_SOURCE_LINE_PREFIX: &str = "\u{1e}mez-copy-source-line:";
+/// Lightweight reference to an adjacent source group, without duplicating its payload.
+pub const COPY_SOURCE_REFERENCE_PREFIX: &str = "\u{1e}mez-copy-source-reference:";
 /// Copy-text marker for wrapped rich-text continuation rows.
 pub const COPY_WRAP_CONTINUATION: &str = "\u{1e}mez-copy-wrap-continuation";
 

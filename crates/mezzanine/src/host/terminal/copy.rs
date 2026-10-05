@@ -10,8 +10,8 @@ use std::ops::{Deref, DerefMut};
 use super::{Result, TerminalScreen};
 use mez_mux::copy::{
     COPY_SKIP_LINE as AGENT_COPY_SKIP_LINE,
-    COPY_SOURCE_LINE_PREFIX as AGENT_COPY_SOURCE_LINE_PREFIX, CopyPosition, StyledCopyMode,
-    normalize_selection, validate_position,
+    COPY_SOURCE_LINE_PREFIX as AGENT_COPY_SOURCE_LINE_PREFIX, COPY_SOURCE_REFERENCE_PREFIX,
+    CopyPosition, StyledCopyMode, normalize_selection, validate_position,
 };
 #[cfg(test)]
 use mez_mux::paste::PasteBuffers;
@@ -153,8 +153,10 @@ impl CopyMode {
     fn copy_source_selection(&self, start: CopyPosition, end: CopyPosition) -> Result<String> {
         let mut copied = Vec::new();
         let mut emitted_group_starts = BTreeSet::new();
-        for line in start.line..=end.line {
+        let mut line = start.line;
+        while line <= end.line {
             let Some(copy_line) = self.0.copy_line(line) else {
+                line = line.saturating_add(1);
                 continue;
             };
             if let Some((group_start, group_end, raw_line)) =
@@ -163,25 +165,50 @@ impl CopyMode {
                 && group_end >= start.line
                 && emitted_group_starts.insert(group_start)
             {
-                copied.push(raw_line);
+                copied.push(raw_line.to_string());
+                line = group_end.saturating_add(1);
+            } else {
+                line = line.saturating_add(1);
             }
         }
         Ok(copied.join("\n"))
     }
 
     /// Returns source-group metadata for one rendered row when available.
-    fn source_group_for_line(
-        &self,
+    fn source_group_for_line<'a>(
+        &'a self,
         line: usize,
-        copy_line: &str,
-    ) -> Option<(usize, usize, String)> {
-        if let Some((_, raw_line)) = decode_agent_copy_source_line(copy_line) {
-            let (group_start, group_end) = self.markdown_source_group_bounds(line, copy_line);
-            return Some((group_start, group_end, raw_line.to_string()));
+        copy_line: &'a str,
+    ) -> Option<(usize, usize, &'a str)> {
+        let identity = decode_agent_copy_source_line(copy_line)
+            .map(|(id, _)| id)
+            .or_else(|| copy_line.strip_prefix(COPY_SOURCE_REFERENCE_PREFIX));
+        if let Some(identity) = identity {
+            let matches = |row: usize| {
+                self.0.copy_line(row).is_some_and(|candidate| {
+                    decode_agent_copy_source_line(candidate).map(|(id, _)| id) == Some(identity)
+                        || candidate.strip_prefix(COPY_SOURCE_REFERENCE_PREFIX) == Some(identity)
+                })
+            };
+            let mut first = line;
+            while first > 0 && matches(first - 1) {
+                first -= 1;
+            }
+            let mut last = line;
+            while last + 1 < self.0.line_count() && matches(last + 1) {
+                last += 1;
+            }
+            let raw = (first..=last).find_map(|row| {
+                self.0
+                    .copy_line(row)
+                    .and_then(decode_agent_copy_source_line)
+                    .map(|(_, raw)| raw)
+            })?;
+            return Some((first, last, raw));
         }
         let (group_start, group_end) = self.transformed_source_group_bounds_for_line(line)?;
         let raw_line = self.0.copy_line(group_start)?;
-        Some((group_start, group_end, raw_line.to_string()))
+        Some((group_start, group_end, raw_line))
     }
 
     /// Returns transformed source-group bounds for any row in that group.
@@ -232,29 +259,6 @@ impl CopyMode {
             group_end = group_end.saturating_add(1);
         }
         Some((line, group_end))
-    }
-
-    /// Returns the rendered row bounds belonging to one markdown source line.
-    fn markdown_source_group_bounds(&self, line: usize, copy_line: &str) -> (usize, usize) {
-        let mut start = line;
-        while start > 0
-            && self
-                .0
-                .copy_line(start.saturating_sub(1))
-                .is_some_and(|candidate| candidate == copy_line)
-        {
-            start = start.saturating_sub(1);
-        }
-        let mut end = line;
-        while end.saturating_add(1) < self.0.line_count()
-            && self
-                .0
-                .copy_line(end.saturating_add(1))
-                .is_some_and(|candidate| candidate == copy_line)
-        {
-            end = end.saturating_add(1);
-        }
-        (start, end)
     }
 
     /// Runs the copy selection to buffer operation for this subsystem.

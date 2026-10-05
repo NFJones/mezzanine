@@ -5930,8 +5930,12 @@ Settled display source MUST carry occurrence identity for replay and exact
 persistence retry; retries MUST NOT resubmit input or repeat visible promotion.
 Pending rows MUST remain absent from ordinary durable presentation sources and
 lower-layer baselines. Visible pending rows use the existing composer log geometry
-and bounded overflow projection, not forced viewport pinning. Full interaction,
-copy/overflow, restart and failure qualification remains in progress.
+and bounded overflow projection, not forced viewport pinning. Source selection
+MUST preserve the complete occurrence display source, including CRLF and trailing
+newlines, independently of rendered labels and wrapping. Overflow summary and
+tail rows MUST retain an explicit full-source association; selecting the group
+MUST emit it once. Frozen copy snapshots MUST remain unchanged by later output
+or promotion. Full interaction, restart and failure qualification remains in progress.
 The display-only receipt view MUST select the currently bound conversation,
 deduplicate by occurrence identity, and preserve acceptance order independently
 of status, turn-map order or equal display text. Restored order MUST advance the

@@ -2,6 +2,125 @@
 
 use super::*;
 
+/// Source selection preserves trailing authored newlines rather than inheriting
+/// peer-message trim policy. A frozen copy snapshot remains unchanged while
+/// later pane output relocates the live pending suffix.
+#[test]
+fn runtime_pending_steering_source_copy_preserves_trailing_newlines_and_frozen_view() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.start_agent_prompt_turn("%1", "initial").unwrap();
+    let display = "雪e\u{301} exact source\r\nsecond line\n\n";
+    service
+        .execute_agent_shell_command_with_display(&primary, "exact model input", display, &[])
+        .unwrap();
+    let screen = service.agent_pane_screen("%1").unwrap();
+    let start = screen
+        .normal_content_lines()
+        .iter()
+        .position(|line| line.contains("[pending]"))
+        .unwrap();
+    let mut copy = crate::host::terminal::CopyMode::from_screen(screen, 24).unwrap();
+    copy.set_agent_surface(true);
+    copy.scroll_to_top();
+    copy.move_cursor_by(start as isize, 0);
+    copy.begin_keyboard_selection();
+    copy.scroll_to_bottom();
+    assert_eq!(
+        copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap(),
+        display
+    );
+    let frozen = copy.clone();
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "new durable output")
+        .unwrap();
+    assert_eq!(copy, frozen);
+    assert_eq!(
+        copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap(),
+        display
+    );
+}
+
+/// A bounded pending preview must keep the complete accepted display source
+/// copyable, including rows omitted from the live projection. Unicode and
+/// authored newlines remain source rather than reconstructed wrapped cells.
+#[test]
+fn runtime_pending_steering_overflow_retains_full_copy_source() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(40, 8).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(40, 8).unwrap(), 120).unwrap(),
+    );
+    service.start_agent_prompt_turn("%1", "initial").unwrap();
+    let display = format!(
+        "hidden source start\n{}\nsource end",
+        "雪e\u{301} long display ".repeat(35)
+    );
+    service
+        .execute_agent_shell_command_with_display(&primary, "exact model input", &display, &[])
+        .unwrap();
+    let screen = service.agent_pane_screen("%1").unwrap();
+    let visible = screen.normal_content_lines().join("\n");
+    assert!(visible.contains("[pending]"), "{visible}");
+    let sources = screen
+        .normal_styled_content_lines()
+        .into_iter()
+        .filter_map(|line| line.copy_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        sources.contains(&display),
+        "full pending source missing: {sources}"
+    );
+    let summary = screen
+        .normal_content_lines()
+        .iter()
+        .position(|line| line.contains("[pending]"))
+        .unwrap();
+    let mut copy = crate::host::terminal::CopyMode::from_screen(screen, 8).unwrap();
+    copy.set_agent_surface(true);
+    copy.scroll_to_top();
+    copy.move_cursor_by(summary as isize, 0);
+    copy.begin_keyboard_selection();
+    copy.move_cursor_to_line_end();
+    assert_eq!(
+        copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap(),
+        display
+    );
+    let rendered = copy.copy_selection().unwrap();
+    assert!(rendered.contains("[pending]"), "{rendered}");
+    assert!(!rendered.contains("hidden source start"), "{rendered}");
+    assert!(!rendered.contains("mez-copy-source-line"), "{rendered}");
+    copy.clear_selection();
+    copy.move_cursor_by(1, 0);
+    copy.move_cursor_to_line_start();
+    copy.begin_keyboard_selection();
+    copy.move_cursor_to_line_end();
+    assert_eq!(
+        copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap(),
+        display,
+        "clipped tail rows must retain their explicit source association"
+    );
+}
+
 /// Retiring a shell suffix during a durable write must remove only that suffix,
 /// leaving preceding durable output and one pending receipt at the live tail.
 #[test]

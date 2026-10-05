@@ -9,6 +9,38 @@
 use super::*;
 use mez_agent::transcript::SteeringRecoveryStatus;
 
+/// Associates every display row with one exact accepted occurrence source.
+/// Source selection emits the group once and preserves CRLF and trailing bytes;
+/// rendered selection remains sanitized, wrapped terminal text.
+fn steering_source_rendered_lines(
+    prefix: &str,
+    display: &str,
+    width: usize,
+    occurrence: &str,
+) -> Vec<RichTextLine> {
+    let mut lines = wrapped_prefixed_agent_terminal_lines(prefix, display, width);
+    attach_steering_copy_source(&mut lines, display, occurrence);
+    lines
+}
+
+/// Retains one exact payload at the group tail and small references on preceding
+/// rows. Keeping the anchor last preserves source when older history is evicted.
+fn attach_steering_copy_source(lines: &mut [RichTextLine], display: &str, occurrence: &str) {
+    let reference = format!(
+        "{}{occurrence}/0",
+        mez_mux::copy::COPY_SOURCE_REFERENCE_PREFIX
+    );
+    for line in lines.iter_mut() {
+        line.copy_text = Some(reference.clone());
+    }
+    if let Some(anchor) = lines.last_mut() {
+        anchor.copy_text = Some(encode_copy_source_line_in_group(occurrence, 0, display));
+    }
+}
+
+#[cfg(test)]
+mod tests;
+
 /// Surface-local receipt projection captured alongside an exact rollback screen.
 pub(crate) struct SteeringPresentationSnapshot {
     /// Conversation, installed screen lineage, and physical pending suffix rows.
@@ -154,12 +186,25 @@ impl RuntimeSessionService {
             }
         };
         let width = self.agent_terminal_markdown_frame_width(pane)?;
-        let lines = wrapped_prefixed_agent_terminal_lines(prefix, &source.receipt.display, width);
+        let lines = steering_source_rendered_lines(
+            prefix,
+            &source.receipt.display,
+            width,
+            &source.receipt.id,
+        );
+        let copies = lines
+            .iter()
+            .map(|line| {
+                line.copy_text
+                    .clone()
+                    .unwrap_or_else(|| AGENT_COPY_SKIP_LINE.to_string())
+            })
+            .collect::<Vec<_>>();
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane,
             AgentTerminalPresentationStyle::UserPrompt,
             &lines,
-            &[],
+            &copies,
             Some((&encoded, crate::storage::transcript::steering::CONTENT_TYPE)),
         )
     }
@@ -274,6 +319,35 @@ impl RuntimeSessionService {
             );
             lines.truncate(1);
             lines.extend(tail);
+            // Every overflow row belongs to the same complete source group.
+            // Source selection recovers it once even when only a tail row is
+            // selected, without reconstructing omitted text from screen cells.
+            let full_source = pending
+                .iter()
+                .map(|entry| entry.display.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            attach_steering_copy_source(
+                &mut lines,
+                &full_source,
+                &format!("steering-overflow-{conversation}"),
+            );
+        } else {
+            let mut offset = 0;
+            for entry in &pending {
+                let count = wrapped_prefixed_agent_terminal_lines(
+                    "user> [pending] ",
+                    &entry.display,
+                    width,
+                )
+                .len();
+                attach_steering_copy_source(
+                    &mut lines[offset..offset + count],
+                    &entry.display,
+                    &entry.id,
+                );
+                offset += count;
+            }
         }
         let mut bytes = String::new();
         let cursor = screen.cursor_state();
@@ -300,6 +374,15 @@ impl RuntimeSessionService {
             bytes.as_bytes(),
             "projecting pending steering",
         )?;
+        let copies = lines
+            .iter()
+            .map(|line| {
+                line.copy_text
+                    .clone()
+                    .unwrap_or_else(|| AGENT_COPY_SKIP_LINE.to_string())
+            })
+            .collect::<Vec<_>>();
+        screen.set_recent_normal_copy_texts(&copies, AGENT_COPY_SKIP_LINE);
         Ok((screen, lines.len()))
     }
 
