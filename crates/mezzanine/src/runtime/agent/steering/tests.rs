@@ -2,6 +2,120 @@
 
 use super::*;
 
+/// Recovery count and byte limits may age historical evidence out, but cannot
+/// drop a newly admitted or not-sent live occurrence before its first display
+/// and durable publication. Reconciliation must install its exact identity once.
+#[test]
+fn steering_receipts_live_settlement_survives_recovery_history_pressure() {
+    use mez_agent::transcript::{SteeringRecoveryReceipt, SteeringRecoveryStatus};
+    for bytes in [false, true] {
+        for admitted in [false, true] {
+            let (mut service, turn) = fixture();
+            let history = if bytes {
+                vec![SteeringRecoveryReceipt {
+                    id: "old-large".into(),
+                    acceptance_order: 1,
+                    turn_id: None,
+                    event_sequence: None,
+                    display: "x".repeat(mez_agent::transcript::STEERING_RECOVERY_BYTES),
+                    status: SteeringRecoveryStatus::NotSent,
+                }]
+            } else {
+                (1..=128)
+                    .map(|order| SteeringRecoveryReceipt {
+                        id: format!("old-{order}"),
+                        acceptance_order: order,
+                        turn_id: None,
+                        event_sequence: None,
+                        display: "older evidence".into(),
+                        status: SteeringRecoveryStatus::NotSent,
+                    })
+                    .collect()
+            };
+            service
+                .restore_steering_recovery("%1", &turn.conversation_id, &history)
+                .unwrap();
+            // These older occurrences have already been displayed on this surface.
+            service
+                .install_replayed_steering_receipt_ids(
+                    "%1",
+                    &turn.conversation_id,
+                    history.iter().map(|entry| entry.id.clone()).collect(),
+                )
+                .unwrap();
+            let root = std::env::temp_dir().join(format!(
+                "mez-steering-pressure-{}",
+                crate::storage::token_usage::new_token_usage_event_id()
+            ));
+            let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+            service.set_agent_transcript_store(store.clone());
+            service
+                .inject_agent_steering_with_display("%1", "fresh input", "fresh display")
+                .unwrap();
+            let occurrence = service.steering_receipts_for_tests(&turn.turn_id)[0].clone();
+            if admitted {
+                service
+                    .agent
+                    .steering_receipts
+                    .get_mut(&turn.turn_id)
+                    .unwrap()
+                    .admit(7, &BTreeSet::from([occurrence.sequence]));
+                service.request_steering_presentation("%1");
+            } else {
+                service.settle_steering_receipts(&turn.turn_id);
+            }
+            service.request_steering_presentation("%1");
+            let text = service
+                .agent_pane_screen("%1")
+                .unwrap()
+                .normal_content_lines()
+                .join("\n");
+            assert_eq!(text.matches("fresh display").count(), 1, "{text}");
+            assert!(!text.contains("[pending]"), "{text}");
+            let writes = service
+                .drain_transcript_persistence_transition()
+                .side_effects;
+            let mut published = 0;
+            for effect in writes {
+                if let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation {
+                    entry,
+                    ..
+                } = effect
+                {
+                    let source = crate::storage::transcript::steering::Source::decode(
+                        entry.source_text.as_deref().unwrap(),
+                    )
+                    .unwrap();
+                    if source.receipt.id == occurrence.id {
+                        published += 1;
+                        store.append_presentation_many(&[entry]).unwrap();
+                    }
+                }
+            }
+            assert_eq!(published, 1);
+            assert_eq!(
+                store
+                    .inspect_presentation(&turn.conversation_id)
+                    .unwrap()
+                    .iter()
+                    .filter(|entry| entry.source_content_type.as_deref()
+                        == Some(crate::storage::transcript::steering::CONTENT_TYPE))
+                    .filter(
+                        |entry| crate::storage::transcript::steering::Source::decode(
+                            entry.source_text.as_deref().unwrap()
+                        )
+                        .unwrap()
+                        .receipt
+                        .id == occurrence.id
+                    )
+                    .count(),
+                1
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
 /// Promotion retains exact authored CRLF/trailing newlines in source selection,
 /// while an already captured pending selection remains frozen and independently
 /// copyable. Reading either view cannot acknowledge or reinsert model input.

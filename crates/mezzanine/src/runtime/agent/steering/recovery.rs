@@ -34,9 +34,8 @@ fn project(receipt: &Receipt, turn: Option<&str>) -> SteeringRecoveryReceipt {
 impl RuntimeSessionService {
     /// Projects receipt evidence only for the pane's currently bound conversation.
     /// This view grants no execution or acknowledgement authority; rendering
-    /// must track occurrence IDs rather than matching display text. Pending
-    /// evidence is never silently truncated; bounded terminal history may age out.
-    #[allow(dead_code, reason = "pending-log rendering consumes this receipt view")]
+    /// must track occurrence IDs rather than matching display text. Live display
+    /// obligations are not truncated by restart-checkpoint history budgets.
     pub(crate) fn steering_presentation_receipts(
         &self,
         pane: &str,
@@ -44,7 +43,7 @@ impl RuntimeSessionService {
         let conversation = self.agent_shell_store().get(pane).ok_or_else(|| {
             crate::error::MezError::invalid_state("steering presentation owner unavailable")
         })?;
-        self.steering_recovery_checkpoint(pane, &conversation.session_id)
+        Ok(self.steering_receipt_candidates(pane, &conversation.session_id))
     }
 
     /// Reports receipt changes awaiting checkpoint publication.
@@ -103,6 +102,35 @@ impl RuntimeSessionService {
         pane: &str,
         conversation: &str,
     ) -> Result<Vec<SteeringRecoveryReceipt>> {
+        let candidates = self.steering_receipt_candidates(pane, conversation);
+        let (mut pending, terminal): (Vec<_>, Vec<_>) = candidates
+            .into_iter()
+            .partition(|entry| entry.status == SteeringRecoveryStatus::Pending);
+        validate_steering_recovery(&pending)?;
+        let mut bytes = pending
+            .iter()
+            .map(|entry| entry.display.len())
+            .sum::<usize>();
+        for entry in terminal {
+            if pending.len() < STEERING_RECOVERY_ENTRIES
+                && bytes.saturating_add(entry.display.len()) <= STEERING_RECOVERY_BYTES
+            {
+                bytes += entry.display.len();
+                pending.push(entry);
+            }
+        }
+        pending.sort_by_key(|entry| entry.acceptance_order);
+        validate_steering_recovery(&pending)?;
+        Ok(pending)
+    }
+
+    /// Collects exact retained obligations without applying lossy restart-history
+    /// selection. Actor stores retain their own finite owner/source limits.
+    fn steering_receipt_candidates(
+        &self,
+        pane: &str,
+        conversation: &str,
+    ) -> Vec<SteeringRecoveryReceipt> {
         let mut candidates = Vec::new();
         for owner in self.agent.steering_receipts.values().filter(|owner| {
             owner.turn.pane_id == pane && owner.turn.conversation_id == conversation
@@ -143,25 +171,7 @@ impl RuntimeSessionService {
         let mut ids = BTreeSet::new();
         candidates.retain(|entry| ids.insert(entry.id.clone()));
         candidates.sort_by_key(|entry| entry.acceptance_order);
-        let (mut pending, terminal): (Vec<_>, Vec<_>) = candidates
-            .into_iter()
-            .partition(|entry| entry.status == SteeringRecoveryStatus::Pending);
-        validate_steering_recovery(&pending)?;
-        let mut bytes = pending
-            .iter()
-            .map(|entry| entry.display.len())
-            .sum::<usize>();
-        for entry in terminal {
-            if pending.len() < STEERING_RECOVERY_ENTRIES
-                && bytes.saturating_add(entry.display.len()) <= STEERING_RECOVERY_BYTES
-            {
-                bytes += entry.display.len();
-                pending.push(entry);
-            }
-        }
-        pending.sort_by_key(|entry| entry.acceptance_order);
-        validate_steering_recovery(&pending)?;
-        Ok(pending)
+        candidates
     }
 
     /// Hydrates only inert evidence. No canonical event, input, provider task,
