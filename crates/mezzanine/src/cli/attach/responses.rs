@@ -1,9 +1,13 @@
 //! Attached-client control response validation and terminal payload decoding.
 
 use super::{
-    AttachedTerminalOutputModes, ClientId, GraphicRendition, MezError, Result, TerminalColor,
-    TerminalCursorStyle, TerminalStepRefreshRequirement, TerminalStyleSpan, json_escape,
+    AttachedTerminalOutputModes, ClientId, MezError, Result, TerminalCursorStyle,
+    TerminalStepRefreshRequirement, TerminalStyleSpan, json_escape,
 };
+use crate::host::terminal::wire_styles::parse_terminal_graphic_rendition;
+pub(super) use crate::host::terminal::wire_styles::parse_terminal_style_span_row;
+#[cfg(test)]
+use mez_terminal::TerminalColor;
 
 /// Runs the ensure control response success operation for this subsystem.
 ///
@@ -407,146 +411,6 @@ pub(in crate::cli) fn terminal_step_response_line_style_spans(
         .iter()
         .map(parse_terminal_style_span_row)
         .collect()
-}
-
-/// Runs the parse terminal style span row operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn parse_terminal_style_span_row(
-    value: &serde_json::Value,
-) -> Result<Vec<TerminalStyleSpan>> {
-    let spans = value
-        .as_array()
-        .ok_or_else(|| MezError::invalid_state("terminal step style span row is not an array"))?;
-    spans.iter().map(parse_terminal_style_span).collect()
-}
-
-/// Runs the parse terminal style span operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn parse_terminal_style_span(value: &serde_json::Value) -> Result<TerminalStyleSpan> {
-    let start = value
-        .get("start")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| MezError::invalid_state("terminal step style span start is missing"))?;
-    let length = value
-        .get("length")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| MezError::invalid_state("terminal step style span length is missing"))?;
-    let rendition = value
-        .get("rendition")
-        .ok_or_else(|| MezError::invalid_state("terminal step style span rendition is missing"))
-        .and_then(parse_terminal_graphic_rendition)?;
-    Ok(TerminalStyleSpan {
-        start: usize::try_from(start)
-            .map_err(|_| MezError::invalid_state("terminal step style span start is too large"))?,
-        length: usize::try_from(length)
-            .map_err(|_| MezError::invalid_state("terminal step style span length is too large"))?,
-        rendition,
-    })
-}
-
-/// Runs the parse terminal graphic rendition operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn parse_terminal_graphic_rendition(
-    value: &serde_json::Value,
-) -> Result<GraphicRendition> {
-    Ok(GraphicRendition {
-        bold: bool_field(value, "bold"),
-        dim: bool_field(value, "dim"),
-        italic: bool_field(value, "italic"),
-        underline: bool_field(value, "underline"),
-        double_underline: bool_field(value, "double_underline"),
-        strikethrough: bool_field(value, "strikethrough"),
-        inverse: bool_field(value, "inverse"),
-        hidden: bool_field(value, "hidden"),
-        foreground: parse_terminal_color_field(value, "foreground")?,
-        background: parse_terminal_color_field(value, "background")?,
-    })
-}
-
-/// Runs the bool field operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn bool_field(value: &serde_json::Value, field: &str) -> bool {
-    value
-        .get(field)
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
-
-/// Runs the parse terminal color field operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn parse_terminal_color_field(
-    value: &serde_json::Value,
-    field: &str,
-) -> Result<Option<TerminalColor>> {
-    let Some(color) = value.get(field) else {
-        return Ok(None);
-    };
-    if color.is_null() {
-        return Ok(None);
-    }
-    parse_terminal_color_value(color).map(Some)
-}
-
-/// Runs the parse terminal color value operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn parse_terminal_color_value(color: &serde_json::Value) -> Result<TerminalColor> {
-    let kind = color
-        .get("kind")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| MezError::invalid_state("terminal step style color kind is missing"))?;
-    match kind {
-        "indexed" => {
-            let index = color
-                .get("index")
-                .and_then(serde_json::Value::as_u64)
-                .ok_or_else(|| {
-                    MezError::invalid_state("terminal step indexed style color is missing")
-                })?;
-            Ok(TerminalColor::Indexed(u8::try_from(index).map_err(
-                |_| MezError::invalid_state("terminal step indexed style color is out of range"),
-            )?))
-        }
-        "rgb" => Ok(TerminalColor::Rgb(
-            parse_u8_color_component(color, "red")?,
-            parse_u8_color_component(color, "green")?,
-            parse_u8_color_component(color, "blue")?,
-        )),
-        _ => Err(MezError::invalid_state(
-            "terminal step style color kind is invalid",
-        )),
-    }
-}
-
-/// Runs the parse u8 color component operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn parse_u8_color_component(value: &serde_json::Value, field: &str) -> Result<u8> {
-    let component = value
-        .get(field)
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| MezError::invalid_state("terminal step RGB style color is missing"))?;
-    u8::try_from(component)
-        .map_err(|_| MezError::invalid_state("terminal step RGB style color is out of range"))
 }
 
 /// Runs the terminal step response output modes operation for this subsystem.

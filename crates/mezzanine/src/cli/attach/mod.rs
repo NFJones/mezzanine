@@ -7,13 +7,13 @@
 use super::{
     Args, AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
     AttachedTerminalOutputModes, AuxiliarySocketKind, CliEnv, CliOutputFormat, ClientId,
-    DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT, GraphicRendition, IsTerminal, MezError, Result,
-    SessionRecord, SessionRegistry, Size, SocketSelection, TerminalColor, TerminalCursorStyle,
-    TerminalStyleSpan, UnixStream, Write, attached_terminal_output_disconnected,
-    auxiliary_socket_path_for_control_socket, decode_control_frame, encode_control_body,
-    incomplete_control_response_error, io, json_escape, read_control_response_frames,
-    records_to_json, registry_root, resolve_session_record_target, selected_socket_path,
-    terminal_size_from_fd_or_environment, write_control_response, write_json_or_plain,
+    DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT, IsTerminal, MezError, Result, SessionRecord,
+    SessionRegistry, Size, SocketSelection, TerminalCursorStyle, TerminalStyleSpan, UnixStream,
+    Write, attached_terminal_output_disconnected, auxiliary_socket_path_for_control_socket,
+    decode_control_frame, encode_control_body, incomplete_control_response_error, io, json_escape,
+    read_control_response_frames, records_to_json, registry_root, resolve_session_record_target,
+    selected_socket_path, terminal_size_from_fd_or_environment, write_control_response,
+    write_json_or_plain,
 };
 // Attach clients and interactive control-socket attachment helpers.
 

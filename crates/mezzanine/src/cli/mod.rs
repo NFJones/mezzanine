@@ -64,7 +64,7 @@ use mez_agent::memory::{MemoryKind, MemoryRecord, MemoryScope, MemorySource, Mem
 use mez_core::ids::ClientId;
 use mez_mux::layout::Size;
 use mez_mux::session::Session;
-use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
+use mez_terminal::TerminalStyleSpan;
 
 use self::mcp::load_primary_config_layers;
 
