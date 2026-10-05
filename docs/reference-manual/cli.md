@@ -545,6 +545,11 @@ through exact-handle IPC using the fixed read-only host method. It exposes no
 device proof or private principal/checkpoint metadata and retires only the
 management connection. Real-host fixtures qualify listing beside a live sibling
 without session allocation; ordinary CLI consumer migration remains unfinished.
+Ordinary `list --iroh-profile NAME` now reuses an authenticated active broker,
+after checking the current outbound veto. Only missing or refused discovery
+retains direct fallback; unsafe discovery, protocol errors and failed broker
+operations do not create a competing endpoint. Invitation listing and automatic
+broker startup are unchanged; other ordinary consumers remain unmigrated.
 Errors after writing never automatically replay initialization. Session
 creation/attachment uses a separate internal transition retaining the original
 intent/key and validating exact client/session/active-lease evidence. A loopback

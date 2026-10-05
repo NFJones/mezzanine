@@ -4267,6 +4267,11 @@ the exact frontend handle, returning only bounded validated lease summaries.
 Credentials, private principal/checkpoint facts and arbitrary peer metadata MUST
 NOT cross IPC. Listing MUST retire only its management connection and MUST NOT
 allocate sessions or disturb sibling attachments. Ordinary CLI migration remains separate.
+Ordinary paired-profile session listing MUST reuse an authenticated active broker
+when available, respecting the current outbound veto before discovery. Only
+missing or refused discovery MAY use the existing direct exchange; permission,
+protocol and broker-operation failures MUST NOT trigger competing endpoint use.
+Invitation listing and automatic broker startup remain separate paths.
 The separate internal session initialization MUST retain the original routing
 intent and invocation key, validate correlated role/client/session/active-lease
 evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection

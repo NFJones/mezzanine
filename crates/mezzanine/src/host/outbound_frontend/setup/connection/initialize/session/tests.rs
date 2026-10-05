@@ -131,7 +131,13 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
     std::fs::create_dir(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     let host_root = root.join("host");
-    let client_root = root.join("client");
+    let cli_env = crate::cli::CliEnv {
+        home: Some(root.join("client-home")),
+        ..Default::default()
+    };
+    let cli_paths = crate::config::ConfigPaths::from_home(cli_env.home.clone().unwrap());
+    cli_paths.ensure_default_config().unwrap();
+    let client_root = cli_paths.root().to_path_buf();
     let policy = RuntimeIrohTransportPolicy {
         compression_codecs: vec![RuntimeIrohCompressionCodec::None],
         ..Default::default()
@@ -223,7 +229,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
     )
     .unwrap();
     let socket = listener.socket_path().unwrap().to_path_buf();
-    let client_work = async {
+    let client_work = Box::pin(async {
         let (first, first_local) = create_frontend(&admission, "first").await;
         let mut first = first
             .connect_pinned()
@@ -357,6 +363,30 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
                     .any(|row| row["session_id"] == second_view["session"]["session_id"])
             );
             assert_eq!(router.snapshots().await.unwrap().len(), 4);
+            let mut cli_output = Vec::new();
+            let mut cli_error = Vec::new();
+            let code = crate::cli::run_with(
+                vec![
+                    "mez".into(),
+                    "--iroh-profile".into(),
+                    "creator".into(),
+                    "--json".into(),
+                    "list".into(),
+                ],
+                cli_env.clone(),
+                false,
+                &mut cli_output,
+                &mut cli_error,
+            )
+            .await
+            .expect("ordinary listing must reuse the live paired broker");
+            assert_eq!(code, 0);
+            assert!(cli_error.is_empty());
+            let cli_listing: serde_json::Value = serde_json::from_slice(&cli_output).unwrap();
+            assert_eq!(
+                cli_listing["result"]["sessions"].as_array().unwrap().len(),
+                4
+            );
             let (second, _, second_event) = second
                 .poll_events(25, Duration::from_secs(2))
                 .await
@@ -486,15 +516,15 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             cancel.notify_one();
         };
         let (accepted, ()) = tokio::join!(supervised, clients);
-        assert_eq!(accepted.unwrap(), 3);
+        assert_eq!(accepted.unwrap(), 4);
         stop.notify_one();
-    };
+    });
     let (served, ()) = tokio::time::timeout(Duration::from_secs(30), async {
         tokio::join!(serve, client_work)
     })
     .await
     .unwrap();
-    assert_eq!(served.unwrap(), 5);
+    assert_eq!(served.unwrap(), 6);
     router
         .shutdown_all(true, Duration::from_secs(5))
         .await

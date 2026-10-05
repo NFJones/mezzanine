@@ -150,7 +150,7 @@ pub(super) async fn run_remote<W: Write>(
     stdout: &mut W,
 ) -> Result<()> {
     match args.command {
-        RemoteCliCommand::OutboundServe => broker::run(env, broker::shutdown_signal())
+        RemoteCliCommand::OutboundServe => Box::pin(broker::run(env, broker::shutdown_signal()))
             .await
             .map(|_| ()),
         RemoteCliCommand::Status => {

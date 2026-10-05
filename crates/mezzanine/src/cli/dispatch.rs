@@ -334,14 +334,14 @@ async fn run_with_inner<W: Write, E: Write>(
             .await?
         }
         Some(CliCommand::Serve(args)) => {
-            run_serve(
+            Box::pin(run_serve(
                 &socket_selection,
                 args,
                 env,
                 interactive,
                 output_format,
                 stdout,
-            )
+            ))
             .await?
         }
         Some(CliCommand::List(args)) => {
@@ -501,7 +501,14 @@ async fn run_with_inner<W: Write, E: Write>(
             run_session_catalog(args, env, output_format, stdout)?;
         }
         Some(CliCommand::Remote(args)) => {
-            run_remote(args, &socket_selection, &env, output_format, stdout).await?;
+            Box::pin(run_remote(
+                args,
+                &socket_selection,
+                &env,
+                output_format,
+                stdout,
+            ))
+            .await?;
         }
         Some(CliCommand::Sandbox(args)) => {
             exit_code = run_sandbox(args, env, interactive, output_format, stdout)?;

@@ -1429,14 +1429,46 @@ pub(super) async fn list_iroh_host_sessions(
     control_target: &super::ControlTargetSelection,
     env: &super::CliEnv,
 ) -> Result<String> {
-    exchange_iroh_host_request(
+    if let super::ControlTargetSelection::IrohProfile(profile) = control_target {
+        let paths = env.config_paths()?;
+        let layers = super::load_runtime_config_layers(&paths)?;
+        let structured = crate::runtime::runtime_effective_config_value(&layers)?;
+        let policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+        if !policy.outbound_enabled {
+            return Err(MezError::config(
+                "outbound Iroh connections are disabled by transport.iroh.outbound_enabled",
+            ));
+        }
+        match crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
+            paths.root(),
+            policy.setup_timeout,
+        )
+        .await
+        {
+            Ok(client) => {
+                let sessions = client.list_sessions(profile, policy.setup_timeout).await?;
+                return Ok(serde_json::json!({"jsonrpc":"2.0","id":"cli",
+                    "result":{"sessions":sessions}})
+                .to_string());
+            }
+            Err(error)
+                if matches!(
+                    error.io_kind(),
+                    Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
+                ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    // Keep the legacy direct exchange off the caller's bounded stack even when
+    // this path is bypassed by an already authenticated broker.
+    Box::pin(exchange_iroh_host_request(
         control_target,
         env,
         "host/session/list",
         serde_json::json!({}),
         "session-list",
         "session list",
-    )
+    ))
     .await
 }
 
@@ -3025,6 +3057,9 @@ pub(super) fn incomplete_control_response_error(
         "control socket closed before complete response frame ({complete_frames}/{expected_frames})"
     ))
 }
+
+#[cfg(test)]
+mod broker_listing_tests;
 
 #[cfg(test)]
 mod tests {
