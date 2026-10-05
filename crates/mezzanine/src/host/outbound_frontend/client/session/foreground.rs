@@ -86,12 +86,16 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
     let mut ordinary_rate = AttachOrdinaryRenderRate::default();
     let mut animation = AttachAnimationRefresh::default();
     let mut pending_ordinary = false;
+    let mut health_deadline = None;
     loop {
         if render {
             let key = next_key(nonce, &mut sequence)?;
             session = session.present(terminal, &key, budget).await?.0;
             ordinary_rate.update_from_rendered_view(session.render_rate_limit_fps);
             animation.update_from_rendered_view(session.modes.animation_refresh_interval_ms);
+            health_deadline = session
+                .painted_health
+                .map(|_| tokio::time::Instant::now() + Duration::from_secs(1));
         }
         let (input, action) = if session.events_negotiated {
             let (updated, input, action) = wait::negotiated(session, terminal, budget).await?;
@@ -167,6 +171,14 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
                 animation.update_from_rendered_view(session.modes.animation_refresh_interval_ms);
             }
             pending_ordinary = false;
+        }
+        if !render
+            && session.painted_health.is_some()
+            && session.receipts.is_empty()
+            && health_deadline.is_some_and(|deadline| deadline <= tokio::time::Instant::now())
+        {
+            session = session.repaint_transport_status(terminal, budget).await?.0;
+            health_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(1));
         }
     }
 }

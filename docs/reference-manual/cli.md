@@ -621,7 +621,11 @@ An explicit internal status-repaint API now refreshes previously painted,
 receipt-settled output when coarse health changes. It preserves server rows,
 styles and revision, sends no receipt ACK or view request, and skips writes for
 unchanged samples. Replacement or writer invalidation clears eligibility.
-Automatic idle scheduling and ordinary CLI attachment remain unfinished.
+Production scheduling acceptance and ordinary CLI attachment remain unfinished.
+The internal foreground now schedules eligible settled status refreshes after
+event settlement on a finite local cadence. Changed health repaints without a
+snapshot request or another ACK. Exact wake latency and ordinary CLI attachment
+remain unqualified; pending exchanges are never abandoned for a repaint.
 Partial or failed output never arms presentation; terminal restoration and
 started output tails remain caller-owned. Unix-fd fixtures qualify byte commitment,
 not visibility in a physical terminal or complete interactive attachment support.

@@ -151,6 +151,117 @@ fn inert_client(
     (root, listener, peer, client)
 }
 
+/// Idle coarse-health changes must repaint the settled local decoration without
+/// fetching server rows or acknowledging receipts again. The original health
+/// exchange supplies initial presentation, and cancellation retires a later poll.
+#[tokio::test]
+async fn outbound_foreground_idle_health_repaints_without_snapshot_or_ack() {
+    let (root, listener, peer, mut client) = inert_client(Vec::new());
+    client.events_negotiated = true;
+    client.lines = vec!["base    tail".into()];
+    let colored = |index| mez_terminal::GraphicRendition {
+        background: Some(mez_terminal::TerminalColor::Indexed(index)),
+        ..Default::default()
+    };
+    client.iroh_status_slot = Some(crate::host::terminal::TerminalIrohStatusSlot {
+        row: 0,
+        column: 4,
+        width: 4,
+        good: colored(2),
+        degraded: colored(3),
+        poor: colored(1),
+        unknown: colored(8),
+    });
+    let handle = client.client.handle.clone();
+    let summary = client.summary.clone();
+    let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+    for _ in 0..3 {
+        terminal.push_pending_input_read();
+    }
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let foreground_stop = stop.clone();
+    let foreground = client.run_snapshot_foreground(
+        &mut terminal,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(2),
+        async move { foreground_stop.notified().await },
+    );
+    let responder = async {
+        let mut peer = Framed::new(peer, ProtocolFrameCodec::new(SNAPSHOT_LIMIT).unwrap());
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(request["operation"], "health");
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"connected":true,"quality":"degraded"
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(request["operation"], "events");
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"action":"none","event_id":null
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(
+            request["operation"], "health",
+            "idle output needs connection-local refresh"
+        );
+        assert_eq!(request["handle"], serde_json::to_value(&handle).unwrap());
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            serde_json::json!({
+                "handle":handle,"session":summary,"connected":true,"quality":"poor"
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let frame = peer.next().await.unwrap().unwrap();
+        let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(
+            request["operation"], "events",
+            "health repaint sends no snapshot or ACK"
+        );
+        stop.notify_one();
+        assert!(peer.next().await.is_none());
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(foreground, responder)
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(terminal.written_frames.len(), 2);
+    for (frame, index) in terminal.written_frames.iter().zip([3, 1]) {
+        assert_eq!(frame.lines, ["base up tail"]);
+        assert_eq!(
+            frame.line_style_spans[0]
+                .iter()
+                .find(|span| span.start == 4)
+                .unwrap()
+                .rendition
+                .background,
+            Some(mez_terminal::TerminalColor::Indexed(index))
+        );
+    }
+    assert_eq!(terminal.presentation_restores, 1);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// An ordinary event refresh may reuse only the initially committed frame.
 /// Unchanged settlement must not write another frame or acknowledge receipts;
 /// cancellation during the following event poll still restores presentation.

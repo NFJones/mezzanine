@@ -4355,8 +4355,12 @@ The explicit internal status-repaint API MUST require previously painted,
 receipt-settled output and preserve its retained server base and revision.
 Changed coarse health MAY repaint that base without receipt IDs or an ACK;
 unchanged samples MUST NOT write. Replacement or writer invalidation MUST clear
-repaint eligibility. Failure consumes ownership; automatic idle scheduling
+repaint eligibility. Failure consumes ownership; production scheduling acceptance
 and ordinary CLI attachment remain separate qualification boundaries.
+The internal foreground MUST refresh eligible settled status decorations on a
+finite local cadence after event exchange settlement. Changed health MUST use
+receipt-free repaint without snapshot capture or another ACK; unchanged samples
+MUST preserve output. Exact wake latency and ordinary CLI attachment remain unqualified.
 The internal request-driven foreground composition MUST retire its session on
 EOF, cancellation or error, attempt presentation restoration on explicit return,
 and retain distinct operation identities without replay. Whole-future abandonment
