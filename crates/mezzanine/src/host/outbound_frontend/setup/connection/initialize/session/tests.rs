@@ -96,6 +96,7 @@ async fn create_frontend(
             "client_name":name,"requested_version":3,"requested_role":"primary",
             "session_intent":"create","idempotency_key":format!("create-{name}"),
             "detach_primary_on_disconnect":true,
+            "event_stream_version":1,
             "client":{"name":name,"interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"},
                 "metadata":{"session_name":name}}
         }
@@ -224,7 +225,7 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
     let socket = listener.socket_path().unwrap().to_path_buf();
     let client_work = async {
         let (first, first_local) = create_frontend(&admission, "first").await;
-        let first = first
+        let mut first = first
             .connect_pinned()
             .await
             .unwrap()
@@ -246,7 +247,27 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             first.connected.prepared.initialize["idempotency_key"],
             "create-first"
         );
+        let first_event = tokio::time::timeout(Duration::from_secs(2), first.next_event())
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("negotiated first-session event");
+        assert!(first_event.1.is_some());
         drop(first);
+        let second_event = tokio::time::timeout(Duration::from_secs(2), second.next_event())
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("sibling event remains available");
+        assert!(second_event.1.is_some());
+        assert!(
+            second
+                .connected
+                .connection
+                .connection()
+                .close_reason()
+                .is_none()
+        );
         let handle = second.connected.prepared.frontend.handle().clone();
         let mut second_local = Framed::new(
             second_local.into_inner(),

@@ -3,8 +3,9 @@
 //! Reuses the single owner-authenticated exchange. No automatic retry is allowed
 //! after writing, since creation may already be committed remotely. Session and
 //! client evidence stays scoped to its connection; labels cannot grant authority.
-//! Event streams and X11 are rejected before sending until their independent
-//! forwarding owners are integrated. Raw remote responses never enter local IPC.
+//! Optional version-one events remain bound to this exact retained connection;
+//! later event versions and X11 are rejected before sending. Frontend event
+//! forwarding is separate. Raw remote responses never enter local IPC.
 
 use super::*;
 use mez_core::ids::{ClientId, SessionId};
@@ -16,6 +17,9 @@ pub(crate) struct InitializedSessionFrontend {
     bridge: IrohCompressionBridge,
     summary: serde_json::Value,
     delivered_receipts: Vec<u64>,
+    events: Option<
+        crate::host::outbound_frontend::events::OutboundEventReader<iroh::endpoint::RecvStream>,
+    >,
 }
 
 mod view;
@@ -36,7 +40,9 @@ impl ConnectedFrontend {
                         | SessionIntent::Default
                 )
             )
-            || params.event_stream_version.is_some()
+            || params
+                .event_stream_version
+                .is_some_and(|version| version != 1)
             || params.x11_forwarding.is_some()
         {
             return Err(MezError::forbidden(
@@ -48,12 +54,58 @@ impl ConnectedFrontend {
                 validate_session_response(body, connected.prepared.profile.server_addr.id, &params)
             })
             .await?;
+        let events = if params.event_stream_version == Some(1) {
+            let endpoint = &connected.prepared.frontend._endpoint;
+            endpoint.frontend_config_root()?;
+            let events = crate::host::outbound_frontend::events::OutboundEventReader::accept(
+                connected.connection.connection(),
+                connected.compression,
+                endpoint.transport_policy().setup_timeout,
+            )
+            .await?;
+            endpoint.frontend_config_root()?;
+            Some(events)
+        } else {
+            None
+        };
         Ok(InitializedSessionFrontend {
             connected,
             bridge,
             summary,
             delivered_receipts: Vec::new(),
+            events,
         })
+    }
+}
+
+impl InitializedSessionFrontend {
+    /// Reads only negotiated version-one events on this retained connection.
+    /// Idle cancellation preserves reader state. Errors/EOF require the caller
+    /// to retire this session owner; no reconnect, replay or IPC occurs here.
+    pub(crate) async fn next_event(
+        &mut self,
+    ) -> Result<
+        Option<(
+            crate::host::terminal::wire_events::AttachRenderAction,
+            Option<u64>,
+        )>,
+    > {
+        self.connected
+            .prepared
+            .frontend
+            ._endpoint
+            .frontend_config_root()?;
+        let reader = self
+            .events
+            .as_mut()
+            .ok_or_else(|| MezError::invalid_state("outbound session did not negotiate events"))?;
+        let event = reader.next().await?;
+        self.connected
+            .prepared
+            .frontend
+            ._endpoint
+            .frontend_config_root()?;
+        Ok(event)
     }
 }
 

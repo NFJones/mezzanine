@@ -4267,6 +4267,11 @@ intent and invocation key, validate correlated role/client/session/active-lease
 evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection
 or replay creation after ambiguous failure. Event/X11 forwarding and CLI activation
 remain outside this session initialization checkpoint.
+Optional version-one event setup MUST remain bound to the initialized session's
+retained connection lease and validate the exact preface under a finite deadline.
+Later event versions and X11 MUST reject before initialization. Reader errors or
+EOF require retirement of that session owner, not reconnect or creation replay;
+retiring one session MUST NOT close a sibling connection.
 The internal display-only frontend view exchange MUST bind the exact local handle
 and initialized session, accept only bounded geometry, and project correlated
 role/geometry-checked rendered lines. It MUST NOT acknowledge presentation,

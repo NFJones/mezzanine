@@ -546,6 +546,10 @@ intent/key and validating exact client/session/active-lease evidence. A loopback
 host fixture qualifies two sessions while the first remains attached and sibling
 control survives retirement; this is not multi-process CLI acceptance. Event/X11
 forwarding, startup election and CLI activation remain unfinished.
+Optional version-one events now remain owned by the initialized session and its
+exact connection lease. Setup validates the preface within a deadline; later
+versions and X11 remain rejected. Real-host fixtures qualify event availability
+after sibling retirement, not frontend forwarding or ordinary CLI activation.
 An internal display-only view exchange now carries bounded rendered lines and
 validated session identity across exact-handle local IPC. It does not provide
 terminal input, presentation acknowledgement or the complete attached
