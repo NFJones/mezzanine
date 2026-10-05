@@ -411,7 +411,10 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
                 serde_json::to_value(first.summary()).unwrap(),
                 first_view["session"]
             );
-            drop(first);
+            first
+                .detach_self("exact-first-detach", Duration::from_secs(2))
+                .await
+                .expect("self-detach must settle without retiring a sibling");
             let (second, connected, _) = second
                 .sample_transport_health(Duration::from_secs(2))
                 .await

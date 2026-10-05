@@ -140,6 +140,9 @@ impl OutboundFrontendListener {
         let mut session = connected.initialize_session().await?;
         loop {
             session = session.deliver_view().await?;
+            if session.is_detached() {
+                return Ok(());
+            }
         }
     }
 }

@@ -565,6 +565,11 @@ intent/key and validating exact client/session/active-lease evidence. A loopback
 host fixture qualifies two sessions while the first remains attached and sibling
 control survives retirement; this is not multi-process CLI acceptance. Event/X11
 forwarding, startup election and CLI activation remain unfinished.
+An internal self-detach API now consumes the exact initialized primary frontend,
+preserves its mutation key and validates exact-client settlement. It exposes no
+sibling target and ends the settled broker pipeline after reply delivery. Errors
+are not replayed; ordinary detach-command migration and terminal restoration
+remain separate from this retained-session API.
 Optional version-one events now remain owned by the initialized session and its
 exact connection lease. Setup validates the preface within a deadline; later
 versions and X11 remain rejected. Real-host fixtures qualify event availability

@@ -13,6 +13,7 @@ const VIEW_REQUEST_ID: &str = "outbound-session-view";
 
 mod acknowledge;
 mod conditional;
+mod detach;
 mod events;
 mod health;
 mod step;
@@ -33,6 +34,9 @@ impl InitializedSessionFrontend {
     /// total deadline. No terminal input or presentation receipt is acknowledged.
     /// On success the returned owner remains bound to the same session/client.
     pub(crate) async fn deliver_view(mut self) -> Result<Self> {
+        if self.detached {
+            return Err(MezError::conflict("outbound session owner is detached"));
+        }
         let deadline = self
             .connected
             .prepared
@@ -60,6 +64,13 @@ impl InitializedSessionFrontend {
             let envelope: serde_json::Value = serde_json::from_str(&frame.body)
                 .map_err(|_| MezError::invalid_args("outbound local request invalid"))?;
             if envelope.get("operation").is_some() {
+                if envelope
+                    .get("operation")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("detach")
+                {
+                    return detach::deliver_detach(self, &frame.body).await;
+                }
                 if envelope
                     .get("operation")
                     .and_then(serde_json::Value::as_str)

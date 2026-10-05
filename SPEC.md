@@ -4286,6 +4286,12 @@ intent and invocation key, validate correlated role/client/session/active-lease
 evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection
 or replay creation after ambiguous failure. Event/X11 forwarding and CLI activation
 remain outside this session initialization checkpoint.
+The internal self-detach exchange MUST bind the exact initialized primary and
+original mutation key, expose no client/session target, and validate correlated
+exact-client settlement. Successful reply delivery MUST retire that pipeline;
+detached ownership MUST NOT admit another request or affect sibling connections.
+Uncertain detach outcomes MUST NOT reconnect or replay. Ordinary detach command
+migration and terminal restoration remain separate caller-owned boundaries.
 Optional version-one event setup MUST remain bound to the initialized session's
 retained connection lease and validate the exact preface under a finite deadline.
 Later event versions and X11 MUST reject before initialization. Reader errors or

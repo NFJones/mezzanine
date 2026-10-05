@@ -21,6 +21,8 @@ pub(crate) struct InitializedSessionFrontend {
     delivered_view: Option<(String, u16, u16)>,
     /// Selected-path evidence owned by this connection, never a sibling endpoint.
     health: crate::host::terminal::iroh_health::AttachIrohHealthTracker,
+    /// Successful self-detach permanently retires this initialized owner.
+    detached: bool,
     events: Option<
         crate::host::outbound_frontend::events::OutboundEventReader<iroh::endpoint::RecvStream>,
     >,
@@ -79,12 +81,19 @@ impl ConnectedFrontend {
             delivered_receipts: Vec::new(),
             delivered_view: None,
             health: Default::default(),
+            detached: false,
             events,
         })
     }
 }
 
 impl InitializedSessionFrontend {
+    /// Reports exact self-detach settlement so supervision can dispose this
+    /// pipeline after reply delivery instead of admitting another request.
+    pub(crate) fn is_detached(&self) -> bool {
+        self.detached
+    }
+
     /// Samples only this retained connection when its refresh deadline is due.
     /// Disconnection returns unknown without borrowing another path or reviving
     /// ownership. Callers own reply delivery, redraw and terminal retirement.
