@@ -9,7 +9,7 @@ use crate::security::remote::RemoteRoleCeiling;
 use secrecy::SecretString;
 
 /// Prepares through the production hello and protected-profile setup owners.
-async fn prepared(
+pub(super) async fn prepared(
     admission: &OutboundFrontendAdmission,
     root: &std::path::Path,
     address: iroh::EndpointAddr,

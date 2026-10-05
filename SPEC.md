@@ -4256,6 +4256,12 @@ frontend and an independent connection lease, verify the protected server ID,
 and bound all pre-stream codec attempts by one deadline. Unsupported shared
 endpoint route policy MUST reject without rebinding. This transition sends no
 application initialization and establishes no remote session authority.
+The subsequent internal host-only initialization MUST send exactly one
+owner-authenticated request, correlate its response, validate observer role and
+host-only settlement, and retain only allowlisted response facts. Device proof
+MUST NOT enter frontend IPC or diagnostics. Failure after writing MUST NOT
+automatically replay initialization. Session creation/attachment, event and X11
+forwarding remain excluded from this host-only transition.
 The client MUST publish a profile
 only after successful invitation initialization. A client-local alias supplied
 by `--save-as` or `remote pair --name` MUST affect only profile lookup and

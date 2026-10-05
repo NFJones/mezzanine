@@ -537,6 +537,11 @@ the exact frontend and independent connection lease, verifies the server ID,
 and negotiates a bounded codec without sending application initialization.
 Relay/discovery policy qualification, remote authority settlement and CLI
 activation remain unfinished; unsupported policy rejects without another endpoint.
+An internal host-only initialization transition sends one owner-authenticated
+request and validates correlated observer/host-only settlement. Private proof
+and raw peer responses stay inside the owner; only allowlisted facts are retained.
+Errors after writing never automatically replay initialization. Session
+creation/attachment, events, X11 and CLI activation are not yet integrated.
 Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and revokes the selected lease before
 terminating its runtime.

@@ -22,6 +22,8 @@ pub(crate) struct ConnectedFrontend {
     compression: IrohCompressionPolicy,
 }
 
+mod initialize;
+
 impl PreparedFrontend {
     /// Connects only to this owner-resolved profile's pinned direct address.
     /// A single total deadline bounds all pre-stream codec attempts. Failure or
