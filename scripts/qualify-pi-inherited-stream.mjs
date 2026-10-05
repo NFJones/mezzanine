@@ -27,12 +27,17 @@ let opened = 0;
 let closed;
 const runtime = createExtensionRuntime();
 let extension;
+let duplicate;
 if (process.argv[3]) {
   const artifactRoot = resolve(process.argv[3]);
   const loaded = await discoverAndLoadExtensions([], process.cwd(), artifactRoot, createEventBus());
   assert.equal(loaded.errors.length, 0);
   assert.equal(loaded.extensions.length, 1);
   extension = loaded.extensions[0];
+  const second = await discoverAndLoadExtensions([], process.cwd(), artifactRoot, createEventBus());
+  assert.equal(second.errors.length, 0);
+  assert.equal(second.extensions.length, 1);
+  duplicate = second.extensions[0];
 } else {
 extension = await loadExtensionFromFactory(createPiStreamExtension("bound", () => {
   opened++;
@@ -43,7 +48,7 @@ extension = await loadExtensionFromFactory(createPiStreamExtension("bound", () =
 }
 assert.equal(opened, 0);
 for (const key of ["tools", "commands", "flags", "shortcuts"]) assert.equal(extension[key].size, 0);
-const runner = new ExtensionRunner([extension], runtime, process.cwd(), { getSessionId: () => "bound" }, {});
+const runner = new ExtensionRunner(duplicate ? [extension, duplicate] : [extension], runtime, process.cwd(), { getSessionId: () => "bound" }, {});
 const errors = [];
 runner.onError((e) => errors.push(e));
 for (const event of [
