@@ -53,6 +53,7 @@ mod pane_status;
 /// declaration makes the boundary available to the crate.
 mod render;
 pub(crate) mod wire_modes;
+pub(crate) mod wire_receipts;
 pub(crate) mod wire_styles;
 pub(crate) use render::render_focus_label;
 /// Exposes the screen module boundary.

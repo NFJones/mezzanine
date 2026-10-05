@@ -153,7 +153,14 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
         runtime_root: root.join("runtime"),
         owner_uid: crate::runtime::current_effective_uid(),
         config_root: host_root.clone(),
-        config_layers: Vec::new(),
+        config_layers: vec![crate::config::ConfigLayer {
+            name: "outbound-receipts".into(),
+            path: None,
+            format: crate::config::ConfigFormat::Toml,
+            scope: crate::config::ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nzen_mode = true\nzen_focus_label_duration_ms = 60000\n[agents]\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n".into(),
+        }],
         shell: ResolvedShell::new(
             std::path::PathBuf::from("/bin/sh"),
             ShellSource::FallbackBinSh,
@@ -271,7 +278,12 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
         );
         assert!(view["cursor"].is_object());
         assert!(view["output_modes"].is_object());
-        assert_eq!(view.as_object().unwrap().len(), 6);
+        assert!(view["presentation_ids"].is_array());
+        assert_eq!(
+            second.delivered_receipts,
+            serde_json::from_value::<Vec<u64>>(view["presentation_ids"].clone()).unwrap()
+        );
+        assert_eq!(view.as_object().unwrap().len(), 7);
         drop(second);
         drop(first_local);
         drop(second_local);
@@ -320,6 +332,18 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             assert_eq!(second.line_style_spans().len(), lines.len());
             assert!(second.output_modes().cursor_row < 24);
             assert!(second.output_modes().cursor_column < 80);
+            let settlement = serde_json::to_value(second.summary()).unwrap();
+            let runtime = router
+                .runtime_for_tests(settlement["session_id"].as_str().unwrap())
+                .unwrap();
+            let client_id =
+                ClientId::parse('c', settlement["client_id"].as_str().unwrap().to_string())
+                    .unwrap();
+            runtime
+                .actor()
+                .execute_terminal_command(client_id.clone(), "new-window receipt-focus".into())
+                .await
+                .unwrap();
             let (second, _) = second
                 .snapshot(100, 30, Duration::from_secs(2))
                 .await
@@ -327,6 +351,38 @@ async fn outbound_session_initialization_creates_distinct_live_siblings() {
             assert_eq!(
                 serde_json::to_value(second.summary()).unwrap(),
                 second_view["session"]
+            );
+            let receipts = second.presentation_ids().to_vec();
+            assert!(
+                !receipts.is_empty(),
+                "focus transition must produce real receipts"
+            );
+            let pending = runtime
+                .actor()
+                .render_iroh_client_snapshot(client_id.clone(), false)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(pending.presentation_ids, receipts);
+            // The explicit API is called only to simulate a renderer's completed
+            // write. Snapshot delivery above does not send this mutation itself.
+            let (second, acknowledged) = second
+                .acknowledge_presented("exact-output-commit", Duration::from_secs(2))
+                .await
+                .unwrap();
+            assert!(
+                acknowledged,
+                "delivery alone must leave the receipt unarmed"
+            );
+            assert!(second.presentation_ids().is_empty());
+            assert_eq!(
+                runtime
+                    .actor()
+                    .acknowledge_zen_focus_label_presentations(client_id, receipts, 1)
+                    .await
+                    .unwrap(),
+                0,
+                "explicit acknowledgement must arm once, without renewing on duplicate"
             );
             drop(second);
             cancel.notify_one();

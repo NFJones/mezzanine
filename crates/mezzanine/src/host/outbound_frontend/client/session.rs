@@ -34,6 +34,7 @@ struct Snapshot {
     line_style_spans: serde_json::Value,
     cursor: serde_json::Value,
     output_modes: serde_json::Value,
+    presentation_ids: Vec<u64>,
 }
 
 /// Client pinned to its first exact session settlement, with one retained stream.
@@ -42,8 +43,10 @@ pub(crate) struct OutboundSessionClient {
     summary: SessionSummary,
     styles: Vec<Vec<mez_terminal::TerminalStyleSpan>>,
     modes: mez_mux::presentation::AttachedTerminalOutputModes,
+    receipts: Vec<u64>,
 }
 
+mod acknowledge;
 mod step;
 
 impl OutboundFrontendClient {
@@ -108,6 +111,7 @@ impl OutboundFrontendClient {
                 OutboundSessionClient {
                     client: self,
                     modes: snapshot_modes(&snapshot, columns, rows)?,
+                    receipts: snapshot.presentation_ids,
                     summary: snapshot.session,
                     styles: crate::host::terminal::wire_styles::bounded_style_rows(
                         &snapshot.line_style_spans,
@@ -177,6 +181,7 @@ impl OutboundSessionClient {
                 columns,
             )?;
             self.modes = snapshot_modes(&snapshot, columns, rows)?;
+            self.receipts = snapshot.presentation_ids;
             Ok((self, snapshot.lines))
         })
         .await
@@ -198,6 +203,12 @@ impl OutboundSessionClient {
     /// applying them or granting terminal-input/presentation receipt authority.
     pub(crate) fn output_modes(&self) -> mez_mux::presentation::AttachedTerminalOutputModes {
         self.modes
+    }
+
+    /// Returns receipt IDs for the last snapshot, without acknowledging delivery.
+    /// Only a renderer's completed terminal write may justify the explicit ACK.
+    pub(crate) fn presentation_ids(&self) -> &[u64] {
+        &self.receipts
     }
 }
 
@@ -229,6 +240,7 @@ fn validate_budget(columns: u16, rows: u16, deadline: Duration) -> Result<()> {
 
 /// Checks closed snapshot identities and row count before exposing any lines.
 fn validate_snapshot(snapshot: &Snapshot, handle: &FrontendHandle, rows: u16) -> Result<()> {
+    crate::host::terminal::wire_receipts::validate_receipts(&snapshot.presentation_ids)?;
     let summary = &snapshot.session;
     if snapshot.handle != *handle
         || summary.selected_version != 3

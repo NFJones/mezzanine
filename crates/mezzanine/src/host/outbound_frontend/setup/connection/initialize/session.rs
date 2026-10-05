@@ -15,6 +15,7 @@ pub(crate) struct InitializedSessionFrontend {
     connected: ConnectedFrontend,
     bridge: IrohCompressionBridge,
     summary: serde_json::Value,
+    delivered_receipts: Vec<u64>,
 }
 
 mod view;
@@ -51,6 +52,7 @@ impl ConnectedFrontend {
             connected,
             bridge,
             summary,
+            delivered_receipts: Vec::new(),
         })
     }
 }

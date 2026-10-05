@@ -4280,6 +4280,11 @@ Snapshot cursor and output-mode fields MUST use the shared attach interpretation
 and validate cursor coordinates against the requested viewport on both ends.
 Only decoded presentation fields MAY cross IPC; this transport MUST NOT apply
 host modes or grant input or presentation-acknowledgement authority.
+Snapshots MUST retain bounded positive distinct presentation receipt IDs without
+arming them on IPC delivery. A separate explicit post-output acknowledgement MUST
+bind the exact frontend, session, last delivered receipt list and mutation key.
+Only the renderer's completed output may justify requesting it; false settlement
+MUST remain false, and uncertain failures MUST consume ownership without replay.
 The separate internal primary-input exchange MUST bind the exact frontend and
 initialized primary, bound geometry/input/key size, and retain the original
 terminal-step idempotency key. It MUST issue one mutation without automatic

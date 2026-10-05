@@ -556,11 +556,16 @@ shared rendition interpretation; unknown style metadata is not forwarded.
 Snapshots retain decoded cursor and output-mode facts as well, with viewport
 bounds checked by broker and client. Transporting those facts does not apply
 host terminal modes or establish complete renderer or receipt support.
+Snapshots also carry bounded receipt IDs without acknowledging them on delivery.
+An explicit post-output API binds the last delivered IDs, exact frontend/session
+and original mutation key. It must be called only after the renderer commits
+output; false settlement stays false and uncertain exchanges are not replayed.
 An independent internal primary-input exchange carries bounded bytes with the
 original mutation key and validates exact frontend/session acknowledgement.
 Reported byte acceptance is runtime evidence, not proof of process or model
 delivery. Errors consume ownership without automatic replay; full rendering,
-events, X11, presentation acknowledgement and ordinary CLI migration remain unfinished.
+events, X11 and ordinary CLI migration remain unfinished. Receipt forwarding is
+qualified separately from physical-terminal output commitment.
 An internal listener supervisor drives finitely many independent setup/display
 pipelines. Stalled peers do not serialize siblings; cancellation disposes owned
 pipelines without replay. The caller still disposes the listener and completes

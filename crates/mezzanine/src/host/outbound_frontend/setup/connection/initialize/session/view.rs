@@ -11,6 +11,7 @@ use super::*;
 
 const VIEW_REQUEST_ID: &str = "outbound-session-view";
 
+mod acknowledge;
 mod step;
 
 /// Closed display request; geometry is the only frontend-controlled parameter.
@@ -54,6 +55,13 @@ impl InitializedSessionFrontend {
             let envelope: serde_json::Value = serde_json::from_str(&frame.body)
                 .map_err(|_| MezError::invalid_args("outbound local request invalid"))?;
             if envelope.get("operation").is_some() {
+                if envelope
+                    .get("operation")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("acknowledge")
+                {
+                    return acknowledge::deliver_acknowledgement(self, &frame.body).await;
+                }
                 return step::deliver_step(self, &frame.body).await;
             }
             let request: ViewRequest = serde_json::from_str(&frame.body)
@@ -84,6 +92,13 @@ impl InitializedSessionFrontend {
             let lines = project_view_lines(&response, &request, &self.summary)?;
             let styles = project_view_styles(&response, lines.len(), request.columns)?;
             let modes = project_view_modes(&response, request.columns, request.rows)?;
+            let response_value: serde_json::Value = serde_json::from_str(&response)
+                .map_err(|_| MezError::invalid_state("outbound view response invalid"))?;
+            let receipts = crate::host::terminal::wire_receipts::parse_receipts(
+                response_value
+                    .pointer("/result/presentation_ids")
+                    .ok_or_else(|| MezError::invalid_state("outbound view receipts unavailable"))?,
+            )?;
             self.connected
                 .prepared
                 .frontend
@@ -91,7 +106,8 @@ impl InitializedSessionFrontend {
                 .frontend_config_root()?;
             let body = serde_json::json!({"handle":request.handle,"session":self.summary,
                 "lines":lines,"line_style_spans":styles,
-                "cursor":modes["cursor"],"output_modes":modes["output_modes"]})
+                "cursor":modes["cursor"],"output_modes":modes["output_modes"],
+                "presentation_ids":receipts})
             .to_string();
             if body.len() > BODY_LIMIT {
                 return Err(MezError::invalid_state(
@@ -105,6 +121,7 @@ impl InitializedSessionFrontend {
                 .write_all(&encode_frame(&ProtocolFrame::new(CONTENT_TYPE, body)))
                 .await
                 .map_err(|_| MezError::invalid_state("outbound local view delivery unavailable"))?;
+            self.delivered_receipts = receipts;
             Ok(self)
         })
         .await
