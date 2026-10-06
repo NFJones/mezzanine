@@ -83,7 +83,7 @@ impl GeneratedX11CredentialLease {
             cleanup.command_timeout,
         )
         .await;
-        let _ = fs::remove_dir_all(&cleanup.directory);
+        drop(cleanup);
         remove_result
     }
 
@@ -98,9 +98,7 @@ impl GeneratedX11CredentialLease {
 
 impl Drop for GeneratedX11CredentialLease {
     fn drop(&mut self) {
-        if let Some(cleanup) = self.cleanup.take() {
-            let _ = fs::remove_dir_all(cleanup.directory);
-        }
+        drop(self.cleanup.take());
     }
 }
 
@@ -111,6 +109,15 @@ struct XauthCleanup {
     directory: PathBuf,
     display_name: String,
     command_timeout: Duration,
+}
+
+impl Drop for XauthCleanup {
+    /// Removes private artifacts even when explicit helper cleanup is cancelled
+    /// after ownership has moved out of the lease. This is best-effort local
+    /// filesystem cleanup, not proof of server-side authorization revocation.
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
 }
 
 /// Resolves the process authority path without formatting it into diagnostics.
@@ -574,6 +581,59 @@ mod tests {
             started.elapsed()
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Abandoning a consuming prepared-client close after the removal helper
+    /// starts must still remove its private credential directory. The helper's
+    /// marker fences the await window; no physical X server or authored authority
+    /// is modified, and exec keeps termination owned by the exact child handle.
+    #[tokio::test]
+    async fn cancelled_generated_x11_cleanup_removes_private_artifacts() {
+        let root = test_root("cleanup-cancel");
+        fs::create_dir_all(&root).unwrap();
+        let authority_path = root.join("authority");
+        write_private_file(&authority_path, b"synthetic private authority").unwrap();
+        let script = root.join("fake-xauth");
+        fs::write(
+            &script,
+            "#!/bin/sh\n: > \"$XAUTHORITY.started\"\nexec /bin/sleep 30\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let prepared = crate::cli::x11::PreparedX11Client {
+            mode: crate::runtime::x11::X11ForwardingMode::Untrusted,
+            display: resolve_local_x11_display(":17").unwrap(),
+            fake_cookie: X11Cookie::new([17; X11_COOKIE_BYTES]),
+            real_cookie: X11Cookie::new([52; X11_COOKIE_BYTES]),
+            lease: X11CredentialLease::Generated(GeneratedX11CredentialLease {
+                cleanup: Some(XauthCleanup {
+                    executable: script.as_os_str().to_os_string(),
+                    authority_path,
+                    directory: root.clone(),
+                    display_name: ":17".to_string(),
+                    command_timeout: Duration::from_secs(10),
+                }),
+            }),
+        };
+        let mut closing = Box::pin(prepared.close());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                result = &mut closing => panic!("cleanup settled before abandonment barrier: {}", result.is_ok()),
+                () = async {
+                    while !root.join("authority.started").exists() {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                } => {}
+            }
+        }).await.unwrap();
+        assert!(root.join("authority").exists());
+        drop(closing);
+        let removed = !root.exists();
+        let _ = fs::remove_dir_all(&root);
+        assert!(
+            removed,
+            "abandoned cleanup must remove private credential artifacts"
+        );
     }
 
     /// Explicit cleanup must remove private credential files even when xauth

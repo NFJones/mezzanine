@@ -670,6 +670,11 @@ EOF before setup retires supervision without reopening. Only completed setup and
 bidirectional application relay can admit fresh demand without replaying prior bytes.
 Deterministic ownership tests qualify this boundary, not attachment-lifetime
 credential cleanup, terminal restoration or ordinary CLI activation.
+A staged lifetime coordinator now disposes channel futures before credential
+cleanup and gives the foreground a persistent stop request plus a finite restoration
+budget. Causal failures retain precedence. Deterministic tests qualify ordering,
+timeout and abandonment, not physical terminal restoration or generated credential
+revocation; ordinary routing remains unchanged.
 A staged dedicated listener now publishes an owner-only socket under the retained
 configuration root, preserves existing entries, and cleans only its recorded socket
 through the held parent. Pending accepts and admitted streams share finite slots;

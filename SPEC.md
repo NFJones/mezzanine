@@ -4434,6 +4434,12 @@ channel operations MUST NOT be retried. EOF before setup MUST retire supervision
 without opening another channel; only completed setup and bidirectional application
 relay MAY admit fresh demand without repeating prior bytes. This component alone MUST NOT activate
 ordinary attachment routing or restore terminal modes.
+Attachment-lifetime coordination MUST dispose channel futures before explicit
+credential cleanup and retain foreground restoration through persistent cancellation.
+Channel retirement or external cancellation MUST request foreground shutdown under
+a finite cleanup budget; causal operation errors MUST survive later cleanup failures.
+Whole-future abandonment still requires the concrete terminal guard and prepared
+credential Drop cleanup. This coordinator alone MUST NOT activate ordinary routing.
 Later event versions MUST reject before initialization. Reader errors or
 EOF require retirement of that session owner, not reconnect or creation replay;
 retiring one session MUST NOT close a sibling connection.

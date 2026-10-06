@@ -19,6 +19,11 @@ use crate::runtime::x11::{
 mod authority;
 #[allow(
     dead_code,
+    reason = "ordinary broker X11 activation follows attachment-lifetime qualification"
+)]
+mod broker_lifetime;
+#[allow(
+    dead_code,
     reason = "broker X11 activation follows client-local relay qualification"
 )]
 mod broker_relay;
