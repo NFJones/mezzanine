@@ -112,6 +112,23 @@ pub(in crate::cli) async fn run_attach<W: Write>(
     let terminal_size = Size::new(columns, rows)?;
     let term = std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string());
     if !control_target.is_unix() {
+        let routing = remote_routing
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("remote attachment routing is unavailable"))?;
+        if let Some(attachment) = Box::pin(super::super::control_client::broker_attach::try_open(
+            control_target,
+            &env,
+            request.requested_role,
+            routing,
+            columns,
+            rows,
+            &term,
+            x11_request.is_some(),
+        ))
+        .await?
+        {
+            return Box::pin(super::broker::run(attachment, terminal_size)).await;
+        }
         let (mut channel, initialize_body) = open_persistent_iroh_control_channel(
             control_target,
             &env,

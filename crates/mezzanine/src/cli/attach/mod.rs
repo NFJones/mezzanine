@@ -155,6 +155,7 @@ impl AttachTerminalSizeRefresh {
     }
 }
 
+mod broker;
 mod event_stream;
 mod observer;
 mod primary;

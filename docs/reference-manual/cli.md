@@ -559,13 +559,17 @@ preserving the exact target and invocation key through a fixed host kill request
 The host still enforces destructive authority and visibility. Only correlated
 revoked-lease evidence reports success; uncertain exchanges never replay or fall
 back to a competing endpoint. Invitation operations and attach/new remain separate.
-A staged paired-profile attachment setup adapter now preserves prepared routing
+A paired-profile attachment setup adapter now preserves prepared routing
 and invocation keys through an existing authenticated broker, checking current
 outbound policy and protected profile role. Missing/refused discovery leaves the
 direct path eligible only before connection; discovery loss during connected
 readiness is terminal. Readiness/setup failures never acquire a competing identity
-or replay creation. Ordinary attach/new routing, startup and X11 remain unactivated
-by this adapter alone.
+or replay creation. Ordinary `attach` and `new` now reuse an active broker for
+eligible paired host profiles, with guarded terminal output and restoration.
+OS signals retire only the local frontend; terminal Ctrl-C remains forwarded input.
+Absent discovery retains direct setup. Automatic broker startup, invitation pairing
+and broker X11 forwarding remain unfinished; X11 with an active broker rejects
+before session setup rather than switching to a competing endpoint.
 Errors after writing never automatically replay initialization. Session
 creation/attachment uses a separate internal transition retaining the original
 intent/key and validating exact client/session/active-lease evidence. A loopback

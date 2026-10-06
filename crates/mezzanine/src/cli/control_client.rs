@@ -3122,10 +3122,6 @@ pub(super) fn incomplete_control_response_error(
 #[cfg(test)]
 mod broker_listing_tests;
 
-#[allow(
-    dead_code,
-    reason = "ordinary attachment activation follows broker setup qualification"
-)]
 pub(super) mod broker_attach;
 
 #[cfg(test)]

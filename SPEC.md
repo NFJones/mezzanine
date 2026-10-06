@@ -4281,13 +4281,16 @@ under the same discovery boundary. The closed mutation MUST preserve the exact
 target and invocation key, issue only host/session/kill with force=true, and
 validate correlated revoked-lease evidence. Host destructive authority remains
 mandatory; uncertain exchanges MUST NOT reconnect, fall back or replay a kill.
-The staged paired-profile attachment setup adapter MUST preserve the prepared
+The paired-profile attachment setup adapter MUST preserve the prepared
 routing intent and invocation key, check current outbound policy and profile role,
 and reuse authenticated broker discovery without acquiring an endpoint identity.
 Only initial discovery/connect absence or refusal MAY leave direct setup eligible;
 discovery loss after local connection MUST remain terminal. Failures after
-readiness MUST NOT switch endpoints or replay creation. This adapter alone does
-not activate ordinary attach/new routing, automatic startup or X11 forwarding.
+readiness MUST NOT switch endpoints or replay creation. Ordinary attach/new MUST
+reuse an authenticated active broker for eligible paired host profiles through a
+concrete terminal guard. Signals MUST retire only that frontend and attempt bounded
+terminal restoration. Missing discovery retains the direct path; automatic startup,
+invitation pairing and broker X11 forwarding remain separate qualification boundaries.
 The separate internal session initialization MUST retain the original routing
 intent and invocation key, validate correlated role/client/session/active-lease
 evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection

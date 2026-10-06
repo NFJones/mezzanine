@@ -25,6 +25,9 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "foreground_cli/broker_attachment.rs"]
+mod broker_attachment;
+
 /// Carries Foreground Process state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
