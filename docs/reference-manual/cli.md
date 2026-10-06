@@ -616,6 +616,12 @@ A separate internal X11 admission now retains exact correlated route authority
 for an explicitly requested primary offer. Missing capability, changed trust mode
 or invalid route proof rejects; proof stays outside local summaries. This staged
 path starts no relay and does not enable ordinary supervisor or CLI X11 forwarding.
+Bounded internal channel admission now authenticates the retained route's fixed
+preface before exposing setup bytes. Pending/active streams share finite capacity,
+and inbound stream credit is granted only after route settlement. Timeout or
+cancellation releases the slot and resets only that stream; retained endpoint
+ownership prevents premature identity reuse. This is not frontend forwarding or
+local X credential provisioning, and ordinary X11 activation remains gated.
 Each internal initialized session now retains its own shared health tracker and
 samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling

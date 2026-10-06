@@ -31,17 +31,20 @@ pub(crate) struct InitializedSessionFrontend {
     /// Local transfer occurrence; never reused within this initialized owner.
     clipboard_transfer: u64,
     /// Explicitly negotiated route proof; never part of the local summary.
-    #[allow(
-        dead_code,
-        reason = "X11 channel integration follows admission qualification"
-    )]
     x11_route: Option<crate::runtime::x11::X11ForwardingResult>,
+    /// One finite capacity owner shared by pending and authenticated X11 streams.
+    x11_slots: std::sync::Arc<tokio::sync::Semaphore>,
     events: Option<
         crate::host::outbound_frontend::events::OutboundEventReader<iroh::endpoint::RecvStream>,
     >,
 }
 
 mod view;
+#[allow(
+    dead_code,
+    reason = "X11 forwarding follows authenticated channel qualification"
+)]
+mod x11_channel;
 
 impl ConnectedFrontend {
     /// Initializes one host-routed session using its original invocation key.
@@ -149,6 +152,24 @@ impl ConnectedFrontend {
         };
         #[cfg(test)]
         diagnostics.complete();
+        let x11_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(
+            connected
+                .prepared
+                .frontend
+                ._endpoint
+                .transport_policy()
+                .x11
+                .max_connections_per_route,
+        ));
+        if x11_route.is_some() {
+            let limit = u32::try_from(x11_slots.available_permits()).map_err(|_| {
+                MezError::invalid_state("outbound X11 stream credit exceeds limits")
+            })?;
+            connected
+                .connection
+                .connection()
+                .set_max_concurrent_bi_streams(iroh::endpoint::VarInt::from_u32(limit));
+        }
         Ok(InitializedSessionFrontend {
             connected,
             bridge,
@@ -160,6 +181,7 @@ impl ConnectedFrontend {
             clipboard_enabled: clipboard,
             clipboard_transfer: 0,
             x11_route,
+            x11_slots,
             events,
         })
     }

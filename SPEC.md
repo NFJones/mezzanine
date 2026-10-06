@@ -4344,6 +4344,13 @@ retain matching capability, version, mode, positive generation and route proof
 only after correlated session settlement on the exact connection. It MUST NOT
 expose route proof in local summaries or start channel forwarding. Ordinary
 supervision and CLI forwarding remain gated until channel ownership is qualified.
+Authenticated X11 channel admission MUST grant finite inbound stream credit only
+after validated route settlement, share a nonwaiting capacity pool across pending
+and active channels, and authenticate the exact route generation and token before
+exposing subsequent bytes. Channels MUST retain endpoint lifetime; parent-session
+disposal MUST close their exact connection. Rejection, timeout and cancellation
+MUST release capacity and reset only the affected stream, not a sibling connection.
+This admission does not itself forward frontend bytes or provision local X credentials.
 Later event versions MUST reject before initialization. Reader errors or
 EOF require retirement of that session owner, not reconnect or creation replay;
 retiring one session MUST NOT close a sibling connection.
