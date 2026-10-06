@@ -197,12 +197,19 @@ impl SessionFactory {
             service.set_session_registry(registry);
         }
         let config_root = request.config.root.clone();
+        #[cfg(test)]
+        let mut startup_timing =
+            crate::host::iroh::initialize_diagnostics::InitializeDiagnostics::new();
+        #[cfg(test)]
+        startup_timing.advance("session-dependencies");
         let snapshots = initialize_session_dependencies(
             &mut service,
             request.config,
             request.created_at_unix_seconds,
         )
         .await?;
+        #[cfg(test)]
+        startup_timing.advance("session-services");
         let x11_policy = service.configured_iroh_transport_policy()?.x11;
         service.set_applied_runtime_x11_policy(x11_policy.clone());
         let x11_proxy = if x11_policy.enabled {
@@ -243,14 +250,20 @@ impl SessionFactory {
             control_listener.is_some() || message_listener.is_some() || event_listener.is_some(),
         )?;
 
+        #[cfg(test)]
+        startup_timing.advance("pane-startup");
         if let Err(error) = start_session(&mut service, request.startup) {
             let _ = service.terminate_all_pane_processes();
             return Err(error);
         }
+        #[cfg(test)]
+        startup_timing.advance("registry-publication");
         if let Err(error) = service.persist_registry_update() {
             let _ = service.terminate_all_pane_processes();
             return Err(error);
         }
+        #[cfg(test)]
+        startup_timing.advance("actor-construction");
         let attached_client_size = service.session().authoritative_size;
         let (handle, mut actor) =
             AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default())?;
@@ -294,6 +307,8 @@ impl SessionFactory {
             services.push(build_actor_lifetime_service(handle.clone()));
         }
 
+        #[cfg(test)]
+        startup_timing.complete();
         Ok(SessionRuntime {
             handle: SessionRuntimeHandle {
                 session_id,

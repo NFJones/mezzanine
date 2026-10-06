@@ -5,7 +5,7 @@
 //! of a cause. Instrumentation changes no deadline, task, retry or ownership.
 
 /// One initialization attempt's local timing and static stage.
-pub(super) struct InitializeDiagnostics {
+pub(in crate::host) struct InitializeDiagnostics {
     started: std::time::Instant,
     stage_started: std::time::Instant,
     stage: &'static str,
@@ -14,7 +14,7 @@ pub(super) struct InitializeDiagnostics {
 
 impl InitializeDiagnostics {
     /// Begins timing before protected principal validation.
-    pub(super) fn new() -> Self {
+    pub(in crate::host) fn new() -> Self {
         let now = std::time::Instant::now();
         Self {
             started: now,
@@ -25,14 +25,14 @@ impl InitializeDiagnostics {
     }
 
     /// Reports a slow finished stage before entering the next fixed label.
-    pub(super) fn advance(&mut self, stage: &'static str) {
+    pub(in crate::host) fn advance(&mut self, stage: &'static str) {
         self.report_slow();
         self.stage = stage;
         self.stage_started = std::time::Instant::now();
     }
 
     /// Records successful publication without emitting an incomplete report.
-    pub(super) fn complete(&mut self) {
+    pub(in crate::host) fn complete(&mut self) {
         self.report_slow();
         self.complete = true;
     }

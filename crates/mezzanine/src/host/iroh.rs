@@ -49,7 +49,7 @@ use crate::storage::lease::{RemoteSessionLease, RemoteSessionLeaseState};
 const HOST_CONTROL_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
 
 #[cfg(test)]
-mod initialize_diagnostics;
+pub(super) mod initialize_diagnostics;
 
 /// Emits the final lifecycle record for one established remote client connection.
 struct RemoteClientConnectionLog {
