@@ -646,6 +646,12 @@ connect and initial delivery share a deadline; subsequent bytes and half-close
 remain caller-owned. Synthetic local TCP fixtures qualify both byte orders,
 rejection and cancellation, not a physical X server or ordinary CLI activation.
 The prepared credential lease remains separately owned by the attachment caller.
+A staged dedicated listener now publishes an owner-only socket under the retained
+configuration root, preserves existing entries, and cleans only its recorded socket
+through the held parent. Pending accepts and admitted streams share finite slots;
+accepted streams retain endpoint ownership through relay. Kernel UID is checked
+before handshake decoding. Publication remains a cooperative same-user pathname
+boundary, and this component does not enable ordinary X11 forwarding.
 Each internal initialized session now retains its own shared health tracker and
 samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling

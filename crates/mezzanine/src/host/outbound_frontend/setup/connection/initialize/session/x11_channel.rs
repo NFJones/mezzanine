@@ -32,6 +32,7 @@ pub(super) struct AuthenticatedX11Channel {
 
 mod frontend;
 mod handoff;
+mod listener;
 mod relay;
 
 impl InitializedSessionFrontend {

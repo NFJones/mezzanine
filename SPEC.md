@@ -4371,6 +4371,14 @@ and retain the parent session throughout relay. Handshake, remote preface and
 setup delivery MUST use one setup deadline without restarting it. Failure MUST
 consume the attempted occurrence and dedicated stream, not replay bytes. This
 serialized composition alone MUST NOT activate listeners or ordinary CLI forwarding.
+Dedicated X11 listener publication MUST retain the protected root and endpoint,
+use owner-only permissions, and preserve existing pathname entries. Cleanup MUST
+check the published socket identity through the held parent and preserve replacements.
+Pending accepts and admitted streams MUST share finite nonwaiting capacity; accepted
+streams MUST retain their slot and endpoint through handshake and relay. Kernel UID
+authentication MUST precede protocol decoding. Pathname bind/check/unlink remains a
+cooperative same-user boundary, not atomic protection against hostile renames.
+This staged listener alone MUST NOT activate ordinary supervisor or CLI forwarding.
 The attaching-client relay MUST validate the fake setup cookie before dialing
 the frozen local X destination, substitute the real credential only locally, and
 preserve subsequent application bytes and directional half-close. Setup read,
