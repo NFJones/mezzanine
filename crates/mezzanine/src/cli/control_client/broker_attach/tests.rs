@@ -2,6 +2,7 @@
 use super::*;
 
 mod boundaries;
+mod multiprocess;
 mod startup;
 
 /// An attachment caller outside the broker subtree must be able to observe and
