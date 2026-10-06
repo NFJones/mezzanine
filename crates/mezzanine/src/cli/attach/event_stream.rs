@@ -23,26 +23,6 @@ const IROH_RENDER_FRAGMENT_MAX_CHUNKS: usize = 16;
 /// presentation work without blocking ordered render-revision reconstruction.
 const IROH_RENDER_WAKEUP_CHANNEL_CAPACITY: usize = 1;
 
-/// Starts one single-pending-value worker for client-local clipboard writes.
-fn spawn_iroh_client_clipboard_worker(
-    clipboard: crate::host::terminal::HostClipboard,
-) -> (
-    tokio::sync::watch::Sender<Option<String>>,
-    tokio::task::JoinHandle<()>,
-) {
-    let (sender, mut receiver) = tokio::sync::watch::channel(None::<String>);
-    let task = tokio::spawn(async move {
-        while receiver.changed().await.is_ok() {
-            let Some(content) = receiver.borrow_and_update().clone() else {
-                continue;
-            };
-            let clipboard = clipboard.clone();
-            let _ = tokio::task::spawn_blocking(move || clipboard.copy(content.as_str())).await;
-        }
-    });
-    (sender, task)
-}
-
 /// Carries Attached Client Input Poll state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -398,10 +378,9 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
 ) {
     let (sender, receiver) = tokio::sync::mpsc::channel(IROH_RENDER_WAKEUP_CHANNEL_CAPACITY);
     let task = tokio::spawn(async move {
-        let clipboard_worker = clipboard.map(spawn_iroh_client_clipboard_worker);
-        let clipboard_sender = clipboard_worker
-            .as_ref()
-            .map(|(clipboard_sender, _)| clipboard_sender.clone());
+        let clipboard_worker =
+            clipboard.map(crate::host::terminal::clipboard_worker::ClipboardWorker::new);
+        let clipboard_sender = clipboard_worker.as_ref().and_then(|worker| worker.sender());
         let result = receive_iroh_runtime_events(
             connection,
             compression,
@@ -409,14 +388,12 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
             event_stream_version,
             allow_pushed_render,
             pushed_render_role,
-            clipboard_sender.as_ref(),
+            clipboard_sender,
             &sender,
         )
         .await;
-        if let Some((clipboard_sender, clipboard_task)) = clipboard_worker {
-            drop(clipboard_sender);
-            clipboard_task.abort();
-            let _ = clipboard_task.await;
+        if let Some(clipboard_worker) = clipboard_worker {
+            clipboard_worker.shutdown().await;
         }
         if let Err(error) = result {
             let _ = sender.send(Err(error)).await;

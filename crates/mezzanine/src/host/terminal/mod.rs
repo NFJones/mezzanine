@@ -27,6 +27,7 @@ pub(crate) mod cadence;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod client_loop;
+pub(crate) mod clipboard_worker;
 /// Exposes the copy module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
