@@ -11,6 +11,57 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 use tokio_util::codec::Framed;
 
+/// The running-binary selector must reuse authenticated readiness without
+/// spawning another identity owner. This test serves the real broker in-process;
+/// no test executable is launched and no remote session is allocated.
+#[tokio::test]
+async fn outbound_broker_cli_selector_reuses_ready_owner() {
+    let home = std::env::temp_dir().join(format!("mez-selector-{:032x}", rand::random::<u128>()));
+    let env = CliEnv {
+        home: Some(home.clone()),
+        ..Default::default()
+    };
+    let paths = env.config_paths().unwrap();
+    paths.ensure_default_config().unwrap();
+    let socket = paths.root().join("outbound.sock");
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let broker_stop = stop.clone();
+    let broker = run(&env, async move { broker_stop.notified().await });
+    let client = async {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !socket.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut child = None;
+        let first = connect_cli(&env, Duration::from_secs(2), &mut child)
+            .await
+            .unwrap();
+        let second = connect_cli(&env, Duration::from_secs(2), &mut child)
+            .await
+            .unwrap();
+        assert!(
+            child.is_none(),
+            "ready broker must not spawn a competing owner"
+        );
+        assert_ne!(first.handle().unwrap(), second.handle().unwrap());
+        drop(first);
+        drop(second);
+        stop.notify_one();
+    };
+    let (served, ()) = tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::join!(broker, client)
+    })
+    .await
+    .unwrap();
+    assert_eq!(served.unwrap(), 2);
+    assert!(!socket.exists());
+    drop(RemoteClientIdentity::load_or_create(paths.root()).unwrap());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
 /// Cancellation with a contended profile read must preserve the shutdown owner
 /// until that worker retires. The held lock models another live administrator;
 /// release after cancellation must permit completed teardown and identity reuse.
@@ -175,6 +226,13 @@ async fn outbound_broker_veto_precedes_identity_creation() {
     );
     std::fs::write(&file, &source).unwrap();
     assert!(run(&env, std::future::ready(())).await.is_err());
+    let mut child = None;
+    assert!(
+        connect_cli(&env, Duration::from_secs(1), &mut child)
+            .await
+            .is_err()
+    );
+    assert!(child.is_none());
     assert!(!paths.root().join("remote/client/endpoint.key").exists());
     assert!(!paths.root().join("outbound.sock").exists());
     assert_eq!(std::fs::read_to_string(file).unwrap(), source);

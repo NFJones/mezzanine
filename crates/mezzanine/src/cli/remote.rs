@@ -12,7 +12,7 @@ use super::{
 };
 use crate::security::remote::{RemoteClientProfileStore, write_remote_invitation_file_new};
 
-mod broker;
+pub(in crate::cli) mod broker;
 
 /// Typed process CLI arguments for `mez remote`.
 #[derive(Debug, Clone, Args)]

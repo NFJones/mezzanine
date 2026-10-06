@@ -781,6 +781,10 @@ Owned startup now composes that launcher with election/readiness, preserving any
 spawned child in caller state even on failure or cancellation. An explicit
 fresh-binary fixture qualifies actual broker readiness reuse and SIGTERM/reaping
 under the isolated environment; this is not full remote CLI attachment acceptance.
+An internal CLI selector now supplies the currently running executable to that
+owned composition. It retains outbound veto and caller-owned child evidence,
+and reuses ready owners without spawning. Automatic first-attachment startup
+and complete remote CLI acceptance remain separate integration work.
 An internal client session API consumes readiness once, sends credential-free
 setup, and pins session/client/lease identities from the initial line snapshot.
 Subsequent snapshots retain the same settlement and stream buffers. Failed

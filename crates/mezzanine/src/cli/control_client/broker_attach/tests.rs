@@ -3,6 +3,48 @@ use super::*;
 
 mod boundaries;
 
+/// An attachment caller outside the broker subtree must be able to observe and
+/// reap its exact retained child after failed readiness. A harmless exited
+/// executable publishes no broker, and no kill or replacement is inferred.
+#[tokio::test]
+async fn broker_attach_caller_can_reap_retained_startup_child() {
+    let home =
+        std::env::temp_dir().join(format!("mez-caller-reap-{:032x}", rand::random::<u128>()));
+    let env = crate::cli::CliEnv {
+        home: Some(home.clone()),
+        ..Default::default()
+    };
+    env.config_paths().unwrap().ensure_default_config().unwrap();
+    let mut child = None;
+    assert!(
+        crate::cli::remote::broker::launch::connect_owned(
+            Path::new("/bin/true"),
+            &env,
+            std::time::Duration::from_millis(200),
+            &mut child,
+        )
+        .await
+        .is_err()
+    );
+    let child = child
+        .as_mut()
+        .expect("failed readiness retains the exact child");
+    let status = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(status.success());
+    assert!(child.try_wait().unwrap().unwrap().success());
+    assert!(
+        !env.config_paths()
+            .unwrap()
+            .root()
+            .join("outbound.sock")
+            .exists()
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
 /// Setup must use the original operation key, not allocate another nonce during
 /// discovery or convert explicit/default selection into fresh creation. Primary
 /// clipboard negotiation and observer v1 are independent of routing intent.

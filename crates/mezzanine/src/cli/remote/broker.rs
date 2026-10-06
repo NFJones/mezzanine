@@ -26,7 +26,25 @@ mod startup;
     dead_code,
     reason = "production startup integration follows launcher qualification"
 )]
-mod launch;
+pub(in crate::cli) mod launch;
+
+/// Selects this running binary for elected broker startup, retaining any spawned
+/// child in caller-owned state even on readiness failure or cancellation. This
+/// helper creates no remote session and never infers permission to kill an owner
+/// from discovery failure. The caller must observe/reap its exact child and must
+/// not switch to direct endpoint acquisition after an attempted startup.
+#[allow(
+    dead_code,
+    reason = "first-owner attachment startup follows selector qualification"
+)]
+pub(in crate::cli) async fn connect_cli(
+    env: &CliEnv,
+    budget: std::time::Duration,
+    child: &mut Option<launch::LaunchedBroker>,
+) -> Result<crate::host::outbound_frontend::client::OutboundFrontendClient> {
+    let executable = std::env::current_exe()?;
+    launch::connect_owned(&executable, env, budget, child).await
+}
 
 /// Runs one foreground owner until cancellation, with explicit teardown on
 /// normal/error return. Cancellation of this entire future remains fail-closed

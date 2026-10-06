@@ -23,7 +23,7 @@ const DIAGNOSTIC_NAME: &str = "outbound.diagnostics.log";
 /// executable. The caller retains any spawned child even when readiness fails
 /// or this future is cancelled; no socket observation authorizes killing it.
 /// This is not ordinary attach/new activation or a background reaper.
-pub(super) async fn connect_owned(
+pub(in crate::cli) async fn connect_owned(
     executable: &Path,
     env: &CliEnv,
     budget: std::time::Duration,
@@ -58,7 +58,7 @@ pub(super) async fn connect_owned(
 
 /// One exact spawned child. Drop does not kill it; Tokio's best-effort reaper
 /// is not a guarantee of bounded reaping. Deliberate callers should wait for exit.
-pub(super) struct LaunchedBroker {
+pub(in crate::cli) struct LaunchedBroker {
     child: tokio::process::Child,
 }
 
@@ -79,13 +79,13 @@ impl LaunchedBroker {
     }
 
     /// Observes/reaps an exited child without reading or exposing diagnostic contents.
-    pub(super) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
+    pub(in crate::cli) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
         self.child.try_wait().map_err(Into::into)
     }
 
     /// Waits for this exact child's exit. Cancellation retains the child in this
     /// handle; no automatic kill, relaunch or application retry occurs.
-    pub(super) async fn wait(&mut self) -> Result<ExitStatus> {
+    pub(in crate::cli) async fn wait(&mut self) -> Result<ExitStatus> {
         self.child.wait().await.map_err(Into::into)
     }
 
