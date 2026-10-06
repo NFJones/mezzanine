@@ -614,8 +614,10 @@ fixtures qualify bounded Unicode item delivery across all codecs and sibling
 survival after self-detach, not host clipboard writes or ordinary CLI attachment.
 A separate internal X11 admission now retains exact correlated route authority
 for an explicitly requested primary offer. Missing capability, changed trust mode
-or invalid route proof rejects; proof stays outside local summaries. This staged
-path starts no relay and does not enable ordinary supervisor or CLI X11 forwarding.
+or invalid route proof rejects; proof stays outside local summaries. The internal
+listener now selects dedicated supervision for authored offers after host-only
+handling. Ordinary CLI X11 preparation remains gated pending attachment-lifetime
+qualification.
 Bounded internal channel admission now authenticates the retained route's fixed
 preface before exposing setup bytes. Pending/active streams share finite capacity,
 and inbound stream credit is granted only after route settlement. Timeout or
@@ -666,9 +668,11 @@ consumed control request. Stalled handshakes do not block control replies;
 independent listener/channel capacity waits retain pending admission alongside
 control instead of spinning or retiring the session. Peer authentication rejection
 closes only that stream; root and listener failures remain terminal.
-cancellation or control failure disposes channel work and listener publication.
-Synthetic tests qualify control progress and cleanup, not ordinary listener
-dispatch, occurrence announcement or CLI X11 activation.
+Cancellation or control failure disposes channel work and listener publication.
+A combined synthetic fixture now exercises internal listener dispatch, initial
+snapshot, discovery, production channel opening and client-local substitution,
+then checks continued control and dedicated-publication cleanup. This is not
+real-host X route provisioning, physical X behavior or ordinary CLI X11 activation.
 An exact-session discovery exchange now returns only the dedicated listener's
 validated basename while supervision owns publication. It allocates no channel
 occurrence or remote permit and exposes no route proof. Closed client validation

@@ -38,6 +38,13 @@ impl ConnectedFrontend {
         let params = initialize_params_from_json(&self.prepared.initialize.to_string())?;
         Ok(params.event_stream_version == Some(2))
     }
+
+    /// Reports an authored X11 offer only; primary role and exact returned route
+    /// authority are independently enforced during session initialization.
+    pub(crate) fn x11_requested(&self) -> Result<bool> {
+        let params = initialize_params_from_json(&self.prepared.initialize.to_string())?;
+        Ok(params.x11_forwarding.is_some())
+    }
 }
 
 impl PreparedFrontend {

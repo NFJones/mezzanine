@@ -15,6 +15,19 @@ use std::future::Future;
 use std::pin::Pin;
 
 impl InitializedSessionFrontend {
+    /// Publishes a dedicated socket for this admitted route and owns supervision
+    /// until control retirement or failure. The outer frontend pipeline supplies
+    /// cancellation by dropping this future; no task or reconnect is introduced.
+    pub(crate) async fn serve_x11(self) -> Result<()> {
+        self.x11_relay_source()?;
+        let endpoint = &self.connected.prepared.frontend._endpoint;
+        let listener = X11FrontendListener::bind(
+            endpoint.clone(),
+            endpoint.transport_policy().x11.max_connections_per_route,
+        )?;
+        Box::pin(self.supervise_x11(listener, std::future::pending())).await
+    }
+
     /// Supervises an already published dedicated listener while servicing control.
     /// Channel failures retire only that channel. Control failure or cancellation
     /// retires the entire exact session, including pending handshakes and relays.

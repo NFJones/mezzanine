@@ -164,6 +164,15 @@ impl OutboundFrontendListener {
             diagnostics.complete();
             return Ok(());
         }
+        if connected.x11_requested()? {
+            let session = Box::pin(connected.initialize_x11_session()).await?;
+            #[cfg(test)]
+            diagnostics.advance("x11-supervision");
+            session.serve_x11().await?;
+            #[cfg(test)]
+            diagnostics.complete();
+            return Ok(());
+        }
         let mut session = if connected.clipboard_requested()? {
             Box::pin(connected.initialize_clipboard_session()).await?
         } else {

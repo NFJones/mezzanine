@@ -4342,8 +4342,9 @@ host clipboard. Ordinary transitions MUST reject X11 before initialization.
 A separate internal X11 admission MUST require an explicit primary offer and
 retain matching capability, version, mode, positive generation and route proof
 only after correlated session settlement on the exact connection. It MUST NOT
-expose route proof in local summaries or start channel forwarding. Ordinary
-supervision and CLI forwarding remain gated until channel ownership is qualified.
+expose route proof in local summaries. Explicit internal offers MAY select dedicated
+channel supervision after validated admission; ordinary CLI preparation remains
+gated until attachment-lifetime integration is qualified.
 Authenticated X11 channel admission MUST grant finite inbound stream credit only
 after validated route settlement, share a nonwaiting capacity pool across pending
 and active channels, and authenticate the exact route generation and token before
@@ -4397,7 +4398,10 @@ or listener failures remain terminal. Pending admission MUST remain owned across
 control replies. Channel failure MUST retire only that channel; control failure,
 parent retirement or cancellation MUST dispose all owned channels and listener
 publication without replay. This staged supervisor alone MUST NOT activate
-ordinary listener dispatch or CLI forwarding.
+ordinary CLI forwarding. Internal listener dispatch MUST select X11 supervision
+only for an authored offer, after host-only intent handling and exact primary
+route admission. The session MUST own dedicated publication through control
+retirement, without reconnecting or replaying initialization.
 Dedicated X11 discovery MUST bind the exact frontend and session and expose only
 a validated listener basename while supervision owns its publication. Discovery
 MUST NOT allocate an occurrence, consume channel capacity, expose route proof,

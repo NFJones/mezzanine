@@ -9,6 +9,7 @@ use crate::runtime::{RuntimeIrohCompressionCodec, RuntimeIrohTransportPolicy};
 use crate::security::remote::RemoteRoleCeiling;
 use base64::Engine as _;
 
+mod dispatch;
 mod frontend;
 
 /// Returns only a synthetic fake-cookie offer, never a real local credential.

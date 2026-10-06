@@ -6,8 +6,9 @@
 //! Optional version-one events remain bound to this exact retained connection.
 //! A separate version-two primary admission validates clipboard capability and
 //! requires item-aware consumption; supervision selects it only for explicit v2.
-//! A separate X11 admission retains correlated route authority, but does not
-//! enable supervisor forwarding. Ordinary transitions reject X11 before sending.
+//! A separate X11 admission retains correlated route authority. Explicit internal
+//! offers select dedicated channel supervision; ordinary CLI preparation remains
+//! gated. Non-X11 transitions reject offers before sending.
 //! Later event versions reject before sending. Raw replies never enter IPC.
 
 use super::*;
@@ -70,12 +71,9 @@ impl ConnectedFrontend {
 
     /// Admits an explicit primary X11 offer on this exact connection. Requested
     /// mode and returned route authority must match correlated session settlement.
-    /// This staged transition creates no relay or local credential owner and is
-    /// not selected by ordinary supervision. Failure never replays initialization.
-    #[allow(
-        dead_code,
-        reason = "X11 channel integration follows admission qualification"
-    )]
+    /// The internal listener selects this transition only for an authored offer;
+    /// local real-credential ownership remains client-side. Failure never replays
+    /// initialization or authorizes a competing endpoint.
     pub(crate) async fn initialize_x11_session(self) -> Result<InitializedSessionFrontend> {
         let params = initialize_params_from_json(&self.prepared.initialize.to_string())?;
         validate_x11_mode(&params)?;
