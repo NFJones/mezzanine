@@ -4297,7 +4297,10 @@ before reporting success. Host-invitation attachment through an active broker MU
 pair once, then use fresh authenticated local IPC for the original routing intent
 and invocation key. Failures after pairing submission MUST NOT restore direct
 eligibility or replay redemption/creation. Initial absence retains the existing
-direct invitation path; automatic invitation startup remains separate. Explicit
+direct invitation path only when elected startup is ineligible. Host-invitation
+attachments with configured routing MAY elect first-owner startup before redemption,
+retaining exact child evidence. Startup failure MUST NOT consume proof, restore
+direct eligibility or authorize a replacement endpoint. Explicit
 invitation X11 MUST validate the complete offer envelope and prepare local
 credentials before redemption. Pairing or reconnect failure MUST clean prepared
 credentials without replay; successful handoff MUST preserve trust/takeover intent,

@@ -10,6 +10,81 @@ use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio_util::codec::Framed;
 
+/// A host invitation first attachment must elect the shared identity owner before
+/// consuming proof. Failed readiness preserves invitation bytes and exact child
+/// evidence, with no direct fallback, credential generation or remote redemption.
+#[tokio::test]
+async fn broker_attach_invitation_first_owner_failure_preserves_proof() {
+    let home = std::env::temp_dir().join(format!("mez-ifirst-{:032x}", rand::random::<u128>()));
+    let env = crate::cli::CliEnv {
+        home: Some(home.clone()),
+        ..Default::default()
+    };
+    let paths = env.config_paths().unwrap();
+    paths.ensure_default_config().unwrap();
+    std::fs::write(
+        paths.default_primary_file(),
+        format!(
+            "version = {}\n[transport.iroh]\nsetup_timeout_ms = 200\n",
+            crate::config::CURRENT_CONFIG_SCHEMA_VERSION,
+        ),
+    )
+    .unwrap();
+    let invitation = home.join("invitation.json");
+    crate::security::remote::write_remote_invitation_file_new(&invitation, serde_json::json!({
+        "format_version":1,"profile_name":"fixture","server_addr":EndpointAddr::new(iroh::SecretKey::generate().public())
+            .with_ip_addr("127.0.0.1:43210".parse().unwrap()),
+        "role":"primary","profile_scope":"host","token":"synthetic-first-use-proof","expires_at_unix_seconds":u64::MAX
+    }).to_string().as_bytes()).unwrap();
+    let before = std::fs::read(&invitation).unwrap();
+    let mut child = None;
+    let result = try_open_inner(
+        &crate::cli::ControlTargetSelection::IrohInvitation {
+            path: invitation.clone(),
+            save_as: None,
+        },
+        &env,
+        "primary",
+        &IrohSessionRouting::Create {
+            name: None,
+            idempotency_key: "original-invitation-first".into(),
+        },
+        80,
+        24,
+        "xterm",
+        None,
+        Some(&mut child),
+        Some(Path::new("/bin/true")),
+    )
+    .await;
+    let retained = child.is_some();
+    if let Some(child) = child.as_mut() {
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), child.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success()
+        );
+    }
+    assert_eq!(std::fs::read(&invitation).unwrap(), before);
+    assert!(
+        RemoteClientProfileStore::under_config_root(paths.root())
+            .load("fixture")
+            .unwrap()
+            .is_none()
+    );
+    std::fs::remove_dir_all(home).unwrap();
+    assert!(
+        result.is_err(),
+        "startup uncertainty must not restore direct eligibility"
+    );
+    assert!(
+        retained,
+        "invitation-first attachment must retain elected child evidence"
+    );
+}
+
 /// Even an X11 first attachment must elect the shared owner for a supported
 /// pinned profile. Failed readiness retains exact-child evidence and is terminal,
 /// rather than granting direct identity acquisition. The harmless executable

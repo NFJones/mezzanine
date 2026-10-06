@@ -119,7 +119,7 @@ async fn try_open_inner(
     executable: Option<&Path>,
 ) -> Result<Option<BrokerAttachment>> {
     if let super::super::ControlTargetSelection::IrohInvitation { path, save_as } = target {
-        return Box::pin(invitation::try_open(
+        return Box::pin(invitation::try_open_starting(
             path,
             save_as.as_deref(),
             env,
@@ -129,6 +129,8 @@ async fn try_open_inner(
             rows,
             term,
             x11,
+            child,
+            executable,
         ))
         .await;
     }

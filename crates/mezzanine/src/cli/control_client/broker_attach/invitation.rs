@@ -7,7 +7,9 @@
 //! or replay redemption/creation. Original prepared routing and mutation keys
 //! survive this two-connection handoff; neither connection exports private proof.
 //! Explicit X11 preparation precedes redemption and retains client-local cleanup.
-//! This active-owner path starts no broker and does not activate legacy pairing.
+//! Initial absent/refused discovery may elect a first owner with retained child
+//! evidence before redemption. Startup failure is terminal, not direct eligibility.
+//! Legacy pairing remains separate.
 
 use super::*;
 
@@ -18,6 +20,7 @@ use super::*;
     clippy::too_many_arguments,
     reason = "invitation evidence, prepared routing and terminal intent are independent handoff inputs"
 )]
+#[cfg(test)]
 pub(super) async fn try_open(
     path: &Path,
     save_as: Option<&str>,
@@ -39,6 +42,44 @@ pub(super) async fn try_open(
         rows,
         term,
         x11,
+        None,
+        None,
+        crate::cli::x11::prepare_x11_client,
+    ))
+    .await
+}
+
+/// Permits first-owner election for a host invitation with configured routing.
+/// Startup uncertainty retains the exact child and never redeems or falls back.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "invitation evidence and retained startup ownership are independent inputs"
+)]
+pub(super) async fn try_open_starting(
+    path: &Path,
+    save_as: Option<&str>,
+    env: &crate::cli::CliEnv,
+    role: &str,
+    routing: &IrohSessionRouting,
+    columns: u16,
+    rows: u16,
+    term: &str,
+    x11: Option<(crate::runtime::x11::X11ForwardingMode, bool)>,
+    child: Option<&mut Option<crate::cli::remote::broker::launch::LaunchedBroker>>,
+    executable: Option<&Path>,
+) -> Result<Option<BrokerAttachment>> {
+    Box::pin(try_open_with_preparation(
+        path,
+        save_as,
+        env,
+        role,
+        routing,
+        columns,
+        rows,
+        term,
+        x11,
+        child,
+        executable,
         crate::cli::x11::prepare_x11_client,
     ))
     .await
@@ -61,6 +102,8 @@ async fn try_open_with_preparation<P, W>(
     rows: u16,
     term: &str,
     x11: Option<(crate::runtime::x11::X11ForwardingMode, bool)>,
+    child: Option<&mut Option<crate::cli::remote::broker::launch::LaunchedBroker>>,
+    executable: Option<&Path>,
     prepare: P,
 ) -> Result<Option<BrokerAttachment>>
 where
@@ -111,7 +154,28 @@ where
                 Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
             ) =>
         {
-            return Ok(None);
+            let Some(child) = child else {
+                return Ok(None);
+            };
+            if !crate::host::outbound_frontend::routes::available(&policy, target.server_addr()) {
+                return Ok(None);
+            }
+            if let Some(executable) = executable {
+                Box::pin(crate::cli::remote::broker::launch::connect_owned(
+                    executable,
+                    env,
+                    policy.setup_timeout,
+                    child,
+                ))
+                .await?
+            } else {
+                Box::pin(crate::cli::remote::broker::connect_cli(
+                    env,
+                    policy.setup_timeout,
+                    child,
+                ))
+                .await?
+            }
         }
         Err(error) => return Err(error),
     };

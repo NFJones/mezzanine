@@ -46,6 +46,8 @@ async fn broker_invitation_x11_rejects_before_redemption() {
             24,
             &term,
             Some((X11ForwardingMode::Untrusted, false)),
+            None,
+            None,
             |_| async {
                 prepared.store(true, Ordering::SeqCst);
                 Err(MezError::invalid_state("synthetic preparation failure"))
@@ -209,6 +211,8 @@ async fn broker_invitation_x11_handoff_retains_credentials_and_original_key() {
                 24,
                 "xterm",
                 Some((X11ForwardingMode::Trusted, true)),
+                None,
+                None,
                 |mode| async move {
                     let (prepared, directory) = crate::cli::x11::prepare_broker_x11_for_tests(
                         mode,

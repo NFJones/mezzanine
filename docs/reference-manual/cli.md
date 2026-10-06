@@ -573,11 +573,14 @@ never acquire another endpoint or replay redemption. The closed client reply mus
 match the exact handle and expected profile alias. Host-invitation `attach`/`new`
 also reuse an active broker: private pairing completes once, then fresh authenticated
 IPC carries the original attachment intent/key. No post-pair failure permits direct
-fallback or replay. Initial absent/refused discovery retains direct invitation setup.
+fallback or replay. Initial absent/refused discovery can elect a first owner for
+host invitations with configured routing, retaining the exact child before any
+redemption. Failed readiness preserves proof and cannot restore direct eligibility.
+Ineligible routes retain their existing path before startup.
 Explicit invitation X11 now validates its final offer and prepares client-local
 credentials before redemption. Pairing/reconnect loss cleans those credentials
 without replay; successful attachment preserves trust/takeover and the original key.
-Legacy pairing and automatic invitation startup remain separate.
+Legacy pairing remains separate.
 Paired-profile `kill --force TARGET` reuses an authenticated active broker too,
 preserving the exact target and invocation key through a fixed host kill request.
 The host still enforces destructive authority and visibility. Only correlated
