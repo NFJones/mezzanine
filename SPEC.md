@@ -4338,7 +4338,13 @@ initialize reply before accepting the version-two stream. Supervision MUST selec
 this transition only for explicit version-two intent; redraw-only consumers MUST
 reject clipboard sessions rather than silently discard effects.
 This admission alone MUST NOT deliver frontend clipboard content or write the
-host clipboard. Later event versions and X11 MUST reject before initialization. Reader errors or
+host clipboard. Ordinary transitions MUST reject X11 before initialization.
+A separate internal X11 admission MUST require an explicit primary offer and
+retain matching capability, version, mode, positive generation and route proof
+only after correlated session settlement on the exact connection. It MUST NOT
+expose route proof in local summaries or start channel forwarding. Ordinary
+supervision and CLI forwarding remain gated until channel ownership is qualified.
+Later event versions MUST reject before initialization. Reader errors or
 EOF require retirement of that session owner, not reconnect or creation replay;
 retiring one session MUST NOT close a sibling connection.
 Internal session health sampling MUST retain one shared health tracker per exact

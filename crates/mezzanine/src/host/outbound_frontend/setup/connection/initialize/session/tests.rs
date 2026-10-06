@@ -7,6 +7,7 @@ use super::*;
 use crate::host::async_runtime::AsyncAttachedTerminalIo;
 
 mod clipboard;
+mod x11;
 
 /// Supplies one valid correlated active-lease response for validator probes.
 fn response(server: iroh::EndpointId) -> serde_json::Value {

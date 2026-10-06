@@ -612,6 +612,10 @@ and retains typed effect ownership on the exact connection. Redraw-only polling
 and foreground entry reject these sessions rather than discard effects. Real-host
 fixtures qualify bounded Unicode item delivery across all codecs and sibling
 survival after self-detach, not host clipboard writes or ordinary CLI attachment.
+A separate internal X11 admission now retains exact correlated route authority
+for an explicitly requested primary offer. Missing capability, changed trust mode
+or invalid route proof rejects; proof stays outside local summaries. This staged
+path starts no relay and does not enable ordinary supervisor or CLI X11 forwarding.
 Each internal initialized session now retains its own shared health tracker and
 samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling

@@ -6,7 +6,9 @@
 //! Optional version-one events remain bound to this exact retained connection.
 //! A separate version-two primary admission validates clipboard capability and
 //! requires item-aware consumption; supervision selects it only for explicit v2.
-//! Later versions and X11 reject before sending. Raw replies never enter IPC.
+//! A separate X11 admission retains correlated route authority, but does not
+//! enable supervisor forwarding. Ordinary transitions reject X11 before sending.
+//! Later event versions reject before sending. Raw replies never enter IPC.
 
 use super::*;
 use mez_core::ids::{ClientId, SessionId};
@@ -28,6 +30,12 @@ pub(crate) struct InitializedSessionFrontend {
     clipboard_enabled: bool,
     /// Local transfer occurrence; never reused within this initialized owner.
     clipboard_transfer: u64,
+    /// Explicitly negotiated route proof; never part of the local summary.
+    #[allow(
+        dead_code,
+        reason = "X11 channel integration follows admission qualification"
+    )]
+    x11_route: Option<crate::runtime::x11::X11ForwardingResult>,
     events: Option<
         crate::host::outbound_frontend::events::OutboundEventReader<iroh::endpoint::RecvStream>,
     >,
@@ -40,7 +48,7 @@ impl ConnectedFrontend {
     /// Unsupported modes reject before opening a stream; failed replies retain
     /// ambiguity and never replay creation, input, or initialization.
     pub(crate) async fn initialize_session(self) -> Result<InitializedSessionFrontend> {
-        self.initialize_session_mode(false).await
+        self.initialize_session_mode(false, false).await
     }
 
     /// Admits only explicitly requested version-two primary clipboard sessions.
@@ -48,14 +56,36 @@ impl ConnectedFrontend {
     /// Supervision selects this transition only for explicit version-two intent;
     /// it writes no host clipboard, and callers must consume typed event items.
     pub(crate) async fn initialize_clipboard_session(self) -> Result<InitializedSessionFrontend> {
-        self.initialize_session_mode(true).await
+        self.initialize_session_mode(true, false).await
+    }
+
+    /// Admits an explicit primary X11 offer on this exact connection. Requested
+    /// mode and returned route authority must match correlated session settlement.
+    /// This staged transition creates no relay or local credential owner and is
+    /// not selected by ordinary supervision. Failure never replays initialization.
+    #[allow(
+        dead_code,
+        reason = "X11 channel integration follows admission qualification"
+    )]
+    pub(crate) async fn initialize_x11_session(self) -> Result<InitializedSessionFrontend> {
+        let params = initialize_params_from_json(&self.prepared.initialize.to_string())?;
+        validate_x11_mode(&params)?;
+        self.initialize_session_mode(params.event_stream_version == Some(2), true)
+            .await
     }
 
     /// Shares single-attempt authenticated initialization without broadening the
     /// existing redraw-only path. Capability rejection never retries creation.
-    async fn initialize_session_mode(self, clipboard: bool) -> Result<InitializedSessionFrontend> {
+    async fn initialize_session_mode(
+        self,
+        clipboard: bool,
+        x11: bool,
+    ) -> Result<InitializedSessionFrontend> {
         let params = initialize_params_from_json(&self.prepared.initialize.to_string())?;
         validate_event_mode(&params, clipboard)?;
+        if x11 {
+            validate_x11_mode(&params)?;
+        }
         if self.prepared.profile.scope != RemoteClientProfileScope::Host
             || !matches!(
                 params.session_intent,
@@ -66,7 +96,7 @@ impl ConnectedFrontend {
                         | SessionIntent::Default
                 )
             )
-            || params.x11_forwarding.is_some()
+            || (!x11 && params.x11_forwarding.is_some())
         {
             return Err(MezError::forbidden(
                 "outbound session initialization mode unsupported",
@@ -77,9 +107,19 @@ impl ConnectedFrontend {
             crate::host::outbound_frontend::listener::setup_diagnostics::SetupDiagnostics::new();
         #[cfg(test)]
         diagnostics.advance("initialize-reply");
+        let mut x11_route = None;
         let (connected, bridge, summary) = self
             .initialize_once(|body, connected| {
-                validate_session_response(body, connected.prepared.profile.server_addr.id, &params)
+                let summary = validate_session_response(
+                    body,
+                    connected.prepared.profile.server_addr.id,
+                    &params,
+                )?;
+                x11_route = crate::host::terminal::wire_x11::validate_route(
+                    body,
+                    params.x11_forwarding.as_ref().map(|offer| offer.mode),
+                )?;
+                Ok(summary)
             })
             .await?;
         #[cfg(test)]
@@ -119,6 +159,7 @@ impl ConnectedFrontend {
             detached: false,
             clipboard_enabled: clipboard,
             clipboard_transfer: 0,
+            x11_route,
             events,
         })
     }
@@ -270,9 +311,6 @@ fn validate_session_response(
         || value.pointer("/result/capabilities/features/host_only")
             == Some(&serde_json::Value::Bool(true))
         || result.contains_key("device_credential")
-        || result
-            .get("x11_forwarding")
-            .is_some_and(|route| !route.is_null())
     {
         return Err(MezError::forbidden("outbound session settlement invalid"));
     }
@@ -300,8 +338,23 @@ fn validate_session_response(
             "outbound clipboard capability unavailable",
         ));
     }
+    crate::host::terminal::wire_x11::validate_route(
+        body,
+        params.x11_forwarding.as_ref().map(|offer| offer.mode),
+    )?;
     Ok(serde_json::json!({"selected_version":3,"granted_role":role,
         "session_id":session.as_str(),"lease_id":lease,"client_id":client.as_str()}))
+}
+
+/// Rejects unrequested or non-primary route admission before stream opening.
+/// The existing event-mode gate separately limits this path to absent/v1/v2.
+fn validate_x11_mode(params: &crate::control::InitializeParams) -> Result<()> {
+    if params.requested_role != RequestedRole::Primary || params.x11_forwarding.is_none() {
+        return Err(MezError::forbidden(
+            "outbound X11 requires explicit primary offer",
+        ));
+    }
+    Ok(())
 }
 
 /// Rejects unsupported negotiation before opening an application stream. The
