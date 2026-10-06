@@ -15,6 +15,7 @@ use super::{Result, TranscriptEntry};
 use crate::storage::transcript::AgentTranscriptStore;
 
 /// Actor-captured store and conversation, never a live service reference.
+#[derive(Debug, Clone)]
 pub(super) struct ManualCompactionSourceWork {
     store: Option<AgentTranscriptStore>,
     conversation_id: String,

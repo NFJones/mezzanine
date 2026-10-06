@@ -265,6 +265,7 @@ impl AsyncRuntimeSessionActor {
         service.use_registry_effect_adapter();
         service.use_config_effect_adapter();
         service.use_hook_effect_adapter();
+        service.use_manual_compaction_preparation_adapter();
         let now_ms = super::coalesce::async_runtime_current_unix_millis();
         let mut initial_side_effects = service
             .queue_saved_session_retention_operation(now_ms / 1_000, true)?

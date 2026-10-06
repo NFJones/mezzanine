@@ -540,6 +540,18 @@ pub(crate) struct RuntimeAgentComponent {
     sandbox_fallback_audits: BTreeMap<(String, String), RuntimeSandboxFallbackAudit>,
     /// Panes currently running model-backed context compaction.
     agent_compacting_panes: BTreeMap<String, u64>,
+    /// Finite actor-preparation admission, held until the actual source worker exits.
+    manual_compaction_preparation_slots: Option<std::sync::Arc<tokio::sync::Semaphore>>,
+    /// Explicit preparation gate used only by deterministic actor regressions.
+    #[cfg(test)]
+    manual_compaction_preparation_probe: Option<(
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+    )>,
+    /// Exact source work awaiting actor worker dispatch; cancellation removes only its owner.
+    pending_manual_compaction_preparations:
+        BTreeMap<(String, u64), crate::runtime::RuntimeManualCompactionPreparation>,
     /// Monotonic identity source for queued and claimed compaction tasks.
     next_agent_compaction_task_generation: u64,
     /// Current compaction task generation and originating conversation by pane.
@@ -2777,6 +2789,109 @@ impl RuntimeSessionService {
             .insert(pane_id, task);
     }
 
+    /// Enables finite manual source preparation for an actor owner. Synchronous
+    /// callers retain their existing contract; this is not a user configuration.
+    pub(crate) fn use_manual_compaction_preparation_adapter(&mut self) {
+        self.agent.manual_compaction_preparation_slots =
+            Some(std::sync::Arc::new(tokio::sync::Semaphore::new(8)));
+    }
+
+    /// Reports whether this service assigns manual source preparation to workers.
+    pub(crate) fn manual_compaction_preparation_uses_adapter(&self) -> bool {
+        self.agent.manual_compaction_preparation_slots.is_some()
+    }
+
+    /// Installs an explicit pre-source worker gate without changing production
+    /// source decoding or introducing process-global test state.
+    #[cfg(test)]
+    pub(crate) fn set_manual_compaction_preparation_probe_for_tests(
+        &mut self,
+        started: std::sync::Arc<tokio::sync::Notify>,
+        release: std::sync::Arc<tokio::sync::Notify>,
+        completed: std::sync::Arc<tokio::sync::Notify>,
+    ) {
+        self.agent.manual_compaction_preparation_probe = Some((started, release, completed));
+    }
+
+    /// Captures the current test gate into one exact immutable work owner.
+    #[cfg(test)]
+    pub(crate) fn manual_compaction_preparation_probe_for_tests(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+    )> {
+        self.agent.manual_compaction_preparation_probe.clone()
+    }
+
+    /// Reserves finite source-worker capacity without waiting on the actor. The
+    /// permit must remain with the owned work until its actual I/O ends, including
+    /// after logical cancellation. Missing adapter or saturation rejects admission.
+    pub(crate) fn reserve_manual_compaction_preparation(
+        &self,
+    ) -> Result<std::sync::Arc<tokio::sync::OwnedSemaphorePermit>> {
+        let slots = self
+            .agent
+            .manual_compaction_preparation_slots
+            .as_ref()
+            .ok_or_else(|| {
+                MezError::invalid_state("manual compaction preparation adapter unavailable")
+            })?;
+        slots
+            .clone()
+            .try_acquire_owned()
+            .map(std::sync::Arc::new)
+            .map_err(|_| MezError::conflict("manual compaction preparation capacity unavailable"))
+    }
+
+    /// Admits a logical compaction before source decoding. Generation and epoch
+    /// allocation are checked before mutation; duplicate work cannot own a pane.
+    pub(crate) fn queue_manual_compaction_preparation(
+        &mut self,
+        mut work: crate::runtime::RuntimeManualCompactionPreparation,
+    ) -> Result<()> {
+        if self.agent_is_compacting(&work.pane_id) {
+            return Err(MezError::conflict("pane is already compacting"));
+        }
+        let generation = self
+            .agent
+            .next_agent_compaction_task_generation
+            .checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("compaction generation exhausted"))?;
+        let epoch = self
+            .agent_compaction_epoch(&work.pane_id)
+            .checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("compaction epoch exhausted"))?;
+        work.task_generation = generation;
+        work.compaction_epoch = epoch;
+        self.agent.next_agent_compaction_task_generation = generation;
+        self.agent
+            .agent_compaction_epochs
+            .insert(work.pane_id.clone(), epoch);
+        self.agent.agent_compaction_task_owners.insert(
+            work.pane_id.clone(),
+            (generation, work.conversation_id.clone()),
+        );
+        self.agent
+            .agent_compacting_panes
+            .insert(work.pane_id.clone(), current_unix_seconds().max(1));
+        self.agent
+            .pending_manual_compaction_preparations
+            .insert((work.pane_id.clone(), generation), work);
+        Ok(())
+    }
+
+    /// Transfers queued preparation to exact worker ownership, never recreating
+    /// it from mutable pane state. Current-generation checks fence later adoption.
+    pub(crate) fn take_manual_compaction_preparations(
+        &mut self,
+    ) -> Vec<crate::runtime::RuntimeManualCompactionPreparation> {
+        std::mem::take(&mut self.agent.pending_manual_compaction_preparations)
+            .into_values()
+            .collect()
+    }
+
     /// Returns pane ids with queued model-backed compaction work.
     pub(crate) fn pending_agent_compaction_task_ids(&self) -> Vec<String> {
         self.agent
@@ -2977,6 +3092,10 @@ impl RuntimeSessionService {
             .agent
             .claimed_agent_compaction_tasks
             .remove(&(pane_id.to_string(), task_generation));
+        let preparation = self
+            .agent
+            .pending_manual_compaction_preparations
+            .remove(&(pane_id.to_string(), task_generation));
         let resume_turn_id = claimed
             .as_ref()
             .or(pending.as_ref())
@@ -2994,7 +3113,8 @@ impl RuntimeSessionService {
             self.agent.agent_compaction_task_owners.remove(pane_id);
             self.agent.agent_compacting_panes.remove(pane_id);
         }
-        let had_task = pending.is_some() || claimed.is_some() || marker_matches;
+        let had_task =
+            pending.is_some() || claimed.is_some() || preparation.is_some() || marker_matches;
         RuntimeAgentCompactionFailureState {
             had_task,
             resume_turn_id,

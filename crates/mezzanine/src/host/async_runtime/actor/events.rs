@@ -1086,6 +1086,7 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn queue_pending_provider_dispatch_side_effects(&mut self) -> Result<usize> {
+        self.dispatch_manual_compaction_preparations();
         let side_effects = self.pending_provider_dispatch_side_effects()?;
         let count = side_effects.len();
         self.queue_runtime_side_effects(side_effects)?;

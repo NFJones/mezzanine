@@ -859,6 +859,16 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Canonical history epoch prepared without accessing live actor state.
         history: Result<crate::runtime::RuntimeAgentTranscriptContext>,
     },
+    /// Adopts exact manual compaction source work without replaying command input.
+    CompleteManualCompactionPreparation {
+        /// Captured preparation identity and finite worker ownership.
+        work: crate::runtime::RuntimeManualCompactionPreparation,
+        /// Worker-decoded durable source and captured history projection.
+        result: Result<(
+            Vec<mez_agent::TranscriptEntry>,
+            crate::runtime::RuntimeAgentTranscriptContext,
+        )>,
+    },
     /// Admits checked chronology retained before terminal turn cleanup.
     CompleteBookkeepingCandidate {
         /// Exact candidate generation and captured conversation history owner.
@@ -1461,6 +1471,7 @@ impl AsyncRuntimeRequest {
             | Self::CompleteAgentShellProviderInfoRefresh { .. }
             | Self::CompleteAgentPromptProviderInfoRefresh { .. }
             | Self::CompleteAgentPromptHistoryPreparation { .. }
+            | Self::CompleteManualCompactionPreparation { .. }
             | Self::CompleteBookkeepingCandidate { .. }
             | Self::PendingAgentProviderTasks { .. }
             | Self::AgentTurnIsRunning { .. }

@@ -7,6 +7,8 @@ use mez_agent::messaging::{Envelope, MessageScope};
 use mez_core::ids::PaneId;
 use mez_terminal::TerminalScreen;
 
+mod manual_compaction_preparation;
+
 /// Verifies that typed runtime events can cross the async actor boundary through
 /// the same serialized request channel used by legacy compatibility requests.
 /// Non-mutating event families are accepted without side effects, while later
@@ -957,11 +959,23 @@ context_window_tokens = 128000
             .execute_agent_shell_command(primary.clone(), "/compact".to_string())
             .await
             .unwrap();
-        assert!(response.contains("state=queued"), "{response}");
-        let dispatches = handle
-            .drain_agent_provider_dispatch_side_effects(8)
-            .await
-            .unwrap();
+        assert!(response.contains("state=preparing"), "{response}");
+        let dispatches = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let dispatches = handle
+                    .drain_agent_provider_dispatch_side_effects(8)
+                    .await
+                    .unwrap();
+                if dispatches.iter().any(|effect| {
+                    matches!(effect, RuntimeSideEffect::DispatchAgentCompaction { .. })
+                }) {
+                    break dispatches;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(dispatches.iter().any(|effect| matches!(
             effect,
             RuntimeSideEffect::DispatchAgentCompaction { pane_id, .. } if pane_id == "%1"

@@ -37,7 +37,9 @@ use crate::security::auth::AuthProfileCredentialSource;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 use mez_agent::{ProviderErrorRetryClass, apply_model_context_compaction_plan};
 
+mod preparation;
 mod source;
+pub(crate) use preparation::RuntimeManualCompactionPreparation;
 
 /// Content-free component estimates for a failed complete provider request.
 fn runtime_compaction_candidate_size_diagnostic(
@@ -562,7 +564,10 @@ impl RuntimeSessionService {
                 "compact command does not accept arguments",
             ));
         }
-        self.queue_agent_shell_compaction_with_model(pane_id, "manual", None)
+        if self.manual_compaction_preparation_uses_adapter() {
+            return self.admit_manual_compaction_preparation(pane_id);
+        }
+        self.queue_agent_shell_compaction_with_model(pane_id, "manual", None, None)
     }
 
     /// Queues model-backed conversation compaction and marks the pane active.
@@ -576,6 +581,11 @@ impl RuntimeSessionService {
         pane_id: &str,
         source: &str,
         resume_turn_id: Option<&str>,
+        prepared: Option<(
+            Vec<TranscriptEntry>,
+            crate::runtime::RuntimeAgentTranscriptContext,
+            u64,
+        )>,
     ) -> Result<AgentShellCommandOutcome> {
         let (conversation_id, transcript_entries, visibility, running_turn_id) = {
             let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
@@ -619,8 +629,16 @@ impl RuntimeSessionService {
                 ),
             });
         }
-        let transcript_records =
-            self.inspect_agent_shell_transcript_for_compaction(&conversation_id)?;
+        let (transcript_records, prepared_history, prepared_epoch) =
+            if let Some((rows, history, epoch)) = prepared {
+                (rows, Some(history), epoch)
+            } else {
+                (
+                    self.inspect_agent_shell_transcript_for_compaction(&conversation_id)?,
+                    None,
+                    0,
+                )
+            };
         if transcript_records.is_empty() {
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
@@ -718,8 +736,17 @@ impl RuntimeSessionService {
             });
         }
 
-        let compaction_context =
-            self.agent_context_for_pane_prompt(pane_id, "[context compaction requested]", 100)?;
+        let compaction_context = if let Some(history) = prepared_history {
+            self.agent_context_for_pane_prompt_with_history(
+                pane_id,
+                "[context compaction requested]",
+                false,
+                history,
+            )?
+            .context
+        } else {
+            self.agent_context_for_pane_prompt(pane_id, "[context compaction requested]", 100)?
+        };
         let compaction_context =
             self.apply_agent_shell_preference_context(pane_id, compaction_context)?;
         let mcp_summary = self.mcp_registry().prompt_summary();
@@ -754,7 +781,7 @@ impl RuntimeSessionService {
             .map(|message| message.content.clone());
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             task_generation: 0,
-            compaction_epoch: 0,
+            compaction_epoch: prepared_epoch,
             pane_id: pane_id.to_string(),
             accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
             conversation_id: conversation_id.clone(),

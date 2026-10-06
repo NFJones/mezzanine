@@ -194,6 +194,36 @@ impl AsyncRuntimeSessionActor {
         }
     }
 
+    /// Executes admitted manual source preparation under its retained capacity
+    /// permit. Logical cancellation does not release an in-flight blocking read;
+    /// only exact actor completion may adopt it into provider work.
+    pub(super) fn dispatch_manual_compaction_preparations(&mut self) {
+        for work in self.service.take_manual_compaction_preparations() {
+            let sender = self.sender.clone();
+            tokio::spawn(async move {
+                #[cfg(test)]
+                if let Some((started, release, _)) = work.probe.as_ref() {
+                    started.notify_one();
+                    release.notified().await;
+                }
+                let read_work = work.clone();
+                let result = tokio::task::spawn_blocking(move || read_work.execute_source())
+                    .await
+                    .map_err(|error| {
+                        crate::error::MezError::invalid_state(format!(
+                            "manual compaction source worker failed: {error}"
+                        ))
+                    })
+                    .and_then(|result| result);
+                let _ = sender
+                    .send(AsyncRuntimeRequestEnvelope::new(
+                        AsyncRuntimeRequest::CompleteManualCompactionPreparation { work, result },
+                    ))
+                    .await;
+            });
+        }
+    }
+
     /// Checks retained chronology outside the actor, one candidate per conversation.
     pub(super) fn dispatch_bookkeeping_candidates(&mut self) {
         for work in self.service.claim_bookkeeping_candidates() {
@@ -2063,6 +2093,28 @@ impl AsyncRuntimeSessionActor {
                 }
                 self.dispatch_bookkeeping_candidates();
                 self.notify_event_delivery();
+                false
+            }
+            AsyncRuntimeRequest::CompleteManualCompactionPreparation { work, result } => {
+                let pane_id = work.pane_id.clone();
+                let applied = self
+                    .service
+                    .complete_manual_compaction_preparation(&work, result);
+                #[cfg(test)]
+                if let Some((_, _, completed)) = work.probe.as_ref() {
+                    completed.notify_one();
+                }
+                if applied.as_ref().is_ok_and(|applied| *applied) || applied.is_err() {
+                    let _ = self.queue_pending_provider_dispatch_side_effects();
+                    let transition = self.service.runtime_pane_transition_with_render(
+                        &pane_id,
+                        true,
+                        Some(crate::runtime::RenderInvalidationReason::AgentPrompt),
+                    );
+                    let _ = self.queue_runtime_side_effects(transition.side_effects);
+                    self.dispatch_pending_agent_prompt_history();
+                    self.notify_event_delivery();
+                }
                 false
             }
             AsyncRuntimeRequest::CompleteAgentPromptHistoryPreparation { dispatch, history } => {

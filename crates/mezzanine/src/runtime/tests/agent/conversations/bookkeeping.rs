@@ -5,6 +5,105 @@
 
 use super::*;
 
+/// Real stopped-turn chronology candidates must fence manual compaction even
+/// when earlier eligible durable rows exist. Queued, worker-claimed and blocked
+/// candidates are all unchecked history; asynchronous admission must not mark
+/// compacting or queue a provider from a partial conversation.
+#[test]
+fn runtime_manual_compaction_preparation_preserves_bookkeeping_admission_fence() {
+    for state in ["queued", "claimed", "blocked"] {
+        let (mut service, store, conversation) = stopped_candidate_fixture(state);
+        seed_compaction_prefix(&mut service, &store, &conversation);
+        if state != "queued" {
+            let work = service.claim_bookkeeping_candidates().pop().unwrap();
+            if state == "blocked" {
+                assert!(
+                    service
+                        .complete_bookkeeping_candidate(
+                            work,
+                            Err(MezError::invalid_state("fixture archive check failed"))
+                        )
+                        .is_err()
+                );
+            }
+        }
+        service.use_manual_compaction_preparation_adapter();
+        let primary = service
+            .attach_primary("fence-test", true, Size::new(80, 24).unwrap(), 121)
+            .unwrap();
+        let response = service
+            .execute_agent_shell_command(&primary, "/compact")
+            .unwrap();
+        assert!(response.contains("bookkeeping must settle"), "{response}");
+        assert!(!service.agent_is_compacting("%1"));
+        assert!(service.take_manual_compaction_preparations().is_empty());
+        assert!(service.pending_agent_compaction_task_ids().is_empty());
+        assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
+/// A candidate arriving while source work is owned must also fence adoption.
+/// The fixture temporarily retains a genuine stopped-turn candidate outside the
+/// persistence queue solely to place its arrival between admission and callback.
+/// No unchecked history may reach the existing compactor after that arrival.
+#[test]
+fn runtime_manual_compaction_preparation_rechecks_bookkeeping_at_adoption() {
+    let (mut service, store, conversation) = stopped_candidate_fixture("late-compact");
+    let work = service.claim_bookkeeping_candidates().pop().unwrap();
+    let candidate = service
+        .persistence
+        .take_bookkeeping_candidate(work.candidate.generation)
+        .unwrap();
+    seed_compaction_prefix(&mut service, &store, &conversation);
+    service.use_manual_compaction_preparation_adapter();
+    let primary = service
+        .attach_primary("late-fence-test", true, Size::new(80, 24).unwrap(), 121)
+        .unwrap();
+    let response = service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    assert!(response.contains("state=preparing"), "{response}");
+    let preparation = service.take_manual_compaction_preparations().pop().unwrap();
+    let source = preparation.execute_source();
+    service.persistence.queue_bookkeeping_candidate(candidate);
+    let error = service
+        .complete_manual_compaction_preparation(&preparation, source)
+        .unwrap_err();
+    assert!(error.message().contains("bookkeeping must settle"));
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.pending_agent_compaction_task_ids().is_empty());
+    assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Adds an independently eligible durable prefix while preserving the original
+/// conversation whose terminal bookkeeping is being qualified by these tests.
+fn seed_compaction_prefix(
+    service: &mut RuntimeSessionService,
+    store: &AgentTranscriptStore,
+    conversation: &str,
+) {
+    for sequence in 1..=3 {
+        store
+            .append(&TranscriptEntry {
+                conversation_id: conversation.into(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: TranscriptRole::Assistant,
+                turn_id: format!("prefix-{sequence}"),
+                agent_id: "agent-%1".into(),
+                pane_id: "%1".into(),
+                content: format!("completed prefix {sequence}"),
+            })
+            .unwrap();
+    }
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", conversation, 3)
+        .unwrap();
+}
+
 /// Replacing a stopped conversation while its checked read is outstanding must
 /// preserve the original interruption rows without updating replacement counters.
 #[test]

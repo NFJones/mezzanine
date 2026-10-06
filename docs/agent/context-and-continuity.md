@@ -56,6 +56,15 @@ also attempt context-length recovery after a provider rejects an oversized
 request. It does not summarize unfinished work indiscriminately or treat token
 estimates as provider guarantees.
 
+Manual `/compact` with retained history first reports **preparing** and shows
+compacting while the daemon reads the captured source outside its actor. This
+phase is not a sent model request. Other panes and Stop remain responsive;
+cancelled or obsolete preparation cannot later queue provider work. The daemon
+checks the original operation, conversation, configuration, store and pane before
+adoption, then uses the existing model compactor. Context/request assembly still
+runs on the actor after source preparation. A cancelled blocking source read can
+retain one of the finite worker slots until the actual read finishes.
+
 If compaction fails, the error does not mean the source history was discarded.
 Mez does not publish a partial replacement as a completed durable compaction.
 Missing or corrupt required history is reported rather than silently omitted.

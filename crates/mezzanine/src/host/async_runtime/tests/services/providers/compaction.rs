@@ -130,7 +130,7 @@ async fn qualify(attached: bool) {
                 .execute_agent_shell_command(primary.clone(), "/compact".into())
                 .await
                 .unwrap();
-            assert!(response.contains("state=queued"));
+            assert!(response.contains("state=preparing"));
         }
         tokio::time::timeout(Duration::from_secs(5), started.notified())
             .await

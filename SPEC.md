@@ -10533,6 +10533,15 @@ The baseline command capabilities are:
   durable transcript entries exist, regardless of retained-tail budget. It MUST
   no-op only when there are no closed transcript execution groups to compact or
   no durable transcript entries are available.
+  Actor-owned manual admission with logical history MUST expose `state=preparing`
+  and current compacting presentation before durable source decoding. Captured
+  source/history reads MUST run outside the actor under finite preparation capacity;
+  logical cancellation MUST NOT free capacity still owned by actual blocking I/O.
+  Source adoption MUST validate the exact operation generation, conversation,
+  configuration, installed store and pane incarnation before queuing the existing
+  model compactor. Stale results MUST NOT clear newer work or replay input. Preparing
+  means source work is admitted, not that a model request has been sent. Current
+  context/request assembly remains actor-owned after this source-preparation phase.
   If the manual compactor's complete request exceeds a configured input cap or
   the provider rejects it for context length, it MUST split redacted temporary
   source at UTF-8 boundaries, summarize bounded chunks in source order, and

@@ -198,10 +198,7 @@ impl RuntimeSessionService {
         if prompt.trim().is_empty() {
             return Err(MezError::invalid_args("agent prompt must not be empty"));
         }
-        if refresh_project_config {
-            self.refresh_project_config_layers_for_pane(pane_id)?;
-        }
-        self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
+        self.prepare_agent_context_prerequisites(pane_id, refresh_project_config)?;
         let history = self.runtime_agent_history_epoch_context(pane_id)?;
         self.agent_context_for_pane_prompt_with_history(
             pane_id,
@@ -209,6 +206,21 @@ impl RuntimeSessionService {
             include_unread_messages,
             history,
         )
+    }
+
+    /// Validates live context prerequisites without decoding durable history.
+    /// Worker-prepared history must preserve the same project-policy refresh,
+    /// pane readiness and pending-bookkeeping fences as inline preparation.
+    pub(crate) fn prepare_agent_context_prerequisites(
+        &mut self,
+        pane_id: &str,
+        refresh_project_config: bool,
+    ) -> Result<()> {
+        if refresh_project_config {
+            self.refresh_project_config_layers_for_pane(pane_id)?;
+        }
+        self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
+        self.check_agent_history_admission(pane_id)
     }
 
     /// Completes prompt context assembly from one already prepared history epoch.
@@ -680,6 +692,15 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> Result<RuntimeAgentTranscriptContext> {
+        self.check_agent_history_admission(pane_id)?;
+        execute_runtime_agent_prompt_history_work(
+            self.prepare_runtime_agent_prompt_history_work(pane_id),
+        )
+    }
+
+    /// Refuses history admission while unchecked, claimed or blocked bookkeeping
+    /// still owns this conversation. Checking this fence performs no source I/O.
+    pub(crate) fn check_agent_history_admission(&self, pane_id: &str) -> Result<()> {
         if self
             .agent_shell_store()
             .get(pane_id)
@@ -689,9 +710,7 @@ impl RuntimeSessionService {
                 "conversation bookkeeping must settle before history admission",
             ));
         }
-        execute_runtime_agent_prompt_history_work(
-            self.prepare_runtime_agent_prompt_history_work(pane_id),
-        )
+        Ok(())
     }
 
     /// Captures immutable prompt history inputs before transcript I/O begins.

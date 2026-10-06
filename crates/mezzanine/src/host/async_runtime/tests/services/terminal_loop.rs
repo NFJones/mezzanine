@@ -275,10 +275,22 @@ context_window_tokens = 128000
                 b"/compact\r".to_vec()
             )]
         );
-        let dispatches = handle
-            .drain_agent_provider_dispatch_side_effects(8)
-            .await
-            .unwrap();
+        let dispatches = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let dispatches = handle
+                    .drain_agent_provider_dispatch_side_effects(8)
+                    .await
+                    .unwrap();
+                if dispatches.iter().any(|effect| {
+                    matches!(effect, RuntimeSideEffect::DispatchAgentCompaction { .. })
+                }) {
+                    break dispatches;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(
             dispatches.iter().any(|effect| matches!(
                 effect,

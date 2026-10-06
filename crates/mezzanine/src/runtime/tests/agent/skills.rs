@@ -2,6 +2,102 @@
 
 use super::*;
 
+/// Actor-style manual preparation must discover current project overlays before
+/// capturing configuration freshness, then recheck on result adoption. A disk
+/// edit or newly rejected trust decision invalidates the old prepared source;
+/// the compactor cannot run using stale project context/policy.
+#[test]
+fn runtime_manual_compaction_preparation_refreshes_project_policy() {
+    for change in ["overlay", "trust"] {
+        let mut service = test_runtime_service();
+        let root = temp_root(&format!("compact-project-refresh-{change}"));
+        let project = root.join("repo");
+        fs::create_dir_all(project.join(".git")).unwrap();
+        fs::create_dir_all(project.join(".mezzanine")).unwrap();
+        let overlay = project.join(".mezzanine/config.toml");
+        fs::write(
+            &overlay,
+            format!(
+                "version = {}\n[history]\nlines=11\n",
+                crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+        service.set_config_root(root.join("config"));
+        service.replace_config_layers(vec![ConfigLayer {name:"primary".into(),path:None,format:ConfigFormat::Toml,scope:ConfigScope::Primary,trusted:true,
+            text:"[history]\nlines=3\n[agents]\ndefault_provider=\"openai\"\ndefault_model_profile=\"default\"\n[providers.openai]\nkind=\"openai\"\nmodels=[\"fixture-model\"]\ndefault_model=\"fixture-model\"\n[model_profiles.default]\nprovider=\"openai\"\nmodel=\"fixture-model\"\ncontext_window_tokens=128000\n".into()}]).unwrap();
+        service.set_pane_current_working_directory("%1", project.clone());
+        service.set_project_trust_store(overlay_trust_store(&project, &project, None), None);
+        let store = AgentTranscriptStore::new(root.join("transcripts"));
+        for sequence in 1..=3 {
+            store
+                .append(&TranscriptEntry {
+                    conversation_id: "project-compact".into(),
+                    sequence,
+                    created_at_unix_seconds: sequence,
+                    role: TranscriptRole::Assistant,
+                    turn_id: format!("project-{sequence}"),
+                    agent_id: "agent-%1".into(),
+                    pane_id: "%1".into(),
+                    content: format!("eligible project source {sequence}"),
+                })
+                .unwrap();
+        }
+        service.set_agent_transcript_store(store.clone());
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .bind_conversation("%1", "project-compact", 3)
+            .unwrap();
+        service.use_manual_compaction_preparation_adapter();
+        let primary = service
+            .attach_primary("project-compact", true, Size::new(100, 30).unwrap(), 1)
+            .unwrap();
+        assert_eq!(service.terminal_history_limit(), 3);
+        let response = service
+            .execute_agent_shell_command(&primary, "/compact")
+            .unwrap();
+        assert!(response.contains("state=preparing"), "{response}");
+        assert_eq!(service.terminal_history_limit(), 11);
+        assert!(overlay_layer_is_trusted(&service, &overlay));
+        let work = service.take_manual_compaction_preparations().pop().unwrap();
+        let source = work.execute_source();
+        if change == "overlay" {
+            fs::write(
+                &overlay,
+                format!(
+                    "version = {}\n[history]\nlines=13\n",
+                    crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+                ),
+            )
+            .unwrap();
+        } else {
+            service.set_project_trust_store(
+                overlay_trust_store(&project, &project, Some(TrustDecision::Rejected)),
+                None,
+            );
+        }
+        assert!(
+            service
+                .complete_manual_compaction_preparation(&work, source)
+                .is_err()
+        );
+        if change == "overlay" {
+            assert_eq!(service.terminal_history_limit(), 13);
+        } else {
+            assert!(!overlay_layer_is_trusted(&service, &overlay));
+            assert_eq!(service.terminal_history_limit(), 3);
+        }
+        assert!(!service.agent_is_compacting("%1"));
+        assert!(service.pending_agent_compaction_task_ids().is_empty());
+        assert!(store.compaction_epoch("project-compact").unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// Opted-in provider batches discover metadata and load a selected document in
 /// separate continuations, using the same captured schema and runtime reducer.
 /// Discovery cannot expose document bodies or paths before explicit selection.
