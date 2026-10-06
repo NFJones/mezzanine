@@ -674,6 +674,12 @@ validated basename while supervision owns publication. It allocates no channel
 occurrence or remote permit and exposes no route proof. Closed client validation
 rejects foreign ownership and directory paths; this does not open a channel or
 enable ordinary CLI X11 forwarding.
+A staged client opener now retains protected root/control/dedicated socket evidence,
+checks kernel UID and exact version-two readiness, and preserves raw setup bytes
+read ahead after that reply. Finite permits cover opening and active channel lifetime;
+errors and cancellation release the dedicated stream without retry or endpoint
+acquisition. Socket fixtures qualify this boundary, not ordinary CLI forwarding;
+the attachment supervisor must dispose openers and channels when its parent ends.
 Each internal initialized session now retains its own shared health tracker and
 samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling

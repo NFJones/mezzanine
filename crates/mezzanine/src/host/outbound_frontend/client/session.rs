@@ -81,6 +81,11 @@ mod present;
 mod setup;
 mod step;
 mod target_detach;
+#[allow(
+    dead_code,
+    reason = "ordinary X11 activation follows channel-opening qualification"
+)]
+mod x11_channel;
 mod x11_discovery;
 
 impl OutboundFrontendClient {

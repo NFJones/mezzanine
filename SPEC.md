@@ -4403,6 +4403,13 @@ a validated listener basename while supervision owns its publication. Discovery
 MUST NOT allocate an occurrence, consume channel capacity, expose route proof,
 or issue remote work. The client MUST validate the closed reply and treat absent
 publication as unavailable, not as permission to acquire another endpoint.
+Dedicated client channel acquisition MUST revalidate the retained private root,
+control socket and dedicated socket identity, authenticate kernel peer UID, and
+validate exact version-two frontend/session readiness with a positive broker-assigned
+occurrence. Setup and active channel lifetime MUST retain finite capacity. Buffered
+raw bytes following readiness MUST survive the transition without loss. Failure
+or cancellation MUST dispose that stream without endpoint fallback or replay;
+the attachment supervisor remains responsible for parent-lifetime disposal.
 The attaching-client relay MUST validate the fake setup cookie before dialing
 the frozen local X destination, substitute the real credential only locally, and
 preserve subsequent application bytes and directional half-close. Setup read,
