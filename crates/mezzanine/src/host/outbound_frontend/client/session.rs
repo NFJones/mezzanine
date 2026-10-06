@@ -86,6 +86,8 @@ mod target_detach;
     reason = "ordinary X11 activation follows channel-opening qualification"
 )]
 mod x11_channel;
+#[allow(unused_imports, reason = "broker X11 attachment integration is staged")]
+pub(crate) use x11_channel::X11ChannelOpener;
 mod x11_discovery;
 
 impl OutboundFrontendClient {

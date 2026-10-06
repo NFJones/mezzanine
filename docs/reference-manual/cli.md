@@ -663,6 +663,13 @@ Subsequent bytes and half-close
 remain caller-owned. Synthetic local TCP fixtures qualify both byte orders,
 rejection and cancellation, not a physical X server or ordinary CLI activation.
 The prepared credential lease remains separately owned by the attachment caller.
+A staged client supervisor now shares one opener across a finite collection of
+directly owned channel futures. Cancellation and abandonment dispose those
+streams; errors stop supervision without retrying the channel operation.
+EOF before setup retires supervision without reopening. Only completed setup and
+bidirectional application relay can admit fresh demand without replaying prior bytes.
+Deterministic ownership tests qualify this boundary, not attachment-lifetime
+credential cleanup, terminal restoration or ordinary CLI activation.
 A staged dedicated listener now publishes an owner-only socket under the retained
 configuration root, preserves existing entries, and cleans only its recorded socket
 through the held parent. Pending accepts and admitted streams share finite slots;

@@ -17,6 +17,16 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use zeroize::Zeroizing;
 
+/// Distinguishes an idle channel's retirement from completed application work.
+/// Only completed setup and bidirectional relay permit fresh channel demand.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BrokerRelayOutcome {
+    /// EOF arrived before setup; no application was admitted or relayed.
+    IdleRetired,
+    /// Setup was validated and both application directions completed normally.
+    Completed,
+}
+
 impl X11ClientForwarder {
     /// Relays an independently authenticated dedicated broker byte stream to the
     /// frozen client-local X target. Buffered readiness successors must remain
@@ -25,7 +35,22 @@ impl X11ClientForwarder {
     /// established application relay is not limited by the setup deadline.
     /// Before the first setup byte, idle waiting retains this stream until EOF
     /// or caller cancellation and performs no local dialing or automatic retry.
-    pub(crate) async fn relay_broker_stream<S>(&self, mut broker: S, budget: Duration) -> Result<()>
+    pub(crate) async fn relay_broker_stream<S>(&self, broker: S, budget: Duration) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        self.relay_broker_stream_outcome(broker, budget)
+            .await
+            .map(|_| ())
+    }
+
+    /// Reports whether EOF retired an idle stream or followed completed setup
+    /// and application relay. Supervisors must not replenish idle retirement.
+    pub(super) async fn relay_broker_stream_outcome<S>(
+        &self,
+        mut broker: S,
+        budget: Duration,
+    ) -> Result<BrokerRelayOutcome>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
@@ -40,7 +65,7 @@ impl X11ClientForwarder {
             .await
             .map_err(|_| MezError::invalid_state("broker X11 client demand unavailable"))?;
         if read == 0 {
-            return Ok(());
+            return Ok(BrokerRelayOutcome::IdleRetired);
         }
         let deadline = tokio::time::Instant::now() + budget;
         let mut local = tokio::time::timeout_at(deadline, async {
@@ -64,7 +89,7 @@ impl X11ClientForwarder {
         tokio::io::copy_bidirectional(&mut broker, &mut local)
             .await
             .map_err(|_| MezError::invalid_state("broker X11 client relay unavailable"))?;
-        Ok(())
+        Ok(BrokerRelayOutcome::Completed)
     }
 }
 

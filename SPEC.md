@@ -4427,6 +4427,13 @@ stream until EOF or caller cancellation, without local dialing or automatic retr
 Cancellation
 MUST dispose owned streams without replay; the prepared credential lease remains
 caller-owned. This helper alone MUST NOT activate ordinary broker X11 forwarding.
+Attaching-client channel supervision MUST share one retained opener and directly
+own a finite set of opening/active relay futures. Cancellation or abandonment
+MUST dispose all owned streams before explicit credential-lease cleanup. Failed
+channel operations MUST NOT be retried. EOF before setup MUST retire supervision
+without opening another channel; only completed setup and bidirectional application
+relay MAY admit fresh demand without repeating prior bytes. This component alone MUST NOT activate
+ordinary attachment routing or restore terminal modes.
 Later event versions MUST reject before initialization. Reader errors or
 EOF require retirement of that session owner, not reconnect or creation replay;
 retiring one session MUST NOT close a sibling connection.

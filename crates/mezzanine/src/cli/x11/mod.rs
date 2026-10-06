@@ -22,6 +22,11 @@ mod authority;
     reason = "broker X11 activation follows client-local relay qualification"
 )]
 mod broker_relay;
+#[allow(
+    dead_code,
+    reason = "ordinary broker X11 activation follows supervision qualification"
+)]
+mod broker_supervisor;
 mod display;
 mod forwarder;
 

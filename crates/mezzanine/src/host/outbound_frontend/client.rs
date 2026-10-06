@@ -25,7 +25,7 @@ mod session;
     unused_imports,
     reason = "ordinary CLI integration follows client snapshot qualification"
 )]
-pub(crate) use session::{FrontendItem, OutboundSessionClient, SessionSummary};
+pub(crate) use session::{FrontendItem, OutboundSessionClient, SessionSummary, X11ChannelOpener};
 
 /// Strict content-free broker reply. Unknown fields cannot carry remote proof.
 #[derive(Deserialize)]

@@ -7,6 +7,165 @@ use super::*;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// Completed setup and bidirectional application EOF admit one fresh channel.
+/// The next channel's idle EOF ends supervision without a third opening. This
+/// combines the production opener with local substitution, rather than treating
+/// arbitrary successful futures as proof of application completion.
+#[tokio::test]
+async fn broker_x11_supervisor_completed_relay_replenishes_once() {
+    let (root, control, dedicated, opener) = fixture();
+    let local = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = local.local_addr().unwrap().port();
+    let forwarder = crate::cli::x11::X11ClientForwarder::new_for_test(
+        crate::cli::x11::resolve_local_x11_display(&format!(
+            "127.0.0.1:{}",
+            port.checked_sub(6000).unwrap()
+        ))
+        .unwrap(),
+        crate::runtime::x11::X11Cookie::new([17; 16]),
+        crate::runtime::x11::X11Cookie::new([52; 16]),
+    );
+    let peer = async {
+        for occurrence in [1, 2] {
+            let (stream, _) = dedicated.accept().await.unwrap();
+            let mut framed = Framed::new(stream, ProtocolFrameCodec::new(HELLO_LIMIT).unwrap());
+            let request = framed.next().await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&request.body).unwrap(),
+                serde_json::json!({"protocol":"mez-outbound-x11/2","handle":opener.handle,"session":opener.session})
+            );
+            framed
+                .send(ProtocolFrame::new(
+                    CONTENT_TYPE,
+                    serde_json::json!({
+                        "protocol":"mez-outbound-x11/2","handle":opener.handle,
+                        "session":opener.session,"occurrence":occurrence,"ready":true
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            if occurrence == 1 {
+                let mut raw = framed.into_inner();
+                let mut setup = vec![0; 48];
+                setup[0] = b'l';
+                setup[2..4].copy_from_slice(&11_u16.to_le_bytes());
+                setup[6..8].copy_from_slice(&18_u16.to_le_bytes());
+                setup[8..10].copy_from_slice(&16_u16.to_le_bytes());
+                setup[12..30].copy_from_slice(b"MIT-MAGIC-COOKIE-1");
+                setup[32..48].fill(17);
+                raw.write_all(&[setup, b"ping".to_vec()].concat())
+                    .await
+                    .unwrap();
+                raw.shutdown().await.unwrap();
+                let mut bytes = Vec::new();
+                raw.read_to_end(&mut bytes).await.unwrap();
+                assert_eq!(bytes, b"pong");
+            } else {
+                drop(framed);
+            }
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), dedicated.accept())
+                .await
+                .is_err(),
+            "idle retirement must not authorize another opening"
+        );
+    };
+    let local_work = async {
+        let (mut socket, _) = local.accept().await.unwrap();
+        let mut setup = [0; 48];
+        socket.read_exact(&mut setup).await.unwrap();
+        crate::runtime::x11::validate_x11_setup_cookie(
+            &setup,
+            &crate::runtime::x11::X11Cookie::new([52; 16]),
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        socket.read_to_end(&mut bytes).await.unwrap();
+        assert_eq!(bytes, b"ping");
+        socket.write_all(b"pong").await.unwrap();
+        socket.shutdown().await.unwrap();
+    };
+    let client = forwarder.supervise_broker_channels(
+        &opener,
+        1,
+        Duration::from_secs(2),
+        std::future::pending(),
+    );
+    let ((), (), result) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(Box::pin(peer), Box::pin(local_work), Box::pin(client))
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(opener.slots.available_permits(), 1);
+    drop((opener, dedicated, control, local));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Valid readiness followed by EOF before setup is retirement, not completed
+/// application work. The real supervisor must return without a second channel
+/// connection, local X dialing, or any replay of the original request.
+#[tokio::test]
+async fn broker_x11_supervisor_idle_eof_never_reopens_channel() {
+    let (root, control, dedicated, opener) = fixture();
+    let forwarder = crate::cli::x11::X11ClientForwarder::new_for_test(
+        crate::cli::x11::resolve_local_x11_display("127.0.0.1:19").unwrap(),
+        crate::runtime::x11::X11Cookie::new([17; 16]),
+        crate::runtime::x11::X11Cookie::new([52; 16]),
+    );
+    let peer = async {
+        let (stream, _) = dedicated.accept().await.unwrap();
+        let mut framed = Framed::new(stream, ProtocolFrameCodec::new(HELLO_LIMIT).unwrap());
+        let request = framed.next().await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&request.body).unwrap(),
+            serde_json::json!({"protocol":"mez-outbound-x11/2","handle":opener.handle,"session":opener.session})
+        );
+        framed
+            .send(ProtocolFrame::new(
+                CONTENT_TYPE,
+                serde_json::json!({
+                    "protocol":"mez-outbound-x11/2","handle":opener.handle,
+                    "session":opener.session,"occurrence":1,"ready":true
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        drop(framed);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), dedicated.accept())
+                .await
+                .is_err(),
+            "pre-demand EOF must not authorize a second channel opening"
+        );
+    };
+    let client = async {
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            forwarder.supervise_broker_channels(
+                &opener,
+                1,
+                Duration::from_secs(1),
+                std::future::pending(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(opener.slots.available_permits(), 1);
+    };
+    tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(peer, client);
+    })
+    .await
+    .unwrap();
+    drop((opener, dedicated, control));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Supplies private control discovery and a separate dedicated listener. No
 /// endpoint key, proof, terminal output or desktop state is created here.
 fn fixture() -> (
