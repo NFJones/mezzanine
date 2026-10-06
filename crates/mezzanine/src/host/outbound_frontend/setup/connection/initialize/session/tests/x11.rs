@@ -13,7 +13,7 @@ mod dispatch;
 mod frontend;
 
 /// Returns only a synthetic fake-cookie offer, never a real local credential.
-fn offer(mode: &str) -> serde_json::Value {
+pub(super) fn offer(mode: &str) -> serde_json::Value {
     serde_json::json!({"version":crate::runtime::x11::X11_FORWARDING_VERSION,
         "mode":mode,"auth_protocol":"MIT-MAGIC-COOKIE-1",
         "fake_cookie_base64":base64::engine::general_purpose::STANDARD.encode([17_u8;16]),

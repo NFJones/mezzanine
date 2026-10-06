@@ -113,7 +113,8 @@ async fn create_frontend(
 /// Two independently initialized connections using the same paired endpoint
 /// create distinct sessions while the first remains attached. Retiring one
 /// owner leaves the sibling control stream usable. This is an in-process
-/// broker-component fixture, not two CLI processes or event/X11 qualification.
+/// broker-component fixture including X11 admission/discovery and clipboard
+/// coexistence, not two CLI processes or X11 application-forwarding qualification.
 #[tokio::test]
 async fn outbound_session_initialization_creates_distinct_live_siblings() {
     Box::pin(qualify_session_siblings(
@@ -152,12 +153,11 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
     use crate::security::remote::{
         RemoteHostRoutingAuthority, RemoteRoleCeiling, RemoteSessionAttachScope, RemoteTrustStore,
     };
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 
-    let root = std::env::temp_dir().join(format!(
-        "mez-owner-sessions-{:032x}",
-        rand::random::<u128>()
-    ));
+    // Leave room for dedicated X11 names as well as outbound.sock under the
+    // portable Unix socket pathname bound; no production limit is relaxed.
+    let root = std::env::temp_dir().join(format!("mez-os-{:032x}", rand::random::<u128>()));
     std::fs::create_dir(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     let host_root = root.join("host");
@@ -177,6 +177,11 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
     let client_root = cli_paths.root().to_path_buf();
     let policy = RuntimeIrohTransportPolicy {
         compression_codecs: vec![codec],
+        x11: crate::runtime::RuntimeIrohX11Policy {
+            enabled: true,
+            allow_trusted: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let host = HostIrohRuntime::bind(
@@ -204,7 +209,7 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
             format: crate::config::ConfigFormat::Toml,
             scope: crate::config::ConfigScope::Primary,
             trusted: true,
-            text: "[terminal]\nzen_mode = true\nzen_focus_label_duration_ms = 60000\n[agents]\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n".into(),
+            text: "[terminal]\nzen_mode = true\nzen_focus_label_duration_ms = 60000\n[agents]\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n[transport.iroh.x11]\nenabled = true\nallow_trusted = true\n".into(),
         }],
         shell: ResolvedShell::new(
             std::path::PathBuf::from("/bin/sh"),
@@ -523,9 +528,14 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
                 "client_name":"clipboard-route-fixture","requested_version":3,"requested_role":"primary",
                 "session_intent":"attach","session_target":{"session_id":first_view["session"]["session_id"]},
                 "detach_primary_on_disconnect":true,"event_stream_version":2,
+                "x11_forwarding":x11::offer("untrusted"),
                 "client":{"name":"clipboard-route-fixture","interactive":true,
                     "terminal":{"columns":80,"rows":24,"term":"xterm"}}
             }), 80, 24, policy.setup_timeout).await.unwrap();
+            let (returned, x11_name) = clipboard_client.discover_x11(policy.setup_timeout).await.unwrap();
+            clipboard_client = returned;
+            let x11_path = client_root.join(x11_name.expect("real host must admit dedicated X11 publication"));
+            assert!(std::fs::symlink_metadata(&x11_path).unwrap().file_type().is_socket());
             let clipboard_summary = serde_json::to_value(clipboard_client.summary()).unwrap();
             assert_eq!(
                 clipboard_summary["session_id"],
@@ -580,6 +590,11 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
                 .detach_self("exact-clipboard-detach", policy.setup_timeout)
                 .await
                 .unwrap();
+            tokio::time::timeout(policy.setup_timeout, async {
+                while x11_path.exists() {
+                    tokio::task::yield_now().await;
+                }
+            }).await.expect("exact detach must retire dedicated X11 publication");
             }).await;
             let (second, connected, _) = second
                 .sample_transport_health(policy.setup_timeout)
