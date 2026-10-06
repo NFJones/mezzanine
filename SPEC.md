@@ -4443,6 +4443,11 @@ admission and the exact frontend handle. A finite wait MUST consume at most one
 typed item; clipboard delivery MUST use bounded transfer records and checked
 nonreused local occurrences. Delivery failure MUST retire ownership without
 effect replay. Ordinary supervision and host clipboard writes remain separate.
+The consumed frontend item API MUST pin the exact handle and whole session,
+retain occurrence watermarks across polls, and expose clipboard content only
+after complete bounded UTF-8 transfer validation. One total deadline MUST cover
+request and all reply frames. Failure or cancellation MUST discard partial
+content and retire the stream without replay; host clipboard policy is separate.
 The internal requested event exchange MUST bind the exact frontend/session and
 bounded wait, coalesce at most 64 redraw facts without returning raw payloads,
 and preserve unknown burst cutoffs. Idle waits MUST retain incremental reader

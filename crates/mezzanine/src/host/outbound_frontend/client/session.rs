@@ -65,6 +65,8 @@ pub(crate) struct OutboundSessionClient {
     cursor_blink_epoch: std::time::Instant,
     /// Effective cursor visibility from the last receipt-settled output frame.
     painted_cursor: Option<bool>,
+    /// Exact-session transfer decoder present only for explicit primary v2 setup.
+    clipboard_receiver: Option<crate::host::outbound_frontend::clipboard_wire::ClipboardReceiver>,
 }
 
 mod acknowledge;
@@ -73,6 +75,7 @@ mod detach;
 mod events;
 mod foreground;
 mod health;
+mod items;
 mod present;
 mod step;
 
@@ -136,6 +139,14 @@ impl OutboundFrontendClient {
             }
             Ok((
                 OutboundSessionClient {
+                    clipboard_receiver: (params.event_stream_version == Some(2)
+                        && params.requested_role == RequestedRole::Primary)
+                        .then(|| {
+                            crate::host::outbound_frontend::clipboard_wire::ClipboardReceiver::new(
+                                self.handle.clone(),
+                                snapshot.session.clone(),
+                            )
+                        }),
                     client: self,
                     modes: snapshot_modes(&snapshot, columns, rows)?,
                     iroh_status_slot: snapshot_status_slot(&snapshot, columns, rows)?,

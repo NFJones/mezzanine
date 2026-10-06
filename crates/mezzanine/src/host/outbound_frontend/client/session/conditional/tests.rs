@@ -114,6 +114,7 @@ fn fixture() -> (
         painted_health: None,
         cursor_blink_epoch: std::time::Instant::now(),
         painted_cursor: None,
+        clipboard_receiver: None,
     };
     (root, listener, peer, owner)
 }

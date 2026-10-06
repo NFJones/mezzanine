@@ -74,6 +74,7 @@ fn fixture() -> (
         painted_health: None,
         cursor_blink_epoch: std::time::Instant::now(),
         painted_cursor: None,
+        clipboard_receiver: None,
         iroh_status_slot: Some(crate::host::terminal::TerminalIrohStatusSlot {
             row: 0,
             column: 3,
