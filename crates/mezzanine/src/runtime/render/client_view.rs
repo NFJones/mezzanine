@@ -1208,15 +1208,20 @@ impl RuntimeSessionService {
 
     /// Builds the live working footer shown at the tail of an active agent pane.
     fn runtime_agent_working_footer_line(&self, pane_id: &str) -> Option<String> {
-        if self.agent_command_is_active(pane_id) {
-            return Some("command running".to_string());
-        }
-        if let Some(started_at) = self.agent_compaction_started_at(pane_id) {
-            let elapsed = current_unix_seconds().saturating_sub(started_at);
+        if let Some(operation) = self.runtime_compaction_status(pane_id) {
+            let elapsed = current_unix_seconds().saturating_sub(operation.started_at);
             return Some(format!(
-                "compacting ({} • esc to interrupt)",
+                "compacting ({}{} • {} • esc to interrupt)",
+                operation.phase,
+                operation
+                    .pause
+                    .map(|pause| format!(" • {pause}"))
+                    .unwrap_or_default(),
                 runtime_agent_turn_duration_display(elapsed)
             ));
+        }
+        if self.agent_command_is_active(pane_id) {
+            return Some("command running".to_string());
         }
         if let Some(started_at) = self.agent_remember_started_at(pane_id) {
             let elapsed = current_unix_seconds().saturating_sub(started_at);
@@ -1991,8 +1996,8 @@ impl RuntimeSessionService {
                     })
                     .flatten();
                 let agent_status = self
-                    .agent_is_compacting(&pane_id)
-                    .then(|| "compacting".to_string())
+                    .runtime_compaction_status(&pane_id)
+                    .map(|_| "compacting".to_string())
                     .or_else(|| {
                         self.agent_is_remembering(&pane_id)
                             .then(|| "memorizing".to_string())

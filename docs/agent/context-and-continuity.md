@@ -72,6 +72,14 @@ If an earlier accepted prompt or command is still preparing its history, a new
 `/compact` is refused before changing the conversation epoch. The earlier input
 continues normally; this also protects guidance resumed after cancelling compaction.
 
+The pane/footer, `agent/list` and `/status` agree that the current operation is
+compacting even when there is no ordinary user turn. Allowed inspections do not
+replace that footer with a generic command-running label. The footer and status
+diagnostics show preparing/queued/claimed and existing pause detail; a claim is
+not evidence that a provider has received a request. Elapsed time starts once
+per logical operation and does not reset for source/request handoffs or compactor
+chunks/retries. Completed or cancelled work no longer appears active.
+
 If compaction fails, the error does not mean the source history was discarded.
 Mez does not publish a partial replacement as a completed durable compaction.
 Missing or corrupt required history is reported rather than silently omitted.

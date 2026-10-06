@@ -278,6 +278,20 @@ pub(super) const AGENT_PROVIDER_REQUEST_CHAIN_LIMIT: usize = 4096;
 /// Maximum completed persistent-child closures retained for same-session retries.
 const RETIRED_PERSISTENT_SUBAGENT_LIMIT: usize = 256;
 
+/// Inert current compaction presentation derived from exact runtime ownership.
+/// Phase/clock metadata never authorize a claim, turn, approval or continuation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeCompactionStatus {
+    /// Original logical operation start, independent of provider claim deadlines.
+    pub(crate) started_at: u64,
+    /// Preparing, queued or claimed; claimed does not prove wire execution.
+    pub(crate) phase: &'static str,
+    /// Current logical operation epoch, retained across chunk/retry generations.
+    pub(crate) epoch: u64,
+    /// Existing human-pause presentation, without changing that owner's state.
+    pub(crate) pause: Option<&'static str>,
+}
+
 /// Owns application-side agent execution state and lifecycle invariants.
 ///
 /// The component begins with visible agent-subshell lifecycle state and grows
@@ -540,6 +554,10 @@ pub(crate) struct RuntimeAgentComponent {
     sandbox_fallback_audits: BTreeMap<(String, String), RuntimeSandboxFallbackAudit>,
     /// Panes currently running model-backed context compaction.
     agent_compacting_panes: BTreeMap<String, u64>,
+    /// Last logical start per pane, fenced by conversation and epoch. Retained
+    /// across claim retirement for chunk/retry/handoff continuity; this cache
+    /// alone never proves active work and a new operation replaces its entry.
+    compaction_operation_starts: BTreeMap<String, (String, u64, u64)>,
     /// Finite actor-preparation admission, held until the actual source worker exits.
     manual_compaction_preparation_slots: Option<std::sync::Arc<tokio::sync::Semaphore>>,
     /// Explicit preparation gate used only by deterministic actor regressions.
@@ -2751,6 +2769,83 @@ impl RuntimeSessionService {
         self.agent.agent_remembering_panes.contains_key(pane_id)
     }
 
+    /// Projects only compaction owners matching the pane's current conversation.
+    /// Display status does not invent an ordinary turn or authorize execution.
+    pub(crate) fn runtime_compacting_pane_ids(&self) -> BTreeSet<String> {
+        self.agent
+            .agent_compacting_panes
+            .keys()
+            .filter(|pane| self.runtime_compaction_status(pane).is_some())
+            .cloned()
+            .collect()
+    }
+
+    /// Derives current phase from exact existing operation/task ownership. A
+    /// claimed phase is a runtime lease, not proof of provider wire execution;
+    /// pause details stay owned by the existing human-pause lifecycle.
+    pub(crate) fn runtime_compaction_status(&self, pane: &str) -> Option<RuntimeCompactionStatus> {
+        let started_at = self.agent_compaction_started_at(pane)?;
+        let (generation, conversation) = self.agent.agent_compaction_task_owners.get(pane)?;
+        if self.agent_shell_store().get(pane)?.session_id != *conversation {
+            return None;
+        }
+        let phase = if self
+            .agent
+            .claimed_agent_compaction_tasks
+            .contains_key(&(pane.to_string(), *generation))
+        {
+            "claimed"
+        } else if self
+            .agent
+            .pending_agent_compaction_tasks
+            .get(pane)
+            .is_some_and(|task| task.task_generation == *generation)
+        {
+            "queued"
+        } else {
+            "preparing"
+        };
+        Some(RuntimeCompactionStatus {
+            started_at,
+            phase,
+            epoch: self.agent_compaction_epoch(pane),
+            pause: self.agent_human_pause_status(pane),
+        })
+    }
+
+    /// Retains one logical-operation clock independently of per-request leases.
+    /// Inactive cached clocks cannot appear without current matching ownership.
+    fn retain_compaction_operation_start(
+        &mut self,
+        pane: &str,
+        conversation: &str,
+        epoch: u64,
+    ) -> u64 {
+        let started = self
+            .agent
+            .compaction_operation_starts
+            .get(pane)
+            .filter(|(owner, recorded_epoch, _)| owner == conversation && *recorded_epoch == epoch)
+            .map(|(_, _, started)| *started)
+            .unwrap_or_else(|| current_unix_seconds().max(1));
+        self.agent
+            .compaction_operation_starts
+            .insert(pane.to_string(), (conversation.to_string(), epoch, started));
+        started
+    }
+
+    /// Seeds the existing logical and presentation clocks for deterministic
+    /// elapsed-time tests; no production clock or mutable busy flag is added.
+    #[cfg(test)]
+    pub(crate) fn set_compaction_operation_start_for_tests(&mut self, pane: &str, started: u64) {
+        if let Some((_, _, clock)) = self.agent.compaction_operation_starts.get_mut(pane) {
+            *clock = started;
+        }
+        if let Some(clock) = self.agent.agent_compacting_panes.get_mut(pane) {
+            *clock = started;
+        }
+    }
+
     /// Counts background model operations attached to the provided panes.
     pub(crate) fn active_agent_background_work_count(&self, pane_ids: &[String]) -> usize {
         self.agent
@@ -2791,9 +2886,14 @@ impl RuntimeSessionService {
             pane_id.clone(),
             (task.task_generation, task.conversation_id.clone()),
         );
+        let started = self.retain_compaction_operation_start(
+            &pane_id,
+            &task.conversation_id,
+            task.compaction_epoch,
+        );
         self.agent
             .agent_compacting_panes
-            .insert(pane_id.clone(), current_unix_seconds().max(1));
+            .insert(pane_id.clone(), started);
         self.agent
             .pending_agent_compaction_tasks
             .insert(pane_id, task);
@@ -2906,9 +3006,11 @@ impl RuntimeSessionService {
             work.pane_id.clone(),
             (generation, work.conversation_id.clone()),
         );
+        let started =
+            self.retain_compaction_operation_start(&work.pane_id, &work.conversation_id, epoch);
         self.agent
             .agent_compacting_panes
-            .insert(work.pane_id.clone(), current_unix_seconds().max(1));
+            .insert(work.pane_id.clone(), started);
         self.agent
             .pending_manual_compaction_preparations
             .insert((work.pane_id.clone(), generation), work);
@@ -3317,6 +3419,38 @@ impl RuntimeSessionService {
             .or_default();
         *epoch = epoch.saturating_add(1);
         self.agent.agent_compacting_panes.insert(pane_id, at);
+    }
+
+    /// Seeds an exact current presentation owner for isolated rendering tests.
+    /// Unlike the chronology-only marker probe, this requires a real shell
+    /// session and proves no provider execution, task dispatch or durable summary.
+    #[cfg(test)]
+    pub(crate) fn mark_owned_compaction_for_render_tests(
+        &mut self,
+        pane: &str,
+        at: u64,
+    ) -> Result<()> {
+        let conversation = self
+            .agent_shell_store()
+            .get(pane)
+            .ok_or_else(|| MezError::invalid_state("render compaction session unavailable"))?
+            .session_id
+            .clone();
+        self.mark_agent_compacting_for_tests(pane, at);
+        let generation = self
+            .agent
+            .next_agent_compaction_task_generation
+            .saturating_add(1)
+            .max(1);
+        self.agent.next_agent_compaction_task_generation = generation;
+        self.agent
+            .agent_compaction_task_owners
+            .insert(pane.to_string(), (generation, conversation.clone()));
+        self.agent.compaction_operation_starts.insert(
+            pane.to_string(),
+            (conversation, self.agent_compaction_epoch(pane), at),
+        );
+        Ok(())
     }
 
     /// Returns one queued compaction task to crate-local regression tests.

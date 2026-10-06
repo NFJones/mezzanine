@@ -1197,7 +1197,13 @@ fn runtime_frame_context_animates_live_agent_footer() {
         .active_pane()
         .id
         .to_string();
-    service.mark_agent_compacting_for_tests(pane_id, 1);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    service
+        .mark_owned_compaction_for_render_tests(&pane_id, 1)
+        .unwrap();
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();
@@ -1457,7 +1463,9 @@ fn runtime_frame_context_reports_agent_compacting_substate() {
         .agent_turn_ledger_mut()
         .finish_turn("turn-completed", AgentTurnState::Completed)
         .unwrap();
-    service.mark_agent_compacting_for_tests(pane_id.clone(), 1);
+    service
+        .mark_owned_compaction_for_render_tests(&pane_id, 1)
+        .unwrap();
 
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())

@@ -1120,6 +1120,7 @@ impl RuntimeSessionService {
             if request.method == "agent/list" {
                 let model_profiles_by_pane = self.runtime_agent_model_profiles_by_pane();
                 let peer_wait_turn_ids = self.runtime_peer_wait_turn_ids();
+                let compacting_panes = self.runtime_compacting_pane_ids();
                 let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
                 let response =
                     dispatch_control_request_for_client_with_agent_state_and_model_profiles(
@@ -1133,7 +1134,8 @@ impl RuntimeSessionService {
                             Some(&model_profiles_by_pane),
                             None,
                             Some(&peer_wait_turn_ids),
-                        ),
+                        )
+                        .with_compacting_panes(&compacting_panes),
                     );
                 return self.append_external_agent_list_rows(response);
             }
@@ -1667,6 +1669,7 @@ impl RuntimeSessionService {
                 if request.method == "agent/list" {
                     let model_profiles_by_pane = self.runtime_agent_model_profiles_by_pane();
                     let peer_wait_turn_ids = self.runtime_peer_wait_turn_ids();
+                    let compacting_panes = self.runtime_compacting_pane_ids();
                     let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
                     let response =
                         dispatch_control_request_for_client_with_agent_state_and_model_profiles(
@@ -1680,7 +1683,8 @@ impl RuntimeSessionService {
                                 Some(&model_profiles_by_pane),
                                 None,
                                 Some(&peer_wait_turn_ids),
-                            ),
+                            )
+                            .with_compacting_panes(&compacting_panes),
                         );
                     return self.append_external_agent_list_rows(response);
                 }

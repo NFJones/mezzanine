@@ -622,6 +622,16 @@ SQLite schema v2 migrates legacy rows to harness `mez` without counter backfill.
 The ledger stores harness/model counters and opaque stream identities, not prompt,
 transcript or pane paths. Native latest-request samples remain separate. Pane
 reset changes only the external view baseline; session and durable expense remain.
+Native `agent/list` reports the existing `compacting` status whenever an exact
+compaction operation owns the pane's current conversation. Manual preparation
+may therefore report `compacting` with `last_turn_id: null`; it does not invent
+an ordinary turn. Completion/cancellation removes that current projection.
+The pane footer and `/status` use the same ownership. `/status` includes preparing,
+queued or claimed phase, logical epoch/elapsed time and existing human-pause detail;
+claimed describes a runtime claim, not proof of provider execution. Elapsed time
+belongs to the logical operation, not each chunk/retry's lease. No new control
+record field or configuration setting is introduced by this projection repair.
+
 `agent/list` exposes separate `external_token_usage` runtime-instance telemetry.
 The harness-aware `/status` reader includes native and external events in rolling
 history and its oldest-event boundary. Tables retain harness and unknown-reasoning

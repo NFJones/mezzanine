@@ -136,6 +136,307 @@ fn runtime_manual_compaction_preserves_queued_and_claimed_history_input() {
     }
 }
 
+/// A real manual operation without an ordinary turn must agree across the frame
+/// and control projection in source preparation and provider queuing. Cancelling
+/// the operation removes current compacting status without inventing a turn or
+/// persisting a summary merely to rebuild display state.
+#[test]
+fn runtime_manual_compaction_state_matches_control_and_frame() {
+    for preparing in [false, true] {
+        let (mut service, primary, _) =
+            fixture_with_adapter(&format!("manual-status-{preparing}"), preparing);
+        service
+            .execute_agent_shell_command(&primary, "/compact")
+            .unwrap();
+        assert!(service.agent_is_compacting("%1"));
+        assert!(
+            service
+                .agent_shell_store()
+                .get("%1")
+                .unwrap()
+                .running_turn_id
+                .is_none()
+        );
+        let config = service
+            .terminal_client_loop_config(TerminalClientLoopConfig::default())
+            .unwrap();
+        assert_eq!(
+            config
+                .frame_context
+                .panes
+                .get("%1")
+                .and_then(|pane| pane.agent_status.as_deref()),
+            Some("compacting")
+        );
+        let body = service.dispatch_runtime_control_body(
+            r#"{"jsonrpc":"2.0","id":"compact-state","method":"agent/list","params":{}}"#,
+            &primary,
+        );
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let row = json["result"]["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["pane_id"] == "%1")
+            .unwrap();
+        assert_eq!(row["status"], "compacting", "{body}");
+        assert!(row["last_turn_id"].is_null());
+        service.cancel_current_agent_compaction_task("%1");
+        let body = service.dispatch_runtime_control_body(
+            r#"{"jsonrpc":"2.0","id":"after-stop","method":"agent/list","params":{}}"#,
+            &primary,
+        );
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["result"]["agents"][0]["status"], "idle");
+    }
+}
+
+/// The worker must preserve the established manual compactor's source boundary,
+/// retention and request contract even after the operation clock is separated.
+///
+/// Logical elapsed time is qualified independently of provider claim deadlines.
+#[test]
+fn runtime_manual_compaction_elapsed_survives_claim_retry_and_new_operation() {
+    let (mut service, primary, _) = fixture_with_adapter("manual-operation-clock", false);
+    service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    let original_epoch = service.agent_compaction_epoch("%1");
+    let started = current_unix_seconds().saturating_sub(120).max(1);
+    service.set_compaction_operation_start_for_tests("%1", started);
+    let original = service.take_pending_agent_compaction_task("%1").unwrap();
+    let old_generation = original.task_generation;
+    service.claim_agent_compaction_task_state("%1", original.clone());
+    assert_eq!(
+        service.runtime_compaction_status("%1").unwrap().phase,
+        "claimed"
+    );
+    assert_eq!(
+        service.runtime_compaction_status("%1").unwrap().started_at,
+        started
+    );
+    let retry = service
+        .finish_agent_compaction_task("%1", old_generation)
+        .unwrap();
+    assert!(service.runtime_compaction_status("%1").is_none());
+    service.queue_agent_compaction_task(retry);
+    let operation = service.runtime_compaction_status("%1").unwrap();
+    assert_eq!(operation.phase, "queued");
+    assert_eq!(operation.epoch, original_epoch);
+    assert_eq!(operation.started_at, started);
+    let retry = service.take_pending_agent_compaction_task("%1").unwrap();
+    let retry_generation = retry.task_generation;
+    service.claim_agent_compaction_task_state("%1", retry);
+    let mut fresh = service
+        .finish_agent_compaction_task("%1", retry_generation)
+        .unwrap();
+    fresh.compaction_epoch = 0;
+    service.queue_agent_compaction_task(fresh);
+    let fresh = service.runtime_compaction_status("%1").unwrap();
+    assert!(fresh.epoch > original_epoch);
+    assert!(fresh.started_at > started);
+    service.fail_agent_compaction_task("%1", old_generation);
+    assert_eq!(
+        service.runtime_compaction_status("%1").unwrap(),
+        fresh,
+        "stale retirement cannot reset a newer operation clock"
+    );
+    service.cancel_current_agent_compaction_task("%1");
+    assert!(service.runtime_compaction_status("%1").is_none());
+}
+
+/// An allowed read-only inspection may own the generic command lane while
+/// the worker handoff retains the admitted clock independently of task claims.
+#[test]
+fn runtime_manual_compaction_elapsed_survives_source_request_handoff() {
+    let (mut service, primary, _) = fixture("manual-handoff-clock");
+    service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    let epoch = service.agent_compaction_epoch("%1");
+    let started = current_unix_seconds().saturating_sub(90).max(1);
+    service.set_compaction_operation_start_for_tests("%1", started);
+    let source = service.take_manual_compaction_preparations().pop().unwrap();
+    let rows = source.execute_source();
+    service
+        .complete_manual_compaction_preparation(&source, rows)
+        .unwrap();
+    assert_eq!(
+        service.runtime_compaction_status("%1").unwrap().started_at,
+        started
+    );
+    let request = service.take_manual_compaction_requests().pop().unwrap();
+    let rendered = request.execute_request();
+    service
+        .complete_manual_compaction_request(&request, rendered)
+        .unwrap();
+    let operation = service.runtime_compaction_status("%1").unwrap();
+    assert_eq!(operation.phase, "queued");
+    assert_eq!(operation.epoch, epoch);
+    assert_eq!(operation.started_at, started);
+    service.cancel_current_agent_compaction_task("%1");
+}
+
+/// Current operation projection must remain pane-scoped across a genuine split;
+/// a sibling conversation with no compactor stays idle in control and frame data.
+#[test]
+fn runtime_manual_compaction_state_does_not_leak_to_sibling() {
+    let (mut service, primary, _) = fixture_with_adapter("manual-status-sibling", false);
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    let second = service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat >/dev/null"))
+        .unwrap()
+        .pane_id;
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(second.as_str())
+        .unwrap();
+    let body = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"independent","method":"agent/list","params":{}}"#,
+        &primary,
+    );
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let rows = json["result"]["agents"].as_array().unwrap();
+    assert_eq!(
+        rows.iter().find(|row| row["pane_id"] == "%1").unwrap()["status"],
+        "compacting"
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|row| row["pane_id"] == second.as_str())
+            .unwrap()["status"],
+        "idle"
+    );
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert_eq!(
+        config
+            .frame_context
+            .panes
+            .get(second.as_str())
+            .and_then(|pane| pane.agent_status.as_deref()),
+        Some("idle")
+    );
+    service.cancel_current_agent_compaction_task("%1");
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// An allowed read-only inspection may own the generic command lane while
+/// compaction remains active. Footer and /status must retain discoverable
+/// compaction ownership and honest queued/preparing phase instead of masking it
+/// with command-running or an ordinary turn/claim that does not exist.
+#[test]
+fn runtime_manual_compaction_footer_and_status_survive_inspection_overlap() {
+    for preparing in [false, true] {
+        let (mut service, primary, _) =
+            fixture_with_adapter(&format!("manual-inspection-status-{preparing}"), preparing);
+        service
+            .execute_agent_shell_command(&primary, "/compact")
+            .unwrap();
+        let operation = service.runtime_compaction_status("%1").unwrap();
+        assert_eq!(
+            operation.phase,
+            if preparing { "preparing" } else { "queued" }
+        );
+        let status = service
+            .execute_agent_shell_command(&primary, "/status")
+            .unwrap();
+        let status: serde_json::Value = serde_json::from_str(&status).unwrap();
+        let body = status["body"].as_str().unwrap();
+        assert!(body.contains("Compaction phase"));
+        assert!(body.contains(operation.phase));
+        assert!(body.contains("compacting"));
+        service
+            .begin_agent_command_claim("%1", "prepare-owned")
+            .unwrap();
+        let view = service
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                &TerminalClientLoopConfig::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            view.lines.iter().any(|line| line.contains("compacting (")),
+            "{}",
+            view.lines.join("\n")
+        );
+        assert!(
+            !view
+                .lines
+                .iter()
+                .any(|line| line.contains("command running"))
+        );
+        service.cancel_current_agent_compaction_task("%1");
+    }
+}
+
+/// Existing human pause ownership must remain intact while manual queued
+/// compaction is still discoverable. Phase stays queued, claim admission remains
+/// inhibited, and inspecting control/status/footer does not silently resume it.
+#[test]
+fn runtime_manual_compaction_status_preserves_human_pause() {
+    let (mut service, primary, _) = fixture_with_adapter("manual-pause-status", false);
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "establish native identity")
+        .unwrap();
+    service.stop_agent_turn_for_pane("%1").unwrap();
+    service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    let target = service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    let pause = service
+        .pause_agent_lifecycle_target(&primary, &target)
+        .unwrap();
+    let operation = service.runtime_compaction_status("%1").unwrap();
+    assert_eq!(operation.phase, "queued");
+    assert_eq!(operation.pause, Some("paused"));
+    let generation = service
+        .pending_agent_compaction_task_generation("%1")
+        .unwrap();
+    assert!(
+        service
+            .claim_agent_compaction_task("%1", generation)
+            .unwrap()
+            .is_none()
+    );
+    let status = service
+        .execute_agent_shell_command(&primary, "/status")
+        .unwrap();
+    assert!(status.contains("Compaction pause"));
+    assert!(status.contains("paused"));
+    let view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(80, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        view.lines
+            .iter()
+            .any(|line| line.contains("compacting (queued") && line.contains("paused"))
+    );
+    assert_eq!(service.agent_human_pause_generation("%1"), Some(pause));
+    assert!(service.agent_is_human_paused("%1"));
+    service.cancel_current_agent_compaction_task("%1");
+    assert!(service.runtime_compaction_status("%1").is_none());
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// The worker must preserve the established manual compactor's source boundary,
 /// retained count, configured model/reasoning and derived output ceiling. Exact
 /// fixed instructions and redacted source text match the synchronous path; only

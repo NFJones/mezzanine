@@ -11652,6 +11652,17 @@ allocation among children and MUST be sufficient to reconstruct the layout.
 `read_scopes`, `write_scopes`, and `last_turn_id`. `status` MUST be one of
 `idle`, `running`, `remembering`, `waiting_approval`, `blocked`, `compacting`,
 `failed`, or `stopped`.
+Runtime `agent/list` MUST project `compacting` while an exact compaction owner
+matches the pane's current conversation, including manual preparation without
+an ordinary turn. `last_turn_id` MUST remain null when no such turn exists;
+presentation MUST NOT create a turn to explain auxiliary work. The pane/footer
+and `/status` MUST use the same current ownership and retain compacting visibility
+during permitted read-only inspections. Diagnostics MUST distinguish preparing,
+queued and claimed work and existing pause state; claimed is not proof of a sent
+provider request. Display elapsed time MUST retain the original conversation and
+logical-compaction-epoch start across handoffs/chunks/retries, independently of
+per-request claim deadlines. Inactive cached starts MUST NOT imply active work,
+and a genuinely new operation MUST receive a new start.
 
 `AgentTaskState` MUST include `id`, `version`, `agent_id`, `state`,
 `created_at`, `started_at`, `finished_at`, `prompt_preview`, `approval_ids`,

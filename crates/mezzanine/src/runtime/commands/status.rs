@@ -296,6 +296,7 @@ impl RuntimeSessionService {
                 attempt => format!("attempt {attempt}"),
             },
         );
+        let compaction = self.runtime_compaction_status(pane_id);
         let rows = vec![
             vec!["Pane".to_string(), session.pane_id.clone()],
             vec!["Session".to_string(), session.session_id.clone()],
@@ -307,6 +308,11 @@ impl RuntimeSessionService {
             vec!["Turn elapsed".to_string(), running_turn_elapsed],
             vec!["Provider claim".to_string(), provider_claim],
             vec!["Provider retry".to_string(), provider_retry],
+            vec!["Compaction".to_string(), if compaction.is_some() { "compacting" } else { "none" }.to_string()],
+            vec!["Compaction phase".to_string(), compaction.map_or("none", |operation| operation.phase).to_string()],
+            vec!["Compaction epoch".to_string(), compaction.map(|operation| operation.epoch.to_string()).unwrap_or_else(|| "none".to_string())],
+            vec!["Compaction elapsed".to_string(), compaction.map(|operation| runtime_agent_turn_duration_display(current_unix_seconds().saturating_sub(operation.started_at))).unwrap_or_else(|| "none".to_string())],
+            vec!["Compaction pause".to_string(), compaction.and_then(|operation| operation.pause).unwrap_or("none").to_string()],
             vec![
                 "Transcript entries".to_string(),
                 session.transcript_entries.to_string(),
