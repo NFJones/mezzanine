@@ -534,8 +534,12 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
             }), 80, 24, policy.setup_timeout).await.unwrap();
             let (returned, x11_name) = clipboard_client.discover_x11(policy.setup_timeout).await.unwrap();
             clipboard_client = returned;
-            let x11_path = client_root.join(x11_name.expect("real host must admit dedicated X11 publication"));
+            let x11_name = x11_name.expect("real host must admit dedicated X11 publication");
+            let x11_path = client_root.join(&x11_name);
             assert!(std::fs::symlink_metadata(&x11_path).unwrap().file_type().is_socket());
+            clipboard_client = Box::pin(x11::qualify_proxy_bytes(
+                clipboard_client, &root, &x11_name, policy.setup_timeout,
+            )).await;
             let clipboard_summary = serde_json::to_value(clipboard_client.summary()).unwrap();
             assert_eq!(
                 clipboard_summary["session_id"],

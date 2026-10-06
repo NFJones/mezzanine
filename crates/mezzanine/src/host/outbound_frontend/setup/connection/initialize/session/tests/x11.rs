@@ -11,6 +11,8 @@ use base64::Engine as _;
 
 mod dispatch;
 mod frontend;
+mod real_host;
+pub(super) use real_host::qualify_proxy_bytes;
 
 /// Returns only a synthetic fake-cookie offer, never a real local credential.
 pub(super) fn offer(mode: &str) -> serde_json::Value {
