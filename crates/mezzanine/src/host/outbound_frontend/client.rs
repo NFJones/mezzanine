@@ -127,45 +127,51 @@ impl OutboundFrontendClient {
         let socket = crate::runtime::socket_path_for_name(&discovery.path, SOCKET_NAME)?;
         tokio::time::timeout(deadline, async move {
             let stream = tokio::net::UnixStream::connect(socket).await?;
-            crate::runtime::authenticated_unix_peer_uid(stream.as_raw_fd(), discovery.uid)?;
-            discovery.validate()?;
-            let mut stream = Framed::new(stream, ProtocolFrameCodec::new(HELLO_LIMIT)?);
-            stream
-                .send(ProtocolFrame::new(
-                    CONTENT_TYPE,
-                    serde_json::json!({"protocol":PROTOCOL}).to_string(),
-                ))
-                .await?;
-            let response =
-                stream.next().await.transpose()?.ok_or_else(|| {
+            // Only capture/connect absence can permit another owner. Once a
+            // stream exists, disappearance during authentication/hello is a
+            // changed connected owner, never permission for direct fallback.
+            async move {
+                crate::runtime::authenticated_unix_peer_uid(stream.as_raw_fd(), discovery.uid)?;
+                discovery.validate()?;
+                let mut stream = Framed::new(stream, ProtocolFrameCodec::new(HELLO_LIMIT)?);
+                stream
+                    .send(ProtocolFrame::new(
+                        CONTENT_TYPE,
+                        serde_json::json!({"protocol":PROTOCOL}).to_string(),
+                    ))
+                    .await?;
+                let response = stream.next().await.transpose()?.ok_or_else(|| {
                     MezError::invalid_state("outbound readiness reply unavailable")
                 })?;
-            if response.content_type != CONTENT_TYPE {
-                return Err(MezError::invalid_args(
-                    "outbound readiness content type unsupported",
-                ));
+                if response.content_type != CONTENT_TYPE {
+                    return Err(MezError::invalid_args(
+                        "outbound readiness content type unsupported",
+                    ));
+                }
+                let reply: HelloResponse = serde_json::from_str(&response.body)
+                    .map_err(|_| MezError::invalid_args("outbound readiness reply invalid"))?;
+                if reply.protocol != PROTOCOL
+                    || reply.handle.generation == 0
+                    || reply.handle.owner.len() != 32
+                    || !reply
+                        .handle
+                        .owner
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err(MezError::invalid_args(
+                        "outbound readiness identity invalid",
+                    ));
+                }
+                discovery.validate()?;
+                Ok(Self {
+                    stream,
+                    handle: reply.handle,
+                    discovery,
+                })
             }
-            let reply: HelloResponse = serde_json::from_str(&response.body)
-                .map_err(|_| MezError::invalid_args("outbound readiness reply invalid"))?;
-            if reply.protocol != PROTOCOL
-                || reply.handle.generation == 0
-                || reply.handle.owner.len() != 32
-                || !reply
-                    .handle
-                    .owner
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            {
-                return Err(MezError::invalid_args(
-                    "outbound readiness identity invalid",
-                ));
-            }
-            discovery.validate()?;
-            Ok(Self {
-                stream,
-                handle: reply.handle,
-                discovery,
-            })
+            .await
+            .map_err(connected_readiness_error)
         })
         .await
         .map_err(|_| MezError::invalid_state("outbound readiness timed out"))?
@@ -175,6 +181,20 @@ impl OutboundFrontendClient {
     pub(crate) fn handle(&self) -> Result<&FrontendHandle> {
         self.discovery.validate()?;
         Ok(&self.handle)
+    }
+}
+
+/// Preserves the phase boundary used by startup and direct-fallback callers.
+/// Missing/refused discovery after connect must not authorize another endpoint;
+/// other errors retain their existing classification and content-free messages.
+fn connected_readiness_error(error: MezError) -> MezError {
+    if matches!(
+        error.io_kind(),
+        Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
+    ) {
+        MezError::conflict("outbound connected readiness changed; retry requires owner inspection")
+    } else {
+        error
     }
 }
 

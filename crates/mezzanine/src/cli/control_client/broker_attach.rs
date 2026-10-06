@@ -1,0 +1,130 @@
+//! Paired host-profile attachment setup through an existing protected broker.
+//!
+//! Preserves the caller's prepared routing intent and invocation key. This owner
+//! never acquires an endpoint identity, pairs a principal or launches a broker.
+//! Only missing/refused discovery permits the caller's direct path; after local
+//! readiness, failed setup may already have created a session and is never
+//! retried through another endpoint. X11 remains explicit and unsupported here.
+
+use super::*;
+use crate::host::outbound_frontend::client::{OutboundFrontendClient, OutboundSessionClient};
+
+/// Retained session plus the client machine's independently selected clipboard
+/// adapter and finite request budget. No remote credentials leave broker setup.
+pub(in crate::cli) struct BrokerAttachment {
+    pub(in crate::cli) session: OutboundSessionClient,
+    pub(in crate::cli) clipboard: crate::host::terminal::HostClipboard,
+    pub(in crate::cli) budget: std::time::Duration,
+    pub(in crate::cli) primary: bool,
+}
+
+/// Tries existing broker reuse for a paired host profile. None means no admitted
+/// broker operation occurred and the established direct transport remains valid.
+/// Errors are terminal and contain no profile proof or remote response content.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "exact target, caller routing, role, geometry and explicit X11 intent are independent attachment inputs"
+)]
+pub(in crate::cli) async fn try_open(
+    target: &super::super::ControlTargetSelection,
+    env: &super::super::CliEnv,
+    role: &str,
+    routing: &IrohSessionRouting,
+    columns: u16,
+    rows: u16,
+    term: &str,
+    x11: bool,
+) -> Result<Option<BrokerAttachment>> {
+    let super::super::ControlTargetSelection::IrohProfile(alias) = target else {
+        return Ok(None);
+    };
+    let paths = env.config_paths()?;
+    let layers = super::super::load_runtime_config_layers(&paths)?;
+    let structured = crate::runtime::runtime_effective_config_value(&layers)?;
+    let policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+    if !policy.outbound_enabled {
+        return Err(MezError::config(
+            "outbound Iroh connections are disabled by transport.iroh.outbound_enabled",
+        ));
+    }
+    let profile = RemoteClientProfileStore::under_config_root(paths.root())
+        .load(alias)?
+        .ok_or_else(|| {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "Iroh client profile not found",
+            )
+        })?;
+    ensure_iroh_attach_role_allowed(profile.role, role)?;
+    routing.validate_target_scope(profile.scope)?;
+    if profile.scope != RemoteClientProfileScope::Host {
+        return Ok(None);
+    }
+    let params = initialize_params(role, routing, columns, rows, term)?;
+    let clipboard = crate::runtime::runtime_client_host_clipboard_from_config(&structured)?;
+    let client = match OutboundFrontendClient::connect(paths.root(), policy.setup_timeout).await {
+        Ok(client) => client,
+        Err(error)
+            if matches!(
+                error.io_kind(),
+                Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    if x11 {
+        return Err(MezError::invalid_state(
+            "shared outbound broker X11 forwarding is not yet supported; close the broker before using the direct X11 path",
+        ));
+    }
+    let (session, _) =
+        Box::pin(client.start_session(alias, params, columns, rows, policy.setup_timeout)).await?;
+    Ok(Some(BrokerAttachment {
+        session,
+        clipboard,
+        budget: policy.setup_timeout,
+        primary: role == "primary",
+    }))
+}
+
+/// Builds credential-free protocol-v3 parameters from the same routing owner as
+/// direct attach. Primary requests explicit clipboard-v2; observers request v1.
+/// No new key is allocated here, and there is no existing-session Create fallback.
+fn initialize_params(
+    role: &str,
+    routing: &IrohSessionRouting,
+    columns: u16,
+    rows: u16,
+    term: &str,
+) -> Result<serde_json::Value> {
+    if !matches!(role, "primary" | "observer")
+        || !(1..=4096).contains(&columns)
+        || !(1..=4096).contains(&rows)
+    {
+        return Err(MezError::invalid_args(
+            "outbound attachment role or geometry invalid",
+        ));
+    }
+    let mut client = serde_json::json!({"name":"remote-cli","interactive":true,
+        "terminal":{"columns":columns,"rows":rows,"term":term}});
+    if let Some(name) = routing.session_name() {
+        client["metadata"] = serde_json::json!({"session_name":name});
+    }
+    let mut params = serde_json::json!({"client_name":"remote-cli","requested_version":3,
+        "requested_role":role,"detach_primary_on_disconnect":role == "primary",
+        "event_stream_version":if role == "primary" { 2 } else { 1 },
+        "session_intent":routing.intent(),"client":client});
+    if let Some(target) = routing.session_target() {
+        params["session_target"] = target;
+    }
+    if let Some(key) = routing.idempotency_key() {
+        params["idempotency_key"] = serde_json::json!(key);
+    }
+    crate::control::initialize_params_from_json(&params.to_string())?;
+    Ok(params)
+}
+
+#[cfg(test)]
+mod tests;
