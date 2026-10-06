@@ -172,6 +172,21 @@ impl Drop for CliTerminal {
 #[tokio::test]
 #[ignore = "requires explicit MEZ_BROKER_EXECUTABLE for combined process qualification"]
 async fn broker_attach_real_host_two_cli_terminals_preserve_sibling_input() {
+    Box::pin(qualify_terminals(false)).await;
+}
+
+/// Abrupt shared-owner death retires frontends but must not remove committed
+/// host sessions. A newly elected owner retains the same paired identity and
+/// explicitly attaches to an existing target without replaying either Create.
+#[tokio::test]
+#[ignore = "requires explicit MEZ_BROKER_EXECUTABLE for owner-crash process qualification"]
+async fn broker_attach_owner_crash_preserves_sessions_and_safe_replacement() {
+    Box::pin(qualify_terminals(true)).await;
+}
+
+/// Drives the same directly owned host/CLI fixture with an optional owner crash.
+/// Deliberate signal authority comes only from the retained child handle.
+async fn qualify_terminals(crash_owner: bool) {
     let executable = PathBuf::from(
         std::env::var_os("MEZ_BROKER_EXECUTABLE").expect("explicit trusted executable required"),
     );
@@ -305,6 +320,57 @@ async fn broker_attach_real_host_two_cli_terminals_preserve_sibling_input() {
         assert_ne!(leases[0]["lease_id"], leases[1]["lease_id"]);
         assert_eq!(router.snapshots().await?.len(), 2);
         assert!(first.child.try_wait()?.is_none());
+        if crash_owner {
+            let child = broker_child
+                .as_mut()
+                .ok_or_else(|| MezError::invalid_state("fixture child missing"))?;
+            assert!(
+                !tokio::time::timeout(Duration::from_secs(5), child.terminate_for_tests())
+                    .await
+                    .map_err(|_| MezError::invalid_state("fixture crash reap timed out"))??
+                    .success()
+            );
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if first.child.try_wait()?.is_some() && second.child.try_wait()?.is_some() {
+                        return Ok::<_, MezError>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .map_err(|_| MezError::invalid_state("frontends did not retire after owner crash"))??;
+            assert_eq!(router.snapshots().await?.len(), 2);
+            let identity = RemoteClientIdentity::load_or_create(paths.root())?;
+            assert_eq!(identity.endpoint_id().to_string(), endpoint_id);
+            drop(identity);
+            // Exact dead-child evidence is reaped before starting a replacement.
+            // Stale publication is not signal authority and no Create is replayed.
+            drop(broker_child.take());
+            let ready = crate::cli::remote::broker::launch::connect_owned(
+                &executable,
+                &env,
+                policy.setup_timeout,
+                &mut broker_child,
+            )
+            .await?;
+            let (attached, _) = ready.start_session("fixture", serde_json::json!({
+                "client_name":"post-crash-attach","requested_version":3,"requested_role":"primary",
+                "session_intent":"attach","session_target":{"session_id":leases[1]["session_id"]},
+                "detach_primary_on_disconnect":true,
+                "client":{"name":"post-crash-attach","interactive":true,
+                    "terminal":{"columns":80,"rows":24,"term":"xterm"}}
+            }), 80, 24, policy.setup_timeout).await?;
+            assert_eq!(
+                serde_json::to_value(attached.summary()).unwrap()["session_id"],
+                leases[1]["session_id"]
+            );
+            assert_eq!(router.snapshots().await?.len(), 2);
+            attached
+                .detach_self("post-crash-detach", policy.setup_timeout)
+                .await?;
+            return Ok(());
+        }
         first.interrupt_and_reap().await?;
         second.input(b"printf 'SIBLING-%s\\n' 'SURVIVES'\n")?;
         second.wait_text("SIBLING-SURVIVES").await?;
