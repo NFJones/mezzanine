@@ -139,7 +139,17 @@ impl OutboundFrontendListener {
         let frontend = self.admit(stream).await?;
         #[cfg(test)]
         diagnostics.advance("profile");
-        let prepared = frontend.prepare(self.admission.deadline).await?;
+        let prepared = match frontend.prepare_operation(self.admission.deadline).await? {
+            super::setup::PreparedOperation::Profile(profile) => profile,
+            super::setup::PreparedOperation::Pairing(pairing) => {
+                #[cfg(test)]
+                diagnostics.advance("pairing-delivery");
+                pairing.deliver().await?;
+                #[cfg(test)]
+                diagnostics.complete();
+                return Ok(());
+            }
+        };
         #[cfg(test)]
         diagnostics.advance("connect");
         let connected = prepared.connect_pinned().await?;

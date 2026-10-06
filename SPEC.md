@@ -4276,6 +4276,15 @@ Host-scoped profile health MUST likewise reuse an authenticated active broker
 when available, with the current outbound veto and the same fail-closed discovery
 boundary. Authentication-only management MUST issue no session-list follow-up,
 require no list permission, and allocate no session. Legacy checks remain separate.
+The internal broker pairing operation MUST accept only the exact frontend handle,
+a protected absolute invitation-file path and optional local alias. The owner
+MUST enforce host scope, expiry and alias pinning before redemption, use its retained
+endpoint for one correlated host-only exchange, and publish issued proof privately
+before reporting success. Invitation and issued credentials MUST NOT cross local
+IPC. Blocking file/publication work MUST retain finite admission capacity and
+endpoint ownership until actual exit, including after waiter cancellation.
+Uncertain redemption/publication MUST NOT replay; this owner alone does not migrate
+ordinary pairing commands or qualify invitation-based attachment and X11.
 Paired-profile force-kill MUST reuse an authenticated active broker when available
 under the same discovery boundary. The closed mutation MUST preserve the exact
 target and invocation key, issue only host/session/kill with force=true, and

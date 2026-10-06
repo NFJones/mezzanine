@@ -1,8 +1,10 @@
-//! One consumed frontend setup request with owner-resolved protected profile.
+//! One consumed frontend operation with owner-resolved protected evidence.
 //!
 //! Setup never connects, redeems invitations or creates sessions. It reuses the
 //! existing control-initialize parser and role/scope contract. A frontend sends
-//! only a profile alias and credential-free initialization parameters; private
+//! a profile alias and credential-free initialization, or a protected invitation
+//! path for the separate pairing owner. Preparation itself performs no redemption.
+//! Private
 //! device proof is loaded in bounded worker ownership and never returned on IPC.
 //! Consuming the frontend prevents a second setup from retargeting one stream.
 //! Profile I/O may outlive cancellation of its waiter, but cannot start network
@@ -32,12 +34,32 @@ pub(crate) struct PreparedFrontend {
 }
 
 mod connection;
+mod pairing;
+
+/// One consumed, validated operation; pairing never masquerades as a profile.
+pub(super) enum PreparedOperation {
+    /// Existing paired-profile setup with unchanged initialization semantics.
+    Profile(PreparedFrontend),
+    /// Protected invitation evidence retained only by the endpoint owner.
+    Pairing(pairing::PreparedPairing),
+}
 
 impl AdmittedFrontend {
     /// Consumes one strict bounded setup request and resolves its protected alias.
     /// Rejection/cancellation disposes this local stream, never replaying input.
     /// A total deadline includes request receive and profile-worker completion.
     pub(crate) async fn prepare(self, deadline: Duration) -> Result<PreparedFrontend> {
+        match self.prepare_operation(deadline).await? {
+            PreparedOperation::Profile(profile) => Ok(profile),
+            PreparedOperation::Pairing(_) => Err(MezError::invalid_args(
+                "pairing requires operation-aware consumption",
+            )),
+        }
+    }
+
+    /// Consumes exactly one bounded profile or invitation operation. Blocking
+    /// work retains endpoint and admission capacity until it actually exits.
+    pub(super) async fn prepare_operation(self, deadline: Duration) -> Result<PreparedOperation> {
         if !(Duration::from_millis(100)..=Duration::from_secs(120)).contains(&deadline) {
             return Err(MezError::invalid_args(
                 "outbound setup deadline unavailable",
@@ -49,7 +71,7 @@ impl AdmittedFrontend {
     }
 
     /// Keeps source parsing and protected-profile work in one consumed transition.
-    async fn prepare_inner(mut self) -> Result<PreparedFrontend> {
+    async fn prepare_inner(mut self) -> Result<PreparedOperation> {
         let frame = self
             .stream
             .next()
@@ -60,6 +82,13 @@ impl AdmittedFrontend {
             return Err(MezError::invalid_args(
                 "outbound frontend content type unsupported",
             ));
+        }
+        let envelope: serde_json::Value = serde_json::from_str(&frame.body)
+            .map_err(|_| MezError::invalid_args("outbound frontend setup invalid"))?;
+        if envelope.get("operation").is_some() {
+            return pairing::prepare(self, &frame.body)
+                .await
+                .map(PreparedOperation::Pairing);
         }
         let setup: Setup = serde_json::from_str(&frame.body)
             .map_err(|_| MezError::invalid_args("outbound frontend setup invalid"))?;
@@ -136,11 +165,11 @@ impl AdmittedFrontend {
                 "outbound fresh creation requires primary role",
             ));
         }
-        Ok(PreparedFrontend {
+        Ok(PreparedOperation::Profile(PreparedFrontend {
             frontend: self,
             profile,
             initialize: setup.initialize,
-        })
+        }))
     }
 }
 

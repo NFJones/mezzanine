@@ -319,10 +319,6 @@ impl RemoteClientProfileStore {
     /// Checks alias conflicts with bounded lock contention for outbound workers.
     /// Filesystem I/O remains subject to host availability; this does not redeem
     /// an invitation or reserve an alias across a later network exchange.
-    #[allow(
-        dead_code,
-        reason = "broker pairing integration follows bounded profile-lock qualification"
-    )]
     pub(crate) fn preflight_for_outbound(
         &self,
         name: &str,
@@ -443,10 +439,6 @@ impl RemoteClientProfileStore {
     /// Publishes validated owner-side pairing evidence under bounded contention.
     /// A lock timeout precedes credential publication; later I/O failure retains
     /// the existing atomic-write and conflict behavior without remote replay.
-    #[allow(
-        dead_code,
-        reason = "broker pairing integration follows bounded profile-lock qualification"
-    )]
     pub(crate) fn save_for_outbound(&self, profile: &RemoteClientProfile) -> Result<()> {
         self.save_with_lock_mode(profile, true)
     }

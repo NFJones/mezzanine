@@ -22,7 +22,7 @@ pub(crate) struct ConnectedFrontend {
     compression: IrohCompressionPolicy,
 }
 
-mod initialize;
+pub(super) mod initialize;
 
 impl ConnectedFrontend {
     /// Reports the validated initialization intent without exposing profile proof
@@ -45,66 +45,74 @@ impl PreparedFrontend {
     /// A single total deadline bounds all pre-stream codec attempts. Failure or
     /// cancellation disposes the consumed frontend, never retrying creation.
     pub(crate) async fn connect_pinned(self) -> Result<ConnectedFrontend> {
-        let policy = self.frontend._endpoint.transport_policy().clone();
-        if !policy.outbound_enabled
-            || !policy.direct_connections
-            || policy.port_mapping
-            || !matches!(
-                policy.address_lookup,
-                RuntimeIrohAddressLookupPolicy::Disabled | RuntimeIrohAddressLookupPolicy::Local
-            )
-            || !matches!(policy.relay, RuntimeIrohRelayPolicy::Disabled)
-            || self.profile.server_addr.ip_addrs().next().is_none()
-            || self.profile.server_addr.relay_urls().next().is_some()
-        {
-            return Err(MezError::forbidden(
-                "outbound pinned route policy unsupported",
-            ));
-        }
-        let codecs = IrohCompressionPolicy::negotiation_codecs(&policy.compression_codecs)
-            .map(|codec| {
-                IrohCompressionPolicy::new(
-                    codec,
-                    policy.compression_min_bytes,
-                    policy.compression_zstd_level,
-                    1024 * 1024 + 1024,
-                )
-                .map(|compression| (codec, compression))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        if codecs.is_empty() {
-            return Err(MezError::invalid_args("outbound codec policy unavailable"));
-        }
-        tokio::time::timeout(policy.setup_timeout, async move {
-            for (codec, compression) in codecs {
-                self.frontend._endpoint.frontend_config_root()?;
-                let attempt = self
-                    .frontend
-                    ._endpoint
-                    .connect(self.profile.server_addr.clone(), codec.alpn())
-                    .await;
-                let connection = match attempt {
-                    Ok(connection) => connection,
-                    Err(error) if error.kind() == MezErrorKind::RateLimited => return Err(error),
-                    Err(_) => continue,
-                };
-                if connection.connection().remote_id() != self.profile.server_addr.id {
-                    return Err(MezError::forbidden("outbound server identity mismatch"));
-                }
-                self.frontend._endpoint.frontend_config_root()?;
-                return Ok(ConnectedFrontend {
-                    prepared: self,
-                    connection,
-                    compression,
-                });
-            }
-            Err(MezError::invalid_state(
-                "outbound pinned connection unavailable",
-            ))
+        let (connection, compression) =
+            connect_to_pinned(&self.frontend._endpoint, &self.profile.server_addr).await?;
+        Ok(ConnectedFrontend {
+            prepared: self,
+            connection,
+            compression,
         })
-        .await
-        .map_err(|_| MezError::invalid_state("outbound pinned connection timed out"))?
     }
+}
+
+/// Connects one owner-resolved pinned address through the retained endpoint.
+/// Codec fallback occurs only before application stream creation; no credential,
+/// pairing or session request is sent. Cancellation retains no detached work.
+pub(super) async fn connect_to_pinned(
+    endpoint: &OutboundEndpointOwner,
+    address: &iroh::EndpointAddr,
+) -> Result<(OutboundConnectionLease, IrohCompressionPolicy)> {
+    let policy = endpoint.transport_policy().clone();
+    if !policy.outbound_enabled
+        || !policy.direct_connections
+        || policy.port_mapping
+        || !matches!(
+            policy.address_lookup,
+            RuntimeIrohAddressLookupPolicy::Disabled | RuntimeIrohAddressLookupPolicy::Local
+        )
+        || !matches!(policy.relay, RuntimeIrohRelayPolicy::Disabled)
+        || address.ip_addrs().next().is_none()
+        || address.relay_urls().next().is_some()
+    {
+        return Err(MezError::forbidden(
+            "outbound pinned route policy unsupported",
+        ));
+    }
+    let codecs = IrohCompressionPolicy::negotiation_codecs(&policy.compression_codecs)
+        .map(|codec| {
+            IrohCompressionPolicy::new(
+                codec,
+                policy.compression_min_bytes,
+                policy.compression_zstd_level,
+                1024 * 1024 + 1024,
+            )
+            .map(|compression| (codec, compression))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if codecs.is_empty() {
+        return Err(MezError::invalid_args("outbound codec policy unavailable"));
+    }
+    tokio::time::timeout(policy.setup_timeout, async move {
+        for (codec, compression) in codecs {
+            endpoint.frontend_config_root()?;
+            let attempt = endpoint.connect(address.clone(), codec.alpn()).await;
+            let connection = match attempt {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == MezErrorKind::RateLimited => return Err(error),
+                Err(_) => continue,
+            };
+            if connection.connection().remote_id() != address.id {
+                return Err(MezError::forbidden("outbound server identity mismatch"));
+            }
+            endpoint.frontend_config_root()?;
+            return Ok((connection, compression));
+        }
+        Err(MezError::invalid_state(
+            "outbound pinned connection unavailable",
+        ))
+    })
+    .await
+    .map_err(|_| MezError::invalid_state("outbound pinned connection timed out"))?
 }
 
 #[cfg(test)]

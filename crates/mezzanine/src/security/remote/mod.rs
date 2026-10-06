@@ -16,7 +16,7 @@ pub(crate) use client::{
     RemoteClientProfileSummary, abbreviated_endpoint_fingerprint, read_remote_invitation_file,
     write_remote_invitation_file_new,
 };
-pub(crate) use invitation::read_iroh_invitation;
+pub(crate) use invitation::{ParsedIrohInvitation, read_iroh_invitation};
 pub(crate) use store::{RemoteEndpointIdentity, RemotePairingPreparation, RemoteTrustStore};
 #[cfg(test)]
 pub(crate) use types::RemotePairingInvitation;

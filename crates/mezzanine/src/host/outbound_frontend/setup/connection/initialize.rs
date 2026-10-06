@@ -112,7 +112,9 @@ impl ConnectedFrontend {
 
 /// Reads bounded headers and exactly the declared body, never discarding trailing
 /// peer frames. Errors contain no peer payload or credentials.
-async fn read_exact_frame(stream: &mut tokio::io::DuplexStream) -> Result<String> {
+pub(in crate::host::outbound_frontend::setup) async fn read_exact_frame(
+    stream: &mut tokio::io::DuplexStream,
+) -> Result<String> {
     let mut bytes = Vec::new();
     while !bytes.ends_with(b"\r\n\r\n") {
         if bytes.len() >= 8192 {

@@ -554,6 +554,13 @@ Host-scoped `remote profile check NAME` also reuses an authenticated active brok
 Its authentication-only exchange requires no session-list permission and creates
 no session. Outbound veto and unsafe/protocol/operation failures remain terminal;
 only absent/refused discovery retains direct fallback. Legacy checks are unchanged.
+An internal broker pairing operation now reads a protected invitation by absolute
+path, checks host scope, expiry and alias pinning, and redeems once using the retained
+endpoint. Issued proof is published privately before the closed success reply;
+neither invitation nor device credentials enter frontend IPC. Blocking workers
+retain endpoint/capacity ownership until they exit, even after waiter cancellation.
+Uncertain results require profile inspection, not automatic redemption replay.
+Ordinary pairing-command migration remains unfinished.
 Paired-profile `kill --force TARGET` reuses an authenticated active broker too,
 preserving the exact target and invocation key through a fixed host kill request.
 The host still enforces destructive authority and visibility. Only correlated
