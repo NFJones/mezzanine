@@ -10,6 +10,75 @@ use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio_util::codec::Framed;
 
+/// Even an X11 first attachment must elect the shared owner for a supported
+/// pinned profile. Failed readiness retains exact-child evidence and is terminal,
+/// rather than granting direct identity acquisition. The harmless executable
+/// never becomes ready, so no credential generation or remote setup occurs.
+#[tokio::test]
+async fn broker_attach_x11_first_owner_failure_retains_child_without_direct_fallback() {
+    let home = std::env::temp_dir().join(format!("mez-xfirst-{:032x}", rand::random::<u128>()));
+    let env = crate::cli::CliEnv {
+        home: Some(home.clone()),
+        ..Default::default()
+    };
+    let paths = env.config_paths().unwrap();
+    paths.ensure_default_config().unwrap();
+    std::fs::write(
+        paths.default_primary_file(),
+        format!(
+            "version = {}\n[transport.iroh]\nsetup_timeout_ms = 200\n",
+            crate::config::CURRENT_CONFIG_SCHEMA_VERSION,
+        ),
+    )
+    .unwrap();
+    RemoteClientProfileStore::under_config_root(paths.root())
+        .save(&RemoteClientProfile {
+            name: "fixture".into(),
+            server_addr: EndpointAddr::new(iroh::SecretKey::generate().public())
+                .with_ip_addr("127.0.0.1:43210".parse().unwrap()),
+            role: RemoteRoleCeiling::Primary,
+            scope: RemoteClientProfileScope::Host,
+            device_credential: SecretString::from("synthetic-first-owner-proof".to_string()),
+        })
+        .unwrap();
+    let mut child = None;
+    let result = try_open_inner(
+        &crate::cli::ControlTargetSelection::IrohProfile("fixture".into()),
+        &env,
+        "primary",
+        &IrohSessionRouting::Create {
+            name: Some("first-x11".into()),
+            idempotency_key: "original-first-x11".into(),
+        },
+        80,
+        24,
+        "xterm",
+        Some((crate::runtime::x11::X11ForwardingMode::Untrusted, false)),
+        Some(&mut child),
+        Some(Path::new("/bin/true")),
+    )
+    .await;
+    let retained = child.is_some();
+    if let Some(child) = child.as_mut() {
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), child.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success()
+        );
+    }
+    std::fs::remove_dir_all(home).unwrap();
+    assert!(
+        result.is_err(),
+        "attempted first-owner startup must not authorize direct fallback"
+    );
+    assert!(
+        retained,
+        "X11 must use elected shared-owner startup rather than direct identity ownership"
+    );
+}
+
 /// Two setups beginning with no broker must retain one actual child, distinct
 /// session identities and original Create keys. Dropping either attachment must
 /// preserve the shared process. Explicit fixture cleanup reaps that exact child;

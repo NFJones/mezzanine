@@ -4311,15 +4311,16 @@ profiles MAY invoke elected startup using the running executable and caller-reta
 child evidence. Startup failure MUST NOT authorize direct fallback or replacement.
 Frontend exit MUST NOT kill the potentially shared child; exited children MAY be
 reaped by exact handle, while live-child disposal retains the documented best-effort
-reaping limitation. Unqualified routes and absent-broker X11 retain direct eligibility
-before startup. Explicit paired-host X11 through an active broker MUST preserve
+reaping limitation. Unqualified routes retain direct eligibility before startup.
+Qualified paired-host X11 first attachments MUST use the same elected shared-owner
+startup, not acquire the persistent identity directly. Explicit paired-host X11 MUST preserve
 trust/takeover intent and original routing/key, validate the final offer envelope
 before generating local credentials, and retain one exclusively owned matching-capacity
 opener. Real credentials and local X destinations MUST remain client-local.
 Channel disposal MUST precede credential cleanup; foreground retirement MUST use
 its own finite budget independently of the X11 packet-setup budget. Connected
 setup/discovery failures MUST NOT switch endpoints or replay creation. Invitation
-X11 and absent-owner X11 startup remain separate paths; physical/platform
+X11 remains a separate path; physical/platform
 qualification is not established by synthetic setup tests.
 The separate internal session initialization MUST retain the original routing
 intent and invocation key, validate correlated role/client/session/active-lease

@@ -167,9 +167,6 @@ async fn try_open_inner(
                 Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
             ) =>
         {
-            if x11.is_some() {
-                return Ok(None);
-            }
             let Some(child) = child else {
                 return Ok(None);
             };

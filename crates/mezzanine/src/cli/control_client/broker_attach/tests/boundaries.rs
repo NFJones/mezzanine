@@ -35,7 +35,7 @@ fn fixture() -> (PathBuf, crate::cli::CliEnv, crate::config::ConfigPaths) {
 }
 
 /// Starting setup must also reject veto/unsafe discovery without retaining a
-/// child. Route-less profiles and explicit X11 remain on the direct path before
+/// child. Route-less profiles, including X11 requests, retain direct eligibility before
 /// any election, launch or endpoint identity acquisition occurs.
 #[tokio::test]
 async fn broker_attach_starting_preserves_no_launch_boundaries() {
