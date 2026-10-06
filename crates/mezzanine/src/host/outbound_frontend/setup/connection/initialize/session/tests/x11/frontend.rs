@@ -64,6 +64,7 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
         .remove("event_stream_version");
     prepared.initialize["x11_forwarding"] = offer("untrusted");
     let (completed, completion) = tokio::sync::oneshot::channel();
+    let (setup_sent, setup_buffered) = tokio::sync::oneshot::channel();
     let remote = async {
         let connection = server.accept().await.unwrap().await.unwrap();
         let (send, recv) = connection.accept_bi().await.unwrap();
@@ -104,6 +105,7 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
         send.write_all(&setup()).await.unwrap();
         send.write_all(b"ping").await.unwrap();
         send.finish().unwrap();
+        setup_sent.send(()).unwrap();
         let mut bytes = Vec::new();
         recv.read_to_end(1024)
             .await
@@ -138,11 +140,26 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
             assert_eq!(initialized.x11_occurrence, 1);
             assert!(peer.next().await.is_none());
             let (dedicated, peer) = tokio::net::UnixStream::pair().unwrap();
-            let frontend = async {
-                let mut peer = Framed::new(peer, ProtocolFrameCodec::new(HELLO_LIMIT).unwrap());
-                peer.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
+            // Provision fixture-only local resources before the production
+            // minimum-budget admission starts. No deadline is relaxed.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let display = crate::cli::x11::resolve_local_x11_display(&format!(
+                "127.0.0.1:{}",
+                port.checked_sub(6000).unwrap()
+            ))
+            .unwrap();
+            let forwarder = crate::cli::x11::X11ClientForwarder::new_for_test(
+                display,
+                crate::runtime::x11::X11Cookie::new([17; 16]),
+                crate::runtime::x11::X11Cookie::new([52; 16]),
+            );
+            let mut peer = Framed::new(peer, ProtocolFrameCodec::new(HELLO_LIMIT).unwrap());
+            peer.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
                 "protocol":"mez-outbound-x11/1","handle":handle,"session":summary,"occurrence":2,
             }).to_string())).await.unwrap();
+            setup_buffered.await.unwrap();
+            let frontend = async {
                 let ready = peer.next().await.unwrap().unwrap();
                 let ready: serde_json::Value = serde_json::from_str(&ready.body).unwrap();
                 assert_eq!(
@@ -152,18 +169,33 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
                 );
                 let parts = peer.into_parts();
                 assert!(parts.write_buf.is_empty());
-                let (read, mut write) = tokio::io::split(parts.io);
+                let (read, write) = tokio::io::split(parts.io);
                 // Readiness and setup can be coalesced. Preserve every byte
                 // decoded ahead of the ready frame before reading the socket.
-                let mut raw = std::io::Cursor::new(parts.read_buf).chain(read);
-                let mut header = [0; 48];
-                raw.read_exact(&mut header).await.unwrap();
-                assert_eq!(header.as_slice(), setup());
-                let mut bytes = Vec::new();
-                raw.read_to_end(&mut bytes).await.unwrap();
-                assert_eq!(bytes, b"ping");
-                write.write_all(b"pong").await.unwrap();
-                write.shutdown().await.unwrap();
+                let raw = tokio::io::join(std::io::Cursor::new(parts.read_buf).chain(read), write);
+                let local = async {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut header = [0; 48];
+                    socket.read_exact(&mut header).await.unwrap();
+                    let mut expected = setup();
+                    expected[32..48].fill(52);
+                    assert_eq!(header.as_slice(), expected);
+                    crate::runtime::x11::validate_x11_setup_cookie(
+                        &header,
+                        &crate::runtime::x11::X11Cookie::new([52; 16]),
+                    )
+                    .unwrap();
+                    let mut bytes = Vec::new();
+                    socket.read_to_end(&mut bytes).await.unwrap();
+                    assert_eq!(bytes, b"ping");
+                    socket.write_all(b"pong").await.unwrap();
+                    socket.shutdown().await.unwrap();
+                };
+                let (relayed, ()) = tokio::join!(
+                    Box::pin(forwarder.relay_broker_stream(raw, Duration::from_secs(2))),
+                    Box::pin(local),
+                );
+                relayed.unwrap();
             };
             let (result, ()) = tokio::join!(
                 Box::pin(initialized.relay_x11_frontend(dedicated)),
