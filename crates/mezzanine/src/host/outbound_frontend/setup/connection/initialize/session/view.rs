@@ -12,6 +12,7 @@ use super::*;
 const VIEW_REQUEST_ID: &str = "outbound-session-view";
 
 mod acknowledge;
+mod clipboard;
 mod conditional;
 mod detach;
 mod events;
@@ -64,6 +65,13 @@ impl InitializedSessionFrontend {
             let envelope: serde_json::Value = serde_json::from_str(&frame.body)
                 .map_err(|_| MezError::invalid_args("outbound local request invalid"))?;
             if envelope.get("operation").is_some() {
+                if envelope
+                    .get("operation")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("items")
+                {
+                    return clipboard::deliver_item(self, &frame.body).await;
+                }
                 if envelope
                     .get("operation")
                     .and_then(serde_json::Value::as_str)

@@ -24,6 +24,10 @@ pub(crate) struct InitializedSessionFrontend {
     health: crate::host::terminal::iroh_health::AttachIrohHealthTracker,
     /// Successful self-detach permanently retires this initialized owner.
     detached: bool,
+    /// True only after explicit v2 primary capability and preface validation.
+    clipboard_enabled: bool,
+    /// Local transfer occurrence; never reused within this initialized owner.
+    clipboard_transfer: u64,
     events: Option<
         crate::host::outbound_frontend::events::OutboundEventReader<iroh::endpoint::RecvStream>,
     >,
@@ -113,6 +117,8 @@ impl ConnectedFrontend {
             delivered_view: None,
             health: Default::default(),
             detached: false,
+            clipboard_enabled: clipboard,
+            clipboard_transfer: 0,
             events,
         })
     }

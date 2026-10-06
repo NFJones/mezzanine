@@ -699,6 +699,11 @@ ownership on every record. An effect is bounded to 8 MiB, encoded lazily in
 256 KiB chunks within 1 MiB frames, and exposed only after ordered UTF-8 commit.
 Malformed records clear partial content and poison the exchange with content-free
 errors. This component performs no IPC or host clipboard write by itself.
+An explicit internal item-delivery request now consumes at most one admitted
+clipboard-session item under a finite wait. It binds the exact frontend, delivers
+clipboard content through bounded transfer records with nonreused occurrences,
+and retires ownership on uncertain delivery rather than replaying the effect.
+Ordinary supervision and host clipboard writes remain unfinished.
 An internal requested event exchange now forwards bounded coalesced redraw facts
 and optional event identity across exact-session IPC, without raw event payloads
 or unsolicited reply interleaving. Idle waits retain the reader; terminal errors

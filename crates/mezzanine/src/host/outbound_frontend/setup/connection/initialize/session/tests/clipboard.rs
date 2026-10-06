@@ -59,7 +59,7 @@ fn outbound_session_clipboard_requires_primary_and_capability() {
 /// Denied capability retires the connection rather than replaying initialization.
 #[tokio::test]
 async fn outbound_session_clipboard_admission_retains_exact_connection() {
-    for capable in [false, true] {
+    for (capable, deliver) in [(false, false), (true, false), (true, true)] {
         let root = std::env::temp_dir().join(format!(
             "mez-clipboard-admission-{:032x}",
             rand::random::<u128>()
@@ -160,6 +160,64 @@ async fn outbound_session_clipboard_admission_retains_exact_connection() {
             if capable {
                 let mut initialized = initialized.unwrap();
                 assert_eq!(initialized.summary["client_id"], "c1");
+                if deliver {
+                    let handle = initialized.connected.prepared.frontend.handle().clone();
+                    let expected_summary = initialized.summary.clone();
+                    let summary = serde_json::from_value(initialized.summary.clone()).unwrap();
+                    let mut receiver =
+                        crate::host::outbound_frontend::clipboard_wire::ClipboardReceiver::new(
+                            handle.clone(),
+                            summary,
+                        );
+                    *local.codec_mut() = ProtocolFrameCodec::new(BODY_LIMIT).unwrap();
+                    for index in 0..3 {
+                        local
+                            .send(ProtocolFrame::new(
+                                CONTENT_TYPE,
+                                serde_json::json!({
+                                    "operation":"items","handle":handle,"wait_ms":250
+                                })
+                                .to_string(),
+                            ))
+                            .await
+                            .unwrap();
+                        let response = async {
+                            if index < 2 {
+                                let frame = local.next().await.unwrap().unwrap();
+                                let value: serde_json::Value =
+                                    serde_json::from_str(&frame.body).unwrap();
+                                assert_eq!(value["kind"], "redraw");
+                                assert_eq!(value["action"], "none");
+                                assert_eq!(value["handle"], serde_json::to_value(&handle).unwrap());
+                                assert_eq!(value["session"], expected_summary);
+                                None
+                            } else {
+                                let mut content = None;
+                                for _ in 0..3 {
+                                    let frame = local.next().await.unwrap().unwrap();
+                                    assert!(frame.body.len() <= BODY_LIMIT);
+                                    let item = receiver.apply(&frame).unwrap();
+                                    if item.is_some() {
+                                        assert!(content.is_none());
+                                        content = item;
+                                    }
+                                }
+                                content
+                            }
+                        };
+                        let (delivered, content) =
+                            tokio::join!(initialized.deliver_view(), response);
+                        initialized = delivered.unwrap();
+                        assert_eq!(
+                            content.as_deref(),
+                            if index == 2 { Some("雪") } else { None }
+                        );
+                    }
+                    assert_eq!(initialized.clipboard_transfer, 1);
+                    drop(initialized);
+                    assert!(local.next().await.is_none());
+                    return;
+                }
                 assert!(
                     initialized.next_event().await.is_err(),
                     "redraw-only consumer must not discard content"

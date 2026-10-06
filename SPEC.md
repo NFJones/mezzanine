@@ -4438,6 +4438,11 @@ bounded to 8 MiB with lazy 256 KiB chunks and independently bounded 1 MiB frames
 Receivers MUST expose content only after exact ordered UTF-8 commit; malformed
 records MUST clear partial content and poison the exchange without payload-bearing
 diagnostics. This framing alone does not activate IPC or host clipboard writes.
+The separate internal item-delivery request MUST require prior clipboard-session
+admission and the exact frontend handle. A finite wait MUST consume at most one
+typed item; clipboard delivery MUST use bounded transfer records and checked
+nonreused local occurrences. Delivery failure MUST retire ownership without
+effect replay. Ordinary supervision and host clipboard writes remain separate.
 The internal requested event exchange MUST bind the exact frontend/session and
 bounded wait, coalesce at most 64 redraw facts without returning raw payloads,
 and preserve unknown burst cutoffs. Idle waits MUST retain incremental reader
