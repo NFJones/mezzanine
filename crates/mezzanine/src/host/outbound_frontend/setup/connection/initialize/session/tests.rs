@@ -415,8 +415,10 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
         let clients = Box::pin(async {
             // This name collides with another lease's actual session ID. The
             // host must reject that ambiguous untyped target before revocation.
-            let (first, first_view) = supervised_create(&socket, &first_session_id).await;
-            let (second, second_view) = supervised_create(&socket, "supervised-second").await;
+            let (first, first_view) =
+                supervised_create(&socket, &first_session_id, policy.setup_timeout).await;
+            let (second, second_view) =
+                supervised_create(&socket, "supervised-second", policy.setup_timeout).await;
             assert_ne!(
                 first_view["session"]["session_id"],
                 second_view["session"]["session_id"]
@@ -845,17 +847,20 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
 
 /// Sends real listener hello/setup/view frames without direct admission calls.
 /// The response binds one fresh session to the exact local handle; no proof is
-/// supplied by or returned to this frontend.
+/// supplied by or returned to this frontend. Creation includes durable startup,
+/// so its finite budget follows the configured transport setup contract rather
+/// than imposing a separate two-second latency guarantee under workspace load.
 async fn supervised_create(
     path: &std::path::Path,
     name: &str,
+    setup_budget: Duration,
 ) -> (
     crate::host::outbound_frontend::client::OutboundSessionClient,
     serde_json::Value,
 ) {
     let client = crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
         path.parent().unwrap(),
-        Duration::from_secs(2),
+        setup_budget,
     )
     .await
     .unwrap();
@@ -866,7 +871,7 @@ async fn supervised_create(
             "event_stream_version":1,
             "client":{"name":name,"interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"},
                 "metadata":{"session_name":name}}
-    }), 80, 24, Duration::from_secs(2)).await.unwrap();
+    }), 80, 24, setup_budget).await.unwrap();
     let view = serde_json::json!({"session":client.summary(), "lines":lines});
     (client, view)
 }
