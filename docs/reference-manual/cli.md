@@ -628,6 +628,11 @@ deadline-bound; normal bidirectional completion preserves FIN tails, while failu
 or cancellation resets only the owned channel. Five-codec synthetic fixtures qualify
 half-close and rejection behavior, not real-cookie substitution, authenticated
 frontend IPC, a physical X server, or ordinary CLI X11 activation.
+A dedicated local-stream handshake now checks kernel UID and exact retained
+frontend/session/channel occurrence before flushing readiness and switching to
+raw bytes. Buffered premature bytes reject without silent loss. Socket-pair tests
+qualify this boundary only: listener publication, occurrence allocation, real-cookie
+substitution and ordinary broker forwarding remain separate integration work.
 Each internal initialized session now retains its own shared health tracker and
 samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling
