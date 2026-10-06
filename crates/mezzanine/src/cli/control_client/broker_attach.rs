@@ -11,6 +11,8 @@
 use super::*;
 use crate::host::outbound_frontend::client::{OutboundFrontendClient, OutboundSessionClient};
 
+mod invitation;
+
 /// Retained session plus the client machine's independently selected clipboard
 /// adapter and finite request budget. No remote credentials leave broker setup.
 pub(in crate::cli) struct BrokerAttachment {
@@ -95,6 +97,20 @@ async fn try_open_inner(
     child: Option<&mut Option<crate::cli::remote::broker::launch::LaunchedBroker>>,
     executable: Option<&Path>,
 ) -> Result<Option<BrokerAttachment>> {
+    if let super::super::ControlTargetSelection::IrohInvitation { path, save_as } = target {
+        return Box::pin(invitation::try_open(
+            path,
+            save_as.as_deref(),
+            env,
+            role,
+            routing,
+            columns,
+            rows,
+            term,
+            x11,
+        ))
+        .await;
+    }
     let super::super::ControlTargetSelection::IrohProfile(alias) = target else {
         return Ok(None);
     };

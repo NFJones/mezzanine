@@ -78,6 +78,7 @@ mod health;
 mod items;
 pub(crate) use items::FrontendItem;
 mod present;
+mod setup;
 mod step;
 
 impl OutboundFrontendClient {
@@ -91,27 +92,13 @@ impl OutboundFrontendClient {
         rows: u16,
         deadline: Duration,
     ) -> Result<(OutboundSessionClient, Vec<String>)> {
-        validate_budget(columns, rows, deadline)?;
-        if profile.is_empty() || profile.len() > 128 || profile.chars().any(char::is_control) {
-            return Err(MezError::invalid_args("outbound profile alias invalid"));
-        }
-        if initialize.get("authentication").is_some() {
-            return Err(MezError::forbidden(
-                "outbound client must not supply credentials",
-            ));
-        }
-        let params = initialize_params_from_json(&initialize.to_string())?;
+        let (body, params) =
+            setup::encode_setup(&self.handle, profile, &initialize, columns, rows, deadline)?;
         let role = match params.requested_role {
             RequestedRole::Primary => "primary",
             RequestedRole::Observer => "observer",
             _ => return Err(MezError::forbidden("outbound session role unsupported")),
         };
-        let body =
-            serde_json::json!({"handle":self.handle,"profile":profile,"initialize":initialize})
-                .to_string();
-        if body.len() > HELLO_LIMIT {
-            return Err(MezError::invalid_args("outbound setup exceeds limit"));
-        }
         tokio::time::timeout(deadline, async move {
             self.discovery.validate()?;
             self.stream

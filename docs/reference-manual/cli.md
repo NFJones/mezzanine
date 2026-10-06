@@ -564,8 +564,11 @@ Ordinary host-invitation `remote pair` now reuses an authenticated active broker
 checking the current outbound veto before discovery. Only initial absent/refused
 discovery retains direct pairing; connected discovery, protocol or operation errors
 never acquire another endpoint or replay redemption. The closed client reply must
-match the exact handle and expected profile alias. Legacy pairing and invitation-based
-attachment remain separate; this does not qualify broker X11 forwarding.
+match the exact handle and expected profile alias. Host-invitation `attach`/`new`
+also reuse an active broker: private pairing completes once, then fresh authenticated
+IPC carries the original attachment intent/key. No post-pair failure permits direct
+fallback or replay. Initial absent/refused discovery retains direct invitation setup.
+Legacy pairing, automatic invitation startup and broker X11 remain separate.
 Paired-profile `kill --force TARGET` reuses an authenticated active broker too,
 preserving the exact target and invocation key through a fixed host kill request.
 The host still enforces destructive authority and visibility. Only correlated
@@ -585,7 +588,7 @@ exact child through setup and foreground exit. Startup failure does not switch t
 direct setup or replay creation. Exited children are observed/reaped; live children
 are not killed on frontend exit, and reaping remains best-effort after disposal.
 Unqualified routes and absent-broker X11 retain direct eligibility before startup.
-Invitation pairing and broker X11 forwarding remain unfinished; X11 with an active broker rejects
+Broker X11 forwarding remains unfinished; X11 with an active broker rejects
 before session setup rather than switching to a competing endpoint.
 Errors after writing never automatically replay initialization. Session
 creation/attachment uses a separate internal transition retaining the original

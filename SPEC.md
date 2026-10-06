@@ -4288,7 +4288,11 @@ MUST reuse an authenticated active broker after checking the current outbound ve
 Only initial absent/refused discovery MAY retain direct pairing; connected discovery,
 protocol or operation failure MUST NOT acquire a competing endpoint or replay redemption.
 The client MUST validate the exact handle, publication boolean and expected alias
-before reporting success. Invitation-based attachment and broker X11 remain separate.
+before reporting success. Host-invitation attachment through an active broker MUST
+pair once, then use fresh authenticated local IPC for the original routing intent
+and invocation key. Failures after pairing submission MUST NOT restore direct
+eligibility or replay redemption/creation. Initial absence retains the existing
+direct invitation path; broker X11 and automatic invitation startup remain separate.
 Paired-profile force-kill MUST reuse an authenticated active broker when available
 under the same discovery boundary. The closed mutation MUST preserve the exact
 target and invocation key, issue only host/session/kill with force=true, and
@@ -4308,7 +4312,7 @@ child evidence. Startup failure MUST NOT authorize direct fallback or replacemen
 Frontend exit MUST NOT kill the potentially shared child; exited children MAY be
 reaped by exact handle, while live-child disposal retains the documented best-effort
 reaping limitation. Unqualified routes and absent-broker X11 retain direct eligibility
-before startup. Invitation pairing and broker X11 forwarding remain separate.
+before startup. Broker X11 forwarding remains separate.
 The separate internal session initialization MUST retain the original routing
 intent and invocation key, validate correlated role/client/session/active-lease
 evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection
