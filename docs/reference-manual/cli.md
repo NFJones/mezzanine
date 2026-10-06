@@ -659,6 +659,13 @@ bounded primary input and explicit presentation restoration. It preserves
 operation identity without replay; abandoning its entire future still requires
 the caller's terminal guard. This polling path is not ordinary CLI activation or
 qualification of pushed events, production render cadence, clipboard or X11.
+A separate internal item-aware foreground now accepts an explicit client-local
+clipboard adapter for negotiated primary sessions. Complete validated effects
+enter an owned latest-value worker; partial transfers never reach the adapter.
+Input-first waits settle the original item exchange before reuse, while
+event-first waits preserve unread input. Cancellation retires queued async work
+before restoring presentation; already-started backend work may continue.
+Queue acceptance is not delivery confirmation or ordinary CLI qualification.
 With version-one events negotiated, the internal foreground settles its exact
 event poll before reusing the session when input arrives first. Event-first waits
 preserve unread input, and idle replies do not redraw unconditionally. This still

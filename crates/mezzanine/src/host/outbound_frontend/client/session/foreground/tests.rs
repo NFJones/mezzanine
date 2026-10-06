@@ -5,6 +5,8 @@
 
 use super::*;
 
+mod clipboard;
+
 /// Entry may emit a mode prefix before stalling. This fake records that entry
 /// began, then remains pending until the caller cancels or its budget expires.
 struct StalledEntry {

@@ -34,10 +34,34 @@ pub(super) async fn negotiated<I: AsyncAttachedTerminalIo>(
     }
 }
 
+/// Waits for a complete item exchange without cancelling and reusing its stream
+/// when local input arrives first. Effect application belongs to the foreground
+/// after validation, not this race; event-first leaves input unread.
+pub(super) async fn items<I: AsyncAttachedTerminalIo>(
+    session: OutboundSessionClient,
+    terminal: &mut I,
+    budget: Duration,
+) -> Result<(OutboundSessionClient, Option<Vec<u8>>, FrontendItem)> {
+    let item = session.poll_items(25, budget);
+    tokio::pin!(item);
+    tokio::select! {
+        biased;
+        input = terminal.read_input(512) => {
+            let input = input?;
+            let (session, item) = item.await?;
+            Ok((session, Some(input), item))
+        }
+        result = &mut item => {
+            let (session, item) = result?;
+            Ok((session, None, item))
+        }
+    }
+}
+
 /// Suppresses only identified ordinary redraws represented by exact committed
 /// output. Received metadata, unsettled receipts or foreign geometry cannot
 /// establish coverage; immediate/invalidation actions remain independently live.
-fn settled_action(
+pub(super) fn settled_action(
     session: &OutboundSessionClient,
     action: AttachRenderAction,
     event_id: Option<u64>,

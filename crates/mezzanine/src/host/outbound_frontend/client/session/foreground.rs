@@ -6,12 +6,14 @@
 //! every explicit return. The caller's concrete terminal guard still owns raw
 //! mode and emergency restoration if this entire future is abandoned. This
 //! request-driven fixture path uses negotiated version-one redraw facts when
-//! available; it does not implement pushed renders, X11, clipboard, local
-//! health overlays or the complete production attach scheduling contract.
+//! available. Explicit clipboard sessions use item-aware consumption and an
+//! owned best-effort worker under caller-supplied local policy. Pushed renders,
+//! X11 and the complete production attach scheduling contract remain separate.
 
 use super::*;
 use crate::host::async_runtime::AsyncAttachedTerminalIo;
 use crate::host::terminal::cadence::{AttachAnimationRefresh, AttachOrdinaryRenderRate};
+use crate::host::terminal::clipboard_worker::ClipboardWorker;
 use crate::host::terminal::wire_events::AttachRenderAction;
 use mez_mux::layout::Size;
 
@@ -44,6 +46,58 @@ impl OutboundSessionClient {
                 "outbound clipboard session requires item-aware foreground",
             ));
         }
+        Box::pin(self.run_foreground(terminal, size, request_budget, cancellation, None)).await
+    }
+
+    /// Runs an explicitly negotiated primary clipboard session under a caller's
+    /// local clipboard policy. Only complete validated effects enter the owned
+    /// latest-value worker; acceptance is not backend delivery confirmation.
+    /// Cancellation retains the same terminal restoration and no-replay boundary.
+    pub(crate) async fn run_clipboard_foreground<I, C>(
+        self,
+        terminal: &mut I,
+        size: Size,
+        request_budget: Duration,
+        cancellation: C,
+        clipboard: crate::host::terminal::HostClipboard,
+    ) -> Result<()>
+    where
+        I: AsyncAttachedTerminalIo,
+        C: std::future::Future<Output = ()>,
+    {
+        validate_budget(size.columns, size.rows, request_budget)?;
+        if self.clipboard_receiver.is_none() || self.summary.granted_role != "primary" {
+            return Err(MezError::forbidden(
+                "outbound clipboard foreground was not negotiated",
+            ));
+        }
+        Box::pin(self.run_foreground(
+            terminal,
+            size,
+            request_budget,
+            cancellation,
+            Some(clipboard),
+        ))
+        .await
+    }
+
+    /// Shares presentation lifecycle without broadening redraw-only admission.
+    /// The worker guard survives cancellation of the owned session future; its
+    /// async queue is retired before restoration. Started backend work may outlive
+    /// that guard and is never claimed cancelled or automatically replayed.
+    async fn run_foreground<I, C>(
+        self,
+        terminal: &mut I,
+        size: Size,
+        request_budget: Duration,
+        cancellation: C,
+        clipboard: Option<crate::host::terminal::HostClipboard>,
+    ) -> Result<()>
+    where
+        I: AsyncAttachedTerminalIo,
+        C: std::future::Future<Output = ()>,
+    {
+        let clipboard_worker = clipboard.map(ClipboardWorker::new);
         tokio::pin!(cancellation);
         let result = {
             // This future owns the session even during entry. Cancellation or
@@ -54,7 +108,14 @@ impl OutboundSessionClient {
                     .map_err(|_| {
                         MezError::invalid_state("outbound presentation entry timed out")
                     })??;
-                run_active(self, terminal, size, request_budget).await
+                Box::pin(run_active(
+                    self,
+                    terminal,
+                    size,
+                    request_budget,
+                    clipboard_worker.as_ref(),
+                ))
+                .await
             };
             tokio::select! {
                 biased;
@@ -62,6 +123,9 @@ impl OutboundSessionClient {
                 result = lifecycle => result,
             }
         };
+        if let Some(worker) = clipboard_worker {
+            worker.shutdown().await;
+        }
         let restored = tokio::time::timeout(request_budget, terminal.restore_presentation())
             .await
             .map_err(|_| MezError::invalid_state("outbound presentation restoration timed out"))
@@ -84,6 +148,7 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
     terminal: &mut I,
     mut size: Size,
     budget: Duration,
+    clipboard_worker: Option<&ClipboardWorker>,
 ) -> Result<()> {
     let nonce = rand::random::<u128>();
     let mut sequence = 0_u64;
@@ -102,7 +167,23 @@ async fn run_active<I: AsyncAttachedTerminalIo>(
                 .painted_health
                 .map(|_| tokio::time::Instant::now() + Duration::from_secs(1));
         }
-        let (input, action) = if session.events_negotiated {
+        let (input, action) = if session.clipboard_receiver.is_some() {
+            let (updated, input, item) = wait::items(session, terminal, budget).await?;
+            session = updated;
+            let action = match item {
+                FrontendItem::Redraw(action, id) => wait::settled_action(&session, action, id),
+                FrontendItem::Clipboard(content) => {
+                    let sender = clipboard_worker
+                        .and_then(ClipboardWorker::sender)
+                        .ok_or_else(|| {
+                            MezError::invalid_state("outbound clipboard worker unavailable")
+                        })?;
+                    sender.send_replace(Some(content));
+                    AttachRenderAction::None
+                }
+            };
+            (input, action)
+        } else if session.events_negotiated {
             let (updated, input, action) = wait::negotiated(session, terminal, budget).await?;
             session = updated;
             (input, action)

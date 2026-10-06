@@ -4392,6 +4392,13 @@ EOF, cancellation or error, attempt presentation restoration on explicit return,
 and retain distinct operation identities without replay. Whole-future abandonment
 still requires the caller's terminal guard. Its polling cadence does not certify
 production event-driven attachment, render scheduling, clipboard or X11 support.
+The separate internal clipboard foreground MUST require negotiated primary
+item ownership and an explicit client-local clipboard adapter. Only complete
+validated effects MAY enter its owned latest-value worker. Input-first waits
+MUST settle the exact item reply before reusing the session; event-first waits
+MUST preserve unread input. Cancellation MUST retire queued async clipboard work
+before terminal restoration. Already-started backend work remains best-effort,
+and queue acceptance MUST NOT be described as clipboard delivery confirmation.
 When version-one events are negotiated, internal foreground waits MUST settle
 the exact event reply before reusing the consumed session, even if local input
 arrives first. Event-first waits MUST preserve unread terminal input. Idle replies
