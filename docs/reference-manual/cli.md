@@ -622,6 +622,12 @@ and inbound stream credit is granted only after route settlement. Timeout or
 cancellation releases the slot and resets only that stream; retained endpoint
 ownership prevents premature identity reuse. This is not frontend forwarding or
 local X credential provisioning, and ordinary X11 activation remains gated.
+A consumed internal channel relay now validates the offered fake setup credential
+and uses direction-local codecs for a caller-owned byte stream. Setup delivery is
+deadline-bound; normal bidirectional completion preserves FIN tails, while failure
+or cancellation resets only the owned channel. Five-codec synthetic fixtures qualify
+half-close and rejection behavior, not real-cookie substitution, authenticated
+frontend IPC, a physical X server, or ordinary CLI X11 activation.
 Each internal initialized session now retains its own shared health tracker and
 samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling

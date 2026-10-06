@@ -4351,6 +4351,13 @@ exposing subsequent bytes. Channels MUST retain endpoint lifetime; parent-sessio
 disposal MUST close their exact connection. Rejection, timeout and cancellation
 MUST release capacity and reset only the affected stream, not a sibling connection.
 This admission does not itself forward frontend bytes or provision local X credentials.
+An internal consumed channel relay MUST validate the negotiated fake setup cookie
+before exposing setup bytes and retain fresh direction-local compression state.
+Setup decoding and initial delivery MUST share a finite deadline. Normal completion
+of both directions MUST preserve the finished transport tail rather than reset it;
+errors and cancellation MUST retain stream-reset cleanup. The caller remains
+responsible for authenticating its frontend byte stream and client-local real-cookie
+substitution. This relay alone MUST NOT activate ordinary X11 forwarding.
 Later event versions MUST reject before initialization. Reader errors or
 EOF require retirement of that session owner, not reconnect or creation replay;
 retiring one session MUST NOT close a sibling connection.

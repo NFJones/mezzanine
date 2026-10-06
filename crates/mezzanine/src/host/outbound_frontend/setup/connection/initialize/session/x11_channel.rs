@@ -3,10 +3,14 @@
 //! Validates the fixed route preface before exposing a channel. Pending acceptance
 //! and active channels share a nonwaiting finite permit pool. Each channel retains
 //! endpoint lifetime but no independent connection lease: parent-session disposal
-//! closes the exact connection, including its channels. Drop resets only this
-//! stream pair, never a sibling connection. No local X target, real credential,
-//! clipboard/input authority or frontend IPC is introduced here. Forwarding and
-//! decoder ownership remain subsequent caller responsibilities.
+//! closes the exact connection, including its channels. Incomplete Drop resets
+//! only this stream pair; graceful completion preserves FIN tails. Neither closes
+//! a sibling connection. No local X target, real credential,
+//! clipboard/input authority or frontend IPC is introduced here. A consumed relay
+//! validates the offered fake setup cookie and adapts direction-local codecs to a
+//! caller-owned byte stream. The caller must independently bind that stream to the
+//! admitted frontend and perform real-cookie substitution locally; this component
+//! never selects a local X destination or owns its real credential.
 
 use super::*;
 use crate::runtime::x11::{X11ForwardingResult, X11StreamFailureStage, X11StreamPreface};
@@ -21,7 +25,12 @@ pub(super) struct AuthenticatedX11Channel {
     recv: iroh::endpoint::RecvStream,
     _endpoint: OutboundEndpointOwner,
     _slot: OwnedSemaphorePermit,
+    /// Armed until both relay directions finish normally; FIN alone is not
+    /// permission to abandon buffered bytes with a transport reset.
+    graceful: bool,
 }
+
+mod relay;
 
 impl InitializedSessionFrontend {
     /// Accepts one exact-route channel under the configured total setup deadline.
@@ -80,6 +89,7 @@ async fn accept_channel(
             recv,
             _endpoint: endpoint,
             _slot: slot,
+            graceful: false,
         };
         let mut bytes = Zeroizing::new([0_u8; crate::runtime::x11::X11_STREAM_PREFACE_BYTES]);
         channel
@@ -101,6 +111,9 @@ async fn accept_channel(
 
 impl Drop for AuthenticatedX11Channel {
     fn drop(&mut self) {
+        if self.graceful {
+            return;
+        }
         let code = iroh::endpoint::VarInt::from_u32(
             X11StreamFailureStage::ClientRouteAuthentication.application_code(),
         );

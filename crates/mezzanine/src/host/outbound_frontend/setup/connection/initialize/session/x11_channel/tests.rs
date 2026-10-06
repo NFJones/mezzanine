@@ -9,7 +9,7 @@ use crate::host::outbound_endpoint::OutboundConnectionLease;
 use crate::runtime::RuntimeIrohTransportPolicy;
 
 /// Owns one endpoint and two independently connected loopback peers for isolation.
-async fn fixture() -> (
+pub(super) async fn fixture() -> (
     std::path::PathBuf,
     OutboundEndpointOwner,
     iroh::Endpoint,
@@ -52,7 +52,7 @@ async fn fixture() -> (
 }
 
 /// Supplies exact synthetic route evidence without any real local credential.
-fn route() -> X11ForwardingResult {
+pub(super) fn route() -> X11ForwardingResult {
     X11ForwardingResult {
         version: crate::runtime::x11::X11_FORWARDING_VERSION,
         mode: crate::runtime::x11::X11ForwardingMode::Untrusted,
