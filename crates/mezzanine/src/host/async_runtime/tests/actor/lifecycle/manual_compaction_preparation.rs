@@ -80,6 +80,14 @@ async fn qualify(cancel: bool, request_phase: bool) {
     let started = StdArc::new(tokio::sync::Notify::new());
     let release = StdArc::new(tokio::sync::Notify::new());
     let completed = StdArc::new(tokio::sync::Notify::new());
+    let history_started = StdArc::new(tokio::sync::Notify::new());
+    let history_release = StdArc::new(tokio::sync::Notify::new());
+    if cancel {
+        service.set_prompt_history_preparation_probe_for_tests(
+            history_started.clone(),
+            history_release.clone(),
+        );
+    }
     if request_phase {
         service.set_manual_compaction_request_probe_for_tests(
             started.clone(),
@@ -163,11 +171,54 @@ async fn qualify(cancel: bool, request_phase: bool) {
             .await
             .unwrap();
         if cancel {
+            let steering = handle
+                .execute_agent_shell_command(
+                    primary.clone(),
+                    "continue after cancelled preparation".into(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                steering.contains("\"command\":\"compacting\""),
+                "{steering}"
+            );
             let response = handle
                 .execute_agent_shell_command(primary.clone(), "/stop".into())
                 .await
                 .unwrap();
             assert!(response.contains("compaction_cancelled=true"));
+            tokio::time::timeout(Duration::from_secs(5), history_started.notified())
+                .await
+                .unwrap();
+            if request_phase {
+                let refused = handle
+                    .execute_agent_shell_command(primary.clone(), "/compact".into())
+                    .await
+                    .unwrap();
+                assert!(
+                    refused.contains("accepted command/history preparation is active"),
+                    "{refused}"
+                );
+            } else {
+                let rejected = handle
+                    .apply_attached_terminal_step_plan(
+                        primary.clone(),
+                        AttachedTerminalClientStepPlan {
+                            actions: vec![TerminalClientLoopAction::ForwardToPane(
+                                b"/compact\r".to_vec(),
+                            )],
+                            output_lines: vec![],
+                            output_line_style_spans: vec![],
+                            input_hangup: false,
+                            output_hangup: false,
+                            error_roles: vec![],
+                        },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(rejected.agent_prompt_inputs_applied, 1);
+            }
+            history_release.notify_one();
         }
         release.notify_one();
         tokio::time::timeout(Duration::from_secs(5), completed.notified())
@@ -191,6 +242,23 @@ async fn qualify(cancel: bool, request_phase: bool) {
             .await
             .unwrap();
         } else {
+            let pending = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let pending = handle.pending_agent_provider_tasks().await.unwrap();
+                    if !pending.is_empty() {
+                        break pending;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                pending.len(),
+                1,
+                "accepted steering must resume once, not duplicate source or provider work"
+            );
+            assert_eq!(pending[0].pane_id, "%1");
             assert!(
                 !handle
                     .drain_agent_provider_dispatch_side_effects(16)
@@ -225,6 +293,12 @@ async fn qualify(cancel: bool, request_phase: bool) {
     if cancel {
         assert!(!exit.service.agent_is_compacting("%1"));
         assert!(exit.service.pending_agent_compaction_task_ids().is_empty());
+        assert_eq!(exit.service.agent_turn_ledger().turns().len(), 1);
+        assert_eq!(
+            exit.service.agent_compaction_epoch("%1"),
+            1,
+            "refused compact must not advance epoch or discard resumed history"
+        );
     }
     assert!(store.compaction_epoch("prepare-compact").unwrap().is_none());
     exit.service.terminate_all_pane_processes().unwrap();

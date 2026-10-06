@@ -566,6 +566,11 @@ impl RuntimeSessionService {
                 "compact command does not accept arguments",
             ));
         }
+        if self.agent.agent_command_is_active(pane_id) {
+            return Err(MezError::conflict(
+                "cannot compact while accepted command/history preparation is active",
+            ));
+        }
         if self.manual_compaction_preparation_uses_adapter() {
             return self.admit_manual_compaction_preparation(pane_id);
         }

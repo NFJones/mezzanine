@@ -10534,8 +10534,12 @@ The baseline command capabilities are:
   no-op only when there are no closed transcript execution groups to compact or
   no durable transcript entries are available.
   Actor-owned manual admission with logical history MUST expose `state=preparing`
-  and current compacting presentation before durable source decoding. Captured
-  source/history reads MUST run outside the actor under finite preparation capacity;
+  and current compacting presentation before durable source decoding.
+  Accepted command/history ownership MUST block a new manual compaction before
+  epoch allocation; refusal MUST preserve that original input and its callback,
+  including steering history resumed after Stop. Compaction MUST NOT silently
+  invalidate an accepted prompt merely because no ordinary turn exists yet.
+  Captured source/history reads MUST run outside the actor under finite preparation capacity;
   logical cancellation MUST NOT free capacity still owned by actual blocking I/O.
   Source adoption MUST validate the exact operation generation, conversation,
   configuration, installed store and pane incarnation before queuing the existing

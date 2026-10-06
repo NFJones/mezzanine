@@ -77,6 +77,50 @@ fn runtime_manual_compaction_preparation_rechecks_bookkeeping_at_adoption() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Unchecked chronology arriving after context capture must still fence the
+/// final rendered request. This places a genuine retained candidate between
+/// the two worker callbacks and verifies no model task or epoch is adopted.
+#[test]
+fn runtime_manual_compaction_request_rechecks_late_bookkeeping() {
+    let (mut service, store, conversation) = stopped_candidate_fixture("late-request");
+    let work = service.claim_bookkeeping_candidates().pop().unwrap();
+    let candidate = service
+        .persistence
+        .take_bookkeeping_candidate(work.candidate.generation)
+        .unwrap();
+    service.replace_config_layers(vec![ConfigLayer {name:"late-request-bookkeeping".into(),path:None,format:ConfigFormat::Toml,scope:ConfigScope::Primary,trusted:true,
+        text:"[agents]\ndefault_provider=\"openai\"\ndefault_model_profile=\"default\"\n[providers.openai]\nkind=\"openai\"\nmodels=[\"fixture-model\"]\ndefault_model=\"fixture-model\"\n[model_profiles.default]\nprovider=\"openai\"\nmodel=\"fixture-model\"\ncontext_window_tokens=128000\n".into()}]).unwrap();
+    seed_compaction_prefix(&mut service, &store, &conversation);
+    service.use_manual_compaction_preparation_adapter();
+    let primary = service
+        .attach_primary("late-request", true, Size::new(80, 24).unwrap(), 121)
+        .unwrap();
+    assert!(
+        service
+            .execute_agent_shell_command(&primary, "/compact")
+            .unwrap()
+            .contains("state=preparing")
+    );
+    let source = service.take_manual_compaction_preparations().pop().unwrap();
+    let rows = source.execute_source();
+    assert!(
+        service
+            .complete_manual_compaction_preparation(&source, rows)
+            .unwrap()
+    );
+    let request = service.take_manual_compaction_requests().pop().unwrap();
+    let rendered = request.execute_request();
+    service.persistence.queue_bookkeeping_candidate(candidate);
+    let error = service
+        .complete_manual_compaction_request(&request, rendered)
+        .unwrap_err();
+    assert!(error.message().contains("bookkeeping must settle"));
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.pending_agent_compaction_task_ids().is_empty());
+    assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Adds an independently eligible durable prefix while preserving the original
 /// conversation whose terminal bookkeeping is being qualified by these tests.
 fn seed_compaction_prefix(

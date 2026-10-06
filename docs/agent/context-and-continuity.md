@@ -68,6 +68,10 @@ Live context capture and source eligibility remain actor-owned; workers cannot
 rediscover or expand authority. A cancelled blocking source read or request worker
 can retain one of the finite slots until its actual work finishes.
 
+If an earlier accepted prompt or command is still preparing its history, a new
+`/compact` is refused before changing the conversation epoch. The earlier input
+continues normally; this also protects guidance resumed after cancelling compaction.
+
 If compaction fails, the error does not mean the source history was discarded.
 Mez does not publish a partial replacement as a completed durable compaction.
 Missing or corrupt required history is reported rather than silently omitted.
