@@ -134,7 +134,7 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
             let (bad, peer) = tokio::net::UnixStream::pair().unwrap();
             let mut peer = Framed::new(peer, ProtocolFrameCodec::new(HELLO_LIMIT).unwrap());
             peer.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
-            "protocol":"mez-outbound-x11/1","handle":handle,"session":summary,"occurrence":2,
+            "protocol":"mez-outbound-x11/2","handle":handle,"session":summary,"occurrence":2,
         }).to_string())).await.unwrap();
             assert!(Box::pin(initialized.relay_x11_frontend(bad)).await.is_err());
             assert_eq!(
@@ -160,16 +160,22 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
                 crate::runtime::x11::X11Cookie::new([52; 16]),
             );
             let mut peer = Framed::new(peer, ProtocolFrameCodec::new(HELLO_LIMIT).unwrap());
-            peer.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
-                "protocol":"mez-outbound-x11/1","handle":handle,"session":summary,"occurrence":2,
-            }).to_string())).await.unwrap();
+            peer.send(ProtocolFrame::new(
+                CONTENT_TYPE,
+                serde_json::json!({
+                    "protocol":"mez-outbound-x11/2","handle":handle,"session":summary,
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
             setup_buffered.await.unwrap();
             let frontend = async {
                 let ready = peer.next().await.unwrap().unwrap();
                 let ready: serde_json::Value = serde_json::from_str(&ready.body).unwrap();
                 assert_eq!(
                     ready,
-                    serde_json::json!({"protocol":"mez-outbound-x11/1","handle":handle,
+                    serde_json::json!({"protocol":"mez-outbound-x11/2","handle":handle,
                 "session":summary,"occurrence":2,"ready":true})
                 );
                 let parts = peer.into_parts();

@@ -1,8 +1,9 @@
 //! Exact local-owner admission for a dedicated X11 byte stream.
 //!
 //! Kernel peer UID is authenticated before decoding a bounded closed handshake.
-//! The caller supplies the already validated frontend/session and nonreused
-//! channel occurrence; these labels never grant remote authority themselves.
+//! The owner supplies the validated frontend/session and a nonreused channel
+//! occurrence. Version-two requests cannot choose an occurrence; the ready reply
+//! reports the owner-assigned value. These labels grant no remote authority.
 //! Control framing ends only after an exact ready reply has flushed. Buffered
 //! read-ahead bytes reject; bytes still in the kernel remain intact for raw relay.
 //! This helper
@@ -20,12 +21,12 @@ struct Request {
     protocol: String,
     handle: FrontendHandle,
     session: SessionSummary,
-    occurrence: u64,
 }
 
 /// Authenticates an already connected dedicated stream and confirms its binding.
 /// Callers bound accepted streams and allocate nonreused occurrences before this
-/// operation. Timeout/cancellation consumes the stream without reconnect/replay.
+/// operation; frontend requests never select that value. Timeout/cancellation
+/// consumes the stream without reconnect/replay.
 /// Success permits raw relay only on this stream, never the control connection.
 pub(super) async fn authenticate_frontend(
     stream: tokio::net::UnixStream,
@@ -54,13 +55,13 @@ pub(super) async fn authenticate_frontend(
         }
         let request: Request = serde_json::from_str(&frame.body)
             .map_err(|_| MezError::invalid_args("outbound X11 handoff invalid"))?;
-        validate_request(&request, handle, session, occurrence)?;
+        validate_request(&request, handle, session)?;
         if !framed.read_buffer().is_empty() {
             return Err(MezError::invalid_args(
                 "outbound X11 handoff contains premature bytes",
             ));
         }
-        let body = serde_json::json!({"protocol":"mez-outbound-x11/1","handle":handle,
+        let body = serde_json::json!({"protocol":"mez-outbound-x11/2","handle":handle,
             "session":session,"occurrence":occurrence,"ready":true})
         .to_string();
         if body.len() > HELLO_LIMIT {
@@ -82,12 +83,10 @@ fn validate_request(
     request: &Request,
     handle: &FrontendHandle,
     session: &SessionSummary,
-    occurrence: u64,
 ) -> Result<()> {
-    if request.protocol != "mez-outbound-x11/1"
+    if request.protocol != "mez-outbound-x11/2"
         || request.handle != *handle
         || request.session != *session
-        || request.occurrence != occurrence
     {
         return Err(MezError::conflict("outbound X11 handoff ownership changed"));
     }

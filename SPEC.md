@@ -4359,8 +4359,10 @@ errors and cancellation MUST retain stream-reset cleanup. The caller remains
 responsible for authenticating its frontend byte stream and client-local real-cookie
 substitution. This relay alone MUST NOT activate ordinary X11 forwarding.
 A dedicated local X11 handoff MUST authenticate kernel peer UID before decoding
-its bounded closed handshake, and match the retained frontend, session and positive
-nonreused channel occurrence. Readiness MUST flush before transitioning that stream
+its bounded closed handshake, and match the retained frontend and session.
+Version-two requests MUST NOT select channel occurrences. The broker MUST return
+its positive nonreused occurrence in the ready reply, without route proof.
+Readiness MUST flush before transitioning that stream
 to raw bytes. Buffered premature bytes MUST reject rather than be discarded.
 The handoff alone MUST NOT publish a listener, expose route proof or activate
 ordinary forwarding; its caller owns finite admission and occurrence allocation.

@@ -25,24 +25,30 @@ fn identity() -> (FrontendHandle, SessionSummary) {
 async fn outbound_x11_handoff_preserves_exact_owner_and_raw_transition() {
     let (handle, session) = identity();
     let (server, client) = tokio::net::UnixStream::pair().unwrap();
-    let peer =
-        async {
-            let mut framed = Framed::new(client, ProtocolFrameCodec::new(HELLO_LIMIT).unwrap());
-            framed.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
-            "protocol":"mez-outbound-x11/1","handle":handle,"session":session,"occurrence":7
-        }).to_string())).await.unwrap();
-            let reply = framed.next().await.unwrap().unwrap();
-            let reply: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
-            assert_eq!(
-                reply,
-                serde_json::json!({"protocol":"mez-outbound-x11/1","handle":handle,
+    let peer = async {
+        let mut framed = Framed::new(client, ProtocolFrameCodec::new(HELLO_LIMIT).unwrap());
+        framed
+            .send(ProtocolFrame::new(
+                CONTENT_TYPE,
+                serde_json::json!({
+                    "protocol":"mez-outbound-x11/2","handle":handle,"session":session
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let reply = framed.next().await.unwrap().unwrap();
+        let reply: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
+        assert_eq!(
+            reply,
+            serde_json::json!({"protocol":"mez-outbound-x11/2","handle":handle,
             "session":session,"occurrence":7,"ready":true})
-            );
-            assert!(framed.read_buffer().is_empty());
-            let mut raw = framed.into_inner();
-            raw.write_all(b"raw-tail").await.unwrap();
-            raw.shutdown().await.unwrap();
-        };
+        );
+        assert!(framed.read_buffer().is_empty());
+        let mut raw = framed.into_inner();
+        raw.write_all(b"raw-tail").await.unwrap();
+        raw.shutdown().await.unwrap();
+    };
     let admitted = async {
         let mut raw = authenticate_frontend(
             server,
@@ -83,13 +89,13 @@ async fn outbound_x11_handoff_rejects_foreign_and_premature_streams() {
     ] {
         let (handle, session) = identity();
         let (server, mut client) = tokio::net::UnixStream::pair().unwrap();
-        let mut body = serde_json::json!({"protocol":"mez-outbound-x11/1","handle":handle,
-            "session":session,"occurrence":7});
+        let mut body = serde_json::json!({"protocol":"mez-outbound-x11/2","handle":handle,
+            "session":session});
         match case {
             "protocol" => body["protocol"] = serde_json::json!("wrong"),
             "handle" => body["handle"]["generation"] = serde_json::json!(2),
             "session" => body["session"]["client_id"] = serde_json::json!("c2"),
-            "occurrence" => body["occurrence"] = serde_json::json!(8),
+            "occurrence" => body["occurrence"] = serde_json::json!(7),
             "extra" => body["token"] = serde_json::json!("private-proof"),
             _ => {}
         }

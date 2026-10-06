@@ -629,8 +629,9 @@ or cancellation resets only the owned channel. Five-codec synthetic fixtures qua
 half-close and rejection behavior, not real-cookie substitution, authenticated
 frontend IPC, a physical X server, or ordinary CLI X11 activation.
 A dedicated local-stream handshake now checks kernel UID and exact retained
-frontend/session/channel occurrence before flushing readiness and switching to
-raw bytes. Buffered premature bytes reject without silent loss. Socket-pair tests
+frontend/session ownership. Version-two requests do not guess or select channel
+occurrences; readiness reports the broker-assigned positive occurrence before
+switching to raw bytes. Buffered premature bytes reject without silent loss. Socket-pair tests
 qualify this boundary only: listener publication, occurrence allocation, real-cookie
 substitution and ordinary broker forwarding remain separate integration work.
 An internal session-owned composition now supplies the retained identities, fake

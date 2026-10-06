@@ -222,14 +222,21 @@ async fn qualify_supervision(case: &str) {
                 );
                 silent.shutdown().await.unwrap();
             }
-            ready.send(ProtocolFrame::new(CONTENT_TYPE, serde_json::json!({
-                "protocol":"mez-outbound-x11/1","handle":handle,"session":summary,"occurrence":baseline + 2
-            }).to_string())).await.unwrap();
+            ready
+                .send(ProtocolFrame::new(
+                    CONTENT_TYPE,
+                    serde_json::json!({
+                        "protocol":"mez-outbound-x11/2","handle":handle,"session":summary
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
             let reply = ready.next().await.unwrap().unwrap();
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&reply.body).unwrap()["ready"],
-                true
-            );
+            let reply: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
+            assert_eq!(reply["ready"], true);
+            assert_eq!(reply["protocol"], "mez-outbound-x11/2");
+            assert_eq!(reply["occurrence"], baseline + 2);
             assert_eq!(
                 slots.available_permits(),
                 if case == "smaller" { 1 } else { 0 }
