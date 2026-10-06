@@ -4374,6 +4374,10 @@ setup delivery MUST use one setup deadline without restarting it. Failure MUST
 consume a returned reservation's occurrence and dedicated stream, not replay bytes.
 Capacity or exhaustion rejection MUST NOT allocate an occurrence. This composition
 alone MUST NOT activate listeners or ordinary CLI forwarding.
+Session-scoped reservation sources MUST share one checked occurrence allocator
+and finite capacity pool, even while control dispatch owns the session. Sources
+MUST NOT create independent connection leases; parent retirement remains
+authoritative. Concurrent reservations MUST not duplicate or wrap occurrences.
 Dedicated X11 listener publication MUST retain the protected root and endpoint,
 use owner-only permissions, and preserve existing pathname entries. Cleanup MUST
 check the published socket identity through the held parent and preserve replacements.

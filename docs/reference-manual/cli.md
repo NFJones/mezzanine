@@ -643,6 +643,11 @@ rejected-occurrence advancement and dedicated ping/pong/FIN delivery, preserving
 read-ahead setup bytes after readiness, capacity rejection without occurrence loss,
 and pending reservation disposal after parent retirement. This composition publishes
 no listener; ordinary X11 activation remains unfinished.
+Session-scoped reservation sources now share the same checked atomic allocator
+and capacity pool while control dispatch owns the session. Concurrent allocation
+tests verify distinct occurrences, saturation without watermark advancement,
+exhaustion without permit leakage, and rejection after parent retirement. Sources
+do not acquire independent connection leases or enable ordinary forwarding.
 A separate attaching-client helper now validates bounded fake-cookie setup and
 substitutes the real cookie only on its frozen local X connection. Setup read,
 connect and initial delivery share a deadline; subsequent bytes and half-close

@@ -137,7 +137,12 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
             "protocol":"mez-outbound-x11/1","handle":handle,"session":summary,"occurrence":2,
         }).to_string())).await.unwrap();
             assert!(Box::pin(initialized.relay_x11_frontend(bad)).await.is_err());
-            assert_eq!(initialized.x11_occurrence, 1);
+            assert_eq!(
+                initialized
+                    .x11_occurrence
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
             assert!(peer.next().await.is_none());
             let (dedicated, peer) = tokio::net::UnixStream::pair().unwrap();
             // Provision fixture-only local resources before the production
@@ -198,7 +203,12 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
                 relayed.unwrap();
             };
             let reservation = initialized.reserve_x11_frontend().unwrap();
-            assert_eq!(initialized.x11_occurrence, 2);
+            assert_eq!(
+                initialized
+                    .x11_occurrence
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                2
+            );
             assert!(
                 initialized.transport_health().unwrap().0,
                 "reservation must release the mutable control-state borrow"
@@ -206,24 +216,44 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
             let (result, ()) =
                 tokio::join!(Box::pin(reservation.relay(dedicated)), Box::pin(frontend));
             result.unwrap();
-            assert_eq!(initialized.x11_occurrence, 2);
+            assert_eq!(
+                initialized
+                    .x11_occurrence
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                2
+            );
             assert_eq!(
                 initialized.x11_slots.available_permits(),
                 policy.x11.max_connections_per_route
             );
             completion.await.unwrap();
+            let source = initialized.x11_relay_source().unwrap();
+            let other_source = initialized.x11_relay_source().unwrap();
             let mut reservations = Vec::new();
-            for _ in 0..policy.x11.max_connections_per_route {
-                reservations.push(initialized.reserve_x11_frontend().unwrap());
+            for index in 0..policy.x11.max_connections_per_route {
+                reservations.push(
+                    if index % 2 == 0 {
+                        source.reserve()
+                    } else {
+                        other_source.reserve()
+                    }
+                    .unwrap(),
+                );
             }
-            let allocated = initialized.x11_occurrence;
+            let allocated = initialized
+                .x11_occurrence
+                .load(std::sync::atomic::Ordering::Relaxed);
+            assert_eq!(allocated, 2 + policy.x11.max_connections_per_route as u64);
             assert_eq!(initialized.x11_slots.available_permits(), 0);
             assert_eq!(
                 initialized.reserve_x11_frontend().err().unwrap().kind(),
                 MezErrorKind::RateLimited
             );
             assert_eq!(
-                initialized.x11_occurrence, allocated,
+                initialized
+                    .x11_occurrence
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                allocated,
                 "capacity rejection must not consume another occurrence"
             );
             assert!(initialized.transport_health().unwrap().0);
@@ -234,7 +264,9 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
             );
             let pending = initialized.reserve_x11_frontend().unwrap();
             let retained_slots = initialized.x11_slots.clone();
-            initialized.x11_occurrence = u64::MAX;
+            initialized
+                .x11_occurrence
+                .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
             let (stream, _peer) = tokio::net::UnixStream::pair().unwrap();
             assert_eq!(
                 initialized
@@ -244,7 +276,16 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
                     .kind(),
                 MezErrorKind::Conflict
             );
-            assert_eq!(initialized.x11_occurrence, u64::MAX);
+            assert_eq!(
+                initialized
+                    .x11_occurrence
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                u64::MAX
+            );
+            assert_eq!(
+                source.reserve().err().unwrap().kind(),
+                MezErrorKind::Conflict
+            );
             initialized.detached = true;
             let (stream, _peer) = tokio::net::UnixStream::pair().unwrap();
             assert_eq!(
@@ -256,6 +297,15 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
                 MezErrorKind::Conflict
             );
             drop(initialized);
+            assert!(
+                source
+                    .reserve()
+                    .err()
+                    .unwrap()
+                    .message()
+                    .contains("parent connection retired")
+            );
+            drop((source, other_source));
             let (stream, mut silent_peer) = tokio::net::UnixStream::pair().unwrap();
             assert_eq!(
                 retained_slots.available_permits(),

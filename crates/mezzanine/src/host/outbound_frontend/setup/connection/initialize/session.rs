@@ -37,7 +37,7 @@ pub(crate) struct InitializedSessionFrontend {
     /// Fake offer credential retained only after exact X11 admission.
     x11_cookie: Option<crate::runtime::x11::X11Cookie>,
     /// Dedicated local channel occurrence; attempts consume it even on failure.
-    x11_occurrence: u64,
+    x11_occurrence: std::sync::Arc<std::sync::atomic::AtomicU64>,
     events: Option<
         crate::host::outbound_frontend::events::OutboundEventReader<iroh::endpoint::RecvStream>,
     >,
@@ -189,7 +189,7 @@ impl ConnectedFrontend {
                 .x11_forwarding
                 .as_ref()
                 .map(|offer| offer.fake_cookie.clone()),
-            x11_occurrence: 0,
+            x11_occurrence: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             events,
         })
     }
