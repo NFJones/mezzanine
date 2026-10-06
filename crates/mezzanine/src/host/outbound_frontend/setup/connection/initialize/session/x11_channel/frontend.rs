@@ -106,12 +106,37 @@ impl InitializedSessionFrontend {
 }
 
 impl X11RelaySource {
+    /// Waits for actual remote channel capacity without allocating an occurrence
+    /// until a slot is available. Cancellation releases the acquired ownership;
+    /// parent/root evidence is revalidated before a reservation is returned.
+    pub(super) async fn reserve_waiting(&self) -> Result<X11RelayReservation> {
+        let slot = self
+            .slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| MezError::invalid_state("outbound X11 channel capacity closed"))?;
+        self.reserve_with_slot(slot)
+    }
+
     /// Reserves capacity nonwaitingly and allocates one checked occurrence. No
     /// async work starts here. Failure releases any acquired permit; successful
     /// reservations consume their identity even if cancelled before execution.
     pub(in crate::host::outbound_frontend::setup::connection::initialize::session) fn reserve(
         &self,
     ) -> Result<X11RelayReservation> {
+        let slot = self.slots.clone().try_acquire_owned().map_err(|_| {
+            MezError::new(
+                MezErrorKind::RateLimited,
+                "outbound X11 channel capacity unavailable",
+            )
+        })?;
+        self.reserve_with_slot(slot)
+    }
+
+    /// Shares post-capacity authority checks and checked occurrence allocation.
+    /// Every failure drops the supplied slot without advancing the allocator.
+    fn reserve_with_slot(&self, slot: OwnedSemaphorePermit) -> Result<X11RelayReservation> {
         self.endpoint.frontend_config_root()?;
         if self.connection.close_reason().is_some() {
             return Err(MezError::invalid_state(
@@ -124,12 +149,6 @@ impl X11RelaySource {
                 "outbound X11 channel deadline invalid",
             ));
         }
-        let slot = self.slots.clone().try_acquire_owned().map_err(|_| {
-            MezError::new(
-                MezErrorKind::RateLimited,
-                "outbound X11 channel capacity unavailable",
-            )
-        })?;
         let occurrence = self
             .occurrence
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {

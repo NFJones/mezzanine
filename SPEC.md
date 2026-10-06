@@ -4386,6 +4386,16 @@ streams MUST retain their slot and endpoint through handshake and relay. Kernel 
 authentication MUST precede protocol decoding. Pathname bind/check/unlink remains a
 cooperative same-user boundary, not atomic protection against hostile renames.
 This staged listener alone MUST NOT activate ordinary supervisor or CLI forwarding.
+An internal X11 supervisor MUST retain the same consumed control future while
+driving bounded owned channel futures. A stalled channel MUST NOT serialize
+control replies. Independent local or remote capacity exhaustion MUST wait for
+actual permits alongside control, without spinning or retiring existing work.
+Rejected peer authentication MUST dispose only the affected local stream; root
+or listener failures remain terminal. Pending admission MUST remain owned across
+control replies. Channel failure MUST retire only that channel; control failure,
+parent retirement or cancellation MUST dispose all owned channels and listener
+publication without replay. This staged supervisor alone MUST NOT activate
+ordinary listener dispatch or CLI forwarding.
 The attaching-client relay MUST validate the fake setup cookie before dialing
 the frozen local X destination, substitute the real credential only locally, and
 preserve subsequent application bytes and directional half-close. Setup read,

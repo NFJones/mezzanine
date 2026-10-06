@@ -660,6 +660,14 @@ through the held parent. Pending accepts and admitted streams share finite slots
 accepted streams retain endpoint ownership through relay. Kernel UID is checked
 before handshake decoding. Publication remains a cooperative same-user pathname
 boundary, and this component does not enable ordinary X11 forwarding.
+An internal supervisor now owns bounded channel futures alongside the same
+consumed control request. Stalled handshakes do not block control replies;
+independent listener/channel capacity waits retain pending admission alongside
+control instead of spinning or retiring the session. Peer authentication rejection
+closes only that stream; root and listener failures remain terminal.
+cancellation or control failure disposes channel work and listener publication.
+Synthetic tests qualify control progress and cleanup, not ordinary listener
+dispatch, occurrence announcement or CLI X11 activation.
 Each internal initialized session now retains its own shared health tracker and
 samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling

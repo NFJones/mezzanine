@@ -93,6 +93,39 @@ impl X11FrontendListener {
         Ok(&self.publication.path)
     }
 
+    /// Waits for actual local capacity without repeatedly returning saturation.
+    /// Peer authentication rejection disposes only that stream; root and listener
+    /// failures remain fatal. The caller polls this future alongside control work.
+    pub(super) async fn accept_waiting(&self) -> Result<Option<AcceptedX11Frontend>> {
+        self.accept_waiting_for_uid(crate::runtime::current_effective_uid())
+            .await
+    }
+
+    /// Shares waiting admission with an explicit expected kernel UID for tests.
+    /// Authentication failure returns no accepted owner or readiness response.
+    async fn accept_waiting_for_uid(&self, owner_uid: u32) -> Result<Option<AcceptedX11Frontend>> {
+        self.endpoint.frontend_config_root()?;
+        let slot = self
+            .slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| MezError::invalid_state("outbound X11 frontend capacity closed"))?;
+        self.endpoint.frontend_config_root()?;
+        let (stream, _) = self.listener.accept().await?;
+        let authenticated =
+            crate::runtime::authenticated_unix_peer_uid(stream.as_raw_fd(), owner_uid);
+        self.endpoint.frontend_config_root()?;
+        if authenticated.is_err() {
+            return Ok(None);
+        }
+        Ok(Some(AcceptedX11Frontend {
+            stream,
+            endpoint: self.endpoint.clone(),
+            slot,
+        }))
+    }
+
     /// Reserves capacity nonwaitingly before awaiting an authenticated peer.
     /// Cancellation drops the pending slot; success transfers it with the stream.
     /// The supervisor supplies accept deadlines/cancellation and drives siblings.
@@ -119,6 +152,22 @@ impl X11FrontendListener {
 }
 
 impl AcceptedX11Frontend {
+    /// Executes a previously allocated exact-session reservation while retaining
+    /// the local admission slot and endpoint until relay completion or disposal.
+    pub(super) async fn relay_reserved(
+        self,
+        reservation: super::frontend::X11RelayReservation,
+    ) -> Result<()> {
+        let Self {
+            stream,
+            endpoint,
+            slot,
+        } = self;
+        let _ownership = (endpoint, slot);
+        _ownership.0.frontend_config_root()?;
+        reservation.relay(stream).await
+    }
+
     /// Retains finite local admission through the session-owned handshake/relay.
     /// Parent-session authority supplies cookie, codec and nonreused occurrence.
     /// Cancellation closes this stream and releases its slot, without replay.

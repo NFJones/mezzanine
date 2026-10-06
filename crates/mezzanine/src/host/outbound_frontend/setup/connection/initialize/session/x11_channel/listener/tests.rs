@@ -3,6 +3,48 @@ use super::*;
 use crate::runtime::RuntimeIrohTransportPolicy;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
+/// A peer failing kernel-UID authentication consumes no lasting slot and gets
+/// no readiness bytes. Publication remains live, and a later authenticated peer
+/// is admitted normally. Expected-UID injection avoids changing process identity.
+#[tokio::test]
+async fn outbound_x11_listener_waiting_rejects_peer_without_retiring_publication() {
+    use tokio::io::AsyncReadExt;
+    let root = std::env::temp_dir().join(format!("mez-xuid-{:016x}", rand::random::<u64>()));
+    let endpoint = OutboundEndpointOwner::bind(&root, &RuntimeIrohTransportPolicy::default())
+        .await
+        .unwrap();
+    let listener = X11FrontendListener::bind(endpoint.clone(), 1).unwrap();
+    let path = listener.socket_path().unwrap().to_path_buf();
+    let mut rejected = tokio::net::UnixStream::connect(&path).await.unwrap();
+    assert!(
+        listener
+            .accept_waiting_for_uid(crate::runtime::current_effective_uid().wrapping_add(1))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(listener.slots.available_permits(), 1);
+    let mut bytes = Vec::new();
+    tokio::time::timeout(Duration::from_secs(1), rejected.read_to_end(&mut bytes))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(bytes.is_empty());
+    assert!(path.exists());
+    let peer = tokio::net::UnixStream::connect(&path).await.unwrap();
+    let accepted = listener.accept_waiting().await.unwrap().unwrap();
+    assert_eq!(listener.slots.available_permits(), 0);
+    drop((accepted, peer, rejected, listener));
+    endpoint
+        .retire_and_shutdown()
+        .await
+        .unwrap()
+        .finish()
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Pending accept and admitted streams hold the same finite pool. Cancellation
 /// releases pending slots, saturation rejects immediately, and accepted streams
 /// retain endpoint identity after the listener closes and removes publication.

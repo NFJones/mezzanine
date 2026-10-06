@@ -34,6 +34,7 @@ mod frontend;
 mod handoff;
 mod listener;
 mod relay;
+mod supervisor;
 
 impl InitializedSessionFrontend {
     /// Accepts one exact-route channel under the configured total setup deadline.
