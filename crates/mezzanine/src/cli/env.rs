@@ -229,6 +229,9 @@ pub(super) struct DetachCliArgs {
     /// Control client id to detach instead of the current client.
     #[arg(long, value_name = "ID")]
     pub(super) client_id: Option<String>,
+    /// Existing host-scoped remote session containing the target client.
+    #[arg(long, value_name = "ID")]
+    pub(super) session_id: Option<String>,
 }
 
 /// Typed process CLI arguments for `mez kill`.

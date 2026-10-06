@@ -80,6 +80,7 @@ pub(crate) use items::FrontendItem;
 mod present;
 mod setup;
 mod step;
+mod target_detach;
 
 impl OutboundFrontendClient {
     /// Consumes readiness once and sends credential-free setup plus initial view.

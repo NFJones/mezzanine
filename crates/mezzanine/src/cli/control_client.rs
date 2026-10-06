@@ -3089,6 +3089,7 @@ pub(super) fn incomplete_control_response_error(
 mod broker_listing_tests;
 
 pub(super) mod broker_attach;
+pub(super) mod broker_detach;
 
 #[cfg(test)]
 mod tests {

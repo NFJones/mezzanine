@@ -107,6 +107,34 @@ fn kill_command_accepts_kill_session_as_an_alias() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Remote administrative detach needs an explicit session rather than guessing
+/// among independently attached frontends. Both command aliases preserve that
+/// selector and exact client ID; local detach retains its original arguments.
+#[test]
+fn remote_detach_accepts_explicit_session_and_client() {
+    let (env, home) = test_env("remote-detach-selector");
+    for command in ["detach", "detach-client"] {
+        let invocation = CliInvocation::parse(
+            &[
+                "mez".into(),
+                "--iroh-profile".into(),
+                "paired".into(),
+                command.into(),
+                "--session-id".into(),
+                "$2".into(),
+                "--client-id".into(),
+                "c7".into(),
+            ],
+            &env.runtime,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(invocation.command, Some(CliCommand::Detach(args))
+            if args.session_id.as_deref() == Some("$2") && args.client_id.as_deref() == Some("c7")));
+    }
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Hosted list aggregation and remote kill are explicit typed contracts.
 #[test]
 fn list_all_and_remote_kill_require_explicit_supported_arguments() {

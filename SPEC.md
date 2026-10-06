@@ -4323,7 +4323,13 @@ original mutation key, expose no client/session target, and validate correlated
 exact-client settlement. Successful reply delivery MUST retire that pipeline;
 detached ownership MUST NOT admit another request or affect sibling connections.
 Uncertain detach outcomes MUST NOT reconnect or replay. Ordinary detach command
-migration and terminal restoration remain separate caller-owned boundaries.
+migration for host profiles MUST require explicit session and client IDs. It MUST
+resolve only that existing session through an active broker, authenticate primary
+administrative authority, and issue one fixed target detach with the original key.
+Exact target settlement MUST retire the temporary administrative pipeline; cleanup
+MUST NOT terminate the runtime or unrelated frontends. Missing broker discovery
+MUST NOT acquire a competing endpoint. Local/legacy detach remains separate, and
+terminal restoration remains the invoking interactive frontend's responsibility.
 Optional version-one event setup MUST remain bound to the initialized session's
 retained connection lease and validate the exact preface under a finite deadline.
 The separate internal clipboard-session transition MUST require explicit

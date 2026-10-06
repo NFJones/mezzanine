@@ -403,16 +403,32 @@ async fn run_with_inner<W: Write, E: Write>(
             .await?
         }
         Some(CliCommand::Detach(args)) => {
+            if control_target.is_unix() && args.session_id.is_some() {
+                return Err(MezError::invalid_args(
+                    "--session-id detach requires an explicit paired Iroh host profile",
+                ));
+            }
+            let key = cli_idempotency_key("client-detach");
+            if !control_target.is_unix()
+                && let Some(body) = Box::pin(super::control_client::broker_detach::try_detach(
+                    &control_target,
+                    &env,
+                    args.session_id.as_deref(),
+                    args.client_id.as_deref(),
+                    &key,
+                ))
+                .await?
+            {
+                super::write_control_response(stdout, output_format, &body)?;
+                return Ok(0);
+            }
             let params = match args.client_id.as_deref() {
                 Some(client_id) => format!(
                     r#"{{"idempotency_key":"{}","client_id":"{}"}}"#,
-                    cli_idempotency_key("client-detach"),
+                    key,
                     json_escape(client_id)
                 ),
-                None => format!(
-                    r#"{{"idempotency_key":"{}"}}"#,
-                    cli_idempotency_key("client-detach")
-                ),
+                None => format!(r#"{{"idempotency_key":"{}"}}"#, key),
             };
             run_control_request_for_target(
                 &control_target,

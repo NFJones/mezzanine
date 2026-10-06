@@ -260,7 +260,7 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
     let serve = host.serve_routed(router.clone(), async move { server_stop.notified().await });
     let listener = crate::host::outbound_frontend::OutboundFrontendListener::bind(
         endpoint.clone(),
-        2,
+        3,
         Duration::from_secs(2),
     )
     .unwrap();
@@ -443,10 +443,56 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
                 serde_json::to_value(first.summary()).unwrap(),
                 first_view["session"]
             );
-            first
-                .detach_self("exact-first-detach", Duration::from_secs(2))
-                .await
-                .expect("self-detach must settle without retiring a sibling");
+            let mut detach_output = Vec::new();
+            let mut detach_error = Vec::new();
+            let detached = crate::cli::run_with(
+                vec![
+                    "mez".into(),
+                    "--iroh-profile".into(),
+                    "creator".into(),
+                    "--json".into(),
+                    "detach".into(),
+                    "--session-id".into(),
+                    first_view["session"]["session_id"].as_str().unwrap().into(),
+                    "--client-id".into(),
+                    first_view["session"]["client_id"].as_str().unwrap().into(),
+                ],
+                cli_env.clone(),
+                false,
+                &mut detach_output,
+                &mut detach_error,
+            )
+            .await
+            .expect("administrative detach must reuse the retained broker");
+            assert_eq!(detached, 0);
+            assert!(detach_error.is_empty());
+            let detached: serde_json::Value = serde_json::from_slice(&detach_output).unwrap();
+            assert_eq!(detached["result"]["detached"], true);
+            assert_eq!(
+                detached["result"]["client_id"],
+                first_view["session"]["client_id"]
+            );
+            let first_runtime = router
+                .runtime_for_tests(first_view["session"]["session_id"].as_str().unwrap())
+                .unwrap();
+            let first_id = ClientId::parse(
+                'c',
+                first_view["session"]["client_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            )
+            .unwrap();
+            assert!(
+                first_runtime
+                    .actor()
+                    .render_iroh_client_snapshot(first_id, false)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "the exact target must lose attached rendering ownership"
+            );
+            drop(first);
             let (second, connected, _) = second
                 .sample_transport_health(Duration::from_secs(2))
                 .await
@@ -905,7 +951,7 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
             cancel.notify_one();
         });
         let (accepted, ()) = tokio::join!(supervised, clients);
-        assert_eq!(accepted.unwrap(), 17);
+        assert_eq!(accepted.unwrap(), 18);
         stop.notify_one();
     });
     let (served, ()) = tokio::time::timeout(Duration::from_secs(30), async {
@@ -913,7 +959,7 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
     })
     .await
     .unwrap();
-    assert_eq!(served.unwrap(), 19);
+    assert_eq!(served.unwrap(), 20);
     router
         .shutdown_all(true, Duration::from_secs(5))
         .await

@@ -18,6 +18,7 @@ mod detach;
 mod events;
 mod health;
 mod step;
+mod target_detach;
 
 /// Closed display request; geometry is the only frontend-controlled parameter.
 #[derive(Deserialize)]
@@ -78,6 +79,13 @@ impl InitializedSessionFrontend {
                     == Some("detach")
                 {
                     return detach::deliver_detach(self, &frame.body).await;
+                }
+                if envelope
+                    .get("operation")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("detach-target")
+                {
+                    return target_detach::deliver(self, &frame.body).await;
                 }
                 if envelope
                     .get("operation")
