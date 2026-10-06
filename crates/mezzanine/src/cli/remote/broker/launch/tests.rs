@@ -6,6 +6,80 @@
 use super::*;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
+/// Concurrent startup callers must elect exactly one real broker child and
+/// obtain distinct authenticated frontend handles. Disposal must not kill the
+/// shared owner; the fixture signals and reaps only its retained child. This is
+/// startup qualification, not simultaneous interactive session creation.
+#[tokio::test]
+#[ignore = "requires explicit MEZ_BROKER_EXECUTABLE for actual process qualification"]
+async fn outbound_launcher_concurrent_callers_elect_one_actual_child() {
+    let executable = std::path::PathBuf::from(
+        std::env::var_os("MEZ_BROKER_EXECUTABLE").expect("explicit executable required"),
+    );
+    assert!(executable.is_absolute());
+    let (home, env, election) = fixture();
+    drop(election);
+    let mut first_child = None;
+    let mut second_child = None;
+    let (first, second) = tokio::join!(
+        connect_owned(
+            &executable,
+            &env,
+            std::time::Duration::from_secs(10),
+            &mut first_child
+        ),
+        connect_owned(
+            &executable,
+            &env,
+            std::time::Duration::from_secs(10),
+            &mut second_child
+        ),
+    );
+    // Collect the verdict before cleanup so a failed startup still retains the
+    // exact child handles for explicit disposal, not socket-derived signalling.
+    let verdict = match (&first, &second) {
+        (Ok(first), Ok(second)) => first
+            .handle()
+            .and_then(|first| second.handle().map(|second| first != second)),
+        _ => Ok(false),
+    };
+    let children = usize::from(first_child.is_some()) + usize::from(second_child.is_some());
+    drop(first);
+    drop(second);
+    let mut shutdowns = Vec::new();
+    for child in [&mut first_child, &mut second_child].into_iter().flatten() {
+        let shutdown = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            child.shutdown_for_tests(),
+        )
+        .await;
+        if child.try_wait().unwrap().is_none() {
+            tokio::time::timeout(std::time::Duration::from_secs(5), child.terminate())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        shutdowns.push(shutdown);
+    }
+    assert!(
+        verdict.unwrap(),
+        "both callers require distinct authenticated handles"
+    );
+    assert_eq!(
+        children, 1,
+        "one elected launcher must retain the sole child"
+    );
+    assert!(
+        shutdowns
+            .into_iter()
+            .all(|result| result.is_ok_and(|result| result.is_ok_and(|status| status.success())))
+    );
+    let paths = env.config_paths().unwrap();
+    assert!(!paths.root().join("outbound.sock").exists());
+    drop(crate::security::remote::RemoteClientIdentity::load_or_create(paths.root()).unwrap());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
 /// Explicit released-binary fixture: the caller supplies a freshly built trusted
 /// executable. Two authenticated readiness clients reuse one launched broker;
 /// disposing them does not kill it. The test deliberately signals and reaps its
