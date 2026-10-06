@@ -7,6 +7,7 @@
 //! trust persistence remain usable before the network listener is introduced.
 
 mod client;
+mod invitation;
 mod store;
 mod types;
 
@@ -15,6 +16,7 @@ pub(crate) use client::{
     RemoteClientProfileSummary, abbreviated_endpoint_fingerprint, read_remote_invitation_file,
     write_remote_invitation_file_new,
 };
+pub(crate) use invitation::read_iroh_invitation;
 pub(crate) use store::{RemoteEndpointIdentity, RemotePairingPreparation, RemoteTrustStore};
 #[cfg(test)]
 pub(crate) use types::RemotePairingInvitation;

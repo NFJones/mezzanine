@@ -25,7 +25,7 @@ use crate::runtime::{
 };
 use crate::security::remote::{
     RemoteClientIdentity, RemoteClientProfile, RemoteClientProfileScope, RemoteClientProfileStore,
-    RemoteRoleCeiling, read_remote_invitation_file,
+    RemoteRoleCeiling,
 };
 
 // Direct control request framing and response handling.
@@ -109,8 +109,6 @@ fn ensure_one_shot_initialize_success(body: &str) -> Result<()> {
     )))
 }
 
-const MAX_IROH_INVITATION_FILE_BYTES: u64 = 64 * 1024;
-
 /// Runs one direct request through the explicitly selected transport.
 pub(super) async fn run_control_request_for_target<W: Write>(
     control_target: &super::ControlTargetSelection,
@@ -155,74 +153,14 @@ pub(super) async fn run_control_request_for_target<W: Write>(
 }
 
 fn parse_iroh_invitation_file(path: &Path, save_as: Option<&str>) -> Result<IrohControlTarget> {
-    let bytes = read_remote_invitation_file(path, MAX_IROH_INVITATION_FILE_BYTES)?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|_| MezError::invalid_args("invalid Iroh invitation JSON"))?;
-    let invitation = value.get("result").unwrap_or(&value);
-    let object = invitation
-        .as_object()
-        .ok_or_else(|| MezError::invalid_args("Iroh invitation must be a JSON object"))?;
-    if object
-        .get("format_version")
-        .and_then(serde_json::Value::as_u64)
-        != Some(1)
-    {
-        return Err(MezError::invalid_args(
-            "Iroh invitation format_version must be 1",
-        ));
-    }
-    let server_addr: EndpointAddr = serde_json::from_value(
-        object
-            .get("server_addr")
-            .cloned()
-            .ok_or_else(|| MezError::invalid_args("Iroh invitation omitted server_addr"))?,
-    )
-    .map_err(|_| MezError::invalid_args("Iroh invitation contains an invalid server_addr"))?;
-    if let Some(server_endpoint_id) = object
-        .get("server_endpoint_id")
-        .and_then(serde_json::Value::as_str)
-        && server_addr.id.to_string() != server_endpoint_id
-    {
-        return Err(MezError::forbidden(
-            "Iroh invitation server identity does not match its address",
-        ));
-    }
-    let profile_name = save_as
-        .map(str::to_string)
-        .unwrap_or(invitation_string(object, "profile_name")?);
-    let token = invitation_string(object, "token")?;
-    let role = match invitation_string(object, "role")?.as_str() {
-        "observer" => RemoteRoleCeiling::Observer,
-        "primary" => RemoteRoleCeiling::Primary,
-        _ => {
-            return Err(MezError::invalid_args(
-                "Iroh invitation role is unsupported",
-            ));
-        }
-    };
-    let expires_at_unix_seconds = object
-        .get("expires_at_unix_seconds")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| MezError::invalid_args("Iroh invitation omitted expiration"))?;
-    let scope = match object
-        .get("profile_scope")
-        .and_then(serde_json::Value::as_str)
-    {
-        Some("host") => RemoteClientProfileScope::Host,
-        None | Some("legacy_session") => RemoteClientProfileScope::LegacySession,
-        Some(_) => {
-            return Err(MezError::invalid_args(
-                "Iroh invitation profile_scope must be host or legacy_session",
-            ));
-        }
-    };
+    let invitation = crate::security::remote::read_iroh_invitation(path, save_as)?;
     Ok(IrohControlTarget::Invitation {
-        profile_name,
-        server_addr,
-        token: SecretString::from(token),
-        role,
-        scope,
-        expires_at_unix_seconds,
+        profile_name: invitation.profile_name,
+        server_addr: invitation.server_addr,
+        token: invitation.token,
+        role: invitation.role,
+        scope: invitation.scope,
+        expires_at_unix_seconds: invitation.expires_at_unix_seconds,
     })
 }
 
@@ -304,18 +242,6 @@ fn preflight_iroh_invitation_profile(config_root: &Path, target: &IrohControlTar
         server_addr.id,
         *scope,
     )
-}
-
-fn invitation_string(
-    object: &serde_json::Map<String, serde_json::Value>,
-    field: &str,
-) -> Result<String> {
-    object
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| MezError::invalid_args(format!("Iroh invitation omitted {field}")))
 }
 
 /// Explicit Iroh destination and Mezzanine authentication material.
