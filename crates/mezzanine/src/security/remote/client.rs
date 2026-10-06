@@ -313,10 +313,38 @@ impl RemoteClientProfileStore {
         server_endpoint_id: iroh::EndpointId,
         scope: RemoteClientProfileScope,
     ) -> Result<()> {
+        self.preflight_name_locked(name, server_endpoint_id, scope, false)
+    }
+
+    /// Checks alias conflicts with bounded lock contention for outbound workers.
+    /// Filesystem I/O remains subject to host availability; this does not redeem
+    /// an invitation or reserve an alias across a later network exchange.
+    #[allow(
+        dead_code,
+        reason = "broker pairing integration follows bounded profile-lock qualification"
+    )]
+    pub(crate) fn preflight_for_outbound(
+        &self,
+        name: &str,
+        server_endpoint_id: iroh::EndpointId,
+        scope: RemoteClientProfileScope,
+    ) -> Result<()> {
+        self.preflight_name_locked(name, server_endpoint_id, scope, true)
+    }
+
+    /// Shares protected alias validation while retaining the selected lock mode.
+    /// Publication must independently recheck the pin after network settlement.
+    fn preflight_name_locked(
+        &self,
+        name: &str,
+        server_endpoint_id: iroh::EndpointId,
+        scope: RemoteClientProfileScope,
+        bounded: bool,
+    ) -> Result<()> {
         validate_profile_name(name)?;
         ensure_client_directory_chain(&self.directory)?;
         let lock = open_private_lock(&self.directory.join(PROFILES_LOCK_FILE_NAME))?;
-        flock(&lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        acquire_profile_lock(&lock, bounded)?;
         let database = self.load_database()?;
         if let Some(existing) = database
             .profiles
@@ -409,6 +437,23 @@ impl RemoteClientProfileStore {
 
     /// Atomically publishes a profile after its credential is safely persisted.
     pub(crate) fn save(&self, profile: &RemoteClientProfile) -> Result<()> {
+        self.save_with_lock_mode(profile, false)
+    }
+
+    /// Publishes validated owner-side pairing evidence under bounded contention.
+    /// A lock timeout precedes credential publication; later I/O failure retains
+    /// the existing atomic-write and conflict behavior without remote replay.
+    #[allow(
+        dead_code,
+        reason = "broker pairing integration follows bounded profile-lock qualification"
+    )]
+    pub(crate) fn save_for_outbound(&self, profile: &RemoteClientProfile) -> Result<()> {
+        self.save_with_lock_mode(profile, true)
+    }
+
+    /// Shares exact pin, capacity and credential-publication semantics for both
+    /// callers. The acquired lock remains held through the whole publication.
+    fn save_with_lock_mode(&self, profile: &RemoteClientProfile, bounded: bool) -> Result<()> {
         validate_profile_name(&profile.name)?;
         if profile.device_credential.expose_secret().is_empty() {
             return Err(MezError::invalid_args(
@@ -417,7 +462,7 @@ impl RemoteClientProfileStore {
         }
         ensure_client_directory_chain(&self.directory)?;
         let lock = open_private_lock(&self.directory.join(PROFILES_LOCK_FILE_NAME))?;
-        flock(&lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        acquire_profile_lock(&lock, bounded)?;
         let credentials = self.directory.join(CREDENTIALS_DIRECTORY_NAME);
         ensure_private_directory(&credentials)?;
 
@@ -535,6 +580,18 @@ impl RemoteClientProfileStore {
     }
 }
 
+/// Acquires the selected profile lock while preserving ordinary blocking callers.
+/// Outbound workers use the existing finite contention budget; neither mode
+/// weakens exclusive ownership or authorizes retries of remote pairing effects.
+fn acquire_profile_lock(lock: &fs::File, bounded: bool) -> Result<()> {
+    if bounded {
+        acquire_identity_lock(lock, "outbound profile lock remained busy")
+    } else {
+        flock(lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredRemoteClientProfile {
     name: String,
@@ -643,6 +700,70 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
+
+    /// A retained administrator lock must bound outbound preflight/publication
+    /// without changing authored metadata or credential files. After release,
+    /// the same operations preserve pinning and exact credential publication.
+    /// This fixture never redeems an invitation or starts a network endpoint.
+    #[test]
+    fn outbound_profile_preflight_and_save_bound_contention_without_mutation() {
+        let root = test_root("bounded-publication");
+        let store = RemoteClientProfileStore::under_config_root(&root);
+        let profile = RemoteClientProfile {
+            name: "paired".into(),
+            server_addr: EndpointAddr::new(SecretKey::generate().public()),
+            role: RemoteRoleCeiling::Primary,
+            scope: RemoteClientProfileScope::Host,
+            device_credential: SecretString::from("synthetic-proof".to_string()),
+        };
+        store.save(&profile).unwrap();
+        let database = store.directory().join(PROFILES_FILE_NAME);
+        let before = fs::read(&database).unwrap();
+        let credentials = store.directory().join(CREDENTIALS_DIRECTORY_NAME);
+        let before_files = fs::read_dir(&credentials)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        let lock = open_private_lock(&store.directory().join(PROFILES_LOCK_FILE_NAME)).unwrap();
+        flock(&lock, FlockOperation::LockExclusive).unwrap();
+        let started = std::time::Instant::now();
+        let preflight = store
+            .preflight_for_outbound(&profile.name, profile.server_addr.id, profile.scope)
+            .unwrap_err();
+        let publication = store.save_for_outbound(&profile).unwrap_err();
+        assert_eq!(preflight.kind(), crate::error::MezErrorKind::Conflict);
+        assert_eq!(publication.kind(), crate::error::MezErrorKind::Conflict);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(fs::read(&database).unwrap(), before);
+        assert_eq!(
+            fs::read_dir(&credentials)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>(),
+            before_files
+        );
+        drop(lock);
+        store
+            .preflight_for_outbound(&profile.name, profile.server_addr.id, profile.scope)
+            .unwrap();
+        store.save_for_outbound(&profile).unwrap();
+        assert_eq!(
+            store
+                .load_for_outbound(&profile.name)
+                .unwrap()
+                .unwrap()
+                .device_credential
+                .expose_secret(),
+            "synthetic-proof"
+        );
+        let foreign = SecretKey::generate().public();
+        assert!(
+            store
+                .preflight_for_outbound(&profile.name, foreign, profile.scope)
+                .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn test_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
