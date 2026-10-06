@@ -154,7 +154,11 @@ impl OutboundFrontendListener {
             diagnostics.complete();
             return Ok(());
         }
-        let mut session = connected.initialize_session().await?;
+        let mut session = if connected.clipboard_requested()? {
+            Box::pin(connected.initialize_clipboard_session()).await?
+        } else {
+            Box::pin(connected.initialize_session()).await?
+        };
         #[cfg(test)]
         diagnostics.advance("first-view");
         loop {

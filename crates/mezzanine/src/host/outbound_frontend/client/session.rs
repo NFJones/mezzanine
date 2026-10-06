@@ -76,6 +76,7 @@ mod events;
 mod foreground;
 mod health;
 mod items;
+pub(crate) use items::FrontendItem;
 mod present;
 mod step;
 

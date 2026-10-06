@@ -4296,8 +4296,9 @@ Optional version-one event setup MUST remain bound to the initialized session's
 retained connection lease and validate the exact preface under a finite deadline.
 The separate internal clipboard-session transition MUST require explicit
 version-two primary intent and validate true clipboard capability in the correlated
-initialize reply before accepting the version-two stream. Ordinary supervision
-MUST remain redraw-only; typed consumption MUST NOT silently discard effects.
+initialize reply before accepting the version-two stream. Supervision MUST select
+this transition only for explicit version-two intent; redraw-only consumers MUST
+reject clipboard sessions rather than silently discard effects.
 This admission alone MUST NOT deliver frontend clipboard content or write the
 host clipboard. Later event versions and X11 MUST reject before initialization. Reader errors or
 EOF require retirement of that session owner, not reconnect or creation replay;

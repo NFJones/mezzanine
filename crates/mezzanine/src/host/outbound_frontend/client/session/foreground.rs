@@ -39,6 +39,11 @@ impl OutboundSessionClient {
         C: std::future::Future<Output = ()>,
     {
         validate_budget(size.columns, size.rows, request_budget)?;
+        if self.clipboard_receiver.is_some() {
+            return Err(MezError::invalid_args(
+                "outbound clipboard session requires item-aware foreground",
+            ));
+        }
         tokio::pin!(cancellation);
         let result = {
             // This future owns the session even during entry. Cancellation or

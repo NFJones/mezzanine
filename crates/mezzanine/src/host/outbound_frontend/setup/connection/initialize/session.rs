@@ -5,7 +5,7 @@
 //! client evidence stays scoped to its connection; labels cannot grant authority.
 //! Optional version-one events remain bound to this exact retained connection.
 //! A separate version-two primary admission validates clipboard capability and
-//! requires item-aware consumption; ordinary supervision remains version-one.
+//! requires item-aware consumption; supervision selects it only for explicit v2.
 //! Later versions and X11 reject before sending. Raw replies never enter IPC.
 
 use super::*;
@@ -45,8 +45,8 @@ impl ConnectedFrontend {
 
     /// Admits only explicitly requested version-two primary clipboard sessions.
     /// Returned capability is validated before accepting the exact v2 preface.
-    /// This separate transition does not activate ordinary supervisor forwarding
-    /// or write a host clipboard; callers must consume typed event items.
+    /// Supervision selects this transition only for explicit version-two intent;
+    /// it writes no host clipboard, and callers must consume typed event items.
     pub(crate) async fn initialize_clipboard_session(self) -> Result<InitializedSessionFrontend> {
         self.initialize_session_mode(true).await
     }

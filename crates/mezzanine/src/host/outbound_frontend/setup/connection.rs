@@ -31,6 +31,13 @@ impl ConnectedFrontend {
         let params = initialize_params_from_json(&self.prepared.initialize.to_string())?;
         Ok(params.session_intent == Some(SessionIntent::HostOnly))
     }
+
+    /// Reports explicit v2 intent only; role and returned clipboard capability
+    /// remain independently validated by clipboard-session admission.
+    pub(crate) fn clipboard_requested(&self) -> Result<bool> {
+        let params = initialize_params_from_json(&self.prepared.initialize.to_string())?;
+        Ok(params.event_stream_version == Some(2))
+    }
 }
 
 impl PreparedFrontend {

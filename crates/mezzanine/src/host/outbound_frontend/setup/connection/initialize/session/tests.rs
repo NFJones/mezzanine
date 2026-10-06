@@ -461,6 +461,87 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
             );
             // A management frontend must use the same protected endpoint while
             // its sibling attachment remains live; listing allocates no session.
+            // Explicit v2 attachment uses the detached session, leaving the
+            // original sibling primary live. Effects cross only its exact route;
+            // this fixture never invokes a host clipboard provider.
+            Box::pin(async {
+            let clipboard_client =
+                crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
+                    socket.parent().unwrap(),
+                    policy.setup_timeout,
+                )
+                .await
+                .unwrap();
+            let (mut clipboard_client, _) = clipboard_client.start_session("creator", serde_json::json!({
+                "client_name":"clipboard-route-fixture","requested_version":3,"requested_role":"primary",
+                "session_intent":"attach","session_target":{"session_id":first_view["session"]["session_id"]},
+                "detach_primary_on_disconnect":true,"event_stream_version":2,
+                "client":{"name":"clipboard-route-fixture","interactive":true,
+                    "terminal":{"columns":80,"rows":24,"term":"xterm"}}
+            }), 80, 24, policy.setup_timeout).await.unwrap();
+            let clipboard_summary = serde_json::to_value(clipboard_client.summary()).unwrap();
+            assert_eq!(
+                clipboard_summary["session_id"],
+                first_view["session"]["session_id"]
+            );
+            let clipboard_runtime = router
+                .runtime_for_tests(clipboard_summary["session_id"].as_str().unwrap())
+                .unwrap();
+            let clipboard_id = ClientId::parse(
+                'c',
+                clipboard_summary["client_id"].as_str().unwrap().to_string(),
+            )
+            .unwrap();
+            let clipboard_source = format!("{}雪\r\n", "x".repeat(256 * 1024 - 1));
+            assert!(
+                clipboard_runtime
+                    .actor()
+                    .enqueue_client_clipboard_write(clipboard_id, clipboard_source.clone())
+                    .await
+                    .unwrap()
+            );
+            let mut received = None;
+            for _ in 0..64 {
+                let (returned, item) = clipboard_client
+                    .poll_items(25, policy.setup_timeout)
+                    .await
+                    .unwrap();
+                clipboard_client = returned;
+                match item {
+                    crate::host::outbound_frontend::client::FrontendItem::Clipboard(content) => {
+                        received = Some(content);
+                        break;
+                    }
+                    crate::host::outbound_frontend::client::FrontendItem::Redraw(_, _) => {}
+                }
+            }
+            assert_eq!(
+                received.as_deref(),
+                Some(clipboard_source.as_str()),
+                "exact-client content must complete across local chunks"
+            );
+            assert_eq!(
+                serde_json::to_value(clipboard_client.summary()).unwrap(),
+                clipboard_summary
+            );
+            assert_eq!(
+                router.snapshots().await.unwrap().len(),
+                4,
+                "clipboard attachment must not allocate a runtime"
+            );
+            clipboard_client
+                .detach_self("exact-clipboard-detach", policy.setup_timeout)
+                .await
+                .unwrap();
+            }).await;
+            let (second, connected, _) = second
+                .sample_transport_health(policy.setup_timeout)
+                .await
+                .unwrap();
+            assert!(
+                connected,
+                "clipboard retirement must preserve the original sibling"
+            );
             for (intent, role, target) in [
                 (
                     "attach",
@@ -824,7 +905,7 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
             cancel.notify_one();
         });
         let (accepted, ()) = tokio::join!(supervised, clients);
-        assert_eq!(accepted.unwrap(), 16);
+        assert_eq!(accepted.unwrap(), 17);
         stop.notify_one();
     });
     let (served, ()) = tokio::time::timeout(Duration::from_secs(30), async {
@@ -832,7 +913,7 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
     })
     .await
     .unwrap();
-    assert_eq!(served.unwrap(), 18);
+    assert_eq!(served.unwrap(), 19);
     router
         .shutdown_all(true, Duration::from_secs(5))
         .await

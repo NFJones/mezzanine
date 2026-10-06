@@ -26,6 +26,11 @@ impl OutboundSessionClient {
         budget: Duration,
     ) -> Result<(Self, AttachRenderAction, Option<u64>)> {
         validate_budget(1, 1, budget)?;
+        if self.clipboard_receiver.is_some() {
+            return Err(MezError::invalid_args(
+                "outbound clipboard session requires item-aware polling",
+            ));
+        }
         if !(1..=250).contains(&wait_ms) || Duration::from_millis(wait_ms) >= budget {
             return Err(MezError::invalid_args("outbound event wait unavailable"));
         }
