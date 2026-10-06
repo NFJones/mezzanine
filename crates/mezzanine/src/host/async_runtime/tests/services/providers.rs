@@ -3,6 +3,8 @@
 use super::super::*;
 use crate::host::async_runtime::run_async_agent_command_service;
 
+mod compaction;
+
 /// Verifies async agent provider service polls runtime queue.
 ///
 /// This regression scenario documents the behavior being protected so a
