@@ -49,7 +49,22 @@ async fn outbound_pairing_real_host_publishes_proof_without_local_secret_deliver
     std::fs::create_dir(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     let host_root = root.join("host");
-    let client_root = root.join("client");
+    let runtime_root = root.join("cli-runtime");
+    std::fs::create_dir(&runtime_root).unwrap();
+    std::fs::set_permissions(&runtime_root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let cli_env = crate::cli::CliEnv {
+        home: Some(root.join("client-home")),
+        runtime: crate::runtime::RuntimeEnv {
+            mez_tmpdir: Some(runtime_root.into_os_string()),
+            xdg_runtime_dir: None,
+            tmpdir: None,
+            uid: crate::runtime::current_effective_uid(),
+        },
+        ..Default::default()
+    };
+    let paths = crate::config::ConfigPaths::from_home(cli_env.home.clone().unwrap());
+    paths.ensure_default_config().unwrap();
+    let client_root = paths.root().to_path_buf();
     let policy = RuntimeIrohTransportPolicy {
         compression_codecs: vec![RuntimeIrohCompressionCodec::None],
         ..Default::default()
@@ -146,6 +161,53 @@ async fn outbound_pairing_real_host_publishes_proof_without_local_secret_deliver
         assert_eq!(reply["host"]["host_only"], true);
         assert_eq!(reply["sessions"], serde_json::json!([]));
         assert!(health.next().await.is_none());
+        // Exercise ordinary command dispatch while the endpoint lock is held.
+        // A separate primary invitation must publish its authored ceiling, not
+        // mistake host-only observer initialization for observer-only pairing.
+        let cli_invitation = RemoteTrustStore::under_host_config_root(&host_root)
+            .unwrap()
+            .create_invitation(host.endpoint_id(), RemoteRoleCeiling::Primary, 600, now)
+            .unwrap();
+        let cli_path = root.join("cli-invitation.json");
+        write_remote_invitation_file_new(&cli_path, serde_json::json!({
+            "format_version":1,"profile_name":"cli-authored","server_addr":host.endpoint_addr().unwrap(),
+            "server_endpoint_id":host.endpoint_id(),"role":"primary","profile_scope":"host",
+            "token":cli_invitation.token.expose_secret(),"expires_at_unix_seconds":cli_invitation.expires_at_unix_seconds
+        }).to_string().as_bytes()).unwrap();
+        let mut output = Vec::new();
+        let mut error = Vec::new();
+        let code = crate::cli::run_with(
+            vec![
+                "mez".into(),
+                "--json".into(),
+                "remote".into(),
+                "pair".into(),
+                "--invite-file".into(),
+                cli_path.to_str().unwrap().into(),
+                "--name".into(),
+                "cli-paired".into(),
+            ],
+            cli_env.clone(),
+            false,
+            &mut output,
+            &mut error,
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, 0);
+        let published: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(published["paired"], true);
+        assert_eq!(published["profile"]["name"], "cli-paired");
+        assert_eq!(published["profile"]["role"], "primary");
+        let cli_profile = store.load_for_outbound("cli-paired").unwrap().unwrap();
+        assert_eq!(cli_profile.role, RemoteRoleCeiling::Primary);
+        assert!(
+            !String::from_utf8_lossy(&output)
+                .contains(cli_profile.device_credential.expose_secret())
+        );
+        assert!(!String::from_utf8_lossy(&output).contains(cli_invitation.token.expose_secret()));
+        assert!(error.is_empty());
+        assert_eq!(endpoint.endpoint_id(), identity);
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(20), sibling.next())
                 .await
@@ -162,8 +224,8 @@ async fn outbound_pairing_real_host_publishes_proof_without_local_secret_deliver
         })
         .await
         .unwrap();
-    assert_eq!(host_result.unwrap(), 2);
-    assert_eq!(local_result.unwrap(), 3);
+    assert_eq!(host_result.unwrap(), 3);
+    assert_eq!(local_result.unwrap(), 4);
     drop(listener);
     endpoint
         .retire_and_shutdown()

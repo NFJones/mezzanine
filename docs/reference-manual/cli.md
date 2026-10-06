@@ -560,7 +560,12 @@ endpoint. Issued proof is published privately before the closed success reply;
 neither invitation nor device credentials enter frontend IPC. Blocking workers
 retain endpoint/capacity ownership until they exit, even after waiter cancellation.
 Uncertain results require profile inspection, not automatic redemption replay.
-Ordinary pairing-command migration remains unfinished.
+Ordinary host-invitation `remote pair` now reuses an authenticated active broker,
+checking the current outbound veto before discovery. Only initial absent/refused
+discovery retains direct pairing; connected discovery, protocol or operation errors
+never acquire another endpoint or replay redemption. The closed client reply must
+match the exact handle and expected profile alias. Legacy pairing and invitation-based
+attachment remain separate; this does not qualify broker X11 forwarding.
 Paired-profile `kill --force TARGET` reuses an authenticated active broker too,
 preserving the exact target and invocation key through a fixed host kill request.
 The host still enforces destructive authority and visibility. Only correlated

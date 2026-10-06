@@ -19,6 +19,7 @@ const SOCKET_NAME: &str = "outbound.sock";
 
 mod killing;
 mod listing;
+mod pairing;
 mod session;
 #[allow(
     unused_imports,

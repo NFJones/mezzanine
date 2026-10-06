@@ -4283,8 +4283,12 @@ endpoint for one correlated host-only exchange, and publish issued proof private
 before reporting success. Invitation and issued credentials MUST NOT cross local
 IPC. Blocking file/publication work MUST retain finite admission capacity and
 endpoint ownership until actual exit, including after waiter cancellation.
-Uncertain redemption/publication MUST NOT replay; this owner alone does not migrate
-ordinary pairing commands or qualify invitation-based attachment and X11.
+Uncertain redemption/publication MUST NOT replay. Ordinary host-invitation pairing
+MUST reuse an authenticated active broker after checking the current outbound veto.
+Only initial absent/refused discovery MAY retain direct pairing; connected discovery,
+protocol or operation failure MUST NOT acquire a competing endpoint or replay redemption.
+The client MUST validate the exact handle, publication boolean and expected alias
+before reporting success. Invitation-based attachment and broker X11 remain separate.
 Paired-profile force-kill MUST reuse an authenticated active broker when available
 under the same discovery boundary. The closed mutation MUST preserve the exact
 target and invocation key, issue only host/session/kill with force=true, and

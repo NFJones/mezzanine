@@ -1285,6 +1285,46 @@ pub(super) async fn pair_iroh_invitation(
     preflight_iroh_invitation_profile(paths.root(), &target)?;
     let profile_name = target.profile_name().to_string();
     if target.scope() == RemoteClientProfileScope::Host {
+        if !configured_policy.outbound_enabled {
+            return Err(MezError::config(
+                "outbound Iroh connections are disabled by transport.iroh.outbound_enabled",
+            ));
+        }
+        match crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
+            paths.root(),
+            configured_policy.setup_timeout,
+        )
+        .await
+        {
+            Ok(client) => {
+                // Preserve authored path spelling for the owner's protected
+                // no-follow read. Do not canonicalize away a final symlink.
+                let absolute = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    std::env::current_dir()?.join(path)
+                };
+                client
+                    .pair_invitation(
+                        &absolute,
+                        save_as,
+                        &profile_name,
+                        configured_policy.setup_timeout,
+                    )
+                    .await?;
+                return RemoteClientProfileStore::under_config_root(paths.root())
+                    .summary(&profile_name)?
+                    .ok_or_else(|| {
+                        MezError::invalid_state("successful Iroh pairing did not persist a profile")
+                    });
+            }
+            Err(error)
+                if matches!(
+                    error.io_kind(),
+                    Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
+                ) => {}
+            Err(error) => return Err(error),
+        }
         exchange_iroh_host_only_initialize(paths.root(), &configured_policy, &target).await?;
     } else {
         let params = format!(
