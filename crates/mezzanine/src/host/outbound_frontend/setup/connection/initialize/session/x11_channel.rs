@@ -81,8 +81,32 @@ async fn accept_channel(
             "outbound X11 channel capacity unavailable",
         )
     })?;
-    let endpoint = endpoint.clone();
-    tokio::time::timeout(budget, async move {
+    accept_reserved_channel(
+        endpoint.clone(),
+        connection,
+        route,
+        slot,
+        tokio::time::Instant::now() + budget,
+    )
+    .await
+}
+
+/// Consumes a pre-acquired slot and original setup deadline. Reservation callers
+/// must not acquire a second permit or restart the clock while awaiting a stream.
+async fn accept_reserved_channel(
+    endpoint: OutboundEndpointOwner,
+    connection: &iroh::endpoint::Connection,
+    route: &X11ForwardingResult,
+    slot: OwnedSemaphorePermit,
+    deadline: tokio::time::Instant,
+) -> Result<AuthenticatedX11Channel> {
+    endpoint.frontend_config_root()?;
+    if deadline <= tokio::time::Instant::now() {
+        return Err(MezError::invalid_state(
+            "outbound X11 channel setup timed out",
+        ));
+    }
+    tokio::time::timeout_at(deadline, async move {
         let (send, recv) = connection
             .accept_bi()
             .await

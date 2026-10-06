@@ -197,10 +197,14 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
                 );
                 relayed.unwrap();
             };
-            let (result, ()) = tokio::join!(
-                Box::pin(initialized.relay_x11_frontend(dedicated)),
-                Box::pin(frontend)
+            let reservation = initialized.reserve_x11_frontend().unwrap();
+            assert_eq!(initialized.x11_occurrence, 2);
+            assert!(
+                initialized.transport_health().unwrap().0,
+                "reservation must release the mutable control-state borrow"
             );
+            let (result, ()) =
+                tokio::join!(Box::pin(reservation.relay(dedicated)), Box::pin(frontend));
             result.unwrap();
             assert_eq!(initialized.x11_occurrence, 2);
             assert_eq!(
@@ -208,6 +212,28 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
                 policy.x11.max_connections_per_route
             );
             completion.await.unwrap();
+            let mut reservations = Vec::new();
+            for _ in 0..policy.x11.max_connections_per_route {
+                reservations.push(initialized.reserve_x11_frontend().unwrap());
+            }
+            let allocated = initialized.x11_occurrence;
+            assert_eq!(initialized.x11_slots.available_permits(), 0);
+            assert_eq!(
+                initialized.reserve_x11_frontend().err().unwrap().kind(),
+                MezErrorKind::RateLimited
+            );
+            assert_eq!(
+                initialized.x11_occurrence, allocated,
+                "capacity rejection must not consume another occurrence"
+            );
+            assert!(initialized.transport_health().unwrap().0);
+            drop(reservations);
+            assert_eq!(
+                initialized.x11_slots.available_permits(),
+                policy.x11.max_connections_per_route
+            );
+            let pending = initialized.reserve_x11_frontend().unwrap();
+            let retained_slots = initialized.x11_slots.clone();
             initialized.x11_occurrence = u64::MAX;
             let (stream, _peer) = tokio::net::UnixStream::pair().unwrap();
             assert_eq!(
@@ -230,6 +256,29 @@ async fn outbound_x11_frontend_uses_retained_session_and_nonreused_occurrences()
                 MezErrorKind::Conflict
             );
             drop(initialized);
+            let (stream, mut silent_peer) = tokio::net::UnixStream::pair().unwrap();
+            assert_eq!(
+                retained_slots.available_permits(),
+                policy.x11.max_connections_per_route - 1
+            );
+            let error = tokio::time::timeout(Duration::from_secs(1), pending.relay(stream))
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert!(error.message().contains("parent connection retired"));
+            assert_eq!(
+                retained_slots.available_permits(),
+                policy.x11.max_connections_per_route
+            );
+            let mut bytes = Vec::new();
+            tokio::time::timeout(Duration::from_secs(1), silent_peer.read_to_end(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                bytes.is_empty(),
+                "retired parent must emit no handoff readiness"
+            );
             assert!(local.next().await.is_none());
         };
     tokio::time::timeout(Duration::from_secs(15), async {

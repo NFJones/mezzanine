@@ -4367,10 +4367,13 @@ ordinary forwarding; its caller owns finite admission and occurrence allocation.
 The internal session-owned composition MUST derive frontend/session identity,
 fake cookie and immutable codec from retained admission evidence. It MUST allocate
 checked nonreused occurrences before awaiting handshake or channel admission,
-and retain the parent session throughout relay. Handshake, remote preface and
+and reserve finite capacity synchronously. Owned reservations MUST release the
+session borrow so control can progress, retain endpoint lifetime, and retire when
+the parent connection lease closes. Handshake, remote preface and
 setup delivery MUST use one setup deadline without restarting it. Failure MUST
-consume the attempted occurrence and dedicated stream, not replay bytes. This
-serialized composition alone MUST NOT activate listeners or ordinary CLI forwarding.
+consume a returned reservation's occurrence and dedicated stream, not replay bytes.
+Capacity or exhaustion rejection MUST NOT allocate an occurrence. This composition
+alone MUST NOT activate listeners or ordinary CLI forwarding.
 Dedicated X11 listener publication MUST retain the protected root and endpoint,
 use owner-only permissions, and preserve existing pathname entries. Cleanup MUST
 check the published socket identity through the held parent and preserve replacements.

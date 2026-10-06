@@ -634,12 +634,15 @@ raw bytes. Buffered premature bytes reject without silent loss. Socket-pair test
 qualify this boundary only: listener publication, occurrence allocation, real-cookie
 substitution and ordinary broker forwarding remain separate integration work.
 An internal session-owned composition now supplies the retained identities, fake
-cookie and codec, allocates checked occurrences before awaits, and holds the parent
-session through handshake and relay. One setup deadline covers local handoff,
+cookie and codec, reserves finite capacity and checked occurrences before awaits,
+and releases the session borrow for concurrent control work. Owned reservations
+retain endpoint lifetime but not an independent connection lease; parent retirement
+cancels handoff/relay. One setup deadline covers local handoff,
 remote preface and initial delivery. An integrated synthetic fixture qualifies
 rejected-occurrence advancement and dedicated ping/pong/FIN delivery, preserving
-read-ahead setup bytes after readiness. The composition is serialized and publishes
-no listener; real-cookie substitution and ordinary X11 activation remain unfinished.
+read-ahead setup bytes after readiness, capacity rejection without occurrence loss,
+and pending reservation disposal after parent retirement. This composition publishes
+no listener; ordinary X11 activation remains unfinished.
 A separate attaching-client helper now validates bounded fake-cookie setup and
 substitutes the real cookie only on its frozen local X connection. Setup read,
 connect and initial delivery share a deadline; subsequent bytes and half-close
