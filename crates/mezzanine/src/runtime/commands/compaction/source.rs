@@ -49,6 +49,28 @@ impl ManualCompactionSourceWork {
 mod tests {
     use super::*;
 
+    /// Capturing source ownership performs no archive decode. A malformed file
+    /// encountered later must remain an error, not become a successful empty
+    /// selection that would falsely classify corruption as a no-work outcome.
+    #[test]
+    fn manual_compaction_source_corruption_propagates_without_skip() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-compaction-corrupt-{:032x}",
+            rand::random::<u128>()
+        ));
+        let store = AgentTranscriptStore::new(root.clone());
+        let path = store.transcript_path("source-corrupt").unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"not-a-transcript-record\n").unwrap();
+        let direct = store.inspect("source-corrupt").unwrap_err();
+        let captured = ManualCompactionSourceWork::capture(Some(store), "source-corrupt".into());
+        let error = captured.execute().unwrap_err();
+        assert_eq!(error.kind(), direct.kind());
+        assert_eq!(error.message(), direct.message());
+        assert_eq!(std::fs::read(&path).unwrap(), b"not-a-transcript-record\n");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// A captured source remains bound to its original conversation and store
     /// even when callers later install another store. No source returns an empty
     /// projection, while a valid original archive preserves exact chronology.
