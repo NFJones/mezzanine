@@ -624,7 +624,17 @@ host fixture qualifies two sessions while the first remains attached and sibling
 control survives retirement. Separate explicit process fixtures qualify ordinary
 two-terminal concurrency and invitation-first startup. Real-host X11 byte forwarding
 and clipboard-v2 coexistence pass across all codecs with a synthetic local X peer;
-physical X-server and macOS acceptance remain unqualified.
+another explicit process fixture exercises overlapping X11 applications through two
+ordinary CLI frontends with generated fixture credentials. Retiring one frontend
+closes its active local relay and removes private artifacts while its sibling
+continues bidirectional X traffic and terminal input. Physical X SECURITY issuance,
+server-side revocation and macOS acceptance remain unqualified.
+Shared-owner fault fixtures cover real committed creation with reply loss, a
+normal-correlation negative control, deliberate same-key recovery and changed-input
+rejection with spare capacity. An actual broker-crash fixture requires frontends
+to retire while committed host sessions survive; replacement preserves the paired
+identity and explicitly attaches without replaying Create. These checks are
+automated loopback/process acceptance, not exhaustive network or platform testing.
 An internal self-detach API now consumes the exact initialized primary frontend,
 preserves its mutation key and validates exact-client settlement. It exposes no
 sibling target and ends the settled broker pipeline after reply delivery. Errors

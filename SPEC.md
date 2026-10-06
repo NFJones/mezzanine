@@ -4325,8 +4325,8 @@ discovery loss after local connection MUST remain terminal. Failures after
 readiness MUST NOT switch endpoints or replay creation. Ordinary attach/new MUST
 reuse an authenticated active broker for eligible paired host profiles through a
 concrete terminal guard. Signals MUST retire only that frontend and attempt bounded
-terminal restoration. Initial missing/refused discovery for qualified pinned direct
-profiles MAY invoke elected startup using the running executable and caller-retained
+terminal restoration. Initial missing/refused discovery for profiles with configured
+route availability MAY invoke elected startup using the running executable and caller-retained
 child evidence. Startup failure MUST NOT authorize direct fallback or replacement.
 Frontend exit MUST NOT kill the potentially shared child; exited children MAY be
 reaped by exact handle, while live-child disposal retains the documented best-effort
