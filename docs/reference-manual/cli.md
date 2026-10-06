@@ -535,6 +535,9 @@ the worker exits. This preparation does not dial or create a remote session.
 The next internal transition supports pinned direct transport only. It retains
 the exact frontend and independent connection lease, verifies the server ID,
 and negotiates a bounded codec without sending application initialization.
+Configured port mapping stays with the retained endpoint and no longer blocks
+an otherwise qualified protected direct address. Loopback regressions verify
+shared identity and sibling byte transfer with this policy enabled.
 Relay/discovery policy qualification, remote authority settlement and CLI
 activation remain unfinished; unsupported policy rejects without another endpoint.
 An internal host-only initialization transition sends one owner-authenticated

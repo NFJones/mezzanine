@@ -174,7 +174,6 @@ async fn try_open_inner(
             // routes. Leave other route policies on their established path
             // before starting any owner, never after uncertain startup.
             if !policy.direct_connections
-                || policy.port_mapping
                 || !matches!(
                     policy.address_lookup,
                     crate::runtime::RuntimeIrohAddressLookupPolicy::Disabled

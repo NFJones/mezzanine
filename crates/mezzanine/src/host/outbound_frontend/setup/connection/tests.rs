@@ -61,9 +61,24 @@ pub(super) async fn prepared(
 /// only that connection; the other remains usable without application setup.
 #[tokio::test]
 async fn outbound_frontend_pinned_connections_retain_independent_ownership() {
+    Box::pin(qualify_independent_connections(false)).await;
+}
+
+/// Port mapping is an endpoint binding policy, not grounds to reject a protected
+/// direct address. Independent leases must still share the same endpoint and
+/// preserve sibling usability without acquiring replacement identity ownership.
+#[tokio::test]
+async fn outbound_frontend_port_mapping_preserves_shared_connections() {
+    Box::pin(qualify_independent_connections(true)).await;
+}
+
+/// Drives protected setup and loopback byte transfer with the selected endpoint
+/// policy. No remote application authentication or session creation is sent.
+async fn qualify_independent_connections(port_mapping: bool) {
     let root = std::env::temp_dir().join(format!("mez-pinned-{:032x}", rand::random::<u128>()));
     let policy = RuntimeIrohTransportPolicy {
         compression_codecs: vec![RuntimeIrohCompressionCodec::None],
+        port_mapping,
         ..Default::default()
     };
     let endpoint = OutboundEndpointOwner::bind(&root, &policy).await.unwrap();

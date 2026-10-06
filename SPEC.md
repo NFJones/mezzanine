@@ -4256,6 +4256,8 @@ frontend and an independent connection lease, verify the protected server ID,
 and bound all pre-stream codec attempts by one deadline. Unsupported shared
 endpoint route policy MUST reject without rebinding. This transition sends no
 application initialization and establishes no remote session authority.
+Configured port mapping MUST remain owned by the retained endpoint binder and
+MUST NOT independently reject an otherwise qualified protected direct address.
 The subsequent internal host-only initialization MUST send exactly one
 owner-authenticated request, correlate its response, validate observer role and
 host-only settlement, and retain only allowlisted response facts. Device proof

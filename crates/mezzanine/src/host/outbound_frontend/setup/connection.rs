@@ -4,9 +4,11 @@
 //! The connection lease retains the shared endpoint and closes only this peer
 //! connection on drop; the prepared frontend retains its local stream/capacity.
 //! This initial path qualifies direct pinned routes only, refusing endpoint-wide
-//! discovery, relay or port-mapping policy rather than changing shared policy or
+//! discovery or relay policy rather than changing shared policy or
 //! silently binding another endpoint. Later policy-qualified routes require
 //! their own acceptance. Codec fallback is allowed only before stream creation.
+//! Port mapping remains an immutable endpoint-binding policy and does not reject
+//! an otherwise qualified protected direct address.
 
 use super::*;
 use crate::host::outbound_endpoint::OutboundConnectionLease;
@@ -72,7 +74,6 @@ pub(super) async fn connect_to_pinned(
     let policy = endpoint.transport_policy().clone();
     if !policy.outbound_enabled
         || !policy.direct_connections
-        || policy.port_mapping
         || !matches!(
             policy.address_lookup,
             RuntimeIrohAddressLookupPolicy::Disabled | RuntimeIrohAddressLookupPolicy::Local
