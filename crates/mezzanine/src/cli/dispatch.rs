@@ -351,7 +351,7 @@ async fn run_with_inner<W: Write, E: Write>(
                         "remote host list already returns every visible session and does not support --all",
                     ));
                 }
-                let body = list_iroh_host_sessions(&control_target, &env).await?;
+                let body = Box::pin(list_iroh_host_sessions(&control_target, &env)).await?;
                 super::write_control_response(stdout, output_format, &body)?;
             } else if prefer_host && ensure_host_available(&env).await? {
                 let sessions = host_list_sessions_with_all(&env, args.all).await?;
@@ -454,7 +454,8 @@ async fn run_with_inner<W: Write, E: Write>(
                         "remote session kill requires a lease id, session id, or exact name",
                     )
                 })?;
-                let body = force_kill_iroh_host_session(&control_target, &env, target).await?;
+                let body =
+                    Box::pin(force_kill_iroh_host_session(&control_target, &env, target)).await?;
                 super::write_control_response(stdout, output_format, &body)?;
             } else {
                 let socket_selection = if prefer_host && ensure_host_available(&env).await? {

@@ -550,12 +550,17 @@ An internal host-list exchange now returns bounded validated lease summaries
 through exact-handle IPC using the fixed read-only host method. It exposes no
 device proof or private principal/checkpoint metadata and retires only the
 management connection. Real-host fixtures qualify listing beside a live sibling
-without session allocation; ordinary CLI consumer migration remains unfinished.
+without session allocation.
 Ordinary `list --iroh-profile NAME` now reuses an authenticated active broker,
 after checking the current outbound veto. Only missing or refused discovery
 retains direct fallback; unsafe discovery, protocol errors and failed broker
-operations do not create a competing endpoint. Invitation listing and automatic
-broker startup are unchanged; other ordinary consumers remain unmigrated.
+operations do not create a competing endpoint. Host-invitation list and force-kill
+now pair through the active owner, then use fresh readiness for their fixed
+management request. Scope, expiry, profile pinning and destructive role checks
+precede redemption. Post-pair failure never restores direct fallback or replays
+the invitation; the original kill target/key remain retained. Fresh re-pairing
+still supersedes prior endpoint trust; it does not preserve revoked authority.
+Automatic startup for management remains separate.
 Host-scoped `remote profile check NAME` also reuses an authenticated active broker.
 Its authentication-only exchange requires no session-list permission and creates
 no session. Outbound veto and unsafe/protocol/operation failures remain terminal;
@@ -585,7 +590,8 @@ Paired-profile `kill --force TARGET` reuses an authenticated active broker too,
 preserving the exact target and invocation key through a fixed host kill request.
 The host still enforces destructive authority and visibility. Only correlated
 revoked-lease evidence reports success; uncertain exchanges never replay or fall
-back to a competing endpoint. Invitation operations and attach/new remain separate.
+back to a competing endpoint. Invitation administration uses the same management
+settlement after protected pairing, not a new destructive authority channel.
 A paired-profile attachment setup adapter now preserves prepared routing
 and invocation keys through an existing authenticated broker, checking current
 outbound policy and protected profile role. Missing/refused discovery leaves the
@@ -595,7 +601,7 @@ or replay creation. Ordinary `attach` and `new` now reuse an active broker for
 eligible paired host profiles, with guarded terminal output and restoration.
 OS signals retire only the local frontend; terminal Ctrl-C remains forwarded input.
 Initial absent/refused discovery now permits elected first-owner startup for
-qualified pinned direct profiles, using the running binary and retaining the
+profiles with configured route availability, using the running binary and retaining the
 exact child through setup and foreground exit. Startup failure does not switch to
 direct setup or replay creation. Exited children are observed/reaped; live children
 are not killed on frontend exit, and reaping remains best-effort after disposal.
@@ -608,24 +614,29 @@ preflight precedes local credential generation; only the fake offer cookie cross
 IPC. One matching-capacity opener and prepared credential owner survive through
 foreground retirement, with channels disposed before credential cleanup. Packet
 setup and foreground retirement use independent finite budgets. Setup uncertainty
- never authorizes endpoint fallback or replay. Invitation X11 shares the same local
- credential lifetime after pre-redemption preparation; physical X and macOS
- acceptance remain unqualified.
+never authorizes endpoint fallback or replay. Invitation X11 shares the same local
+credential lifetime after pre-redemption preparation; physical X and macOS
+acceptance remain unqualified.
 Errors after writing never automatically replay initialization. Session
 creation/attachment uses a separate internal transition retaining the original
 intent/key and validating exact client/session/active-lease evidence. A loopback
 host fixture qualifies two sessions while the first remains attached and sibling
-control survives retirement; this is not multi-process CLI acceptance. Event/X11
-forwarding, startup election and CLI activation remain unfinished.
+control survives retirement. Separate explicit process fixtures qualify ordinary
+two-terminal concurrency and invitation-first startup. Real-host X11 byte forwarding
+and clipboard-v2 coexistence pass across all codecs with a synthetic local X peer;
+physical X-server and macOS acceptance remain unqualified.
 An internal self-detach API now consumes the exact initialized primary frontend,
 preserves its mutation key and validates exact-client settlement. It exposes no
 sibling target and ends the settled broker pipeline after reply delivery. Errors
-are not replayed; ordinary detach-command migration and terminal restoration
-remain separate from this retained-session API.
+are not replayed. Ordinary host-profile administrative detach uses its separately
+validated explicit session/client target and temporary primary authority; it is not
+the target-free self-detach API.
 Optional version-one events now remain owned by the initialized session and its
 exact connection lease. Setup validates the preface within a deadline; later
-versions and X11 remain rejected. Real-host fixtures qualify event availability
-after sibling retirement, not frontend forwarding or ordinary CLI activation.
+versions remain rejected by this v1 transition. Explicit X11 uses separately
+validated route admission. Real-host fixtures qualify event availability after
+sibling retirement; frontend event polling and ordinary attachment have their
+own ownership and cancellation coverage.
 A separate internal clipboard-session admission now requires explicit version-two
 primary intent and true capability in the validated initialize reply before stream
 acceptance. Internal supervision selects this path for explicit version-two intent

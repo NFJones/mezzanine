@@ -9,6 +9,62 @@ use futures_util::{SinkExt, StreamExt};
 use std::os::unix::fs::symlink;
 use tokio_util::codec::Framed;
 
+/// Invitation administration must consult the active broker rather than contend
+/// for its persistent key. Malformed authenticated readiness is terminal and
+/// leaves proof unchanged; list and kill must never fall back to direct ownership.
+#[tokio::test]
+async fn remote_invitation_administration_uses_broker_before_identity_acquisition() {
+    for kill in [false, true] {
+        let (home, env, paths) = fixture();
+        let path = home.join("invitation.json");
+        crate::security::remote::write_remote_invitation_file_new(&path, serde_json::json!({
+            "format_version":1,"profile_name":"fixture","server_addr":EndpointAddr::new(iroh::SecretKey::generate().public())
+                .with_ip_addr("127.0.0.1:43210".parse().unwrap()),
+            "role":"primary","profile_scope":"host","token":"synthetic-proof","expires_at_unix_seconds":u64::MAX
+        }).to_string().as_bytes()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let identity = RemoteClientIdentity::load_or_create(paths.root()).unwrap();
+        let socket = paths.root().join("outbound.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let target = crate::cli::ControlTargetSelection::IrohInvitation {
+            path: path.clone(),
+            save_as: None,
+        };
+        let operation = async {
+            if kill {
+                force_kill_iroh_host_session(&target, &env, "$1").await
+            } else {
+                list_iroh_host_sessions(&target, &env).await
+            }
+        };
+        let peer = async {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = Framed::new(stream, ProtocolFrameCodec::new(4096).unwrap());
+            stream.next().await.unwrap().unwrap();
+            stream.send(ProtocolFrame::new("application/vnd.mezzanine.outbound+json",
+                "{\"protocol\":\"wrong\",\"handle\":{\"owner\":\"00000000000000000000000000000000\",\"generation\":1}}"
+            )).await.unwrap();
+        };
+        let mut operation = Box::pin(operation);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            tokio::select! {
+                result = &mut operation => result.unwrap_err(),
+                () = peer => operation.await.unwrap_err(),
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            error.message().contains("readiness identity invalid"),
+            "must use broker readiness, not direct identity: {error}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        drop((listener, identity));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+}
+
 /// Supplies a disposable authored primary root, not the user's configuration.
 fn fixture() -> (PathBuf, crate::cli::CliEnv, crate::config::ConfigPaths) {
     let home =

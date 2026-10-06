@@ -1418,40 +1418,19 @@ pub(super) async fn check_iroh_profile(
         .ok_or_else(|| MezError::invalid_state("authenticated Iroh profile disappeared"))
 }
 
-/// Lists sessions visible to one paired host profile without selecting a session.
+/// Lists visible host sessions without selecting a session or competing endpoint.
 pub(super) async fn list_iroh_host_sessions(
     control_target: &super::ControlTargetSelection,
     env: &super::CliEnv,
 ) -> Result<String> {
-    if let super::ControlTargetSelection::IrohProfile(profile) = control_target {
-        let paths = env.config_paths()?;
-        let layers = super::load_runtime_config_layers(&paths)?;
-        let structured = crate::runtime::runtime_effective_config_value(&layers)?;
-        let policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
-        if !policy.outbound_enabled {
-            return Err(MezError::config(
-                "outbound Iroh connections are disabled by transport.iroh.outbound_enabled",
-            ));
-        }
-        match crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
-            paths.root(),
-            policy.setup_timeout,
-        )
-        .await
-        {
-            Ok(client) => {
-                let sessions = client.list_sessions(profile, policy.setup_timeout).await?;
-                return Ok(serde_json::json!({"jsonrpc":"2.0","id":"cli",
-                    "result":{"sessions":sessions}})
-                .to_string());
-            }
-            Err(error)
-                if matches!(
-                    error.io_kind(),
-                    Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
-                ) => {}
-            Err(error) => return Err(error),
-        }
+    if let Some((client, profile, budget)) =
+        Box::pin(broker_management::try_open(control_target, env, false)).await?
+    {
+        let sessions = client.list_sessions(&profile, budget).await?;
+        return Ok(
+            serde_json::json!({"jsonrpc":"2.0","id":"cli", "result":{"sessions":sessions}})
+                .to_string(),
+        );
     }
     // Keep the legacy direct exchange off the caller's bounded stack even when
     // this path is bypassed by an already authenticated broker.
@@ -1474,37 +1453,11 @@ pub(super) async fn force_kill_iroh_host_session(
     target: &str,
 ) -> Result<String> {
     let key = super::cli_idempotency_key("remote-session-kill");
-    if let super::ControlTargetSelection::IrohProfile(profile) = control_target {
-        let paths = env.config_paths()?;
-        let layers = super::load_runtime_config_layers(&paths)?;
-        let structured = crate::runtime::runtime_effective_config_value(&layers)?;
-        let policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
-        if !policy.outbound_enabled {
-            return Err(MezError::config(
-                "outbound Iroh connections are disabled by transport.iroh.outbound_enabled",
-            ));
-        }
-        match crate::host::outbound_frontend::client::OutboundFrontendClient::connect(
-            paths.root(),
-            policy.setup_timeout,
-        )
-        .await
-        {
-            Ok(client) => {
-                let settlement = client
-                    .kill_session(profile, target, &key, policy.setup_timeout)
-                    .await?;
-                return Ok(
-                    serde_json::json!({"jsonrpc":"2.0","id":"cli","result":settlement}).to_string(),
-                );
-            }
-            Err(error)
-                if matches!(
-                    error.io_kind(),
-                    Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
-                ) => {}
-            Err(error) => return Err(error),
-        }
+    if let Some((client, profile, budget)) =
+        Box::pin(broker_management::try_open(control_target, env, true)).await?
+    {
+        let settlement = client.kill_session(&profile, target, &key, budget).await?;
+        return Ok(serde_json::json!({"jsonrpc":"2.0","id":"cli","result":settlement}).to_string());
     }
     Box::pin(exchange_iroh_host_request(
         control_target,
@@ -3012,6 +2965,7 @@ mod broker_listing_tests;
 
 pub(super) mod broker_attach;
 pub(super) mod broker_detach;
+mod broker_management;
 
 #[cfg(test)]
 mod tests {

@@ -4271,12 +4271,19 @@ The internal host-list exchange MUST use one fixed read-only host method and
 the exact frontend handle, returning only bounded validated lease summaries.
 Credentials, private principal/checkpoint facts and arbitrary peer metadata MUST
 NOT cross IPC. Listing MUST retire only its management connection and MUST NOT
-allocate sessions or disturb sibling attachments. Ordinary CLI migration remains separate.
+allocate sessions or disturb sibling attachments.
 Ordinary paired-profile session listing MUST reuse an authenticated active broker
 when available, respecting the current outbound veto before discovery. Only
 missing or refused discovery MAY use the existing direct exchange; permission,
 protocol and broker-operation failures MUST NOT trigger competing endpoint use.
-Invitation listing and automatic broker startup remain separate paths.
+Host-invitation list and force-kill MUST likewise reuse an active broker, validating
+scope, expiry and profile pinning before owner-side pairing. Destructive invocation
+MUST reject observer invitations before redemption; host permission and visibility
+remain authoritative. Pairing MUST consume one connection and management MUST use
+fresh authenticated readiness. Failure after pairing submission MUST NOT restore
+direct eligibility, replay redemption or change the original kill target/key.
+Fresh re-pairing retains existing trust-supersession semantics, including revocation
+of previous endpoint authority. Automatic management startup remains separate.
 Host-scoped profile health MUST likewise reuse an authenticated active broker
 when available, with the current outbound veto and the same fail-closed discovery
 boundary. Authentication-only management MUST issue no session-list follow-up,

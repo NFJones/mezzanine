@@ -7,6 +7,7 @@ use super::*;
 use crate::host::async_runtime::AsyncAttachedTerminalIo;
 
 mod clipboard;
+mod management;
 mod x11;
 
 /// Supplies one valid correlated active-lease response for validator probes.
@@ -743,6 +744,28 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
                 cli_listing["result"]["sessions"].as_array().unwrap().len(),
                 4
             );
+            // Resuming this endpoint's redeemed invitation preserves its trust;
+            // a fresh invitation would deliberately revoke the live principal.
+            let invited_listing = Box::pin(management::exchange(
+                &root,
+                &host,
+                &invitation,
+                &cli_env,
+                None,
+            ))
+            .await;
+            assert_eq!(
+                invited_listing["result"]["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                4
+            );
+            assert_eq!(router.snapshots().await.unwrap().len(), 4);
+            assert!(
+                crate::security::remote::RemoteClientIdentity::load_or_create(&client_root)
+                    .is_err()
+            );
             cli_output.clear();
             let code = crate::cli::run_with(
                 vec![
@@ -816,23 +839,36 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
                 ),
             ] {
                 cli_output.clear();
-                let code = crate::cli::run_with(
-                    vec![
-                        "mez".into(),
-                        "--iroh-profile".into(),
-                        "creator".into(),
-                        "--json".into(),
-                        "kill".into(),
-                        "--force".into(),
-                        target.into(),
-                    ],
-                    cli_env.clone(),
-                    false,
-                    &mut cli_output,
-                    &mut cli_error,
-                )
-                .await
-                .expect("remote kill must reuse the live paired broker");
+                let code = if target == "lease-work" {
+                    let killed = Box::pin(management::exchange(
+                        &root,
+                        &host,
+                        &invitation,
+                        &cli_env,
+                        Some(target),
+                    ))
+                    .await;
+                    cli_output.extend_from_slice(killed.to_string().as_bytes());
+                    0
+                } else {
+                    crate::cli::run_with(
+                        vec![
+                            "mez".into(),
+                            "--iroh-profile".into(),
+                            "creator".into(),
+                            "--json".into(),
+                            "kill".into(),
+                            "--force".into(),
+                            target.into(),
+                        ],
+                        cli_env.clone(),
+                        false,
+                        &mut cli_output,
+                        &mut cli_error,
+                    )
+                    .await
+                    .expect("remote kill must reuse the live paired broker")
+                };
                 assert_eq!(code, 0);
                 let killed: serde_json::Value = serde_json::from_slice(&cli_output).unwrap();
                 assert_eq!(killed["result"]["killed"], true);
@@ -971,7 +1007,7 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
             cancel.notify_one();
         });
         let (accepted, ()) = tokio::join!(supervised, clients);
-        assert_eq!(accepted.unwrap(), 18);
+        assert_eq!(accepted.unwrap(), 21);
         stop.notify_one();
     });
     let (served, ()) = tokio::time::timeout(Duration::from_secs(30), async {
@@ -979,7 +1015,7 @@ async fn qualify_session_siblings(codec: crate::runtime::RuntimeIrohCompressionC
     })
     .await
     .unwrap();
-    assert_eq!(served.unwrap(), 20);
+    assert_eq!(served.unwrap(), 23);
     router
         .shutdown_all(true, Duration::from_secs(5))
         .await
