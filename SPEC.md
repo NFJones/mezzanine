@@ -4432,6 +4432,12 @@ idle partial-transfer expiry. Malformed clipboard effects MUST discard partial
 content without impersonating stream EOF; unnegotiated effects MUST NOT acquire
 clipboard authority. Reader construction MUST NOT write a host clipboard or
 activate session negotiation, frontend delivery or ordinary attachment routing.
+Internal clipboard transfer framing MUST bind every record to the exact frontend,
+whole validated session and positive transfer occurrence. Effects MUST remain
+bounded to 8 MiB with lazy 256 KiB chunks and independently bounded 1 MiB frames.
+Receivers MUST expose content only after exact ordered UTF-8 commit; malformed
+records MUST clear partial content and poison the exchange without payload-bearing
+diagnostics. This framing alone does not activate IPC or host clipboard writes.
 The internal requested event exchange MUST bind the exact frontend/session and
 bounded wait, coalesce at most 64 redraw facts without returning raw payloads,
 and preserve unknown burst cutoffs. Idle waits MUST retain incremental reader

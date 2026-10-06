@@ -28,6 +28,7 @@ const CONTENT_TYPE: &str = "application/vnd.mezzanine.outbound+json";
 const HELLO_LIMIT: usize = 4096;
 
 pub(crate) mod client;
+mod clipboard_wire;
 mod events;
 mod killing;
 mod listener;

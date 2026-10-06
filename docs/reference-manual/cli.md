@@ -694,6 +694,11 @@ framing, and partial clipboard content expires while the stream remains live.
 Malformed effects discard partial content without becoming transport EOF. This
 component does not write a host clipboard or activate session negotiation,
 frontend clipboard delivery or ordinary attachment routing.
+Internal clipboard transfer framing now retains exact frontend/session/occurrence
+ownership on every record. An effect is bounded to 8 MiB, encoded lazily in
+256 KiB chunks within 1 MiB frames, and exposed only after ordered UTF-8 commit.
+Malformed records clear partial content and poison the exchange with content-free
+errors. This component performs no IPC or host clipboard write by itself.
 An internal requested event exchange now forwards bounded coalesced redraw facts
 and optional event identity across exact-session IPC, without raw event payloads
 or unsolicited reply interleaving. Idle waits retain the reader; terminal errors
