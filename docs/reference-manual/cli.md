@@ -640,6 +640,12 @@ remote preface and initial delivery. An integrated synthetic fixture qualifies
 rejected-occurrence advancement and dedicated ping/pong/FIN delivery, preserving
 read-ahead setup bytes after readiness. The composition is serialized and publishes
 no listener; real-cookie substitution and ordinary X11 activation remain unfinished.
+A separate attaching-client helper now validates bounded fake-cookie setup and
+substitutes the real cookie only on its frozen local X connection. Setup read,
+connect and initial delivery share a deadline; subsequent bytes and half-close
+remain caller-owned. Synthetic local TCP fixtures qualify both byte orders,
+rejection and cancellation, not a physical X server or ordinary CLI activation.
+The prepared credential lease remains separately owned by the attachment caller.
 Each internal initialized session now retains its own shared health tracker and
 samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling

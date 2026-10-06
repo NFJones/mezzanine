@@ -17,6 +17,11 @@ use crate::runtime::x11::{
 };
 
 mod authority;
+#[allow(
+    dead_code,
+    reason = "broker X11 activation follows client-local relay qualification"
+)]
+mod broker_relay;
 mod display;
 mod forwarder;
 
