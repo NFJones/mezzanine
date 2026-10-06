@@ -19,8 +19,8 @@ impl AuthenticatedX11Channel {
     /// by caller cancellation, route stop and stream EOF, not a guessed idle timer.
     /// Errors are payload-free and consume ownership without replaying bytes.
     pub(super) async fn relay<S>(
-        mut self,
-        mut frontend: S,
+        self,
+        frontend: S,
         compression: IrohCompressionPolicy,
         fake_cookie: &X11Cookie,
         setup_budget: Duration,
@@ -33,9 +33,38 @@ impl AuthenticatedX11Channel {
                 "outbound X11 relay setup deadline invalid",
             ));
         }
+        self.relay_until(
+            frontend,
+            compression,
+            fake_cookie,
+            tokio::time::Instant::now() + setup_budget,
+        )
+        .await
+    }
+
+    /// Uses an already validated operation's absolute setup deadline. Positive
+    /// remainders need not meet the configuration minimum; expiry rejects before
+    /// setup bytes are exposed. Established application relay is not timed here.
+    pub(in crate::host::outbound_frontend::setup::connection::initialize::session) async fn relay_until<
+        S,
+    >(
+        mut self,
+        mut frontend: S,
+        compression: IrohCompressionPolicy,
+        fake_cookie: &X11Cookie,
+        deadline: tokio::time::Instant,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        if deadline <= tokio::time::Instant::now() {
+            return Err(MezError::invalid_state(
+                "outbound X11 relay setup timed out",
+            ));
+        }
         self._endpoint.frontend_config_root()?;
         let mut decoder = X11IrohDecoder::new(compression)?;
-        tokio::time::timeout(setup_budget, async {
+        tokio::time::timeout_at(deadline, async {
             let setup = if decoder.is_raw() {
                 read_raw_setup(&mut self.recv).await?
             } else {

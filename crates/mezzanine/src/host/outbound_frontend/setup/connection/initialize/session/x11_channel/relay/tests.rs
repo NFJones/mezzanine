@@ -1,6 +1,105 @@
 //! Relay uses synthetic frontend bytes, not a desktop X server or real cookie.
 use super::*;
 
+/// A positive remainder below the configured minimum admits already-buffered
+/// setup. Once setup is delivered, application half-close is allowed after that
+/// deadline. Expired or incomplete setup exposes no bytes and resets only the
+/// owned stream, releasing its permit without closing a sibling connection.
+#[tokio::test]
+async fn outbound_x11_relay_absolute_deadline_preserves_short_remainders() {
+    use crate::runtime::RuntimeIrohCompressionCodec as Codec;
+    for case in ["short", "expired", "partial"] {
+        let (root, owner, server, lease, peer, sibling, sibling_peer) =
+            super::super::tests::fixture().await;
+        let route = super::super::tests::route();
+        let slots = Arc::new(Semaphore::new(1));
+        let compression = IrohCompressionPolicy::new(Codec::None, 1, 3, 1024 * 1024).unwrap();
+        let open = async {
+            let (mut send, recv) = peer.open_bi().await.unwrap();
+            let mut bytes = X11StreamPreface {
+                generation: route.generation,
+                route_token: route.route_token.clone(),
+            }
+            .encode()
+            .to_vec();
+            if case == "partial" {
+                bytes.extend_from_slice(b"l");
+            } else {
+                bytes.extend_from_slice(&setup(17));
+            }
+            send.write_all(&bytes).await.unwrap();
+            (send, recv)
+        };
+        let (channel, (mut send, mut recv)) = tokio::join!(
+            accept_channel(
+                &owner,
+                lease.connection(),
+                &route,
+                slots.clone(),
+                Duration::from_secs(2)
+            ),
+            open,
+        );
+        let channel = channel.unwrap();
+        let (relay_side, mut frontend) = tokio::io::duplex(4096);
+        let cookie = X11Cookie::new([17; 16]);
+        let deadline = if case == "expired" {
+            tokio::time::Instant::now()
+        } else {
+            tokio::time::Instant::now() + Duration::from_millis(50)
+        };
+        if case == "short" {
+            let relay = channel.relay_until(relay_side, compression, &cookie, deadline);
+            let client = async {
+                let mut header = [0; 48];
+                frontend.read_exact(&mut header).await.unwrap();
+                assert_eq!(header.as_slice(), setup(17));
+                // Deliberately cross the setup deadline after its commitment.
+                tokio::time::sleep_until(deadline + Duration::from_millis(20)).await;
+                frontend.write_all(b"late-pong").await.unwrap();
+                frontend.shutdown().await.unwrap();
+            };
+            let remote = async {
+                send.finish().unwrap();
+                assert_eq!(recv.read_to_end(1024).await.unwrap(), b"late-pong");
+            };
+            let (result, (), ()) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(Box::pin(relay), Box::pin(client), Box::pin(remote))
+            })
+            .await
+            .unwrap();
+            result.unwrap();
+        } else {
+            let error = Box::pin(channel.relay_until(relay_side, compression, &cookie, deadline))
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), MezErrorKind::InvalidState);
+            let mut bytes = Vec::new();
+            frontend.read_to_end(&mut bytes).await.unwrap();
+            assert!(bytes.is_empty());
+            assert!(
+                tokio::time::timeout(Duration::from_secs(2), send.stopped())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        assert_eq!(slots.available_permits(), 1);
+        assert!(sibling.connection().close_reason().is_none());
+        drop((send, recv, lease, peer, sibling, sibling_peer));
+        owner
+            .retire_and_shutdown()
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
+        server.close().await;
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// Invalid fake credentials and mixed setup/application records must expose no
 /// frontend bytes. Partial setup timeout and cancellation after validated setup
 /// must reset the exact stream, release capacity, and preserve sibling transport.

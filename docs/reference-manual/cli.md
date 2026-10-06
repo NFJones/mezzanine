@@ -633,6 +633,13 @@ frontend/session/channel occurrence before flushing readiness and switching to
 raw bytes. Buffered premature bytes reject without silent loss. Socket-pair tests
 qualify this boundary only: listener publication, occurrence allocation, real-cookie
 substitution and ordinary broker forwarding remain separate integration work.
+An internal session-owned composition now supplies the retained identities, fake
+cookie and codec, allocates checked occurrences before awaits, and holds the parent
+session through handshake and relay. One setup deadline covers local handoff,
+remote preface and initial delivery. An integrated synthetic fixture qualifies
+rejected-occurrence advancement and dedicated ping/pong/FIN delivery, preserving
+read-ahead setup bytes after readiness. The composition is serialized and publishes
+no listener; real-cookie substitution and ordinary X11 activation remain unfinished.
 Each internal initialized session now retains its own shared health tracker and
 samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling

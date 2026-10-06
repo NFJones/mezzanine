@@ -34,6 +34,10 @@ pub(crate) struct InitializedSessionFrontend {
     x11_route: Option<crate::runtime::x11::X11ForwardingResult>,
     /// One finite capacity owner shared by pending and authenticated X11 streams.
     x11_slots: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Fake offer credential retained only after exact X11 admission.
+    x11_cookie: Option<crate::runtime::x11::X11Cookie>,
+    /// Dedicated local channel occurrence; attempts consume it even on failure.
+    x11_occurrence: u64,
     events: Option<
         crate::host::outbound_frontend::events::OutboundEventReader<iroh::endpoint::RecvStream>,
     >,
@@ -51,7 +55,7 @@ impl ConnectedFrontend {
     /// Unsupported modes reject before opening a stream; failed replies retain
     /// ambiguity and never replay creation, input, or initialization.
     pub(crate) async fn initialize_session(self) -> Result<InitializedSessionFrontend> {
-        self.initialize_session_mode(false, false).await
+        Box::pin(self.initialize_session_mode(false, false)).await
     }
 
     /// Admits only explicitly requested version-two primary clipboard sessions.
@@ -59,7 +63,7 @@ impl ConnectedFrontend {
     /// Supervision selects this transition only for explicit version-two intent;
     /// it writes no host clipboard, and callers must consume typed event items.
     pub(crate) async fn initialize_clipboard_session(self) -> Result<InitializedSessionFrontend> {
-        self.initialize_session_mode(true, false).await
+        Box::pin(self.initialize_session_mode(true, false)).await
     }
 
     /// Admits an explicit primary X11 offer on this exact connection. Requested
@@ -73,8 +77,7 @@ impl ConnectedFrontend {
     pub(crate) async fn initialize_x11_session(self) -> Result<InitializedSessionFrontend> {
         let params = initialize_params_from_json(&self.prepared.initialize.to_string())?;
         validate_x11_mode(&params)?;
-        self.initialize_session_mode(params.event_stream_version == Some(2), true)
-            .await
+        Box::pin(self.initialize_session_mode(params.event_stream_version == Some(2), true)).await
     }
 
     /// Shares single-attempt authenticated initialization without broadening the
@@ -182,6 +185,11 @@ impl ConnectedFrontend {
             clipboard_transfer: 0,
             x11_route,
             x11_slots,
+            x11_cookie: params
+                .x11_forwarding
+                .as_ref()
+                .map(|offer| offer.fake_cookie.clone()),
+            x11_occurrence: 0,
             events,
         })
     }

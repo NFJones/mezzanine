@@ -9,6 +9,8 @@ use crate::runtime::{RuntimeIrohCompressionCodec, RuntimeIrohTransportPolicy};
 use crate::security::remote::RemoteRoleCeiling;
 use base64::Engine as _;
 
+mod frontend;
+
 /// Returns only a synthetic fake-cookie offer, never a real local credential.
 fn offer(mode: &str) -> serde_json::Value {
     serde_json::json!({"version":crate::runtime::x11::X11_FORWARDING_VERSION,

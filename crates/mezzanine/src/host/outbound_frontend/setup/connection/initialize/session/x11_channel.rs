@@ -30,6 +30,7 @@ pub(super) struct AuthenticatedX11Channel {
     graceful: bool,
 }
 
+mod frontend;
 mod handoff;
 mod relay;
 

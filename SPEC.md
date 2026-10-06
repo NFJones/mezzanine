@@ -4364,6 +4364,13 @@ nonreused channel occurrence. Readiness MUST flush before transitioning that str
 to raw bytes. Buffered premature bytes MUST reject rather than be discarded.
 The handoff alone MUST NOT publish a listener, expose route proof or activate
 ordinary forwarding; its caller owns finite admission and occurrence allocation.
+The internal session-owned composition MUST derive frontend/session identity,
+fake cookie and immutable codec from retained admission evidence. It MUST allocate
+checked nonreused occurrences before awaiting handshake or channel admission,
+and retain the parent session throughout relay. Handshake, remote preface and
+setup delivery MUST use one setup deadline without restarting it. Failure MUST
+consume the attempted occurrence and dedicated stream, not replay bytes. This
+serialized composition alone MUST NOT activate listeners or ordinary CLI forwarding.
 Later event versions MUST reject before initialization. Reader errors or
 EOF require retirement of that session owner, not reconnect or creation replay;
 retiring one session MUST NOT close a sibling connection.
