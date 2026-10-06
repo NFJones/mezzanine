@@ -48,6 +48,9 @@ use crate::storage::lease::{RemoteSessionLease, RemoteSessionLeaseState};
 
 const HOST_CONTROL_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
 
+#[cfg(test)]
+mod initialize_diagnostics;
+
 /// Emits the final lifecycle record for one established remote client connection.
 struct RemoteClientConnectionLog {
     endpoint_id: String,
@@ -916,6 +919,8 @@ async fn serve_routed_initialize_inner(
             .ok_or_else(|| MezError::forbidden("host Iroh device credential is missing"))?
             .to_string(),
     );
+    #[cfg(test)]
+    let mut setup_timing = initialize_diagnostics::InitializeDiagnostics::new();
     let principal = trust.resolve_principal(
         server_endpoint_id,
         client_endpoint_id,
@@ -941,6 +946,8 @@ async fn serve_routed_initialize_inner(
                 .and_then(Value::as_str)
                 .map(str::to_string)
         });
+    #[cfg(test)]
+    setup_timing.advance("routing");
     let mut provisioning = None;
     let mut binding = match intent {
         SessionIntent::Create => {
@@ -1014,6 +1021,8 @@ async fn serve_routed_initialize_inner(
     connection_state.bind_authenticated_peer(peer.clone())?;
     connection_state.bind_remote_principal(principal.clone())?;
     connection_state.bind_x11_connection_id(format!("iroh-{}", connection.stable_id()))?;
+    #[cfg(test)]
+    setup_timing.advance("actor-admission");
     let mut initialized = binding
         .runtime
         .actor()
@@ -1035,6 +1044,8 @@ async fn serve_routed_initialize_inner(
         MezError::invalid_state("routed actor initialization returned invalid JSON")
     })?;
     let actor_initialized = response.get("error").is_none();
+    #[cfg(test)]
+    setup_timing.advance("lease-settlement");
     if actor_initialized && let Some(prepared) = provisioning.take() {
         binding = prepared.commit()?;
     }
@@ -1070,6 +1081,8 @@ async fn serve_routed_initialize_inner(
     if request_id.as_str() == Some("test-fail-routed-response") {
         bridge.fail_raw_peer_for_test().await;
     }
+    #[cfg(test)]
+    setup_timing.advance("reply-publication");
     tokio::time::timeout(
         policy.idle_timeout,
         bridge
@@ -1082,6 +1095,8 @@ async fn serve_routed_initialize_inner(
         .await
         .map_err(|_| MezError::invalid_state("host routed initialize flush timed out"))??;
     *initialization_sent = true;
+    #[cfg(test)]
+    setup_timing.complete();
     if !actor_initialized {
         return Ok(());
     }
