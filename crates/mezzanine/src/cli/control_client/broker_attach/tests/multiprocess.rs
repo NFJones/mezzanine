@@ -15,6 +15,8 @@ use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
+mod x11;
+
 /// One actual CLI terminal, retaining process and I/O cleanup on assertion failure.
 struct CliTerminal {
     child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -29,6 +31,18 @@ struct CliTerminal {
 impl CliTerminal {
     /// Starts an ordinary new invocation, not a direct call to session setup.
     fn spawn(executable: &Path, home: &Path, runtime: &Path, name: &str) -> Result<Self> {
+        Self::spawn_with_x11(executable, home, runtime, name, None)
+    }
+
+    /// Adds only explicit fixture-local X preparation inputs to a real CLI
+    /// invocation. No process-global environment or physical desktop is changed.
+    fn spawn_with_x11(
+        executable: &Path,
+        home: &Path,
+        runtime: &Path,
+        name: &str,
+        x11: Option<(&str, &Path, &Path)>,
+    ) -> Result<Self> {
         let pair = portable_pty::native_pty_system()
             .openpty(portable_pty::PtySize {
                 rows: 24,
@@ -44,6 +58,19 @@ impl CliTerminal {
         command.env("MEZ_TMPDIR", runtime);
         command.env("TERM", "xterm-256color");
         command.args(["--iroh-profile", "fixture", "new", "--name", name]);
+        if let Some((display, authority, bin)) = x11 {
+            command.env("DISPLAY", display);
+            command.env("XAUTHORITY", authority);
+            command.env(
+                "PATH",
+                format!(
+                    "{}:/usr/bin:/bin",
+                    bin.to_str()
+                        .ok_or_else(|| MezError::invalid_args("fixture bin path invalid"))?
+                ),
+            );
+            command.arg("--x11-trusted");
+        }
         let child = pair
             .slave
             .spawn_command(command)
