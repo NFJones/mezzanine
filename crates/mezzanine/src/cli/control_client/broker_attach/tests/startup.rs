@@ -10,6 +10,8 @@ use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio_util::codec::Framed;
 
+mod invitation;
+
 /// A host invitation first attachment must elect the shared identity owner before
 /// consuming proof. Failed readiness preserves invitation bytes and exact child
 /// evidence, with no direct fallback, credential generation or remote redemption.
