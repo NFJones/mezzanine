@@ -19,6 +19,7 @@ mod events;
 mod health;
 mod step;
 mod target_detach;
+mod x11_discovery;
 
 /// Closed display request; geometry is the only frontend-controlled parameter.
 #[derive(Deserialize)]
@@ -66,6 +67,13 @@ impl InitializedSessionFrontend {
             let envelope: serde_json::Value = serde_json::from_str(&frame.body)
                 .map_err(|_| MezError::invalid_args("outbound local request invalid"))?;
             if envelope.get("operation").is_some() {
+                if envelope
+                    .get("operation")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("x11-discovery")
+                {
+                    return x11_discovery::deliver(self, &frame.body).await;
+                }
                 if envelope
                     .get("operation")
                     .and_then(serde_json::Value::as_str)

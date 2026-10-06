@@ -38,6 +38,8 @@ pub(crate) struct InitializedSessionFrontend {
     x11_cookie: Option<crate::runtime::x11::X11Cookie>,
     /// Dedicated local channel occurrence; attempts consume it even on failure.
     x11_occurrence: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Local basename installed only while the exact dedicated listener is owned.
+    x11_socket_name: Option<String>,
     events: Option<
         crate::host::outbound_frontend::events::OutboundEventReader<iroh::endpoint::RecvStream>,
     >,
@@ -190,6 +192,7 @@ impl ConnectedFrontend {
                 .as_ref()
                 .map(|offer| offer.fake_cookie.clone()),
             x11_occurrence: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            x11_socket_name: None,
             events,
         })
     }

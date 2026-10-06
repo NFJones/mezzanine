@@ -668,6 +668,11 @@ closes only that stream; root and listener failures remain terminal.
 cancellation or control failure disposes channel work and listener publication.
 Synthetic tests qualify control progress and cleanup, not ordinary listener
 dispatch, occurrence announcement or CLI X11 activation.
+An exact-session discovery exchange now returns only the dedicated listener's
+validated basename while supervision owns publication. It allocates no channel
+occurrence or remote permit and exposes no route proof. Closed client validation
+rejects foreign ownership and directory paths; this does not open a channel or
+enable ordinary CLI X11 forwarding.
 Each internal initialized session now retains its own shared health tracker and
 samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling

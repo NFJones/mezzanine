@@ -20,7 +20,7 @@ impl InitializedSessionFrontend {
     /// retires the entire exact session, including pending handshakes and relays.
     /// The owned listener is removed on every return or future abandonment.
     pub(super) async fn supervise_x11<C>(
-        self,
+        mut self,
         listener: X11FrontendListener,
         cancellation: C,
     ) -> Result<()>
@@ -29,6 +29,24 @@ impl InitializedSessionFrontend {
     {
         let source = self.x11_relay_source()?;
         let parent = self.connected.connection.connection().clone();
+        let path = listener.socket_path()?;
+        if path.parent()
+            != Some(
+                self.connected
+                    .prepared
+                    .frontend
+                    ._endpoint
+                    .frontend_config_root()?,
+            )
+        {
+            return Err(MezError::conflict("outbound X11 listener root changed"));
+        }
+        let name = path
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .ok_or_else(|| MezError::invalid_state("outbound X11 listener name unavailable"))?;
+        crate::host::outbound_frontend::x11_discovery::validate_socket_name(name)?;
+        self.x11_socket_name = Some(name.to_string());
         let limit = self
             .connected
             .prepared

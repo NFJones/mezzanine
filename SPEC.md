@@ -4396,6 +4396,11 @@ control replies. Channel failure MUST retire only that channel; control failure,
 parent retirement or cancellation MUST dispose all owned channels and listener
 publication without replay. This staged supervisor alone MUST NOT activate
 ordinary listener dispatch or CLI forwarding.
+Dedicated X11 discovery MUST bind the exact frontend and session and expose only
+a validated listener basename while supervision owns its publication. Discovery
+MUST NOT allocate an occurrence, consume channel capacity, expose route proof,
+or issue remote work. The client MUST validate the closed reply and treat absent
+publication as unavailable, not as permission to acquire another endpoint.
 The attaching-client relay MUST validate the fake setup cookie before dialing
 the frozen local X destination, substitute the real credential only locally, and
 preserve subsequent application bytes and directional half-close. Setup read,

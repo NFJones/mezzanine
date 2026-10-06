@@ -148,6 +148,31 @@ async fn qualify_supervision(case: &str) {
         let supervise =
             initialized.supervise_x11(listener, async move { stopped.notified().await });
         let clients = async {
+            local
+                .send(ProtocolFrame::new(
+                    CONTENT_TYPE,
+                    serde_json::json!({"operation":"x11-discovery","handle":handle}).to_string(),
+                ))
+                .await
+                .unwrap();
+            let discovery = local.next().await.unwrap().unwrap();
+            assert_eq!(discovery.content_type, CONTENT_TYPE);
+            let discovery: serde_json::Value = serde_json::from_str(&discovery.body).unwrap();
+            assert_eq!(
+                discovery,
+                serde_json::json!({"handle":handle,"session":summary,
+                "version":1,"socket_name":path.file_name().unwrap().to_str().unwrap()})
+            );
+            assert_eq!(
+                occurrences.load(std::sync::atomic::Ordering::Relaxed),
+                baseline,
+                "discovery must allocate no occurrence"
+            );
+            assert_eq!(
+                slots.available_permits(),
+                if case == "external" { 0 } else { 2 },
+                "discovery must consume no remote permit"
+            );
             let mut silent = tokio::net::UnixStream::connect(&path).await.unwrap();
             if case == "external" {
                 local

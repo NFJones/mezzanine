@@ -34,6 +34,7 @@ mod killing;
 mod listener;
 mod listing;
 mod setup;
+mod x11_discovery;
 #[allow(
     unused_imports,
     reason = "CLI broker integration follows listener publication qualification"
