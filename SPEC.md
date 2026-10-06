@@ -10533,6 +10533,19 @@ The baseline command capabilities are:
   durable transcript entries exist, regardless of retained-tail budget. It MUST
   no-op only when there are no closed transcript execution groups to compact or
   no durable transcript entries are available.
+  Manual no-work feedback MUST distinguish `no-transcript-entries`,
+  `no-durable-transcript`, `no-eligible-closed-prefix` and
+  `irreducible-exact-retained-tail`. Forced empty-prefix selection MUST NOT cite
+  retained-budget fit as its eligibility cause. Leading exact/open groups MUST
+  remain barriers; later completed groups MUST NOT be selectively skipped into
+  a prefix. Forced and final selection MUST share the narrow eligibility of
+  ordinary assistant-bearing groups and dedicated intact MCP epoch metadata.
+  A genuine skip MUST queue no provider or publish a replay epoch. Content-free
+  `manual_compaction_no_work` diagnostics MUST report `compacted=false` and
+  `provider_queued=false`; they MUST NOT include source text. Worker preparation
+  MAY allocate its logical admission fence while discovering a skip, but MUST
+  retire visible ownership after discovery; that fence is not a durable epoch
+  or evidence of a model request or completed summary. Corruption remains error.
   Actor-owned manual admission with logical history MUST expose `state=preparing`
   and current compacting presentation before durable source decoding.
   Accepted command/history ownership MUST block a new manual compaction before

@@ -38,10 +38,12 @@ use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 use mez_agent::{ProviderErrorRetryClass, apply_model_context_compaction_plan};
 
 mod preparation;
+mod selection;
 mod source;
 pub(crate) use preparation::{
     RuntimeManualCompactionPreparation, RuntimeManualCompactionRequestWork,
 };
+use selection::{ManualCompactionSelection, NoWorkReason};
 
 /// Content-free component estimates for a failed complete provider request.
 fn runtime_compaction_candidate_size_diagnostic(
@@ -626,16 +628,19 @@ impl RuntimeSessionService {
         }
         let _ = self.runtime_prune_expired_persistent_memory_best_effort();
         if transcript_entries == 0 {
+            let reason = NoWorkReason::NoTranscriptEntries;
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
-                "agent: compact skipped; no transcript entries are available",
+                &format!("{} reason={}", reason.status(), reason.code()),
             )?;
+            self.record_manual_compaction_no_work(pane_id, &conversation_id, reason, source)?;
             return Ok(AgentShellCommandOutcome::Display {
                 command: "compact".to_string(),
                 body: format!(
-                    "pane={} conversation={} previous_transcript_entries=0 summarized_entries=0 compacted=false reason=no-transcript-entries source=model-compact trigger={}",
+                    "pane={} conversation={} previous_transcript_entries=0 summarized_entries=0 compacted=false reason={} source=model-compact trigger={}",
                     json_escape(pane_id),
                     json_escape(&conversation_id),
+                    reason.code(),
                     json_escape(source)
                 ),
             });
@@ -654,17 +659,20 @@ impl RuntimeSessionService {
             .as_ref()
             .map_or(0, |owner| owner.compaction_epoch);
         if transcript_records.is_empty() {
+            let reason = NoWorkReason::NoDurableTranscript;
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
-                "agent: compact skipped; no durable transcript entries are available",
+                &format!("{} reason={}", reason.status(), reason.code()),
             )?;
+            self.record_manual_compaction_no_work(pane_id, &conversation_id, reason, source)?;
             return Ok(AgentShellCommandOutcome::Display {
                 command: "compact".to_string(),
                 body: format!(
-                    "pane={} conversation={} previous_transcript_entries={} summarized_entries=0 compacted=false reason=no-durable-transcript source=model-compact trigger={}",
+                    "pane={} conversation={} previous_transcript_entries={} summarized_entries=0 compacted=false reason={} source=model-compact trigger={}",
                     json_escape(pane_id),
                     json_escape(&conversation_id),
                     transcript_entries,
+                    reason.code(),
                     json_escape(source)
                 ),
             });
@@ -698,44 +706,26 @@ impl RuntimeSessionService {
                 retained_tail_percent,
             )
         };
-        let compactable_transcript_records = runtime_compact_transcript_entries_for_summary(
+        let selection = ManualCompactionSelection::select(
             transcript_entries,
             &transcript_records,
             retained_transcript_entries,
+            context_budget_tokens,
+            retained_tail_percent,
         );
-        let retained_transcript_entries = u64::try_from(
-            runtime_compact_active_transcript_entry_count(
-                transcript_entries,
-                transcript_records.len(),
-            )
-            .saturating_sub(compactable_transcript_records.len()),
-        )
-        .unwrap_or(u64::MAX);
-        if compactable_transcript_records.is_empty() {
-            let retained_tail_budget_words = runtime_compact_retained_context_tail_budget_words(
-                context_budget_tokens,
-                retained_tail_percent,
+        let compactable_transcript_records = selection.entries;
+        let retained_transcript_entries = selection.retained_entries;
+        if let Some(reason) = selection.no_work {
+            let retained_tail_words = selection.retained_words;
+            let retained_tail_budget_words = selection.budget_words;
+            let status = format!(
+                "{} reason={} retained_tail_words={retained_tail_words} retained_tail_budget_words={retained_tail_budget_words}",
+                reason.status(),
+                reason.code()
             );
-            let retained_tail_words = runtime_compact_retained_transcript_tail_context_words(
-                transcript_entries,
-                &transcript_records,
-                retained_transcript_entries,
-            );
-            let irreducible_tail = retained_tail_words > retained_tail_budget_words;
-            let (status, reason) = if irreducible_tail {
-                (
-                    format!(
-                        "agent: compaction skipped; exact unfinished transcript tail exceeds retention budget retained_tail_words={retained_tail_words} retained_tail_budget_words={retained_tail_budget_words}"
-                    ),
-                    "irreducible-exact-retained-tail",
-                )
-            } else {
-                (
-                    "agent: compact skipped; recent transcript tail already fits the active context budget".to_string(),
-                    "within-retained-context-tail",
-                )
-            };
             self.append_agent_status_text_to_terminal_buffer(pane_id, &status)?;
+            self.record_manual_compaction_no_work(pane_id, &conversation_id, reason, source)?;
+            let reason = reason.code();
             return Ok(AgentShellCommandOutcome::Display {
                 command: "compact".to_string(),
                 body: format!(
@@ -868,6 +858,18 @@ impl RuntimeSessionService {
             ),
             visibility,
         })
+    }
+
+    /// Records only source eligibility, not provider execution or completion.
+    fn record_manual_compaction_no_work(
+        &mut self,
+        pane: &str,
+        conversation: &str,
+        reason: NoWorkReason,
+        trigger: &str,
+    ) -> Result<()> {
+        self.append_lifecycle_event(crate::runtime::EventKind::Diagnostic,
+            serde_json::json!({"kind":"manual_compaction_no_work","pane_id":pane,"conversation_id":conversation,"reason":reason.code(),"compacted":false,"provider_queued":false,"trigger":trigger}).to_string())
     }
 
     /// Queues model-backed compaction for one frozen active-turn context.
@@ -3649,11 +3651,10 @@ pub(super) fn runtime_compact_forced_retained_transcript_entries(
     }
     let active_entries = &durable_entries[durable_entries.len() - active_count..];
     let groups = runtime_compact_transcript_execution_groups(active_entries);
-    let Some(first_closed_group) = groups.iter().find(|group| {
-        active_entries[(*group).clone()]
-            .iter()
-            .any(|entry| entry.role == TranscriptRole::Assistant)
-    }) else {
+    let Some(first_closed_group) = groups
+        .iter()
+        .find(|group| runtime_compaction_group_is_summarizable(&active_entries[(*group).clone()]))
+    else {
         return u64::try_from(active_count).unwrap_or(u64::MAX);
     };
     u64::try_from(active_count.saturating_sub(first_closed_group.end)).unwrap_or(u64::MAX)

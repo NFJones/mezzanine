@@ -8,6 +8,8 @@
 use super::*;
 use mez_core::ids::ClientId;
 
+mod diagnostics;
+
 /// Captures one genuine preparation through the command entry point. The store
 /// has closed eligible rows; no injected model task or completion is needed.
 fn fixture(label: &str) -> (RuntimeSessionService, ClientId, AgentTranscriptStore) {

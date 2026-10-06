@@ -80,6 +80,18 @@ not evidence that a provider has received a request. Elapsed time starts once
 per logical operation and does not reset for source/request handoffs or compactor
 chunks/retries. Completed or cancelled work no longer appears active.
 
+When `/compact` has no model work, feedback names the eligibility reason: no
+logical entries, no durable source, no eligible closed prefix, or an irreducible
+exact/open retained tail. A fitting budget alone is not why explicit compaction
+skips. An early exact/open group blocks later completed work from entering a
+contiguous prefix; Mez does not silently skip that barrier. Dedicated intact MCP
+epoch metadata uses the same narrow eligibility in forced and final selection.
+Content-free `manual_compaction_no_work` events and feedback reason codes identify
+these outcomes without copying source text or claiming a summary completed.
+Preparing may discover a skip, but it then clears active work without queuing a
+provider or changing the persisted replay epoch; a logical admission fence is not
+a model request or summary commit.
+
 If compaction fails, the error does not mean the source history was discarded.
 Mez does not publish a partial replacement as a completed durable compaction.
 Missing or corrupt required history is reported rather than silently omitted.
