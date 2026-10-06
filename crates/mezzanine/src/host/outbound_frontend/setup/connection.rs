@@ -1,20 +1,16 @@
-//! Pinned direct transport connection for one consumed prepared frontend.
+//! Policy-aware pinned transport connection for one consumed prepared frontend.
 //!
 //! No application stream, authentication request or session creation is sent.
 //! The connection lease retains the shared endpoint and closes only this peer
 //! connection on drop; the prepared frontend retains its local stream/capacity.
-//! This initial path qualifies direct pinned routes only, refusing endpoint-wide
-//! discovery or relay policy rather than changing shared policy or
-//! silently binding another endpoint. Later policy-qualified routes require
-//! their own acceptance. Codec fallback is allowed only before stream creation.
-//! Port mapping remains an immutable endpoint-binding policy and does not reject
-//! an otherwise qualified protected direct address.
+//! The retained binder owns direct, lookup, relay and port-mapping policy. Route
+//! preflight requires possible configured routing without changing that policy
+//! or silently binding another endpoint. The protected endpoint ID remains pinned
+//! regardless of address discovery. Codec fallback precedes application streams.
 
 use super::*;
 use crate::host::outbound_endpoint::OutboundConnectionLease;
-use crate::runtime::{
-    IrohCompressionPolicy, RuntimeIrohAddressLookupPolicy, RuntimeIrohRelayPolicy,
-};
+use crate::runtime::IrohCompressionPolicy;
 
 /// Connected transport ownership, not remote application authority.
 /// Fields remain internal until exact initialization/stream ownership is added.
@@ -50,7 +46,7 @@ impl ConnectedFrontend {
 }
 
 impl PreparedFrontend {
-    /// Connects only to this owner-resolved profile's pinned direct address.
+    /// Connects only to this owner-resolved profile's pinned endpoint identity.
     /// A single total deadline bounds all pre-stream codec attempts. Failure or
     /// cancellation disposes the consumed frontend, never retrying creation.
     pub(crate) async fn connect_pinned(self) -> Result<ConnectedFrontend> {
@@ -72,16 +68,7 @@ pub(super) async fn connect_to_pinned(
     address: &iroh::EndpointAddr,
 ) -> Result<(OutboundConnectionLease, IrohCompressionPolicy)> {
     let policy = endpoint.transport_policy().clone();
-    if !policy.outbound_enabled
-        || !policy.direct_connections
-        || !matches!(
-            policy.address_lookup,
-            RuntimeIrohAddressLookupPolicy::Disabled | RuntimeIrohAddressLookupPolicy::Local
-        )
-        || !matches!(policy.relay, RuntimeIrohRelayPolicy::Disabled)
-        || address.ip_addrs().next().is_none()
-        || address.relay_urls().next().is_some()
-    {
+    if !crate::host::outbound_frontend::routes::available(&policy, address) {
         return Err(MezError::forbidden(
             "outbound pinned route policy unsupported",
         ));

@@ -170,22 +170,9 @@ async fn try_open_inner(
             let Some(child) = child else {
                 return Ok(None);
             };
-            // The shared transport currently qualifies only pinned direct
-            // routes. Leave other route policies on their established path
-            // before starting any owner, never after uncertain startup.
-            if !policy.direct_connections
-                || !matches!(
-                    policy.address_lookup,
-                    crate::runtime::RuntimeIrohAddressLookupPolicy::Disabled
-                        | crate::runtime::RuntimeIrohAddressLookupPolicy::Local
-                )
-                || !matches!(
-                    policy.relay,
-                    crate::runtime::RuntimeIrohRelayPolicy::Disabled
-                )
-                || profile.server_addr.ip_addrs().next().is_none()
-                || profile.server_addr.relay_urls().next().is_some()
-            {
+            // Apply the retained binder's route policy before elected startup,
+            // never switch endpoints after uncertain readiness or setup.
+            if !crate::host::outbound_frontend::routes::available(&policy, &profile.server_addr) {
                 return Ok(None);
             }
             if let Some(executable) = executable {

@@ -532,14 +532,17 @@ profile inside the owner. Caller credentials are rejected; existing control
 initialization and profile role/scope validation remain authoritative. A timed-out
 profile waiter does not cancel blocking I/O: its finite slot stays occupied until
 the worker exits. This preparation does not dial or create a remote session.
-The next internal transition supports pinned direct transport only. It retains
+The next internal transition uses the retained endpoint's configured transport. It retains
 the exact frontend and independent connection lease, verifies the server ID,
 and negotiates a bounded codec without sending application initialization.
 Configured port mapping stays with the retained endpoint and no longer blocks
 an otherwise qualified protected direct address. Loopback regressions verify
 shared identity and sibling byte transfer with this policy enabled.
-Relay/discovery policy qualification, remote authority settlement and CLI
-activation remain unfinished; unsupported policy rejects without another endpoint.
+Startup and connection preflight share possible routing evidence from direct
+addresses, configured relay routes or configured network lookup. The protected
+endpoint identity never changes. Loopback tests cover known direct peers with
+custom relay/lookup policy enabled, not external relay or DNS reachability;
+connection failure never switches to another endpoint owner or replays setup.
 An internal host-only initialization transition sends one owner-authenticated
 request and validates correlated observer/host-only settlement. Private proof
 and raw peer responses stay inside the owner; only allowlisted facts are retained.

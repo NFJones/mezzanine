@@ -61,7 +61,7 @@ pub(super) async fn prepared(
 /// only that connection; the other remains usable without application setup.
 #[tokio::test]
 async fn outbound_frontend_pinned_connections_retain_independent_ownership() {
-    Box::pin(qualify_independent_connections(false)).await;
+    Box::pin(qualify_independent_connections("direct")).await;
 }
 
 /// Port mapping is an endpoint binding policy, not grounds to reject a protected
@@ -69,16 +69,40 @@ async fn outbound_frontend_pinned_connections_retain_independent_ownership() {
 /// preserve sibling usability without acquiring replacement identity ownership.
 #[tokio::test]
 async fn outbound_frontend_port_mapping_preserves_shared_connections() {
-    Box::pin(qualify_independent_connections(true)).await;
+    Box::pin(qualify_independent_connections("port-mapping")).await;
+}
+
+/// Configured relay and lookup options belong to the retained endpoint rather
+/// than vetoing known direct addresses. Loopback-only options exercise policy
+/// preservation and sibling transfer, not external relay or DNS availability.
+#[tokio::test]
+async fn outbound_frontend_configured_routes_preserve_shared_connections() {
+    for policy in ["relay", "lookup"] {
+        Box::pin(qualify_independent_connections(policy)).await;
+    }
 }
 
 /// Drives protected setup and loopback byte transfer with the selected endpoint
 /// policy. No remote application authentication or session creation is sent.
-async fn qualify_independent_connections(port_mapping: bool) {
+async fn qualify_independent_connections(selected: &str) {
     let root = std::env::temp_dir().join(format!("mez-pinned-{:032x}", rand::random::<u128>()));
     let policy = RuntimeIrohTransportPolicy {
         compression_codecs: vec![RuntimeIrohCompressionCodec::None],
-        port_mapping,
+        port_mapping: selected == "port-mapping",
+        relay: if selected == "relay" {
+            crate::runtime::RuntimeIrohRelayPolicy::Custom {
+                urls: vec!["http://127.0.0.1:9".into()],
+            }
+        } else {
+            crate::runtime::RuntimeIrohRelayPolicy::Disabled
+        },
+        address_lookup: if selected == "lookup" {
+            crate::runtime::RuntimeIrohAddressLookupPolicy::CustomDns {
+                domain: "localhost".into(),
+            }
+        } else {
+            crate::runtime::RuntimeIrohAddressLookupPolicy::Disabled
+        },
         ..Default::default()
     };
     let endpoint = OutboundEndpointOwner::bind(&root, &policy).await.unwrap();

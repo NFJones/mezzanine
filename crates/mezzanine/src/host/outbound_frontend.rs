@@ -33,6 +33,7 @@ mod events;
 mod killing;
 mod listener;
 mod listing;
+pub(crate) mod routes;
 mod setup;
 mod x11_discovery;
 #[allow(

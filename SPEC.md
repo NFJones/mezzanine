@@ -4251,10 +4251,13 @@ MUST reuse control initialization validation and enforce profile role/scope;
 frontends MUST NOT supply device proof or route addresses. Blocking profile work
 MUST retain finite capacity and endpoint ownership until it exits, even after
 its waiter times out. Prepared setup is not remote authentication or creation.
-The internal pinned-direct connection transition MUST retain the prepared
+The internal policy-aware pinned connection transition MUST retain the prepared
 frontend and an independent connection lease, verify the protected server ID,
-and bound all pre-stream codec attempts by one deadline. Unsupported shared
-endpoint route policy MUST reject without rebinding. This transition sends no
+and bound all pre-stream codec attempts by one deadline. Startup and connection
+preflight MUST share route availability under the retained endpoint's immutable
+policy: enabled direct addresses, configured relay addresses or configured
+network lookup. Unavailable routes MUST reject without rebinding. Availability
+is not reachability or application authority. This transition sends no
 application initialization and establishes no remote session authority.
 Configured port mapping MUST remain owned by the retained endpoint binder and
 MUST NOT independently reject an otherwise qualified protected direct address.
