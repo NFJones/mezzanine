@@ -112,29 +112,67 @@ async fn accept_reserved_channel(
             .accept_bi()
             .await
             .map_err(|_| MezError::invalid_state("outbound X11 channel unavailable"))?;
-        let mut channel = AuthenticatedX11Channel {
+        let channel = AuthenticatedX11Channel {
             send,
             recv,
             _endpoint: endpoint,
             _slot: slot,
             graceful: false,
         };
-        let mut bytes = Zeroizing::new([0_u8; crate::runtime::x11::X11_STREAM_PREFACE_BYTES]);
-        channel
-            .recv
-            .read_exact(&mut *bytes)
-            .await
-            .map_err(|_| MezError::invalid_state("outbound X11 channel preface unavailable"))?;
-        let preface = X11StreamPreface::decode(&*bytes)
-            .map_err(|_| MezError::forbidden("outbound X11 channel preface invalid"))?;
-        if preface.generation != route.generation || preface.route_token != route.route_token {
-            return Err(MezError::forbidden("outbound X11 channel route mismatch"));
-        }
-        channel._endpoint.frontend_config_root()?;
-        Ok(channel)
+        authenticate_channel(channel, route).await
     })
     .await
     .map_err(|_| MezError::invalid_state("outbound X11 channel setup timed out"))?
+}
+
+/// Waits for remote demand with capacity and endpoint ownership retained. The
+/// caller races this future against local EOF and parent retirement. Once a
+/// stream arrives, one finite deadline covers its preface and initial setup.
+async fn accept_demand_channel(
+    endpoint: OutboundEndpointOwner,
+    connection: &iroh::endpoint::Connection,
+    route: &X11ForwardingResult,
+    slot: OwnedSemaphorePermit,
+    budget: Duration,
+) -> Result<(AuthenticatedX11Channel, tokio::time::Instant)> {
+    endpoint.frontend_config_root()?;
+    let (send, recv) = connection
+        .accept_bi()
+        .await
+        .map_err(|_| MezError::invalid_state("outbound X11 channel unavailable"))?;
+    let channel = AuthenticatedX11Channel {
+        send,
+        recv,
+        _endpoint: endpoint,
+        _slot: slot,
+        graceful: false,
+    };
+    let deadline = tokio::time::Instant::now() + budget;
+    let channel = tokio::time::timeout_at(deadline, authenticate_channel(channel, route))
+        .await
+        .map_err(|_| MezError::invalid_state("outbound X11 channel setup timed out"))??;
+    Ok((channel, deadline))
+}
+
+/// Authenticates one already guarded stream pair without consuming setup bytes.
+/// Callers enforce the phase deadline; any failure drops the reset guard.
+async fn authenticate_channel(
+    mut channel: AuthenticatedX11Channel,
+    route: &X11ForwardingResult,
+) -> Result<AuthenticatedX11Channel> {
+    let mut bytes = Zeroizing::new([0_u8; crate::runtime::x11::X11_STREAM_PREFACE_BYTES]);
+    channel
+        .recv
+        .read_exact(&mut *bytes)
+        .await
+        .map_err(|_| MezError::invalid_state("outbound X11 channel preface unavailable"))?;
+    let preface = X11StreamPreface::decode(&*bytes)
+        .map_err(|_| MezError::forbidden("outbound X11 channel preface invalid"))?;
+    if preface.generation != route.generation || preface.route_token != route.route_token {
+        return Err(MezError::forbidden("outbound X11 channel route mismatch"));
+    }
+    channel._endpoint.frontend_config_root()?;
+    Ok(channel)
 }
 
 impl Drop for AuthenticatedX11Channel {

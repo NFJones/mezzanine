@@ -4,7 +4,9 @@
 //! Reservation holds finite capacity and endpoint lifetime, consumes a checked
 //! occurrence, then releases the session borrow. Execution remains an owned future,
 //! not a detached task. Parent lease disposal closes the cloned connection and
-//! cancels local handoff/relay. One absolute deadline covers setup only; established
+//! cancels local handoff/relay. Local handshake keeps its reservation deadline;
+//! authenticated idle demand retains ownership until a remote stream arrives.
+//! Arrival starts one absolute preface/setup deadline; established
 //! application relay ends on EOF, route stop or caller cancellation. No listener,
 //! real credential or ordinary CLI activation is introduced here.
 
@@ -191,7 +193,7 @@ impl X11RelayReservation {
             }
             let uid = crate::runtime::current_effective_uid();
             crate::runtime::authenticated_unix_peer_uid(stream.as_raw_fd(), uid)?;
-            let (frontend, channel) = tokio::time::timeout_at(self.deadline, async {
+            let mut frontend = tokio::time::timeout_at(self.deadline, async {
                 let frontend = handoff::authenticate_frontend(
                     stream,
                     uid,
@@ -202,20 +204,28 @@ impl X11RelayReservation {
                 )
                 .await?;
                 self.endpoint.frontend_config_root()?;
-                let channel = accept_reserved_channel(
-                    self.endpoint,
-                    &self.connection,
-                    &self.route,
-                    self.slot,
-                    self.deadline,
-                )
-                .await?;
-                Ok::<_, MezError>((frontend, channel))
+                Ok::<_, MezError>(frontend)
             })
             .await
             .map_err(|_| MezError::invalid_state("outbound X11 frontend admission timed out"))??;
+            // Before remote demand, raw frontend bytes are not permitted. EOF
+            // retires only this idle reservation; neither outcome retries it.
+            use tokio::io::AsyncReadExt;
+            let mut premature = [0_u8; 1];
+            let (channel, deadline) = tokio::select! {
+                biased;
+                read = frontend.read(&mut premature) => {
+                    match read {
+                        Ok(0) => return Ok(()),
+                        Ok(_) => return Err(MezError::forbidden("outbound X11 frontend sent bytes before demand")),
+                        Err(_) => return Err(MezError::invalid_state("outbound X11 frontend demand wait unavailable")),
+                    }
+                }
+                demand = accept_demand_channel(self.endpoint, &self.connection,
+                    &self.route, self.slot, self.budget) => demand?,
+            };
             channel
-                .relay_until(frontend, self.compression, &self.cookie, self.deadline)
+                .relay_until(frontend, self.compression, &self.cookie, deadline)
                 .await
         };
         tokio::select! {

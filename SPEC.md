@@ -4372,8 +4372,12 @@ fake cookie and immutable codec from retained admission evidence. It MUST alloca
 checked nonreused occurrences before awaiting handshake or channel admission,
 and reserve finite capacity synchronously. Owned reservations MUST release the
 session borrow so control can progress, retain endpoint lifetime, and retire when
-the parent connection lease closes. Handshake, remote preface and
-setup delivery MUST use one setup deadline without restarting it. Failure MUST
+the parent connection lease closes. Local handshake MUST retain its reservation
+deadline. After authentication, idle remote demand MUST retain the same stream,
+permit and occurrence until demand, local EOF, parent retirement or cancellation.
+Premature frontend bytes MUST reject without forwarding. Remote stream arrival
+MUST start one finite deadline shared by preface validation and setup delivery;
+partial packets MUST NOT restart that deadline. Failure MUST
 consume a returned reservation's occurrence and dedicated stream, not replay bytes.
 Capacity or exhaustion rejection MUST NOT allocate an occurrence. This composition
 alone MUST NOT activate listeners or ordinary CLI forwarding.

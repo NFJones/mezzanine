@@ -28,9 +28,31 @@ fn setup() -> Vec<u8> {
 /// publication and releases identity ownership without replaying initialization.
 #[tokio::test]
 async fn outbound_x11_dispatch_discovers_and_opens_owned_local_relay() {
+    Box::pin(qualify_dispatch(false)).await;
+}
+
+/// An authenticated dedicated channel may remain idle longer than the packet
+/// setup budget. Later demand must use the same channel and occurrence, retain
+/// exact-session control, and complete without reopening or replaying setup.
+#[tokio::test]
+async fn outbound_x11_dispatch_idle_demand_preserves_same_channel() {
+    Box::pin(qualify_dispatch(true)).await;
+}
+
+/// Shares the exact dispatch/credential/cleanup assertions with delayed demand.
+/// The delay precedes remote stream creation, not a partially received packet.
+async fn qualify_dispatch(idle: bool) {
     let root = std::env::temp_dir().join(format!("mez-xdispatch-{:032x}", rand::random::<u128>()));
     let policy = RuntimeIrohTransportPolicy {
         compression_codecs: vec![RuntimeIrohCompressionCodec::None],
+        x11: crate::runtime::RuntimeIrohX11Policy {
+            setup_timeout: if idle {
+                Duration::from_millis(200)
+            } else {
+                Duration::from_secs(5)
+            },
+            ..Default::default()
+        },
         ..Default::default()
     };
     let endpoint = OutboundEndpointOwner::bind(&root, &policy).await.unwrap();
@@ -55,6 +77,7 @@ async fn outbound_x11_dispatch_discovers_and_opens_owned_local_relay() {
     let stop = Arc::new(tokio::sync::Notify::new());
     let stopped = stop.clone();
     let (done, complete) = tokio::sync::oneshot::channel();
+    let (demand, demanded) = tokio::sync::oneshot::channel();
     let remote = async {
         let connection = server.accept().await.unwrap().await.unwrap();
         assert_eq!(connection.remote_id(), endpoint.endpoint_id());
@@ -94,6 +117,10 @@ async fn outbound_x11_dispatch_discovers_and_opens_owned_local_relay() {
             ))
             .await
             .unwrap();
+        demanded.await.unwrap();
+        if idle {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
         let (mut send, mut recv) = connection.open_bi().await.unwrap();
         send.write_all(
             &crate::runtime::x11::X11StreamPreface {
@@ -145,6 +172,7 @@ async fn outbound_x11_dispatch_discovers_and_opens_owned_local_relay() {
         );
         let channel = opener.open(policy.x11.setup_timeout).await.unwrap();
         assert_eq!(channel.occurrence(), 1);
+        demand.send(()).unwrap();
         let local = async {
             let (mut socket, _) = local_listener.accept().await.unwrap();
             let mut header = [0; 48];

@@ -640,8 +640,11 @@ An internal session-owned composition now supplies the retained identities, fake
 cookie and codec, reserves finite capacity and checked occurrences before awaits,
 and releases the session borrow for concurrent control work. Owned reservations
 retain endpoint lifetime but not an independent connection lease; parent retirement
-cancels handoff/relay. One setup deadline covers local handoff,
-remote preface and initial delivery. An integrated synthetic fixture qualifies
+cancels handoff/relay. Local handshake keeps its reservation deadline. Afterwards,
+idle demand retains the same stream, permit and occurrence without reopening it;
+local EOF retires only that channel and premature frontend bytes reject. Remote
+stream arrival starts one finite preface/setup-delivery deadline, never extended
+by partial packets. An integrated synthetic fixture qualifies
 rejected-occurrence advancement and dedicated ping/pong/FIN delivery, preserving
 read-ahead setup bytes after readiness, capacity rejection without occurrence loss,
 and pending reservation disposal after parent retirement. This composition publishes

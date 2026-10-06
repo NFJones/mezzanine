@@ -31,6 +31,20 @@ async fn outbound_x11_supervisor_preserves_control_with_external_reservations() 
     Box::pin(qualify_supervision("external")).await;
 }
 
+/// An authenticated idle frontend closing before remote demand must release
+/// only its channel reservation and preserve the exact control owner.
+#[tokio::test]
+async fn outbound_x11_supervisor_idle_frontend_eof_preserves_control() {
+    Box::pin(qualify_supervision("idle-eof")).await;
+}
+
+/// Frontend application bytes before remote demand are rejected without
+/// forwarding them or retiring the control session and its other channels.
+#[tokio::test]
+async fn outbound_x11_supervisor_premature_frontend_bytes_preserve_control() {
+    Box::pin(qualify_supervision("premature")).await;
+}
+
 /// Exercises independent local/remote capacity while preserving the same
 /// control, channel, cancellation and publication assertions in every case.
 async fn qualify_supervision(case: &str) {
@@ -255,9 +269,48 @@ async fn qualify_supervision(case: &str) {
                 assert_eq!(response["session"], summary);
                 assert_eq!(response["connected"], true);
             }
+            if matches!(case, "idle-eof" | "premature") {
+                if case == "premature" {
+                    ready
+                        .get_mut()
+                        .write_all(b"premature-application")
+                        .await
+                        .unwrap();
+                } else {
+                    ready.get_mut().shutdown().await.unwrap();
+                }
+                match ready.next().await {
+                    None => {}
+                    Some(Err(error)) => {
+                        assert_eq!(error.io_kind(), Some(std::io::ErrorKind::ConnectionReset))
+                    }
+                    Some(Ok(_)) => panic!("rejected idle channel must emit no complete reply"),
+                }
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    while slots.available_permits() != 1 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                local
+                    .send(ProtocolFrame::new(
+                        CONTENT_TYPE,
+                        serde_json::json!({"operation":"health","handle":handle}).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                let response = local.next().await.unwrap().unwrap();
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&response.body).unwrap()["connected"],
+                    true
+                );
+            }
             stop.notify_one();
             assert!(local.next().await.is_none());
-            assert!(ready.next().await.is_none());
+            if !matches!(case, "idle-eof" | "premature") {
+                assert!(ready.next().await.is_none());
+            }
             let mut bytes = Vec::new();
             silent.read_to_end(&mut bytes).await.unwrap();
             assert!(bytes.is_empty());
