@@ -4312,7 +4312,15 @@ child evidence. Startup failure MUST NOT authorize direct fallback or replacemen
 Frontend exit MUST NOT kill the potentially shared child; exited children MAY be
 reaped by exact handle, while live-child disposal retains the documented best-effort
 reaping limitation. Unqualified routes and absent-broker X11 retain direct eligibility
-before startup. Broker X11 forwarding remains separate.
+before startup. Explicit paired-host X11 through an active broker MUST preserve
+trust/takeover intent and original routing/key, validate the final offer envelope
+before generating local credentials, and retain one exclusively owned matching-capacity
+opener. Real credentials and local X destinations MUST remain client-local.
+Channel disposal MUST precede credential cleanup; foreground retirement MUST use
+its own finite budget independently of the X11 packet-setup budget. Connected
+setup/discovery failures MUST NOT switch endpoints or replay creation. Invitation
+X11 and absent-owner X11 startup remain separate paths; physical/platform
+qualification is not established by synthetic setup tests.
 The separate internal session initialization MUST retain the original routing
 intent and invocation key, validate correlated role/client/session/active-lease
 evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection

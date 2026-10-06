@@ -88,7 +88,7 @@ impl GeneratedX11CredentialLease {
     }
 
     #[cfg(test)]
-    fn directory(&self) -> &Path {
+    pub(super) fn directory(&self) -> &Path {
         self.cleanup
             .as_ref()
             .map(|cleanup| cleanup.directory.as_path())

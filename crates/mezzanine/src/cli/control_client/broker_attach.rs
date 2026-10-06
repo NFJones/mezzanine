@@ -6,12 +6,14 @@
 //! Only initial missing/refused discovery permits startup or direct eligibility;
 //! after attempted startup or connected readiness, failure is terminal. After local
 //! readiness, failed setup may already have created a session and is never
-//! retried through another endpoint. X11 remains explicit and unsupported here.
+//! retried through another endpoint. Explicit paired-profile X11 retains client-local
+//! credential and channel cleanup; invitation X11 remains separately gated.
 
 use super::*;
 use crate::host::outbound_frontend::client::{OutboundFrontendClient, OutboundSessionClient};
 
 mod invitation;
+mod x11;
 
 /// Retained session plus the client machine's independently selected clipboard
 /// adapter and finite request budget. No remote credentials leave broker setup.
@@ -20,6 +22,16 @@ pub(in crate::cli) struct BrokerAttachment {
     pub(in crate::cli) clipboard: crate::host::terminal::HostClipboard,
     pub(in crate::cli) budget: std::time::Duration,
     pub(in crate::cli) primary: bool,
+    pub(in crate::cli) x11: Option<BrokerX11>,
+}
+
+/// Client-local credentials and one exclusively owned channel opener. Matching
+/// limits prevent independent opener/supervisor pools from invalidating siblings.
+pub(in crate::cli) struct BrokerX11 {
+    pub(in crate::cli) prepared: crate::cli::x11::PreparedX11Client,
+    pub(in crate::cli) opener: crate::host::outbound_frontend::client::X11ChannelOpener,
+    pub(in crate::cli) limit: usize,
+    pub(in crate::cli) budget: std::time::Duration,
 }
 
 /// Tries existing broker reuse for a paired host profile. None means no admitted
@@ -41,7 +53,16 @@ pub(in crate::cli) async fn try_open(
     x11: bool,
 ) -> Result<Option<BrokerAttachment>> {
     try_open_inner(
-        target, env, role, routing, columns, rows, term, x11, None, None,
+        target,
+        env,
+        role,
+        routing,
+        columns,
+        rows,
+        term,
+        x11.then_some((crate::runtime::x11::X11ForwardingMode::Untrusted, false)),
+        None,
+        None,
     )
     .await
 }
@@ -61,7 +82,7 @@ pub(in crate::cli) async fn try_open_starting(
     columns: u16,
     rows: u16,
     term: &str,
-    x11: bool,
+    x11: Option<(crate::runtime::x11::X11ForwardingMode, bool)>,
     child: &mut Option<crate::cli::remote::broker::launch::LaunchedBroker>,
 ) -> Result<Option<BrokerAttachment>> {
     try_open_inner(
@@ -93,7 +114,7 @@ async fn try_open_inner(
     columns: u16,
     rows: u16,
     term: &str,
-    x11: bool,
+    x11: Option<(crate::runtime::x11::X11ForwardingMode, bool)>,
     child: Option<&mut Option<crate::cli::remote::broker::launch::LaunchedBroker>>,
     executable: Option<&Path>,
 ) -> Result<Option<BrokerAttachment>> {
@@ -107,7 +128,7 @@ async fn try_open_inner(
             columns,
             rows,
             term,
-            x11,
+            x11.is_some(),
         ))
         .await;
     }
@@ -146,7 +167,7 @@ async fn try_open_inner(
                 Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
             ) =>
         {
-            if x11 {
+            if x11.is_some() {
                 return Ok(None);
             }
             let Some(child) = child else {
@@ -190,10 +211,12 @@ async fn try_open_inner(
         }
         Err(error) => return Err(error),
     };
-    if x11 {
-        return Err(MezError::invalid_state(
-            "shared outbound broker X11 forwarding is not yet supported; close the broker before using the direct X11 path",
-        ));
+    if let Some(request) = x11 {
+        return x11::prepare_attachment(
+            client, alias, params, clipboard, &policy, columns, rows, role, request,
+        )
+        .await
+        .map(Some);
     }
     let (session, _) =
         Box::pin(client.start_session(alias, params, columns, rows, policy.setup_timeout)).await?;
@@ -202,6 +225,7 @@ async fn try_open_inner(
         clipboard,
         budget: policy.setup_timeout,
         primary: role == "primary",
+        x11: None,
     }))
 }
 

@@ -5,8 +5,9 @@
 //! reset responsibility across foreground cancellation. Explicit return attempts
 //! bounded restoration even after output or transport failure; the causal error
 //! takes precedence. Closing this frontend cannot terminate the shared broker.
-//! This adapter does not launch brokers, pair identities, retry creation or add
-//! X11/pushed-render negotiation. Missing discovery is handled before this owner.
+//! Explicit X11 owns channel retirement and client-local credentials alongside
+//! foreground restoration. This adapter does not launch brokers, pair identities,
+//! retry creation or negotiate pushed renders. Discovery precedes this owner.
 
 use super::{AsRawFd, AsyncAttachedTerminalPresentationGuard, MezError, Result, Size, io};
 use crate::cli::control_client::broker_attach::BrokerAttachment;
@@ -20,13 +21,32 @@ pub(super) async fn run(attachment: BrokerAttachment, size: Size) -> Result<()> 
         clipboard,
         budget,
         primary,
+        x11,
     } = attachment;
     let mut terminal = AsyncAttachedTerminalPresentationGuard::new(
         io::stdin().as_raw_fd(),
         io::stdout().as_raw_fd(),
         None,
     )?;
-    let result = if primary {
+    let result = if let Some(x11) = x11 {
+        Box::pin(x11.prepared.run_broker_attachment(
+            x11.opener,
+            x11.limit,
+            x11.budget,
+            budget,
+            |stop| {
+                session.run_clipboard_foreground(
+                    terminal.io_mut(),
+                    size,
+                    budget,
+                    crate::cli::x11::broker_attachment_cancelled(stop),
+                    clipboard,
+                )
+            },
+            cancelled(),
+        ))
+        .await
+    } else if primary {
         Box::pin(session.run_clipboard_foreground(
             terminal.io_mut(),
             size,

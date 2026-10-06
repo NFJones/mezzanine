@@ -125,7 +125,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
                 columns,
                 rows,
                 &term,
-                x11_request.is_some(),
+                x11_request,
                 &mut broker_child,
             ),
         )

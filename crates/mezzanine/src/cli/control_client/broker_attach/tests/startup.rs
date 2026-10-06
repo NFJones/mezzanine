@@ -74,7 +74,7 @@ async fn broker_attach_actual_first_owner_retains_child_and_sibling() {
             80,
             24,
             "xterm",
-            false,
+            None,
             Some(&mut child),
             Some(&executable),
         )
@@ -88,7 +88,7 @@ async fn broker_attach_actual_first_owner_retains_child_and_sibling() {
             80,
             24,
             "xterm",
-            false,
+            None,
             Some(&mut sibling_child),
             Some(&executable),
         )

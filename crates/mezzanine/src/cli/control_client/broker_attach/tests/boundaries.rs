@@ -67,7 +67,7 @@ async fn broker_attach_starting_preserves_no_launch_boundaries() {
             80,
             24,
             "xterm",
-            mode == "x11",
+            (mode == "x11").then_some((crate::runtime::x11::X11ForwardingMode::Untrusted, false)),
             &mut child,
         )
         .await;

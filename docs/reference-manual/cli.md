@@ -588,8 +588,14 @@ exact child through setup and foreground exit. Startup failure does not switch t
 direct setup or replay creation. Exited children are observed/reaped; live children
 are not killed on frontend exit, and reaping remains best-effort after disposal.
 Unqualified routes and absent-broker X11 retain direct eligibility before startup.
-Broker X11 forwarding remains unfinished; X11 with an active broker rejects
-before session setup rather than switching to a competing endpoint.
+Paired-host `--x11`/`--x11-trusted` attachments can now reuse an active broker,
+preserving takeover intent and the original session operation key. Final offer
+preflight precedes local credential generation; only the fake offer cookie crosses
+IPC. One matching-capacity opener and prepared credential owner survive through
+foreground retirement, with channels disposed before credential cleanup. Packet
+setup and foreground retirement use independent finite budgets. Setup uncertainty
+never authorizes endpoint fallback or replay. Invitation X11 and absent-owner X11
+startup remain separate; physical X and macOS acceptance remain unqualified.
 Errors after writing never automatically replay initialization. Session
 creation/attachment uses a separate internal transition retaining the original
 intent/key and validating exact client/session/active-lease evidence. A loopback

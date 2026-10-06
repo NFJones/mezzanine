@@ -21,11 +21,16 @@ impl PreparedX11Client {
     /// its terminal restoration path; a concrete guard remains caller-owned.
     /// Opener and supervisor limits must agree. Errors never retry channel work;
     /// causal operation errors take precedence over later cleanup failures.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "packet setup and foreground retirement have independent finite budgets"
+    )]
     pub(crate) async fn run_broker_attachment<F, W, C>(
         self,
         opener: X11ChannelOpener,
         limit: usize,
         budget: Duration,
+        retirement_budget: Duration,
         foreground: F,
         cancellation: C,
     ) -> Result<()>
@@ -35,6 +40,7 @@ impl PreparedX11Client {
         C: Future<Output = ()>,
     {
         let result = if !(Duration::from_millis(100)..=Duration::from_secs(120)).contains(&budget)
+            || !(Duration::from_millis(100)..=Duration::from_secs(120)).contains(&retirement_budget)
             || !(1..=1024).contains(&limit)
         {
             Err(MezError::invalid_args(
@@ -48,7 +54,7 @@ impl PreparedX11Client {
                 forwarder.supervise_broker_channels(&opener, limit, budget, std::future::pending()),
                 cancellation,
                 stop,
-                budget,
+                retirement_budget,
             )
             .await
         };

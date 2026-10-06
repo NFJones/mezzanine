@@ -111,6 +111,7 @@ pub(super) async fn try_open(
         clipboard,
         budget: policy.setup_timeout,
         primary: role == "primary",
+        x11: None,
     }))
 }
 

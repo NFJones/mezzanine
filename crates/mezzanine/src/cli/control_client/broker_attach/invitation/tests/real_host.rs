@@ -110,7 +110,7 @@ async fn broker_invitation_real_host_creates_once_after_private_pairing() {
         };
         let mut child = None;
         let attachment = crate::cli::control_client::broker_attach::try_open_starting(
-            &target, &env, "primary", &routing, 80, 24, "xterm", false, &mut child,
+            &target, &env, "primary", &routing, 80, 24, "xterm", None, &mut child,
         )
         .await
         .unwrap()

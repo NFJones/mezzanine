@@ -22,6 +22,7 @@ mod authority;
     reason = "ordinary broker X11 activation follows attachment-lifetime qualification"
 )]
 mod broker_lifetime;
+pub(crate) use broker_lifetime::broker_attachment_cancelled;
 #[allow(
     dead_code,
     reason = "broker X11 activation follows client-local relay qualification"
@@ -204,6 +205,33 @@ fn distinct_fake_cookie(
             return candidate;
         }
     }
+}
+
+/// Prepares a generated fixture credential with explicit inputs and returns its
+/// private artifact directory for cleanup assertions, without mutating DISPLAY.
+#[cfg(test)]
+pub(crate) async fn prepare_broker_x11_for_tests(
+    mode: X11ForwardingMode,
+    authority: &Path,
+    executable: &OsStr,
+) -> Result<(PreparedX11Client, std::path::PathBuf)> {
+    let prepared = prepare_x11_client_with(
+        mode,
+        "127.0.0.1:19",
+        authority,
+        executable,
+        Duration::from_secs(2),
+    )
+    .await?;
+    let directory = match &prepared.lease {
+        X11CredentialLease::Generated(lease) => lease.directory().to_path_buf(),
+        X11CredentialLease::None => {
+            return Err(MezError::invalid_state(
+                "fixture generated lease unavailable",
+            ));
+        }
+    };
+    Ok((prepared, directory))
 }
 
 #[cfg(test)]
