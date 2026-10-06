@@ -521,7 +521,8 @@ mod pushed_snapshot_tests {
     }
 
     /// Verifies a legacy observer's separate event wakeups produce one trailing
-    /// exact-client view fetch at the server-advertised cadence.
+    /// exact-client view fetch at the server-advertised cadence. Control remains
+    /// live until observer settlement so event EOF cannot race clean control EOF.
     #[tokio::test(start_paused = true, flavor = "current_thread")]
     async fn observer_legacy_event_wakeups_are_paced() {
         let (mut client_stream, mut server_stream) = tokio::io::duplex(16 * 1024);
@@ -536,6 +537,7 @@ mod pushed_snapshot_tests {
         for _ in 0..8 {
             terminal_io.push_pending_input_read();
         }
+        let (settled, settlement) = tokio::sync::oneshot::channel();
         let server = async move {
             for text in ["initial", "latest"] {
                 let request = super::super::requests::read_async_control_response_frames(
@@ -584,18 +586,25 @@ mod pushed_snapshot_tests {
                 }
             }
             drop(event_server);
+            let _ = settlement.await;
+            drop(server_stream);
         };
-        let client = run_attached_observer_client_loop_async(
-            &mut client_stream,
-            &mut terminal_io,
-            None,
-            Some(ClientId::parse('c', "c2".to_string()).unwrap()),
-            Size::new(80, 24).unwrap(),
-            std::time::Duration::from_secs(1),
-            Some(&mut events),
-            None,
-            false,
-        );
+        let client = async {
+            let result = run_attached_observer_client_loop_async(
+                &mut client_stream,
+                &mut terminal_io,
+                None,
+                Some(ClientId::parse('c', "c2".to_string()).unwrap()),
+                Size::new(80, 24).unwrap(),
+                std::time::Duration::from_secs(1),
+                Some(&mut events),
+                None,
+                false,
+            )
+            .await;
+            let _ = settled.send(());
+            result
+        };
         let (result, ()) = tokio::join!(client, server);
         assert!(
             result.is_err(),
