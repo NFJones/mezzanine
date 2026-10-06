@@ -1001,6 +1001,9 @@ async fn serve_routed_initialize_inner(
         SessionIntent::HostOnly => unreachable!("host-only intent returned above"),
     };
 
+    #[cfg(test)]
+    let lose_outbound_reply = params.get("client_name").and_then(Value::as_str)
+        == Some("test-outbound-lose-committed-reply");
     let mut actor_params = params;
     actor_params.insert("requested_version".to_string(), Value::from(2));
     actor_params.remove("session_intent");
@@ -1078,7 +1081,7 @@ async fn serve_routed_initialize_inner(
     // The request-local seam closes the actual raw bridge peer after attachment
     // and provisioning commit; production has no client-controlled failpoint.
     #[cfg(test)]
-    if request_id.as_str() == Some("test-fail-routed-response") {
+    if request_id.as_str() == Some("test-fail-routed-response") || lose_outbound_reply {
         bridge.fail_raw_peer_for_test().await;
     }
     #[cfg(test)]

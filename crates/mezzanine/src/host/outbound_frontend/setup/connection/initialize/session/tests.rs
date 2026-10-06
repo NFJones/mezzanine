@@ -7,6 +7,7 @@ use super::*;
 use crate::host::async_runtime::AsyncAttachedTerminalIo;
 
 mod clipboard;
+mod committed_create;
 mod management;
 mod x11;
 
