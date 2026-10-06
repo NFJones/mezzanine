@@ -4417,7 +4417,10 @@ the attachment supervisor remains responsible for parent-lifetime disposal.
 The attaching-client relay MUST validate the fake setup cookie before dialing
 the frozen local X destination, substitute the real credential only locally, and
 preserve subsequent application bytes and directional half-close. Setup read,
-local connect and initial delivery MUST share one finite deadline. Cancellation
+local connect and initial delivery MUST share one finite deadline starting at the
+first setup byte. Before that byte, idle demand waiting MUST retain the owned
+stream until EOF or caller cancellation, without local dialing or automatic retry.
+Cancellation
 MUST dispose owned streams without replay; the prepared credential lease remains
 caller-owned. This helper alone MUST NOT activate ordinary broker X11 forwarding.
 Later event versions MUST reject before initialization. Reader errors or

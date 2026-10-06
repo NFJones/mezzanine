@@ -4,8 +4,9 @@
 //! preserves readiness read-ahead before handing it here. This layer reads one
 //! bounded setup packet, validates the fake cookie, substitutes the real cookie
 //! locally and dials only the previously frozen X destination. No real credential,
-//! display or authority path is sent to the broker. Setup shares one finite
-//! deadline; established relay uses caller cancellation and directional EOF.
+//! display or authority path is sent to the broker. Idle demand waiting remains
+//! caller-owned; the first byte starts one finite setup deadline. Established
+//! relay uses caller cancellation and directional EOF.
 //! Dropping the future closes its owned streams, with no retry or detached task.
 //! PreparedX11Client's credential lease remains separately caller-owned.
 
@@ -22,6 +23,8 @@ impl X11ClientForwarder {
     /// part of this stream; the caller may not discard them before invocation.
     /// Setup errors expose no payloads, credentials or local destination. The
     /// established application relay is not limited by the setup deadline.
+    /// Before the first setup byte, idle waiting retains this stream until EOF
+    /// or caller cancellation and performs no local dialing or automatic retry.
     pub(crate) async fn relay_broker_stream<S>(&self, mut broker: S, budget: Duration) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin,
@@ -31,9 +34,17 @@ impl X11ClientForwarder {
                 "broker X11 client setup deadline invalid",
             ));
         }
+        let mut first = [0_u8; 1];
+        let read = broker
+            .read(&mut first)
+            .await
+            .map_err(|_| MezError::invalid_state("broker X11 client demand unavailable"))?;
+        if read == 0 {
+            return Ok(());
+        }
         let deadline = tokio::time::Instant::now() + budget;
         let mut local = tokio::time::timeout_at(deadline, async {
-            let mut setup = read_setup(&mut broker).await?;
+            let mut setup = read_setup(&mut broker, first[0]).await?;
             self.rewrite_setup(&mut setup)
                 .map_err(|_| MezError::forbidden("broker X11 client setup credential invalid"))?;
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -59,8 +70,8 @@ impl X11ClientForwarder {
 
 /// Reads exactly one bounded raw setup, leaving application bytes in the source.
 /// Requested lengths come only from the established strict setup parser.
-async fn read_setup<R: AsyncRead + Unpin>(source: &mut R) -> Result<Zeroizing<Vec<u8>>> {
-    let mut setup = Zeroizing::new(Vec::new());
+async fn read_setup<R: AsyncRead + Unpin>(source: &mut R, first: u8) -> Result<Zeroizing<Vec<u8>>> {
+    let mut setup = Zeroizing::new(vec![first]);
     loop {
         match parse_x11_setup(&setup)
             .map_err(|_| MezError::forbidden("broker X11 client setup packet invalid"))?

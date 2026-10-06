@@ -3,6 +3,56 @@ use super::*;
 use crate::cli::x11::resolve_local_x11_display;
 use crate::runtime::x11::{X11Cookie, validate_x11_setup_cookie};
 
+/// Waiting for an application to request X11 must not consume the packet-setup
+/// budget or dial the local target. Advancing virtual time past that budget
+/// leaves one owned future pending; cancellation closes its dedicated stream.
+/// Once even a single setup byte arrives, incomplete setup remains bounded.
+#[tokio::test(start_paused = true)]
+async fn broker_x11_client_idle_demand_wait_preserves_bounded_setup() {
+    let display = resolve_local_x11_display("127.0.0.1:19").unwrap();
+    let forwarder = X11ClientForwarder::new_for_test(
+        display,
+        X11Cookie::new([17; 16]),
+        X11Cookie::new([52; 16]),
+    );
+    let (stream, mut broker) = tokio::io::duplex(4096);
+    let mut relay = Box::pin(forwarder.relay_broker_stream(stream, Duration::from_millis(100)));
+    assert!(matches!(
+        futures_util::poll!(&mut relay),
+        std::task::Poll::Pending
+    ));
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(
+        matches!(futures_util::poll!(&mut relay), std::task::Poll::Pending),
+        "idle demand must not be treated as failed packet setup"
+    );
+    broker.write_all(b"l").await.unwrap();
+    assert!(matches!(
+        futures_util::poll!(&mut relay),
+        std::task::Poll::Pending
+    ));
+    tokio::time::advance(Duration::from_millis(101)).await;
+    assert!(
+        relay.await.is_err(),
+        "partial setup must retain its finite deadline"
+    );
+    let mut bytes = Vec::new();
+    broker.read_to_end(&mut bytes).await.unwrap();
+    assert!(bytes.is_empty());
+
+    let (stream, mut broker) = tokio::io::duplex(4096);
+    let mut relay = Box::pin(forwarder.relay_broker_stream(stream, Duration::from_millis(100)));
+    assert!(matches!(
+        futures_util::poll!(&mut relay),
+        std::task::Poll::Pending
+    ));
+    drop(relay);
+    assert_eq!(
+        broker.read_u8().await.unwrap_err().kind(),
+        std::io::ErrorKind::UnexpectedEof
+    );
+}
+
 /// Constructs one fixed MIT setup in either supported byte order.
 fn setup(order: u8, cookie: u8) -> Vec<u8> {
     let mut bytes = vec![0; 48];

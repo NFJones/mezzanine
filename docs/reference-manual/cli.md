@@ -653,7 +653,10 @@ exhaustion without permit leakage, and rejection after parent retirement. Source
 do not acquire independent connection leases or enable ordinary forwarding.
 A separate attaching-client helper now validates bounded fake-cookie setup and
 substitutes the real cookie only on its frozen local X connection. Setup read,
-connect and initial delivery share a deadline; subsequent bytes and half-close
+connect and initial delivery share a deadline starting at the first setup byte.
+Idle demand retains the same owned stream until EOF or cancellation without local
+dialing or automatic retry; incomplete setup remains deadline-bound.
+Subsequent bytes and half-close
 remain caller-owned. Synthetic local TCP fixtures qualify both byte orders,
 rejection and cancellation, not a physical X server or ordinary CLI activation.
 The prepared credential lease remains separately owned by the attachment caller.
