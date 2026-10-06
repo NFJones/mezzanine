@@ -27,6 +27,48 @@ pub(super) async fn prepare_attachment(
     role: &str,
     (mode, takeover): (crate::runtime::x11::X11ForwardingMode, bool),
 ) -> Result<BrokerAttachment> {
+    let prepared = prepare_local(
+        alias,
+        &params,
+        policy,
+        columns,
+        rows,
+        role,
+        (mode, takeover),
+    )
+    .await?;
+    finish_prepared(
+        client, alias, params, clipboard, policy, columns, rows, prepared, takeover,
+    )
+    .await
+}
+
+/// Validates the complete offer envelope and generates client-local credentials
+/// before pairing can consume first-use proof. Cancellation retains lease cleanup.
+pub(super) async fn prepare_local(
+    alias: &str,
+    params: &serde_json::Value,
+    policy: &crate::runtime::RuntimeIrohTransportPolicy,
+    columns: u16,
+    rows: u16,
+    role: &str,
+    (mode, takeover): (crate::runtime::x11::X11ForwardingMode, bool),
+) -> Result<crate::cli::x11::PreparedX11Client> {
+    validate_local(alias, params, policy, columns, rows, role, (mode, takeover))?;
+    crate::cli::x11::prepare_x11_client(mode).await
+}
+
+/// Validates the final fake-cookie envelope before credential generation or
+/// invitation redemption. The placeholder retains exact encoded-cookie size.
+pub(super) fn validate_local(
+    alias: &str,
+    params: &serde_json::Value,
+    policy: &crate::runtime::RuntimeIrohTransportPolicy,
+    columns: u16,
+    rows: u16,
+    role: &str,
+    (mode, takeover): (crate::runtime::x11::X11ForwardingMode, bool),
+) -> Result<()> {
     if role != "primary" {
         return Err(MezError::forbidden(
             "broker X11 requires primary attachment",
@@ -49,12 +91,7 @@ pub(super) async fn prepare_attachment(
         columns,
         rows,
         policy.setup_timeout,
-    )?;
-    let prepared = crate::cli::x11::prepare_x11_client(mode).await?;
-    finish_prepared(
-        client, alias, params, clipboard, policy, columns, rows, prepared, takeover,
     )
-    .await
 }
 
 /// Sends only the fake-cookie offer, then transfers cleanup ownership on success.
@@ -63,7 +100,7 @@ pub(super) async fn prepare_attachment(
     clippy::too_many_arguments,
     reason = "exact prepared transport and local credential lifetime must stay explicit"
 )]
-async fn finish_prepared(
+pub(super) async fn finish_prepared(
     client: OutboundFrontendClient,
     alias: &str,
     mut params: serde_json::Value,

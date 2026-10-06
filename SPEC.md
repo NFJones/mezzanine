@@ -4297,7 +4297,11 @@ before reporting success. Host-invitation attachment through an active broker MU
 pair once, then use fresh authenticated local IPC for the original routing intent
 and invocation key. Failures after pairing submission MUST NOT restore direct
 eligibility or replay redemption/creation. Initial absence retains the existing
-direct invitation path; broker X11 and automatic invitation startup remain separate.
+direct invitation path; automatic invitation startup remains separate. Explicit
+invitation X11 MUST validate the complete offer envelope and prepare local
+credentials before redemption. Pairing or reconnect failure MUST clean prepared
+credentials without replay; successful handoff MUST preserve trust/takeover intent,
+the original attachment key and client-local credential lifetime.
 Paired-profile force-kill MUST reuse an authenticated active broker when available
 under the same discovery boundary. The closed mutation MUST preserve the exact
 target and invocation key, issue only host/session/kill with force=true, and

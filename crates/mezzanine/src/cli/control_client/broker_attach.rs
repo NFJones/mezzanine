@@ -128,7 +128,7 @@ async fn try_open_inner(
             columns,
             rows,
             term,
-            x11.is_some(),
+            x11,
         ))
         .await;
     }

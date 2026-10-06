@@ -6,6 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use tokio_util::codec::Framed;
 
 mod real_host;
+mod x11;
 
 /// Supplies synthetic protected invitation data without developer credentials.
 fn fixture() -> (
@@ -14,10 +15,7 @@ fn fixture() -> (
     crate::config::ConfigPaths,
     PathBuf,
 ) {
-    let home = std::env::temp_dir().join(format!(
-        "mez-invite-handoff-{:032x}",
-        rand::random::<u128>()
-    ));
+    let home = std::env::temp_dir().join(format!("mez-ih-{:032x}", rand::random::<u128>()));
     let env = crate::cli::CliEnv {
         home: Some(home.clone()),
         ..Default::default()
@@ -64,7 +62,7 @@ async fn broker_invitation_early_rejections_preserve_proof_and_identity() {
             idempotency_key: "original".into(),
         };
         let result = try_open(
-            &path, None, &env, "primary", &routing, 80, 24, "xterm", false,
+            &path, None, &env, "primary", &routing, 80, 24, "xterm", None,
         )
         .await;
         if case == "missing" {
@@ -137,7 +135,7 @@ async fn broker_invitation_oversized_setup_rejects_before_pair_request() {
                 80,
                 24,
                 &term,
-                false
+                None
             ),
             peer
         )
@@ -219,7 +217,7 @@ async fn broker_invitation_handoff_preserves_key_and_rejects_post_pair_absence()
                     80,
                     24,
                     "xterm",
-                    false
+                    None
                 ),
                 peer
             )

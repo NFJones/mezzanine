@@ -574,7 +574,10 @@ match the exact handle and expected profile alias. Host-invitation `attach`/`new
 also reuse an active broker: private pairing completes once, then fresh authenticated
 IPC carries the original attachment intent/key. No post-pair failure permits direct
 fallback or replay. Initial absent/refused discovery retains direct invitation setup.
-Legacy pairing, automatic invitation startup and broker X11 remain separate.
+Explicit invitation X11 now validates its final offer and prepares client-local
+credentials before redemption. Pairing/reconnect loss cleans those credentials
+without replay; successful attachment preserves trust/takeover and the original key.
+Legacy pairing and automatic invitation startup remain separate.
 Paired-profile `kill --force TARGET` reuses an authenticated active broker too,
 preserving the exact target and invocation key through a fixed host kill request.
 The host still enforces destructive authority and visibility. Only correlated
@@ -602,8 +605,9 @@ preflight precedes local credential generation; only the fake offer cookie cross
 IPC. One matching-capacity opener and prepared credential owner survive through
 foreground retirement, with channels disposed before credential cleanup. Packet
 setup and foreground retirement use independent finite budgets. Setup uncertainty
-never authorizes endpoint fallback or replay. Invitation X11 remains separate;
-physical X and macOS acceptance remain unqualified.
+ never authorizes endpoint fallback or replay. Invitation X11 shares the same local
+ credential lifetime after pre-redemption preparation; physical X and macOS
+ acceptance remain unqualified.
 Errors after writing never automatically replay initialization. Session
 creation/attachment uses a separate internal transition retaining the original
 intent/key and validating exact client/session/active-lease evidence. A loopback
