@@ -574,6 +574,11 @@ Optional version-one events now remain owned by the initialized session and its
 exact connection lease. Setup validates the preface within a deadline; later
 versions and X11 remain rejected. Real-host fixtures qualify event availability
 after sibling retirement, not frontend forwarding or ordinary CLI activation.
+A separate internal clipboard-session admission now requires explicit version-two
+primary intent and true capability in the validated initialize reply before stream
+acceptance. It retains typed effect ownership on the exact connection; ordinary
+supervision remains version-one only. This does not activate frontend clipboard
+delivery, host clipboard writes or ordinary CLI attachment.
 Each internal initialized session now retains its own shared health tracker and
 samples only its exact connection when due. Missing measurements remain unknown;
 closed connections report disconnected with unknown quality. Sibling sampling

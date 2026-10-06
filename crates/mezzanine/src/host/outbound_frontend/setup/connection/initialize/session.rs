@@ -3,9 +3,10 @@
 //! Reuses the single owner-authenticated exchange. No automatic retry is allowed
 //! after writing, since creation may already be committed remotely. Session and
 //! client evidence stays scoped to its connection; labels cannot grant authority.
-//! Optional version-one events remain bound to this exact retained connection;
-//! later event versions and X11 are rejected before sending. Frontend event
-//! forwarding is separate. Raw remote responses never enter local IPC.
+//! Optional version-one events remain bound to this exact retained connection.
+//! A separate version-two primary admission validates clipboard capability and
+//! requires item-aware consumption; ordinary supervision remains version-one.
+//! Later versions and X11 reject before sending. Raw replies never enter IPC.
 
 use super::*;
 use mez_core::ids::{ClientId, SessionId};
@@ -35,7 +36,22 @@ impl ConnectedFrontend {
     /// Unsupported modes reject before opening a stream; failed replies retain
     /// ambiguity and never replay creation, input, or initialization.
     pub(crate) async fn initialize_session(self) -> Result<InitializedSessionFrontend> {
+        self.initialize_session_mode(false).await
+    }
+
+    /// Admits only explicitly requested version-two primary clipboard sessions.
+    /// Returned capability is validated before accepting the exact v2 preface.
+    /// This separate transition does not activate ordinary supervisor forwarding
+    /// or write a host clipboard; callers must consume typed event items.
+    pub(crate) async fn initialize_clipboard_session(self) -> Result<InitializedSessionFrontend> {
+        self.initialize_session_mode(true).await
+    }
+
+    /// Shares single-attempt authenticated initialization without broadening the
+    /// existing redraw-only path. Capability rejection never retries creation.
+    async fn initialize_session_mode(self, clipboard: bool) -> Result<InitializedSessionFrontend> {
         let params = initialize_params_from_json(&self.prepared.initialize.to_string())?;
+        validate_event_mode(&params, clipboard)?;
         if self.prepared.profile.scope != RemoteClientProfileScope::Host
             || !matches!(
                 params.session_intent,
@@ -46,9 +62,6 @@ impl ConnectedFrontend {
                         | SessionIntent::Default
                 )
             )
-            || params
-                .event_stream_version
-                .is_some_and(|version| version != 1)
             || params.x11_forwarding.is_some()
         {
             return Err(MezError::forbidden(
@@ -67,15 +80,24 @@ impl ConnectedFrontend {
             .await?;
         #[cfg(test)]
         diagnostics.advance("event-preface");
-        let events = if params.event_stream_version == Some(1) {
+        let events = if params.event_stream_version.is_some() {
             let endpoint = &connected.prepared.frontend._endpoint;
             endpoint.frontend_config_root()?;
-            let events = crate::host::outbound_frontend::events::OutboundEventReader::accept(
-                connected.connection.connection(),
-                connected.compression,
-                endpoint.transport_policy().setup_timeout,
-            )
-            .await?;
+            let events = if clipboard {
+                crate::host::outbound_frontend::events::OutboundEventReader::accept_clipboard(
+                    connected.connection.connection(),
+                    connected.compression,
+                    endpoint.transport_policy().setup_timeout,
+                )
+                .await?
+            } else {
+                crate::host::outbound_frontend::events::OutboundEventReader::accept(
+                    connected.connection.connection(),
+                    connected.compression,
+                    endpoint.transport_policy().setup_timeout,
+                )
+                .await?
+            };
             endpoint.frontend_config_root()?;
             Some(events)
         } else {
@@ -97,6 +119,30 @@ impl ConnectedFrontend {
 }
 
 impl InitializedSessionFrontend {
+    /// Reads one negotiated typed event or clipboard effect without IPC or host
+    /// clipboard writes. Cancellation retains incremental state; EOF/errors
+    /// require retirement of this exact owner, never reconnection or replay.
+    pub(crate) async fn next_event_item(
+        &mut self,
+    ) -> Result<Option<crate::host::outbound_frontend::events::OutboundEventItem>> {
+        self.connected
+            .prepared
+            .frontend
+            ._endpoint
+            .frontend_config_root()?;
+        let reader = self
+            .events
+            .as_mut()
+            .ok_or_else(|| MezError::invalid_state("outbound session did not negotiate events"))?;
+        let item = reader.next_item().await?;
+        self.connected
+            .prepared
+            .frontend
+            ._endpoint
+            .frontend_config_root()?;
+        Ok(item)
+    }
+
     /// Reports exact self-detach settlement so supervision can dispose this
     /// pipeline after reply delivery instead of admitting another request.
     pub(crate) fn is_detached(&self) -> bool {
@@ -239,8 +285,35 @@ fn validate_session_response(
             return Err(MezError::forbidden("outbound session target mismatch"));
         }
     }
+    if params.event_stream_version == Some(2)
+        && (params.requested_role != RequestedRole::Primary
+            || value.pointer("/result/capabilities/features/client_clipboard_write")
+                != Some(&serde_json::Value::Bool(true)))
+    {
+        return Err(MezError::forbidden(
+            "outbound clipboard capability unavailable",
+        ));
+    }
     Ok(serde_json::json!({"selected_version":3,"granted_role":role,
         "session_id":session.as_str(),"lease_id":lease,"client_id":client.as_str()}))
+}
+
+/// Rejects unsupported negotiation before opening an application stream. The
+/// separate clipboard transition cannot be selected by a received remote frame.
+fn validate_event_mode(params: &crate::control::InitializeParams, clipboard: bool) -> Result<()> {
+    let valid = if clipboard {
+        params.event_stream_version == Some(2) && params.requested_role == RequestedRole::Primary
+    } else {
+        params
+            .event_stream_version
+            .is_none_or(|version| version == 1)
+    };
+    if !valid {
+        return Err(MezError::forbidden(
+            "outbound event negotiation mode unsupported",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

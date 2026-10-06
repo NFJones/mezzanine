@@ -4294,7 +4294,12 @@ Uncertain detach outcomes MUST NOT reconnect or replay. Ordinary detach command
 migration and terminal restoration remain separate caller-owned boundaries.
 Optional version-one event setup MUST remain bound to the initialized session's
 retained connection lease and validate the exact preface under a finite deadline.
-Later event versions and X11 MUST reject before initialization. Reader errors or
+The separate internal clipboard-session transition MUST require explicit
+version-two primary intent and validate true clipboard capability in the correlated
+initialize reply before accepting the version-two stream. Ordinary supervision
+MUST remain redraw-only; typed consumption MUST NOT silently discard effects.
+This admission alone MUST NOT deliver frontend clipboard content or write the
+host clipboard. Later event versions and X11 MUST reject before initialization. Reader errors or
 EOF require retirement of that session owner, not reconnect or creation replay;
 retiring one session MUST NOT close a sibling connection.
 Internal session health sampling MUST retain one shared health tracker per exact
