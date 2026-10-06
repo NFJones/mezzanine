@@ -37,6 +37,8 @@ use crate::security::auth::AuthProfileCredentialSource;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 use mez_agent::{ProviderErrorRetryClass, apply_model_context_compaction_plan};
 
+mod source;
+
 /// Content-free component estimates for a failed complete provider request.
 fn runtime_compaction_candidate_size_diagnostic(
     context: &AgentContext,
@@ -2979,14 +2981,11 @@ impl RuntimeSessionService {
         &self,
         conversation_id: &str,
     ) -> Result<Vec<TranscriptEntry>> {
-        let Some(store) = self.persistence.transcript_store() else {
-            return Ok(Vec::new());
-        };
-        match store.inspect(conversation_id) {
-            Ok(entries) => Ok(entries),
-            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Ok(Vec::new()),
-            Err(error) => Err(error),
-        }
+        source::ManualCompactionSourceWork::capture(
+            self.persistence.transcript_store().cloned(),
+            conversation_id.to_string(),
+        )
+        .execute()
     }
 }
 
