@@ -92,6 +92,7 @@ async fn outbound_session_x11_admission_retains_route_without_forwarding() {
             "untrusted"
         };
         prepared.initialize["x11_forwarding"] = offer(requested);
+        let (reset_observed, reset_barrier) = tokio::sync::oneshot::channel();
         let peer = async {
             let connection = server.accept().await.unwrap().await.unwrap();
             assert_eq!(connection.remote_id(), endpoint.endpoint_id());
@@ -128,6 +129,29 @@ async fn outbound_session_x11_admission_retains_route_without_forwarding() {
                 .write_all(&crate::control::encode_control_body(&reply.to_string()))
                 .await
                 .unwrap();
+            if matches!(case, "trusted" | "untrusted") {
+                // No manual credit override: production admission must grant
+                // credit only after validating the correlated route response.
+                let (mut send, recv) = connection.open_bi().await.unwrap();
+                let preface = crate::runtime::x11::X11StreamPreface {
+                    generation: 7,
+                    route_token: crate::runtime::x11::X11RouteToken::new([51; 32]),
+                };
+                send.write_all(&preface.encode()).await.unwrap();
+                assert!(
+                    tokio::time::timeout(Duration::from_secs(2), send.stopped())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .is_some()
+                );
+                assert!(
+                    connection.close_reason().is_none(),
+                    "channel disposal must not retire its parent session"
+                );
+                let _ = reset_observed.send(());
+                drop((send, recv));
+            }
             assert!(
                 read_exact_frame(bridge.stream_mut()).await.is_err(),
                 "no initialize replay or relay request expected"
@@ -148,6 +172,19 @@ async fn outbound_session_x11_admission_retains_route_without_forwarding() {
                 assert_eq!(route.generation, 7);
                 assert_eq!(route.route_token.as_bytes(), &[51_u8; 32]);
                 assert!(initialized.summary.get("x11_forwarding").is_none());
+                let channel = initialized.accept_x11_channel().await.unwrap();
+                assert_eq!(
+                    initialized.x11_slots.available_permits(),
+                    policy.x11.max_connections_per_route - 1
+                );
+                drop(channel);
+                assert_eq!(
+                    initialized.x11_slots.available_permits(),
+                    policy.x11.max_connections_per_route
+                );
+                // Keep the parent until the peer observes its channel reset.
+                // A control-stream EOF below then fences parent retirement.
+                reset_barrier.await.unwrap();
                 drop(initialized);
             } else {
                 assert!(result.is_err());
