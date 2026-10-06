@@ -61,9 +61,12 @@ compacting while the daemon reads the captured source outside its actor. This
 phase is not a sent model request. Other panes and Stop remain responsive;
 cancelled or obsolete preparation cannot later queue provider work. The daemon
 checks the original operation, conversation, configuration, store and pane before
-adoption, then uses the existing model compactor. Context/request assembly still
-runs on the actor after source preparation. A cancelled blocking source read can
-retain one of the finite worker slots until the actual read finishes.
+adoption, captures current model/policy/context and eligible source, then renders
+the immutable context and request on a second worker under the same logical owner.
+Final adoption rechecks freshness before using the existing model compactor.
+Live context capture and source eligibility remain actor-owned; workers cannot
+rediscover or expand authority. A cancelled blocking source read or request worker
+can retain one of the finite slots until its actual work finishes.
 
 If compaction fails, the error does not mean the source history was discarded.
 Mez does not publish a partial replacement as a completed durable compaction.

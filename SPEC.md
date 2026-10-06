@@ -10540,8 +10540,12 @@ The baseline command capabilities are:
   Source adoption MUST validate the exact operation generation, conversation,
   configuration, installed store and pane incarnation before queuing the existing
   model compactor. Stale results MUST NOT clear newer work or replay input. Preparing
-  means source work is admitted, not that a model request has been sent. Current
-  context/request assembly remains actor-owned after this source-preparation phase.
+  means preparation is admitted, not that a model request has been sent. The actor
+  MUST capture live model, policy, context and eligible source before a separate
+  immutable context/request rendering worker. Both worker phases MUST retain the
+  same logical owner and finite capacity; final adoption MUST revalidate that owner
+  before queuing the existing compactor. Live context capture and source eligibility
+  remain actor-owned; workers MUST NOT rediscover or broaden runtime authority.
   If the manual compactor's complete request exceeds a configured input cap or
   the provider rejects it for context length, it MUST split redacted temporary
   source at UTF-8 boundaries, summarize bounded chunks in source order, and

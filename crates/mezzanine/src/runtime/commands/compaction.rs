@@ -39,7 +39,9 @@ use mez_agent::{ProviderErrorRetryClass, apply_model_context_compaction_plan};
 
 mod preparation;
 mod source;
-pub(crate) use preparation::RuntimeManualCompactionPreparation;
+pub(crate) use preparation::{
+    RuntimeManualCompactionPreparation, RuntimeManualCompactionRequestWork,
+};
 
 /// Content-free component estimates for a failed complete provider request.
 fn runtime_compaction_candidate_size_diagnostic(
@@ -584,7 +586,7 @@ impl RuntimeSessionService {
         prepared: Option<(
             Vec<TranscriptEntry>,
             crate::runtime::RuntimeAgentTranscriptContext,
-            u64,
+            RuntimeManualCompactionPreparation,
         )>,
     ) -> Result<AgentShellCommandOutcome> {
         let (conversation_id, transcript_entries, visibility, running_turn_id) = {
@@ -608,7 +610,11 @@ impl RuntimeSessionService {
                 "cannot compact conversation while turn {turn_id} is running"
             )));
         }
-        if self.agent_is_compacting(pane_id) {
+        if self.agent_is_compacting(pane_id)
+            && !prepared.as_ref().is_some_and(|(_, _, owner)| {
+                self.agent_compaction_task_is_current(pane_id, owner.task_generation)
+            })
+        {
             return Err(MezError::conflict(format!(
                 "cannot compact conversation while pane {pane_id} is already compacting"
             )));
@@ -629,16 +635,19 @@ impl RuntimeSessionService {
                 ),
             });
         }
-        let (transcript_records, prepared_history, prepared_epoch) =
-            if let Some((rows, history, epoch)) = prepared {
-                (rows, Some(history), epoch)
+        let (transcript_records, prepared_history, prepared_owner) =
+            if let Some((rows, history, owner)) = prepared {
+                (rows, Some(history), Some(owner))
             } else {
                 (
                     self.inspect_agent_shell_transcript_for_compaction(&conversation_id)?,
                     None,
-                    0,
+                    None,
                 )
             };
+        let prepared_epoch = prepared_owner
+            .as_ref()
+            .map_or(0, |owner| owner.compaction_epoch);
         if transcript_records.is_empty() {
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
@@ -750,15 +759,40 @@ impl RuntimeSessionService {
         let compaction_context =
             self.apply_agent_shell_preference_context(pane_id, compaction_context)?;
         let mcp_summary = self.mcp_registry().prompt_summary();
-        let compaction_context = runtime_compaction_context_without_transcript_blocks(
-            append_mcp_context(compaction_context, &mcp_summary)?,
-        )?;
         let summarized_entries = compactable_transcript_records.len();
         let compacted_through_sequence = compactable_transcript_records
             .last()
             .map(|entry| entry.sequence);
         let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
         self.refresh_project_trust_store_from_disk_if_changed()?;
+        if let Some(owner) = prepared_owner {
+            let work = RuntimeManualCompactionRequestWork::capture(
+                owner,
+                model_profile_name,
+                model_profile,
+                compaction_context,
+                mcp_summary,
+                allowed_actions,
+                compactable_transcript_records.to_vec(),
+                retained_transcript_entries,
+                self.capture_accounting_origin_for_pane(pane_id),
+            );
+            #[cfg(test)]
+            let work = work.with_probe(self.manual_compaction_request_probe_for_tests());
+            self.queue_manual_compaction_request(work)?;
+            return Ok(AgentShellCommandOutcome::Mutated {
+                command: "compact".into(),
+                visibility,
+                body: format!(
+                    "pane={} conversation={} compacted=false state=preparing phase=request source=model-compact trigger=manual",
+                    json_escape(pane_id),
+                    json_escape(&conversation_id)
+                ),
+            });
+        }
+        let compaction_context = runtime_compaction_context_without_transcript_blocks(
+            append_mcp_context(compaction_context, &mcp_summary)?,
+        )?;
         let mut request = runtime_model_compaction_request(
             &model_profile,
             pane_id,

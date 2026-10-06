@@ -15,12 +15,22 @@ use super::*;
 #[tokio::test(flavor = "current_thread")]
 async fn async_manual_compaction_preparation_is_visible_responsive_and_cancellable() {
     for cancel in [false, true] {
-        Box::pin(qualify(cancel)).await;
+        Box::pin(qualify(cancel, false)).await;
+    }
+}
+
+/// Hold immutable request rendering after source adoption. Current compacting
+/// ownership must survive this phase without sending a provider request, and
+/// cancellation must reject the later rendered task rather than resurrect work.
+#[tokio::test(flavor = "current_thread")]
+async fn async_manual_compaction_request_preparation_is_responsive_and_cancellable() {
+    for cancel in [false, true] {
+        Box::pin(qualify(cancel, true)).await;
     }
 }
 
 /// Owns an exact preparation gate and actor under a finite fixture deadline.
-async fn qualify(cancel: bool) {
+async fn qualify(cancel: bool, request_phase: bool) {
     let root = std::env::temp_dir().join(format!("mez-cprepare-{:032x}", rand::random::<u128>()));
     let store = AgentTranscriptStore::new(root.clone());
     for sequence in 1..=3 {
@@ -70,11 +80,19 @@ async fn qualify(cancel: bool) {
     let started = StdArc::new(tokio::sync::Notify::new());
     let release = StdArc::new(tokio::sync::Notify::new());
     let completed = StdArc::new(tokio::sync::Notify::new());
-    service.set_manual_compaction_preparation_probe_for_tests(
-        started.clone(),
-        release.clone(),
-        completed.clone(),
-    );
+    if request_phase {
+        service.set_manual_compaction_request_probe_for_tests(
+            started.clone(),
+            release.clone(),
+            completed.clone(),
+        );
+    } else {
+        service.set_manual_compaction_preparation_probe_for_tests(
+            started.clone(),
+            release.clone(),
+            completed.clone(),
+        );
+    }
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();

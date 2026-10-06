@@ -64,7 +64,9 @@ mod activity;
 mod approval;
 mod artifacts;
 mod compaction;
-pub(crate) use compaction::RuntimeManualCompactionPreparation;
+pub(crate) use compaction::{
+    RuntimeManualCompactionPreparation, RuntimeManualCompactionRequestWork,
+};
 mod context_documents;
 mod deferred;
 mod disposition;

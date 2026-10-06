@@ -550,8 +550,18 @@ pub(crate) struct RuntimeAgentComponent {
         std::sync::Arc<tokio::sync::Notify>,
     )>,
     /// Exact source work awaiting actor worker dispatch; cancellation removes only its owner.
+    #[cfg(test)]
+    /// Explicit request-rendering gate, independent of source preparation.
+    manual_compaction_request_probe: Option<(
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+    )>,
     pending_manual_compaction_preparations:
         BTreeMap<(String, u64), crate::runtime::RuntimeManualCompactionPreparation>,
+    /// Immutable request rendering awaiting the same exact preparation owner.
+    pending_manual_compaction_requests:
+        BTreeMap<(String, u64), crate::runtime::RuntimeManualCompactionRequestWork>,
     /// Monotonic identity source for queued and claimed compaction tasks.
     next_agent_compaction_task_generation: u64,
     /// Current compaction task generation and originating conversation by pane.
@@ -2825,6 +2835,29 @@ impl RuntimeSessionService {
         self.agent.manual_compaction_preparation_probe.clone()
     }
 
+    /// Installs a deterministic immutable-request worker gate for actor tests.
+    #[cfg(test)]
+    pub(crate) fn set_manual_compaction_request_probe_for_tests(
+        &mut self,
+        started: std::sync::Arc<tokio::sync::Notify>,
+        release: std::sync::Arc<tokio::sync::Notify>,
+        completed: std::sync::Arc<tokio::sync::Notify>,
+    ) {
+        self.agent.manual_compaction_request_probe = Some((started, release, completed));
+    }
+
+    /// Captures the request gate for one exact work item without global state.
+    #[cfg(test)]
+    pub(crate) fn manual_compaction_request_probe_for_tests(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+    )> {
+        self.agent.manual_compaction_request_probe.clone()
+    }
+
     /// Reserves finite source-worker capacity without waiting on the actor. The
     /// permit must remain with the owned work until its actual I/O ends, including
     /// after logical cancellation. Missing adapter or saturation rejects admission.
@@ -2888,6 +2921,33 @@ impl RuntimeSessionService {
         &mut self,
     ) -> Vec<crate::runtime::RuntimeManualCompactionPreparation> {
         std::mem::take(&mut self.agent.pending_manual_compaction_preparations)
+            .into_values()
+            .collect()
+    }
+
+    /// Transfers request rendering under the existing exact owner and capacity.
+    /// A cancelled source callback cannot enqueue construction for newer work.
+    pub(crate) fn queue_manual_compaction_request(
+        &mut self,
+        work: crate::runtime::RuntimeManualCompactionRequestWork,
+    ) -> Result<()> {
+        if !self.agent_compaction_task_is_current(&work.owner.pane_id, work.owner.task_generation) {
+            return Err(MezError::conflict(
+                "manual request preparation owner became stale",
+            ));
+        }
+        self.agent.pending_manual_compaction_requests.insert(
+            (work.owner.pane_id.clone(), work.owner.task_generation),
+            work,
+        );
+        Ok(())
+    }
+
+    /// Consumes immutable request work once without rebuilding current state.
+    pub(crate) fn take_manual_compaction_requests(
+        &mut self,
+    ) -> Vec<crate::runtime::RuntimeManualCompactionRequestWork> {
+        std::mem::take(&mut self.agent.pending_manual_compaction_requests)
             .into_values()
             .collect()
     }
@@ -3096,6 +3156,10 @@ impl RuntimeSessionService {
             .agent
             .pending_manual_compaction_preparations
             .remove(&(pane_id.to_string(), task_generation));
+        let request = self
+            .agent
+            .pending_manual_compaction_requests
+            .remove(&(pane_id.to_string(), task_generation));
         let resume_turn_id = claimed
             .as_ref()
             .or(pending.as_ref())
@@ -3113,8 +3177,11 @@ impl RuntimeSessionService {
             self.agent.agent_compaction_task_owners.remove(pane_id);
             self.agent.agent_compacting_panes.remove(pane_id);
         }
-        let had_task =
-            pending.is_some() || claimed.is_some() || preparation.is_some() || marker_matches;
+        let had_task = pending.is_some()
+            || claimed.is_some()
+            || preparation.is_some()
+            || request.is_some()
+            || marker_matches;
         RuntimeAgentCompactionFailureState {
             had_task,
             resume_turn_id,

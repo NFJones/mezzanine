@@ -869,6 +869,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
             crate::runtime::RuntimeAgentTranscriptContext,
         )>,
     },
+    /// Adopts immutable compactor request rendering under its original owner.
+    CompleteManualCompactionRequest {
+        /// Frozen request inputs retaining finite preparation capacity.
+        work: Box<crate::runtime::RuntimeManualCompactionRequestWork>,
+        /// Existing compactor task built without live runtime access.
+        result: Box<Result<crate::runtime::RuntimeAgentCompactionTask>>,
+    },
     /// Admits checked chronology retained before terminal turn cleanup.
     CompleteBookkeepingCandidate {
         /// Exact candidate generation and captured conversation history owner.
@@ -1472,6 +1479,7 @@ impl AsyncRuntimeRequest {
             | Self::CompleteAgentPromptProviderInfoRefresh { .. }
             | Self::CompleteAgentPromptHistoryPreparation { .. }
             | Self::CompleteManualCompactionPreparation { .. }
+            | Self::CompleteManualCompactionRequest { .. }
             | Self::CompleteBookkeepingCandidate { .. }
             | Self::PendingAgentProviderTasks { .. }
             | Self::AgentTurnIsRunning { .. }

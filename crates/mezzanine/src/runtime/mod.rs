@@ -237,7 +237,7 @@ mod auto_sizing;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod commands;
-pub(crate) use commands::RuntimeManualCompactionPreparation;
+pub(crate) use commands::{RuntimeManualCompactionPreparation, RuntimeManualCompactionRequestWork};
 /// Exposes the commands support module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

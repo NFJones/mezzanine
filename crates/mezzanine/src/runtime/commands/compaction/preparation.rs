@@ -5,11 +5,15 @@
 //! actual worker retirement, not merely logical cancellation. The worker decodes
 //! source/history without consulting live service state and performs no model
 //! dispatch or publication. Actor adoption remains the only scheduling authority.
-//! This first preparation phase moves durable decoding; immutable request/context
-//! construction is a later phase and must not be claimed off-actor here.
+//! Durable decoding and immutable context/request rendering use separate worker
+//! phases under the same logical owner. Live context/policy capture and source
+//! eligibility remain actor-owned; no worker may rediscover or widen authority.
 
 use super::*;
 use crate::runtime::control::{RuntimeAgentPromptHistoryWork, RuntimeAgentTranscriptContext};
+
+mod request;
+pub(crate) use request::RuntimeManualCompactionRequestWork;
 
 /// Immutable source work and exact actor owner for one manual operation.
 #[derive(Debug, Clone)]
@@ -136,40 +140,18 @@ impl RuntimeSessionService {
         if !self.agent_compaction_task_is_current(&work.pane_id, work.task_generation) {
             return Ok(false);
         }
-        let freshness = (|| -> Result<()> {
-            self.prepare_agent_context_prerequisites(&work.pane_id, true)?;
-            let session = self
-                .agent_shell_store()
-                .get(&work.pane_id)
-                .ok_or_else(|| MezError::conflict("compaction conversation was removed"))?;
-            if session.session_id != work.conversation_id
-                || session.transcript_entries != work.transcript_entries
-                || self.session.config_generation != work.config_generation
-                || self.integration.config_layers() != work.config_layers.as_slice()
-                || self.persistence.transcript_store() != work.store.as_ref()
-            {
-                return Err(MezError::conflict("compaction preparation became stale"));
-            }
-            let current = self.steering_process_binding(&work.pane_id)?;
-            let same = match (work.process.as_ref(), current.as_ref()) {
-                (Some(old), Some(current)) => old.same_incarnation(current),
-                (None, None) => true,
-                _ => false,
-            };
-            if !same {
-                return Err(MezError::conflict("compaction pane incarnation changed"));
-            }
-            Ok(())
-        })();
-        self.fail_agent_compaction_task(&work.pane_id, work.task_generation);
+        let freshness = self.validate_manual_compaction_owner(work);
         let outcome = freshness.and(result).and_then(|(rows, history)| {
             self.queue_agent_shell_compaction_with_model(
                 &work.pane_id,
                 "manual",
                 None,
-                Some((rows, history, work.compaction_epoch)),
+                Some((rows, history, work.clone())),
             )
         });
+        if outcome.is_err() || matches!(outcome, Ok(AgentShellCommandOutcome::Display { .. })) {
+            self.fail_agent_compaction_task(&work.pane_id, work.task_generation);
+        }
         if let Err(error) = &outcome {
             let _ = self.append_agent_error_text_to_terminal_buffer(
                 &work.pane_id,
@@ -180,5 +162,76 @@ impl RuntimeSessionService {
             self.resume_agent_compaction_steering(&work.pane_id)?;
         }
         outcome.map(|_| true)
+    }
+
+    /// Revalidates transcript-free live prerequisites and the exact captured
+    /// owner at every preparation adoption boundary. This does not read source.
+    fn validate_manual_compaction_owner(
+        &mut self,
+        work: &RuntimeManualCompactionPreparation,
+    ) -> Result<()> {
+        self.prepare_agent_context_prerequisites(&work.pane_id, true)?;
+        let session = self
+            .agent_shell_store()
+            .get(&work.pane_id)
+            .ok_or_else(|| MezError::conflict("compaction conversation was removed"))?;
+        if session.session_id != work.conversation_id
+            || session.transcript_entries != work.transcript_entries
+            || self.session.config_generation != work.config_generation
+            || self.integration.config_layers() != work.config_layers.as_slice()
+            || self.persistence.transcript_store() != work.store.as_ref()
+        {
+            return Err(MezError::conflict("compaction preparation became stale"));
+        }
+        let current = self.steering_process_binding(&work.pane_id)?;
+        let same = match (work.process.as_ref(), current.as_ref()) {
+            (Some(old), Some(current)) => old.same_incarnation(current),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            return Err(MezError::conflict("compaction pane incarnation changed"));
+        }
+        Ok(())
+    }
+
+    /// Adopts a rendered request only under the original logical preparation.
+    /// Errors/cancellation never redispatch source or replay command input.
+    /// Provider work continues through the established compactor queue/claims.
+    pub(crate) fn complete_manual_compaction_request(
+        &mut self,
+        work: &RuntimeManualCompactionRequestWork,
+        result: Result<RuntimeAgentCompactionTask>,
+    ) -> Result<bool> {
+        let owner = &work.owner;
+        if !self.agent_compaction_task_is_current(&owner.pane_id, owner.task_generation) {
+            return Ok(false);
+        }
+        let result = self.validate_manual_compaction_owner(owner).and(result);
+        self.fail_agent_compaction_task(&owner.pane_id, owner.task_generation);
+        let outcome = result.and_then(|task| {
+            if task.pane_id != owner.pane_id || task.conversation_id != owner.conversation_id
+                || task.compaction_epoch != owner.compaction_epoch || task.transcript_entries != owner.transcript_entries {
+                return Err(MezError::conflict("manual rendered request owner changed"));
+            }
+            let status = format!("agent: compacting conversation summary trigger=manual provider={} model={} previous_transcript_entries={} summarized_entries={}",
+                task.model_profile.provider,task.model_profile.model,task.transcript_entries,task.summarized_entries);
+            self.queue_agent_compaction_task(task);
+            let _ = self.append_agent_status_text_to_terminal_buffer(&owner.pane_id,&status);
+            Ok(())
+        });
+        if let Err(error) = &outcome {
+            let _ = self.append_agent_error_text_to_terminal_buffer(
+                &owner.pane_id,
+                &format!(
+                    "agent: compact request preparation failed: {}",
+                    error.message()
+                ),
+            );
+        }
+        if !self.agent_is_compacting(&owner.pane_id) {
+            self.resume_agent_compaction_steering(&owner.pane_id)?;
+        }
+        outcome.map(|()| true)
     }
 }
