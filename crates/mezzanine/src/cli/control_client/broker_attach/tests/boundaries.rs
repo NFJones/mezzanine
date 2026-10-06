@@ -34,6 +34,55 @@ fn fixture() -> (PathBuf, crate::cli::CliEnv, crate::config::ConfigPaths) {
     (home, env, paths)
 }
 
+/// Starting setup must also reject veto/unsafe discovery without retaining a
+/// child. Route-less profiles and explicit X11 remain on the direct path before
+/// any election, launch or endpoint identity acquisition occurs.
+#[tokio::test]
+async fn broker_attach_starting_preserves_no_launch_boundaries() {
+    for mode in ["veto", "unsafe", "route-less", "x11"] {
+        let (home, env, paths) = fixture();
+        if mode == "veto" {
+            std::fs::write(
+                paths.default_primary_file(),
+                format!(
+                    "version = {}\n[transport.iroh]\noutbound_enabled = false\n",
+                    crate::config::CURRENT_CONFIG_SCHEMA_VERSION,
+                ),
+            )
+            .unwrap();
+        }
+        if mode == "unsafe" {
+            std::fs::write(paths.root().join("authored"), b"preserve").unwrap();
+            symlink("authored", paths.root().join("outbound.sock")).unwrap();
+        }
+        let mut child = None;
+        let result = try_open_starting(
+            &crate::cli::ControlTargetSelection::IrohProfile("fixture".into()),
+            &env,
+            "primary",
+            &IrohSessionRouting::Create {
+                name: Some("second".into()),
+                idempotency_key: "exact-original".into(),
+            },
+            80,
+            24,
+            "xterm",
+            mode == "x11",
+            &mut child,
+        )
+        .await;
+        if matches!(mode, "veto" | "unsafe") {
+            assert!(result.is_err());
+        } else {
+            assert!(matches!(result, Ok(None)));
+        }
+        assert!(child.is_none());
+        assert!(!paths.root().join("outbound.startup.lock").exists());
+        assert!(!paths.root().join("remote/client/endpoint.key").exists());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+}
+
 /// Absent discovery leaves direct setup eligible without endpoint mutation.
 /// Outbound veto and unsafe discovery reject instead of authorizing fallback or
 /// repairing authored paths. The caller's Create operation remains unchanged.

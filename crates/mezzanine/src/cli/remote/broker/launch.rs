@@ -95,6 +95,34 @@ impl LaunchedBroker {
         self.child.start_kill()?;
         self.wait().await
     }
+
+    /// Stops only a test's exact retained child during explicit fixture cleanup.
+    /// Production attachment callers have no corresponding termination surface.
+    #[cfg(test)]
+    pub(in crate::cli) async fn terminate_for_tests(&mut self) -> Result<ExitStatus> {
+        self.terminate().await
+    }
+
+    /// Requests graceful shutdown of only this test's retained live child, then
+    /// reaps it. Callers bound the wait and retain forced cleanup on failure;
+    /// no socket lookup or inferred discovery ownership supplies signal authority.
+    #[cfg(test)]
+    pub(in crate::cli) async fn shutdown_for_tests(&mut self) -> Result<ExitStatus> {
+        if let Some(status) = self.try_wait()? {
+            return Ok(status);
+        }
+        let pid = self
+            .child
+            .id()
+            .and_then(|id| i32::try_from(id).ok())
+            .and_then(rustix::process::Pid::from_raw)
+            .ok_or_else(|| {
+                MezError::invalid_state("fixture retained child identity unavailable")
+            })?;
+        rustix::process::kill_process(pid, rustix::process::Signal::TERM)
+            .map_err(std::io::Error::from)?;
+        self.wait().await
+    }
 }
 
 /// Constructs fixed launch inputs and private diagnostic ownership. It performs

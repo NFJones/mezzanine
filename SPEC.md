@@ -4289,8 +4289,13 @@ discovery loss after local connection MUST remain terminal. Failures after
 readiness MUST NOT switch endpoints or replay creation. Ordinary attach/new MUST
 reuse an authenticated active broker for eligible paired host profiles through a
 concrete terminal guard. Signals MUST retire only that frontend and attempt bounded
-terminal restoration. Missing discovery retains the direct path; automatic startup,
-invitation pairing and broker X11 forwarding remain separate qualification boundaries.
+terminal restoration. Initial missing/refused discovery for qualified pinned direct
+profiles MAY invoke elected startup using the running executable and caller-retained
+child evidence. Startup failure MUST NOT authorize direct fallback or replacement.
+Frontend exit MUST NOT kill the potentially shared child; exited children MAY be
+reaped by exact handle, while live-child disposal retains the documented best-effort
+reaping limitation. Unqualified routes and absent-broker X11 retain direct eligibility
+before startup. Invitation pairing and broker X11 forwarding remain separate.
 The separate internal session initialization MUST retain the original routing
 intent and invocation key, validate correlated role/client/session/active-lease
 evidence, and match explicit stable-ID targets. It MUST NOT retarget a connection

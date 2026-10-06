@@ -115,19 +115,34 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         let routing = remote_routing
             .as_ref()
             .ok_or_else(|| MezError::invalid_state("remote attachment routing is unavailable"))?;
-        if let Some(attachment) = Box::pin(super::super::control_client::broker_attach::try_open(
-            control_target,
-            &env,
-            request.requested_role,
-            routing,
-            columns,
-            rows,
-            &term,
-            x11_request.is_some(),
-        ))
-        .await?
-        {
-            return Box::pin(super::broker::run(attachment, terminal_size)).await;
+        let mut broker_child = None;
+        let prepared = Box::pin(
+            super::super::control_client::broker_attach::try_open_starting(
+                control_target,
+                &env,
+                request.requested_role,
+                routing,
+                columns,
+                rows,
+                &term,
+                x11_request.is_some(),
+                &mut broker_child,
+            ),
+        )
+        .await;
+        if let Some(child) = broker_child.as_mut() {
+            // Reap only if already exited. A discovered socket or setup failure
+            // cannot authorize termination of this potentially shared broker.
+            let _ = child.try_wait();
+        }
+        if let Some(attachment) = prepared? {
+            let result = Box::pin(super::broker::run(attachment, terminal_size)).await;
+            if let Some(child) = broker_child.as_mut() {
+                let _ = child.try_wait();
+            }
+            // Live broker drop uses Tokio's best-effort reaper, not a bounded
+            // wait or implicit kill; siblings retain their shared endpoint.
+            return result;
         }
         let (mut channel, initialize_body) = open_persistent_iroh_control_channel(
             control_target,

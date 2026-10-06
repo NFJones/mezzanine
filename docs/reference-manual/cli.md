@@ -567,8 +567,13 @@ readiness is terminal. Readiness/setup failures never acquire a competing identi
 or replay creation. Ordinary `attach` and `new` now reuse an active broker for
 eligible paired host profiles, with guarded terminal output and restoration.
 OS signals retire only the local frontend; terminal Ctrl-C remains forwarded input.
-Absent discovery retains direct setup. Automatic broker startup, invitation pairing
-and broker X11 forwarding remain unfinished; X11 with an active broker rejects
+Initial absent/refused discovery now permits elected first-owner startup for
+qualified pinned direct profiles, using the running binary and retaining the
+exact child through setup and foreground exit. Startup failure does not switch to
+direct setup or replay creation. Exited children are observed/reaped; live children
+are not killed on frontend exit, and reaping remains best-effort after disposal.
+Unqualified routes and absent-broker X11 retain direct eligibility before startup.
+Invitation pairing and broker X11 forwarding remain unfinished; X11 with an active broker rejects
 before session setup rather than switching to a competing endpoint.
 Errors after writing never automatically replay initialization. Session
 creation/attachment uses a separate internal transition retaining the original
@@ -783,8 +788,10 @@ fresh-binary fixture qualifies actual broker readiness reuse and SIGTERM/reaping
 under the isolated environment; this is not full remote CLI attachment acceptance.
 An internal CLI selector now supplies the currently running executable to that
 owned composition. It retains outbound veto and caller-owned child evidence,
-and reuses ready owners without spawning. Automatic first-attachment startup
-and complete remote CLI acceptance remain separate integration work.
+and reuses ready owners without spawning. Eligible first attachments now compose
+that selector with paired-profile setup. Explicit process fixtures qualify original
+keys, distinct sessions and sibling survival against a synthetic pinned peer;
+combined real-host multiprocess and complete remote CLI acceptance remain separate.
 An internal client session API consumes readiness once, sends credential-free
 setup, and pins session/client/lease identities from the initial line snapshot.
 Subsequent snapshots retain the same settlement and stream buffers. Failed

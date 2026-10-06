@@ -2,6 +2,7 @@
 use super::*;
 
 mod boundaries;
+mod startup;
 
 /// An attachment caller outside the broker subtree must be able to observe and
 /// reap its exact retained child after failed readiness. A harmless exited

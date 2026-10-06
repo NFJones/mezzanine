@@ -33,10 +33,6 @@ pub(in crate::cli) mod launch;
 /// helper creates no remote session and never infers permission to kill an owner
 /// from discovery failure. The caller must observe/reap its exact child and must
 /// not switch to direct endpoint acquisition after an attempted startup.
-#[allow(
-    dead_code,
-    reason = "first-owner attachment startup follows selector qualification"
-)]
 pub(in crate::cli) async fn connect_cli(
     env: &CliEnv,
     budget: std::time::Duration,
