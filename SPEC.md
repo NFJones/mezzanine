@@ -270,6 +270,16 @@ or changed origin evidence. Opening a pidfd by numeric PID is not equivalent.
 Unsupported kernel/platform lifetime APIs MUST fail closed without affecting
 existing UID-only control. This anchor still does not attest the current writer,
 vendor producer or client/session association; full admission remains unfinished.
+Direct-parent provenance groundwork MAY derive a parent only from an already-live
+socket-origin helper's paired native record. Parent birth/UID and helper birth/
+relationship checks MUST bracket a retained close-on-exec parent pidfd, with
+nonblocking lifetime polls and a cooperative 100ms capture/reobservation budget.
+This independently fenced parent lookup is not a numeric-PID origin fallback.
+Missing/replaced/dead/reparented/cross-user/init/self or over-budget evidence MUST
+fail closed. Parent retention MAY survive helper exit; helper EOF MUST NOT be
+treated as process death. This is not an atomic tree snapshot or a hook enrollment
+consumer. Vendor/client-session association, writer proof, pane-root/shell rejection
+and exact actor root/producer commit fences remain mandatory independent boundaries.
 Ordinary Unix runtime connection adapters MAY retain optional origin anchors
 before frame processing, with native reads outside the runtime actor and an
 owned socket descriptor throughout capture. Connection clones MUST share the

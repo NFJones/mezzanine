@@ -292,6 +292,15 @@ mod tests {
             Err(error) if error.raw_os_error() == Some(libc::ENOPROTOOPT) => None,
             Err(error) => panic!("origin lifetime capture failed: {error}"),
         };
+        #[cfg(target_os = "linux")]
+        let parent_lifetime = lifetime.as_ref().map(|helper| {
+            let parent = helper.capture_parent().unwrap();
+            assert_eq!(parent.uid(), crate::runtime::current_effective_uid());
+            assert_eq!(parent.identity, root);
+            assert!(parent.is_live());
+            assert_eq!(parent.reobserve().unwrap(), root);
+            parent
+        });
         let evidence = tokio::task::spawn_blocking(move || process_ancestry(origin, root))
             .await
             .unwrap()
@@ -321,6 +330,9 @@ mod tests {
             // The open socket and numeric peer PID cannot keep the dead origin
             // usable. Reobservation must reject its anchored lifetime on exit.
             assert!(lifetime.reobserve().is_err());
+            let parent = parent_lifetime.unwrap();
+            assert!(parent.is_live(), "helper exit incorrectly ended its parent");
+            assert_eq!(parent.reobserve().unwrap(), root);
             assert!(
                 super::super::peer_process_lifetime::capture_unix_origin(
                     socket.as_raw_fd(),

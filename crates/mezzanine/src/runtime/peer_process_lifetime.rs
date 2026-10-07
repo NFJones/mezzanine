@@ -5,11 +5,11 @@
 //! origin. Linux SO_PEERPIDFD instead supplies the socket's retained kernel
 //! process object. Capture and reobservation require that object to remain live
 //! before and after reading the native PID/parent/start record. Unsupported
-//! kernels/platforms fail closed, with no numeric-PID fallback. This is groundwork
-//! only: no role, producer ownership, pane attribution or current-writer proof
-//! follows from retaining a socket-origin anchor. Unix runtime connections retain
-//! optional anchors before framing, but admission does not yet consume them;
-//! existing UID-only control gates remain unchanged.
+//! kernels/platforms fail closed, with no numeric-PID origin fallback. Retention
+//! alone grants no role, pane attribution, vendor or current-writer proof. Ordinary
+//! persistent admission consumes origin anchors with independent writer/ancestry
+//! and actor fences; existing UID-only control gates remain unchanged. Direct
+//! parent capture is separate provenance groundwork, not hook enrollment authority.
 
 use std::io;
 #[cfg(target_os = "linux")]
@@ -19,6 +19,8 @@ use std::os::fd::{OwnedFd, RawFd};
 use mez_mux::process::ProcessParentIdentity;
 
 use super::peer_credentials::UnixPeerProcess;
+
+mod parent;
 
 /// Owns the exact connection-origin lifetime anchor and its first native record.
 #[derive(Debug)]

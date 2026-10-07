@@ -579,8 +579,22 @@ duplicate, so cancellation cannot recycle the worker's descriptor. Connection
 clones share the same anchor; unbound/remote/wrong-user/initialized connections
 cannot attach fresh evidence, and recapture cannot replace an existing anchor.
 Unsupported capture leaves ordinary UID-only control usable with no origin
-evidence. The persistent-host front door is not migrated; retaining an anchor
-alone grants no role or vendor registration.
+evidence. Hosted sessions publish their own control socket through these shared
+runtime adapters; the host administration front door is not a telemetry route.
+Retaining an anchor alone grants no role or vendor registration.
+
+Linux direct-parent lifetime groundwork derives the parent from a live socket
+origin's native PID/parent/start record, never a supplied PID. It checks parent
+birth and same-user evidence before/after pidfd capture and rechecks the helper's
+exact birth/relationship. The retained private CLOEXEC parent fd remains distinct
+from the helper socket-origin anchor, with zero-timeout death polling and a
+cooperative100ms budget. Helper exit does not imply parent exit; socket EOF does
+not prove either. Dead/reused/reparented/unreadable/cross-user/init/self or late
+evidence rejects. Other platforms remain unsupported without numeric fallback.
+This captures provenance only: there is no hook admission consumer, vendor
+attestation, actual client/session association or pane authority. Consumers must
+reject a surviving pane shell as producer and require separate writer/ancestry/
+actor commit fences; two observations do not form an atomic process-tree snapshot.
 
 #### Ordinary persistent-producer enrollment (implemented slice)
 
