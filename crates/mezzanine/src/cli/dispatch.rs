@@ -167,6 +167,7 @@ async fn run_with_inner<W: Write, E: Write>(
             Some(
                 CliCommand::Sandbox(_)
                     | CliCommand::HarnessEvent
+                    | CliCommand::HarnessPeer
                     | CliCommand::CodexHook
                     | CliCommand::Bootstrap(_)
             )
@@ -253,6 +254,9 @@ async fn run_with_inner<W: Write, E: Write>(
         }
         Some(CliCommand::HarnessEvent) => {
             super::harness_event::run(&socket_selection, stdout).await?;
+        }
+        Some(CliCommand::HarnessPeer) => {
+            super::harness_peer::run(stdout)?;
         }
         Some(CliCommand::CodexHook) => {
             super::codex_hook::run(stdout)?;

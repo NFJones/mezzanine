@@ -1059,3 +1059,4 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
 }
 
 mod observer_epochs;
+mod persistent_client;

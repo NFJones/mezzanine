@@ -7,10 +7,10 @@ use super::reconciliation::{Artifact, Entry};
 
 /// Supplies best-effort compiled artifacts for an explicit OpenCode config root.
 pub(crate) fn manifest() -> Manifest {
-    Manifest {
+    let mut manifest = Manifest {
         harness: "opencode".into(),
         vendor_version: "best-effort".into(),
-        revision: 1,
+        revision: 2,
         entries: vec![
             Entry {
                 path: "plugins/mezzanine.js".into(),
@@ -32,7 +32,11 @@ pub(crate) fn manifest() -> Manifest {
                 },
             },
         ],
-    }
+    };
+    manifest
+        .entries
+        .extend(super::persistent_client::entries("plugins/mezzanine"));
+    manifest
 }
 
 #[cfg(test)]

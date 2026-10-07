@@ -53,6 +53,9 @@ pub(super) enum CliCommand {
     Bootstrap(super::bootstrap::BootstrapCliArgs),
     /// Forwards one normalized observational event from bounded stdin; never initializes a client.
     HarnessEvent,
+    /// Checks only native peer ownership on a private client-supplied descriptor.
+    #[command(hide = true)]
+    HarnessPeer,
     /// Forwards one content-free Codex callback to an inherited observation socket.
     #[command(hide = true)]
     CodexHook,

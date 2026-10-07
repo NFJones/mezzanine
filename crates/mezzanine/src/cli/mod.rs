@@ -111,6 +111,9 @@ mod dispatch;
 mod env;
 /// Owns bounded capability-only normalized harness event forwarding.
 mod harness_event;
+/// Owns fixed read-only native daemon peer verification for persistent clients.
+mod harness_peer;
+pub(crate) use harness_peer::run_internal_process as run_internal_harness_peer_process;
 /// Exposes persistent local host lifecycle and routing commands.
 mod host;
 /// Exposes the issue module boundary.

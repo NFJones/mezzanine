@@ -102,7 +102,12 @@ fn receipt_bytes(manifest: &Manifest) -> Result<Vec<u8>> {
 /// Captures a deterministic ownership-checked plan without changing destinations.
 /// An existing journal requires explicit recovery rather than silent replay.
 pub(crate) fn plan(root: &Path, manifest: &Manifest, operation: Operation) -> Result<Plan> {
-    plan_with_history(root, manifest, operation, &[])
+    plan_with_history(
+        root,
+        manifest,
+        operation,
+        &super::compiled_history(manifest),
+    )
 }
 
 /// Captures a plan with caller-owned compiled historical revisions. Neither a

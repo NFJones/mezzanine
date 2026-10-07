@@ -34,6 +34,7 @@ fn cli_rejects_vendor_wrappers_and_omits_root_completion_routes() {
     }
     assert!(names.contains(&"bootstrap"));
     assert!(names.contains(&"harness-event"));
+    assert!(names.contains(&"harness-peer"));
     assert!(names.contains(&"codex-hook"));
     let mut completion = Vec::new();
     clap_complete::generate(

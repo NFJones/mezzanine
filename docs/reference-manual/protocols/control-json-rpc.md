@@ -629,8 +629,24 @@ Explicit primary-launched leases keep their existing caller-renewal contract.
 `usage: "unavailable-source-continuity"` is explicit: ordinary usage RPCs are
 rejected until durable source continuity exists, not billed under fresh owners.
 
-This is a common runtime slice, not a claim that installed plugins already use
-it. Fixed installed clients and their reload/session-transition wiring, short-lived
+Private shared client artifacts are now included by Pi/OpenCode manifests.
+They open no resources at loading; genuine adapter starts must call the client.
+The client discovers only nonsecret MEZ route hints and verifies socket/private
+directory metadata plus actual native same-user peer UID before sending directly
+from the producer. Its fixed hidden `mez harness-peer` subprocess only inspects a
+borrowed socket descriptor and emits a captured bounded acknowledgment. It reads
+no callback/credential data, performs no socket I/O, initializes no role, and
+launches no vendor. The helper runs before HOME/config/runtime discovery with a
+cleared environment. It is not an inherited vendor observer-channel prerequisite.
+The client is bounded, unreferenced, allowlisted and neutral on loss. It exposes
+typed lifecycle delivery, not ledger commitment or fabricated usage.
+
+Private installation pins the installing binary, not a PATH/launcher helper
+variable. Pi revision3/OpenCode revision2 add these siblings; exact previous
+Pi2/OpenCode1 receipts are recognized under frozen ownership fingerprints.
+Other historical variants, recovery/default-root/dry-run UX remain installer work.
+This is a shared runtime/client slice, not a claim that released vendor plugin
+entry points already use it. Their reload/session-transition wiring, short-lived
 helper association, shared/preexisting server session association and macOS
 lifetime/sender equivalents remain unfinished. Unsupported platforms/kernels
 retain ordinary control without enrollment; no vendor relaunch/fallback occurs.

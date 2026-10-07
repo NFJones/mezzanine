@@ -35,6 +35,8 @@ pub(crate) mod opencode_artifact;
     reason = "retained strict observations await ordinary-process enrollment"
 )]
 pub(crate) mod opencode_stream;
+/// Owns private shared persistent-client and fixed helper-reference artifacts.
+mod persistent_client;
 #[allow(
     dead_code,
     reason = "pinned lifecycle projection awaits private Pi launch qualification"
@@ -105,4 +107,62 @@ pub(crate) fn compiled_manifest(
         "codex" => Some(codex_artifact::manifest()),
         _ => None,
     }
+}
+
+/// Recognizes only exact immediately preceding compiled artifact sets for the
+/// shared-client addition. Receipts cannot supply historical authority. Older
+/// byte variants and interrupted old-target recovery remain installer work.
+pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer::Manifest> {
+    let (current, revision, paths) = match manifest.harness.as_str() {
+        "pi" => (
+            pi_artifact::candidate_manifest(),
+            2,
+            [
+                "extensions/mezzanine/persistent_client.mjs",
+                "extensions/mezzanine/peer_helper.mjs",
+            ],
+        ),
+        "opencode" => (
+            opencode_artifact::manifest(),
+            1,
+            [
+                "plugins/mezzanine/persistent_client.mjs",
+                "plugins/mezzanine/peer_helper.mjs",
+            ],
+        ),
+        _ => return Vec::new(),
+    };
+    if *manifest != current {
+        return Vec::new();
+    }
+    let mut previous = current;
+    previous.revision = revision;
+    previous
+        .entries
+        .retain(|entry| !paths.contains(&entry.path.as_str()));
+    if compiled_predecessor_matches(&previous) {
+        vec![previous]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Freezes exact historical ownership bytes; edits to current modules cannot
+/// silently redefine a prior revision. A changed predecessor fails closed until
+/// an explicit reviewed historical snapshot is supplied by its installer owner.
+fn compiled_predecessor_matches(manifest: &installer::Manifest) -> bool {
+    use sha2::Digest;
+    let expected = match (manifest.harness.as_str(), manifest.revision) {
+        ("pi", 2) => "daca64626b1d491199e1418607b7ca29ffad0b15de69811f3842a5c030916751",
+        ("opencode", 1) => "36a754204d96c6287951d205011a02ca63bfe48b9c6dbffefdaa1fd4f34eea82",
+        _ => return false,
+    };
+    let Ok(bytes) = serde_json::to_vec(manifest) else {
+        return false;
+    };
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        == expected
 }

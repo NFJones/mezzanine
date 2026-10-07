@@ -334,6 +334,23 @@ auxiliary commands, forward arbitrary vendor payloads or retry effects. It MUST
 use same-user Unix peer authentication, finite input/exchange deadlines and
 neutral output on telemetry failure. Vendor normalization, private launch-token
 delivery and renewable-lease scheduling remain explicit adapter responsibilities.
+The private dependency-free persistent client MUST perform no I/O at module
+loading, use only nonsecret MEZ route hints, and send enrollment/presentation/end
+directly from the persistent producer. It MUST NOT initialize a general role,
+forward arbitrary RPC or vendor content, transmit fabricated usage, or keep the
+vendor alive with referenced telemetry sockets/timers. Queue/write/reply bounds
+MUST remain finite; malformed/duplicate-key replies and untyped acknowledgments
+MUST lose telemetry neutrally, never replay vendor work or expose private handles.
+The fixed hidden `mez harness-peer` mode MAY verify same-user kernel peer UID on
+the client's borrowed private socket descriptor before config/runtime startup.
+It MUST do no socket I/O, enrollment, credential handling or vendor launch. This
+internal descriptor loan is not a normal vendor FD3/launcher prerequisite. The
+client MUST capture its bounded fixed acknowledgment and send all RPC bytes itself.
+Pi/OpenCode manifests MAY install the private client plus an explicit installing
+binary helper reference. Exact prior Pi2/OpenCode1 ownership identities MUST be
+fingerprint-frozen for the shared-client addition; arbitrary receipt/current-source
+changes MUST NOT redefine historical authority. Deployment alone MUST NOT imply
+vendor entry-point activation, complete bootstrap UX or live vendor conformance.
 The common `mez bootstrap <harness>` installer MUST admit only compiled,
 best-effort manifests based on docs or available local installations. Observed
 vendor versions MUST NOT gate implementation or installation; untested behavior
