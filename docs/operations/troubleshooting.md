@@ -140,6 +140,9 @@ If the operating system rejects a spawn because the executable is temporarily
 write-open (`ETXTBSY`), Mez retries only that pre-execution failure with a short
 backoff inside the same deadline. Missing/inaccessible executables fail normally;
 once a helper starts, wait errors, nonzero exits and timeouts never replay it.
+Unavailability includes the numeric OS spawn errno when available, so a missing
+executable, access denial or resource failure need not be guessed from a generic
+message. It does not include local paths, arguments, authority bytes or helper output.
 
 Only one attachment owns a session's X11 route. A conflict means another
 primary currently owns it. Use `--x11-takeover` only for an intentional

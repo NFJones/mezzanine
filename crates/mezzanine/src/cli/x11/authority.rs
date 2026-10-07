@@ -245,8 +245,9 @@ async fn run_xauth(
 /// fork can temporarily retain a writer to a freshly published executable even
 /// after its publisher closes it. ETXTBSY has not executed the helper, so a
 /// bounded retry cannot replay its effects. Other errors fail neutrally without
-/// disclosing paths or credentials. The original execution deadline is shared
-/// with child wait; synchronous spawn itself is not hard-cancellable.
+/// disclosing paths or credentials; only a numeric OS spawn errno is retained
+/// when available. The original execution deadline is shared with child wait;
+/// synchronous spawn itself is not hard-cancellable.
 async fn spawn_xauth(
     command: &mut tokio::process::Command,
     deadline: tokio::time::Instant,
@@ -261,10 +262,14 @@ async fn spawn_xauth(
                 let retry = tokio::time::Instant::now() + Duration::from_millis(10);
                 tokio::time::sleep_until(retry.min(deadline)).await;
             }
-            Err(_) => {
-                return Err(MezError::invalid_state(
-                    "xauth is unavailable for X11 credential setup",
-                ));
+            Err(error) => {
+                let cause = error
+                    .raw_os_error()
+                    .map(|errno| format!(" (spawn errno {errno})"))
+                    .unwrap_or_default();
+                return Err(MezError::invalid_state(format!(
+                    "xauth is unavailable for X11 credential setup{cause}"
+                )));
             }
         }
     }
@@ -648,6 +653,11 @@ mod tests {
 
         assert!(error.message().contains("unavailable"), "{error:?}");
         assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(
+            error
+                .message()
+                .contains(&format!("spawn errno {}", libc::ENOENT))
+        );
         assert_eq!(fs::read(&authority).unwrap(), b"private fixture");
         assert!(!error.message().contains(root.to_str().unwrap()));
         let _ = fs::remove_dir_all(root);
