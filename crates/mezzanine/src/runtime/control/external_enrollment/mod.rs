@@ -29,6 +29,10 @@ use super::external_agents::{LaunchBinding, text};
 const MAX_PENDING: usize = 32;
 /// Total admission deadline, including actor settlement delay after observation.
 const ADMISSION_BUDGET: Duration = Duration::from_secs(2);
+/// Retired instance identities remain fenced for the live run; no silent eviction.
+const MAX_OBSERVER_INSTANCES: usize = 128;
+
+mod rotation;
 
 /// Actor-owned reservations consumed on every completion, including reply loss.
 #[derive(Debug, Default)]
@@ -47,6 +51,16 @@ pub(super) struct EnrollmentAdmissions {
 #[derive(Debug)]
 pub(super) struct EnrollmentBinding {
     pub(super) origin: Arc<UnixOriginProcess>,
+    /// Stable server-owned run identity, independent of credential replacement.
+    run_generation: u64,
+    /// Fresh presentation/credential epoch for each accepted observer instance.
+    epoch: u64,
+    /// Inert client instance selector; native provenance still supplies authority.
+    instance: String,
+    /// Immutable predecessor witness for identical transition retries.
+    predecessor_generation: Option<u64>,
+    /// Bounded retired-instance fence; old instances cannot reclaim this run.
+    instances: BTreeSet<String>,
     /// Bounded authorized observer sockets; stale closure cannot clear a healthy
     /// reconnect. Weak links hold no extra socket or process descriptor.
     observers: Vec<std::sync::Weak<UnixOriginProcess>>,
@@ -66,6 +80,8 @@ pub(crate) struct ExternalEnrollmentWork {
     version: String,
     session_id: String,
     display_name: String,
+    observer_instance: String,
+    predecessor_generation: Option<u64>,
     deadline: Instant,
     /// Deterministic test-owned barrier proving native work does not hold actor.
     #[cfg(test)]
@@ -221,6 +237,18 @@ impl RuntimeSessionService {
         let version = text(&params, "version", 128)?;
         let session_id = text(&params, "external_session_id", 128)?;
         let display_name = text(&params, "display_name", 128)?;
+        let observer_instance = text(&params, "observer_instance", 128)?;
+        let predecessor_generation = match params.get("predecessor_generation") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .filter(|generation| *generation > 0)
+                    .ok_or_else(|| {
+                        MezError::invalid_args("external observer predecessor must be positive")
+                    })?,
+            ),
+        };
         let origin = connection
             .unix_origin()
             .filter(|origin| origin.uid() == *uid && origin.writer_confirmed())
@@ -278,6 +306,8 @@ impl RuntimeSessionService {
             version,
             session_id,
             display_name,
+            observer_instance,
+            predecessor_generation,
             deadline: Instant::now() + ADMISSION_BUDGET,
             #[cfg(test)]
             worker_gate: registry.enrollments.worker_gate.clone(),
@@ -356,12 +386,12 @@ impl RuntimeSessionService {
             .reobserve()
             .map_err(|_| MezError::forbidden("external producer changed"))?;
         self.reconcile_external_agent_registrations();
-        if let Some(binding) = self
+        let existing = self
             .control
-            .external_agents_mut()
+            .external_agents()
             .bindings
-            .values_mut()
-            .find(|binding| {
+            .iter()
+            .find(|(_, binding)| {
                 !binding.retired
                     && binding.pane_id == work.pane_id
                     && binding.process.same_incarnation(&work.process)
@@ -373,26 +403,14 @@ impl RuntimeSessionService {
                         registration.external_session_id == work.session_id
                     })
             })
-        {
-            let registration = binding.registration.as_ref().ok_or_else(|| {
-                MezError::invalid_state("external enrollment registration disappeared")
-            })?;
-            if binding.version != work.version || registration.display_name != work.display_name {
-                return Err(MezError::conflict(
-                    "external enrollment metadata differs from existing run",
-                ));
-            }
-            let enrollment = binding
-                .enrollment
-                .as_mut()
-                .ok_or_else(|| MezError::invalid_state("external enrollment owner disappeared"))?;
-            enrollment.authorize(connection)?;
-            enrollment.observe_connection(&work.origin);
-            let enrollment = binding
-                .enrollment
-                .as_ref()
-                .ok_or_else(|| MezError::invalid_state("external enrollment owner disappeared"))?;
-            return Ok(enrollment_response(binding, enrollment, &work.session_id));
+            .map(|(digest, _)| *digest);
+        if let Some(digest) = existing {
+            return self.replace_or_retry_external_observer(digest, work, connection);
+        }
+        if work.predecessor_generation.is_some() {
+            return Err(MezError::conflict(
+                "external observer predecessor unavailable",
+            ));
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
         let project_scope = self
@@ -441,6 +459,11 @@ impl RuntimeSessionService {
                 accounting_origin,
                 enrollment: Some(EnrollmentBinding {
                     origin: work.origin.clone(),
+                    run_generation: generation,
+                    epoch: 1,
+                    instance: work.observer_instance.clone(),
+                    predecessor_generation: None,
+                    instances: BTreeSet::from([work.observer_instance.clone()]),
                     observers: vec![Arc::downgrade(&work.origin)],
                     token: SecretString::from(token),
                 }),
@@ -477,6 +500,7 @@ fn enrollment_response(
 ) -> String {
     serde_json::json!({"protocol":"external-agent/1","launch_token":enrollment.token.expose_secret(),
         "agent_id":binding.registration.as_ref().map(|registration| registration.agent_id.as_str()),
+        "run_id":enrollment.run_generation,"observer_epoch":enrollment.epoch,"observer_instance":enrollment.instance,
         "generation":binding.generation,"external_session_id":session,"registered":true,"controls":[],
         "expires_at_unix_seconds":binding.expires,"lease_seconds":60,"usage":"unavailable-source-continuity"}).to_string()
 }

@@ -585,8 +585,11 @@ alone grants no role or vendor registration.
 #### Ordinary persistent-producer enrollment (implemented slice)
 
 `agent/external/enroll` accepts `pane_id`, `harness` (`pi` or `opencode`),
-`version`, `external_session_id`, `display_name` and
+`version`, `external_session_id`, `display_name`, bounded `observer_instance` and
 `observer_kind: "persistent"` over an uninitialized same-user Unix connection.
+First enrollment omits `predecessor_generation`; replacement supplies the exact
+positive generation returned for its current predecessor. Neither field grants
+authority or replaces the native root/producer/writer evidence.
 The pane hint selects a candidate; native ancestry must prove it. No supplied
 PID, parent PID, launch token, idempotency key or general control target is accepted.
 Linux sender credentials are collected with the same read that consumes bytes;
@@ -601,10 +604,18 @@ syscalls are not hard-cancelled: reservations remain held until work completes,
 and late results reject. Actor settlement rechecks exact root/producer/connection
 and releases reservations even if the response owner disconnected.
 
-Success returns one private `launch_token`, `generation`, `agent_id`, exact
+Success returns one private `launch_token`, `generation`, stable `run_id`,
+`observer_epoch`, `observer_instance`, `agent_id`, exact
 external session, `registered: true`, `controls: []`, and the existing 60s lease.
-Identical live same-run retry returns the same handle/identity. Metadata conflict
-rejects. The existing lifecycle/presentation RPCs additionally require the same
+Identical live same-instance retry returns the same handle/identity with the same
+original predecessor witness. A replacement instance against the current
+generation receives a fresh handle/generation/observer epoch and resets its
+presentation sequence owner, while run/agent/accounting provenance stay frozen.
+Old handles cannot affect the replacement. Up to 128 instance identities remain
+fenced for the live run; exhaustion rejects new replacement, never evicts stale
+IDs or disables current-instance retries. Competing replacements cannot both
+publish from one predecessor, and retired instances cannot reclaim the run.
+Metadata conflict rejects. The lifecycle/presentation RPCs also require the same
 kernel-qualified producer and sender. Handle possession alone is insufficient.
 Producer exit retires telemetry independently of its surviving pane shell.
 Ordinary leases renew from the existing daemon idle-maintenance owner while a
@@ -619,7 +630,7 @@ Explicit primary-launched leases keep their existing caller-renewal contract.
 rejected until durable source continuity exists, not billed under fresh owners.
 
 This is a common runtime slice, not a claim that installed plugins already use
-it. Fixed installed clients, reload/observer-epoch migration, short-lived
+it. Fixed installed clients and their reload/session-transition wiring, short-lived
 helper association, shared/preexisting server session association and macOS
 lifetime/sender equivalents remain unfinished. Unsupported platforms/kernels
 retain ordinary control without enrollment; no vendor relaunch/fallback occurs.

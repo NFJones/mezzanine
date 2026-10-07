@@ -538,6 +538,8 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
             "external_session_id",
             "display_name",
             "observer_kind",
+            "observer_instance",
+            "predecessor_generation",
         ]),
     },
     ControlMethodSpec {

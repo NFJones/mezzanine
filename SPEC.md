@@ -279,8 +279,10 @@ authority. Missing optional evidence MUST preserve existing UID-only control;
 enrollment MUST require its own proven admission evidence explicitly.
 The additive `agent/external/enroll` persistent-producer slice MUST admit only
 uninitialized same-user Unix ingress for Pi/OpenCode with bounded inert
-`pane_id`, `harness`, `version`, `external_session_id`, `display_name` and exact
-`observer_kind: persistent`. Pane/session metadata is selection, not authority.
+`pane_id`, `harness`, `version`, `external_session_id`, `display_name`,
+`observer_instance` and exact `observer_kind: persistent`. The optional positive
+`predecessor_generation` narrows observer replacement. These are selectors, not
+authority; first enrollment MUST NOT claim an unavailable predecessor.
 Kernel lifetime, per-received-segment Linux SCM_CREDENTIALS sender evidence and
 off-actor ancestry MUST jointly bind the producer to the selected adapter root.
 Missing/foreign/truncated ancillary evidence MUST permanently disable enrollment
@@ -291,8 +293,17 @@ admission deadline. A blocked native syscall cannot be hard-cancelled; its
 reservation MUST remain held until actual completion, and late evidence MUST NOT
 allocate authority. Actor completion MUST consume the exact reservation and
 recheck root incarnation, origin, writer and deadline before allocation.
-Identical same-run retry MUST retain one private producer-bound handle and
-observational identity; metadata conflict MUST NOT allocate another run.
+Identical same-instance retry MUST retain one private producer-bound handle and
+observational identity, including its original predecessor witness. A verified
+replacement instance MUST name the current predecessor generation, receive fresh
+credentials/generation/observer epoch, and reset only its presentation sequence
+owner. The run ID, agent identity and original accounting namespace/origin MUST
+remain unchanged. Old handles MUST NOT renew, update or retire the replacement.
+At most 128 instance identities per live run MUST remain fenced; exhaustion MUST
+reject replacement without evicting retired IDs or disabling current retry.
+Concurrent replacements of the same predecessor MUST NOT both publish, and
+stale predecessor replay or a retired instance MUST NOT reclaim the current run.
+Metadata conflict MUST NOT allocate another run.
 Renew/register/presentation/deregister MUST additionally require that producer's
 current native origin and sender evidence. Producer death MUST retire the exact
 registration even while its shell lives. No native client/primary role is granted.
@@ -308,7 +319,7 @@ idle coordination adds no new global per-callback scan or procfs observer lookup
 Ordinary usage MUST remain explicitly unavailable until durable source continuity
 is implemented, rather than permitting fresh-owner historical recharge. This
 slice does not complete installed adapter activation, helper/shared-server
-association, reload/observer-epoch migration or macOS lifetime admission.
+association, installed reload/session-transition wiring or macOS admission.
 `agent/external/presentation` MUST require the same capability, generation and
 external session binding. Positive observation sequences MUST reject stale or
 conflicting updates; identical replay MUST be inert. Bounded title suggestions

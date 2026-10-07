@@ -89,7 +89,7 @@ async fn fixture(mode: &str) -> Option<Fixture> {
 fn request() -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"enroll","method":"agent/external/enroll",
         "params":{"pane_id":"%1","harness":"pi","version":"fixture","external_session_id":"session-a",
-        "display_name":"ordinary fixture","observer_kind":"persistent"}}).to_string()).unwrap()
+        "display_name":"ordinary fixture","observer_kind":"persistent","observer_instance":"fixture-instance-a"}}).to_string()).unwrap()
 }
 
 /// Runs a real ordinary process in the pane. Hold mode supports native owner
@@ -128,7 +128,7 @@ fn external_enrollment_ordinary_child_fixture() {
     assert_eq!(mode, "flow");
     let enroll = serde_json::json!({"jsonrpc":"2.0","id":"enroll","method":"agent/external/enroll",
         "params":{"pane_id":std::env::var("MEZ_PANE").unwrap(),"harness":"pi","version":"fixture",
-        "external_session_id":"session-a","display_name":"ordinary fixture","observer_kind":"persistent"}});
+        "external_session_id":"session-a","display_name":"ordinary fixture","observer_kind":"persistent","observer_instance":"fixture-instance-a"}});
     let initial = exchange(&mut socket, &enroll);
     assert!(
         initial.get("error").is_none(),
@@ -411,6 +411,11 @@ async fn external_enrollment_metadata_boundary_and_contracts_are_strict() {
         ("harness", serde_json::json!("gemini")),
         ("harness", serde_json::json!("codex")),
         ("display_name", serde_json::json!(false)),
+        ("observer_instance", serde_json::json!("")),
+        ("observer_instance", serde_json::json!(false)),
+        ("predecessor_generation", serde_json::json!(0)),
+        ("predecessor_generation", serde_json::json!("1")),
+        ("predecessor_generation", serde_json::Value::Null),
         ("external_session_id", serde_json::json!("line\nfeed")),
     ] {
         let mut changed = request();
@@ -1052,3 +1057,5 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
     );
     exit.service.terminate_all_pane_processes().unwrap();
 }
+
+mod observer_epochs;
