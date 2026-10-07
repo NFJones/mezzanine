@@ -104,6 +104,11 @@ impl ExternalEnrollmentWork {
             .origin
             .reobserve()
             .map_err(|_| MezError::forbidden("external producer unavailable"))?;
+        if origin.process_id == self.process.process_id {
+            return Err(MezError::forbidden(
+                "external producer must be a distinct pane descendant",
+            ));
+        }
         let root = mez_mux::process::process_parent_identity_for_pid(self.process.process_id)
             .filter(|root| root.start_token == self.process.start_token)
             .ok_or_else(|| MezError::conflict("external enrollment pane root changed"))?;
@@ -261,6 +266,14 @@ impl RuntimeSessionService {
         if process.role != RuntimePaneProcessRole::AdapterOwnedRoot {
             return Err(MezError::conflict(
                 "external enrollment requires adapter-owned root",
+            ));
+        }
+        // A pane-root lifetime is routing evidence, not an independent producer.
+        // An exec at the same PID must not turn the shell's root anchor into a
+        // producer; executable names and metadata never supply this boundary.
+        if origin.identity.process_id == process.process_id {
+            return Err(MezError::forbidden(
+                "external producer must be a distinct pane descendant",
             ));
         }
         let registry = self.control.external_agents_mut();

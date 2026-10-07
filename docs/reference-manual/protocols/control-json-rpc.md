@@ -614,6 +614,10 @@ positive generation returned for its current predecessor. Neither field grants
 authority or replaces the native root/producer/writer evidence.
 The pane hint selects a candidate; native ancestry must prove it. No supplied
 PID, parent PID, launch token, idempotency key or general control target is accepted.
+The producer must be a distinct descendant of the pane root. A sender at the
+root's own PID is rejected before admission reservation and by native observation,
+even if the root shell has replaced its executable with `exec`. This boundary is
+not an executable-name or vendor-attestation check.
 Linux sender credentials are collected with the same read that consumes bytes;
 all segments must name the retained live socket origin. Inherited writers,
 missing/truncated/foreign ancillary data and passed descriptors cannot qualify.

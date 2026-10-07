@@ -222,9 +222,7 @@ async fn run_xauth(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    let mut child = command
-        .spawn()
-        .map_err(|_| MezError::invalid_state("xauth is unavailable for X11 credential setup"))?;
+    let mut child = spawn_xauth(&mut command, execution_deadline).await?;
     let status = match tokio::time::timeout_at(execution_deadline, child.wait()).await {
         Ok(result) => {
             result.map_err(|_| MezError::invalid_state("xauth credential setup failed"))?
@@ -241,6 +239,35 @@ async fn run_xauth(
         ));
     }
     Ok(())
+}
+
+/// Retries only executable-busy rejections before a child exists. An unrelated
+/// fork can temporarily retain a writer to a freshly published executable even
+/// after its publisher closes it. ETXTBSY has not executed the helper, so a
+/// bounded retry cannot replay its effects. Other errors fail neutrally without
+/// disclosing paths or credentials. The original execution deadline is shared
+/// with child wait; synchronous spawn itself is not hard-cancellable.
+async fn spawn_xauth(
+    command: &mut tokio::process::Command,
+    deadline: tokio::time::Instant,
+) -> Result<tokio::process::Child> {
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(MezError::invalid_state("xauth credential setup timed out"));
+        }
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) => {
+                let retry = tokio::time::Instant::now() + Duration::from_millis(10);
+                tokio::time::sleep_until(retry.min(deadline)).await;
+            }
+            Err(_) => {
+                return Err(MezError::invalid_state(
+                    "xauth is unavailable for X11 credential setup",
+                ));
+            }
+        }
+    }
 }
 
 /// Reads a bounded owner-private regular authority file without following a
@@ -526,6 +553,103 @@ mod tests {
         );
         lease.close().await.unwrap();
         assert!(!lease_directory.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A writer inherited during unrelated fork-to-exec work can transiently
+    /// prevent execution of a newly published fixture. Model that kernel hazard
+    /// with an explicit writer: the initial spawn must fail with ETXTBSY, then
+    /// releasing the writer must permit exactly one helper invocation within
+    /// the original budget. No X server or authored authority is touched.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn xauth_transient_executable_writer_does_not_replay_helper_effects() {
+        let root = test_root("busy-release");
+        fs::create_dir_all(&root).unwrap();
+        let authority = root.join("authority");
+        write_private_file(&authority, &[]).unwrap();
+        let script = root.join("fake-xauth");
+        fs::write(&script, "#!/bin/sh\nprintf x >> \"$XAUTHORITY\"\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let writer = OpenOptions::new().write(true).open(&script).unwrap();
+        let busy = std::process::Command::new(&script).spawn().unwrap_err();
+        assert_eq!(busy.raw_os_error(), Some(libc::ETXTBSY));
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            drop(writer);
+        });
+
+        let result = run_xauth(script.as_os_str(), &authority, &[], Duration::from_secs(2)).await;
+        release.await.unwrap();
+
+        assert!(
+            result.is_ok(),
+            "transient pre-spawn writer must be recoverable: {result:?}"
+        );
+        assert_eq!(
+            fs::read(&authority).unwrap(),
+            b"x",
+            "only a successful spawn may cause effects"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A permanently write-open executable cannot consume an unbounded spawn
+    /// retry budget. The helper must never run, the timeout remains explicit,
+    /// and the reserved termination/reap portion of the deadline is not reset.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn xauth_busy_executable_respects_original_deadline_without_effects() {
+        let root = test_root("busy-timeout");
+        fs::create_dir_all(&root).unwrap();
+        let authority = root.join("authority");
+        write_private_file(&authority, &[]).unwrap();
+        let script = root.join("fake-xauth");
+        fs::write(&script, "#!/bin/sh\nprintf x >> \"$XAUTHORITY\"\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let writer = OpenOptions::new().write(true).open(&script).unwrap();
+        let started = tokio::time::Instant::now();
+
+        let error = run_xauth(
+            script.as_os_str(),
+            &authority,
+            &[],
+            Duration::from_millis(200),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.message().contains("timed out"), "{error:?}");
+        assert!(started.elapsed() <= Duration::from_millis(500));
+        assert!(fs::read(&authority).unwrap().is_empty());
+        drop(writer);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Missing executables are not transient text-busy failures. They must fail
+    /// without waiting for the command budget and without changing private
+    /// authority bytes or exposing local paths in diagnostics.
+    #[tokio::test]
+    async fn xauth_missing_executable_is_not_retried() {
+        let root = test_root("missing-spawn");
+        fs::create_dir_all(&root).unwrap();
+        let authority = root.join("authority");
+        write_private_file(&authority, b"private fixture").unwrap();
+        let started = tokio::time::Instant::now();
+
+        let error = run_xauth(
+            root.join("missing-xauth").as_os_str(),
+            &authority,
+            &[],
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.message().contains("unavailable"), "{error:?}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(fs::read(&authority).unwrap(), b"private fixture");
+        assert!(!error.message().contains(root.to_str().unwrap()));
         let _ = fs::remove_dir_all(root);
     }
 

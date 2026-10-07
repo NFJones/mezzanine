@@ -36,9 +36,14 @@ async fn fixture(mode: &str) -> Option<Fixture> {
     let mut service = RuntimeServiceFixture::new().control_socket(&path).build();
     service.start_initial_pane_process(None).unwrap();
     let executable = std::env::current_exe().unwrap();
+    let (mode_name, launch) = if mode == "root-hold" {
+        ("hold", "exec ")
+    } else {
+        (mode, "")
+    };
     let command = format!(
-        "MEZ_TEST_ENROLL_MODE={} {} --exact runtime::control::external_enrollment::tests::external_enrollment_ordinary_child_fixture --ignored --quiet\n",
-        shlex::try_quote(mode).unwrap(),
+        "MEZ_TEST_ENROLL_MODE={} {launch}{} --exact runtime::control::external_enrollment::tests::external_enrollment_ordinary_child_fixture --ignored --quiet\n",
+        shlex::try_quote(mode_name).unwrap(),
         shlex::try_quote(executable.to_str().unwrap()).unwrap()
     );
     service
@@ -65,7 +70,7 @@ async fn fixture(mode: &str) -> Option<Fixture> {
         .bind_authenticated_peer(AuthenticatedPeer::unix_user(uid))
         .unwrap();
     connection.bind_unix_origin(Arc::new(origin)).unwrap();
-    if mode == "hold" {
+    if mode_name == "hold" {
         use tokio::io::AsyncReadExt;
         let mut qualified =
             crate::runtime::UnixOriginStream::new(&mut socket, connection.unix_origin().cloned());
@@ -596,6 +601,94 @@ async fn external_enrollment_identical_retry_survives_registry_saturation() {
     assert_eq!(
         fixture.service.control.external_agents().bindings.len(),
         super::super::external_agents::MAX_BINDINGS
+    );
+}
+
+/// A sender occupying the exact pane-root incarnation is not a distinct
+/// observational producer. A genuine exec-replaced shell root supplies kernel
+/// writer/lifetime evidence, so rejecting it cannot depend on executable names,
+/// payload process hints, or an unrelated-origin failure. Rejection precedes
+/// reservation and must not allocate a handle or initialize a control role.
+#[tokio::test(flavor = "current_thread")]
+async fn external_enrollment_pane_root_sender_is_rejected_before_reservation() {
+    let Some(mut fixture) = fixture("root-hold").await else {
+        return;
+    };
+    let root = fixture.service.pane_process_identity("%1").unwrap();
+    let origin = fixture.connection.unix_origin().unwrap();
+    assert_eq!(origin.identity.process_id, root.process_id);
+    assert_eq!(origin.identity.start_token, root.start_token);
+    assert!(origin.writer_confirmed());
+    let error = fixture
+        .service
+        .prepare_external_enrollment(&request(), &fixture.connection)
+        .expect_err("a pane root must not become its own observational producer");
+    assert!(error.to_string().contains("distinct pane descendant"));
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
+    assert!(!fixture.connection.initialized());
+}
+
+/// Native observation must independently reject identical root/producer
+/// endpoints. A valid descendant admission is changed only inside this test's
+/// immutable work snapshot, using its real kernel identity rather than a PID
+/// payload. The actor consumes failed work without allocating registration.
+#[tokio::test(flavor = "current_thread")]
+async fn external_enrollment_worker_rejects_identical_root_and_producer() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let mut work = fixture
+        .service
+        .prepare_external_enrollment(&request(), &fixture.connection)
+        .unwrap();
+    work.process.process_id = work.origin.identity.process_id;
+    work.process.start_token = work.origin.identity.start_token;
+    let native = work.clone();
+    let observed = tokio::task::spawn_blocking(move || native.observe())
+        .await
+        .unwrap();
+    assert!(
+        observed.is_err(),
+        "identical ancestry endpoints are not a producer binding"
+    );
+    assert!(
+        fixture
+            .service
+            .complete_external_enrollment(work, observed, &fixture.connection)
+            .contains("distinct pane descendant")
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
     );
 }
 

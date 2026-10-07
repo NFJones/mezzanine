@@ -136,6 +136,10 @@ deadline that includes termination and reap. A timeout can leave the X server's
 short-lived authorization active until its own expiry, but it does not retain
 Mez's private authority directory or keep the attaching client waiting without
 bound.
+If the operating system rejects a spawn because the executable is temporarily
+write-open (`ETXTBSY`), Mez retries only that pre-execution failure with a short
+backoff inside the same deadline. Missing/inaccessible executables fail normally;
+once a helper starts, wait errors, nonzero exits and timeouts never replay it.
 
 Only one attachment owns a session's X11 route. A conflict means another
 primary currently owns it. Use `--x11-takeover` only for an intentional

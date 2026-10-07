@@ -295,6 +295,10 @@ uninitialized same-user Unix ingress for Pi/OpenCode with bounded inert
 authority; first enrollment MUST NOT claim an unavailable predecessor.
 Kernel lifetime, per-received-segment Linux SCM_CREDENTIALS sender evidence and
 off-actor ancestry MUST jointly bind the producer to the selected adapter root.
+The producer MUST be a distinct descendant, not the pane-root process itself.
+Identical root/producer PIDs MUST reject before reserving admission and again
+during native observation, including after an executable replacement at the
+same root incarnation. Executable names MUST NOT substitute for this boundary.
 Missing/foreign/truncated ancillary evidence MUST permanently disable enrollment
 on that connection without changing existing UID-only control. Unexpected passed
 descriptors MUST be closed, never admitted. Frame/metadata limits are 8192/4096
@@ -4201,6 +4205,11 @@ covering normal execution, nonblocking termination signalling, and process
 reap. Timeout recovery MUST NOT await kill or reap without a bound. Untrusted
 credential cleanup MUST remove its private authority artifacts even when the
 helper times out or exits unsuccessfully.
+An executable-busy (`ETXTBSY`) spawn rejection MAY retry with bounded backoff
+only before a child starts, within the original execution/lifecycle deadline.
+Other spawn errors, started-child wait failures, nonzero exits and timeouts
+MUST NOT replay the helper. Spawn retry MUST NOT reset the deadline, alter argv,
+capture helper output or relax authority-file and generated-cookie checks.
 
 X11 capability and route setup MUST be negotiated through
 `control/initialize`; Mezzanine MUST NOT add an X11-specific ALPN family. A
