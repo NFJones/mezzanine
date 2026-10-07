@@ -152,6 +152,45 @@ async fn read_before_deadline(
     Ok(count)
 }
 
+/// Waits for the initial matched session-start fact before public-launch
+/// registration. One-byte reads preserve every subsequent buffered frame for
+/// the existing coordinator. Idle silence is permitted, but partial input uses
+/// the same finite deadline/allowlist as ordinary observer ingress. EOF, another
+/// first fact or malformed input ends telemetry without daemon work.
+pub(crate) async fn wait_for_start(
+    stream: &mut tokio::net::UnixStream,
+    session: &str,
+) -> Result<pi::Observation> {
+    crate::runtime::authenticated_unix_peer_uid(
+        stream.as_raw_fd(),
+        crate::runtime::current_effective_uid(),
+    )
+    .map_err(|_| unavailable())?;
+    let mut bytes = Vec::with_capacity(MAX_FRAME);
+    let mut deadline = None;
+    loop {
+        let mut byte = [0];
+        if read_before_deadline(deadline, stream.read(&mut byte)).await? == 0 {
+            return Err(unavailable());
+        }
+        if byte[0] == b'\n' {
+            let fact = observation(session, &bytes)?;
+            return if matches!(fact, pi::Observation::SessionStarted { .. }) {
+                Ok(fact)
+            } else {
+                Err(unavailable())
+            };
+        }
+        if bytes.len() == MAX_FRAME {
+            return Err(unavailable());
+        }
+        if bytes.is_empty() {
+            deadline = Some(Instant::now() + FRAME_DEADLINE);
+        }
+        bytes.push(byte[0]);
+    }
+}
+
 /// Serves only a launcher-supplied stream after kernel peer authentication.
 pub(crate) async fn serve(
     mut stream: tokio::net::UnixStream,

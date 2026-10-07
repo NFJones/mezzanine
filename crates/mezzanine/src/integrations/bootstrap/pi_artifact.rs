@@ -1,16 +1,16 @@
-//! Compiled owned Pi extension candidate, independent of certification.
+//! Compiled owned best-effort Pi extension, independent of vendor version.
 //!
 //! The released 1.0.2 loader discovers one package entry, with private sibling
 //! modules that are not standalone extension candidates. Exact file ownership
 //! reuses the common installer; no settings, vendor dependency, shell profile,
-//! trust decision or capability is installed. The public certified registry must
-//! remain disabled until private launch/reload and assembled acceptance pass.
+//! trust decision or capability is installed. Explicit launch authority remains
+//! in the CLI parent; ordinary Pi launches leave this extension inert.
 
 use super::installer::Manifest;
 use super::reconciliation::{Artifact, Entry};
 
 /// Returns only compiled artifact bytes for an explicit agent-directory root.
-/// This candidate is not consulted by `certified_manifest` or public bootstrap.
+/// Public bootstrap consults this manifest without a vendor-version gate.
 pub(crate) fn candidate_manifest() -> Manifest {
     let files: &[(&str, &[u8])] = &[
         (

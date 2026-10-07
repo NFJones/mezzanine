@@ -133,6 +133,8 @@ mod mcp;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod memory;
+/// Owns explicit Pi child launch and parent-held telemetry authority.
+mod pi;
 /// Exposes the project trust command boundary.
 ///
 /// The nested module owns direct-user inspection and persistence of project

@@ -1,6 +1,6 @@
 //! Common owned-artifact reconciliation, independent of vendor certification.
 //!
-//! Adapters supply release-qualified manifests, never user-provided executable
+//! Adapters supply compiled best-effort manifests, never user-provided executable
 //! templates. JSON ownership is one exact entry, not its surrounding document;
 //! whole-file ownership requires exact equality. Planning is pure and publication
 //! uses held no-follow directory descriptors, preimage checks and a private journal.
@@ -76,11 +76,14 @@ mod publication_tests;
 )]
 pub(crate) mod reconciliation;
 
-/// Selects a compiled, release-qualified manifest. Candidate research is not a
-/// manifest; vendor adapter tasks must add certified releases at this boundary.
-pub(crate) fn certified_manifest(
-    _harness: &str,
+/// Selects compiled best-effort artifacts. Version text is observation metadata,
+/// not an installation gate; artifact identity remains stable across versions.
+pub(crate) fn compiled_manifest(
+    harness: &str,
     _version: Option<&str>,
 ) -> Option<installer::Manifest> {
-    None
+    match harness {
+        "pi" => Some(pi_artifact::candidate_manifest()),
+        _ => None,
+    }
 }

@@ -15,7 +15,7 @@ fn pi_artifact_candidate_owned_install_repeat_conflict_and_uninstall() {
     std::fs::create_dir(&root).unwrap();
     std::fs::write(root.join("settings.json"), b"{\"authored\":true}\n").unwrap();
     let manifest = candidate_manifest();
-    assert!(crate::integrations::bootstrap::certified_manifest("pi", Some("1.0.2")).is_none());
+    assert!(crate::integrations::bootstrap::compiled_manifest("pi", Some("any-version")).is_some());
     assert_eq!(manifest.entries.len(), 5);
     plan(&root, &manifest, Operation::Install)
         .unwrap()

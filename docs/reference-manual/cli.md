@@ -60,8 +60,9 @@ daemon; add
 ### Harness bootstrap
 
 `mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
-accepts `claude`, `codex`, `copilot`, `opencode`, `cursor`, and `pi` as research
-candidates, not certified integrations. The default or `--plan` inspects a plan;
+accepts `claude`, `codex`, `copilot`, `opencode`, `cursor`, and `pi` as adapter
+candidates. Pi has compiled best-effort artifacts; other candidates currently
+report unavailable installation. The default or `--plan` inspects a plan;
 `--check` checks owned state. Explicit `--apply`, `--uninstall`, and `--recover`
 are separate intents. The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
@@ -72,12 +73,32 @@ and external usage admission are also rejected. Historical expense and replay
 guards remain intact; independent Google/Gemini provider and model usage under
 native or other harnesses is unaffected. No vendor files or user hooks are removed.
 
-**No released vendor adapter is currently certified in the compiled registry.**
-Candidate plans report `supported=false` and unavailable lifecycle/usage;
-mutation requests fail before touching the root. Test-only manifests qualify the
-common engine, not any vendor release. Vendor adapter tasks must supply reviewed
-release-specific artifacts, private launch binding, neutral responses and recovery
-guidance before installation is enabled.
+**Pi installation and initial-session lifecycle support are best-effort, not
+version-certified.** An omitted or arbitrary inert `--vendor-version` does not
+gate installation. Use an existing agent-directory root (including a custom
+`PI_CODING_AGENT_DIR`) or explicitly trusted project `.pi` root:
+
+```sh
+mez bootstrap pi --root /absolute/pi-agent-directory --apply
+mez pi --executable /absolute/path/to/pi --pane %1
+```
+
+The launcher uses the selected local Unix socket and an explicit temporary
+primary, with a two-second authorization deadline. The daemon token remains in
+the parent; Pi receives only fd3 observation access and a preallocated session
+hint. Install into the same agent directory Pi discovers; no forced `-e`, vendor
+package installation, shell-profile change or trust bypass occurs. Ordinary Pi
+invocations leave the extension inert. `--no-extensions` stays disabled. Options
+after `--` are forwarded literally, except conflicting session selectors are
+rejected. `--json` does not wrap Pi's inherited output. Parent supervision returns
+Pi's exit code and does not terminate/restart it on telemetry failure.
+
+Initial-session callbacks drive registration/status and idle renewal. Reload,
+new, resume and fork currently end telemetry; relaunch explicitly for another
+binding. Missing/changed callbacks or daemon outages may leave telemetry
+unavailable; lease expiry cleans up missing end events. Tokens remain unavailable
+in this lifecycle-only delivery. No live provider, macOS or physical-terminal
+compatibility is implied by synthetic tests; user feedback guides repairs.
 
 The Codex `0.160.0` component currently projects bounded main-session lifecycle
 identifiers from its released hook schemas. It discards prompt/transcript/tool
@@ -151,8 +172,8 @@ registration identity and increasing server expiry; a monotonic expiry fence
 accounts for reply latency and integer-second rounding. Failure, cancellation or
 worker drop clears local availability without automatic retry or rebind. A lost
 renewal reply is not proof that no remote renewal occurred.
-Private launch delivery, worker/extension integration and installation remain
-unfinished; these components do not enable a certified manifest.
+The public initial-session launcher composes these components; no version
+certification or accounting completeness follows from lifecycle availability.
 
 The internal session coordinator combines lifecycle delivery and idle renewal
 without spawning detached tasks. Callback ingress is nonblocking and limited to
@@ -165,7 +186,7 @@ closure fences registration and outstanding delivery without draining buffered
 facts. Reload attachment first offers a proposal; an unread or dropped proposal
 leaves the observer suspended. Explicit confirmation activates the replacement;
 losing its result does not undo an accepted activation command. Actual
-extension IPC, private launcher delivery and installation remain unfinished.
+reload orchestration remains unavailable in the public initial-session launcher.
 
 The internal inherited-stream bridge connects content-free observer facts to
 coordinator ingress. The launcher supplies a connected same-user Unix stream,
@@ -175,24 +196,24 @@ and no idle-silence timeout. The JavaScript sink bounds buffered writes to
 32 KiB and stops accepting telemetry after backpressure or error without
 changing vendor decisions. Daemon capabilities never cross this observer link.
 The launcher retains session lifetime separately from observer stream closure.
-Private launcher delivery and installable extension wiring remain unfinished.
+The public launcher supplies this bridge without exposing its daemon capability.
 
 The injectable Pi extension factory wires the observer to its stream sink only
 at session start. Factory loading opens no resources; a matching context session
 can open its explicitly supplied channel once, and shutdown forwards an inert
 teardown fact before idempotent cleanup. Failures remain neutral without retry or
 automatic rebinding. Offline tests exercise this wiring through the installed
-Pi 1.0.2 loader/runner; actual private launcher delivery, installation and
-supported-platform certification remain unfinished.
+Pi 1.0.2 loader/runner; public installation and initial-session launch are
+best-effort, while live/platform conformance remains a disclosed validation gap.
 
 The internal observer launch primitive now performs the inherited-descriptor
 handoff used by the offline loader fixture. Its caller supplies an absolute
 executable and directory, exact arguments, environment and stdio; no ambient
 environment or executable discovery is used. Descriptor 3 carries observations
 only. The process owner must reap the child, independently of observer disposal
-or telemetry failure. This is not a public launch command or an authorization
-issuer: production session selection/private binding, installation and platform
-certification remain unfinished, and no Pi manifest is enabled.
+or telemetry failure. The separate public `mez pi` command supplies explicit
+authorization and fresh session selection. This primitive does not itself mint
+authority or establish live/platform conformance.
 
 The internal owned observer runner joins strict callback ingress and session
 lease delivery without detached tasks or child ownership. Clean stream EOF drains
@@ -200,7 +221,7 @@ accepted facts before ending renewal; it does not imply process death or request
 deregistration. Explicit quit facts retain their existing exact-session retirement
 semantics. Errors and cancellation preserve pending reducer evidence without
 automatic reconnect or vendor replay. Production authorization, reload/replacement
-orchestration and installation are still separate, unfinished work.
+orchestration remains separate; the public launcher does not automatically rebind.
 
 An internal compiled artifact candidate owns five files under
 `extensions/mezzanine/` in an explicit agent-directory root. A package manifest
@@ -209,7 +230,8 @@ as extensions. The entry is registration-only during loading and opens descripto
 3 only at matching session start with explicit observation markers and a socket
 check. These markers carry no daemon capability. Temporary-root repeat, conflict
 and uninstall checks and an offline Pi 1.0.2 discovery/runner fixture qualify the
-candidate, not a public installation: the certified registry remains disabled.
+artifact ownership. Public bootstrap installs these same compiled files, without
+an exact vendor-version gate or a universal compatibility claim.
 
 The common engine owns exact whole files or exact object entries in strict JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is

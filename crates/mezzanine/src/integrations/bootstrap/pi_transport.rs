@@ -179,6 +179,18 @@ impl CapabilityTransport {
         Ok(true)
     }
 
+    /// Retires this immutable launch binding after independently observed child
+    /// exit. A failed exchange is not retried; expiry remains the fallback.
+    pub(crate) async fn retire(&self) -> Result<()> {
+        let result = self
+            .exchange("agent/external/deregister", None, None)
+            .await?;
+        if result.get("retired").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+
     /// Checks exact reducer incarnation before registration or worker startup.
     pub(super) fn belongs_to(&self, owner: &LifecycleOwner) -> bool {
         owner.transport_binding() == (self.session.as_str(), self.owner.as_str())

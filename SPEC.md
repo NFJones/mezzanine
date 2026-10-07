@@ -259,14 +259,15 @@ use same-user Unix peer authentication, finite input/exchange deadlines and
 neutral output on telemetry failure. Vendor normalization, private launch-token
 delivery and renewable-lease scheduling remain explicit adapter responsibilities.
 The common `mez bootstrap <harness>` installer MUST admit only compiled,
-release-qualified manifests. Research candidates MUST NOT imply certification or
-authorize guessed hooks. Planning/checking MUST be distinct from explicit apply,
+best-effort manifests based on docs or available local installations. Observed
+vendor versions MUST NOT gate implementation or installation; untested behavior
+MUST be labelled rather than claimed as certified. Planning/checking MUST be distinct from explicit apply,
 uninstall and recovery, with no daemon dependency or credential installation.
 Owned-file and exact-JSON-entry receipts MUST protect unrelated settings;
 edited ownership MUST conflict. Publication MUST retain bounded recovery intent
 before changing destinations, reject symlink/special-node traversal, and never
 claim whole-install atomicity or external-writer CAS. Vendor adapters remain
-responsible for released schema qualification and observational launch binding.
+responsible for conservative callback projection and observational launch binding.
 The canonical external harness `gemini` is retired without a replacement.
 Bootstrap MUST reject all Gemini intents before root access; new launch,
 runtime usage and direct external-ledger admission MUST reject that exact
@@ -281,7 +282,7 @@ MUST replay without new expense; changed counters, model or completion time MUST
 conflict, not create a new charged stream. Partial snapshots and callback-local
 revision numbers MUST NOT establish consumed usage. This component alone MUST
 NOT enable a certified plugin manifest or claim live vendor conformance.
-The pinned Pi lifecycle projection MUST require an explicitly bound context
+The best-effort Pi lifecycle projection MUST require an explicitly bound context
 session and discard callback content/paths. `agent_end` and `turn_end` MUST NOT
 prove final settlement; `agent_before_settle` outcomes remain provisional until
 `agent_settled`, which MUST NOT fabricate success when outcome is unavailable.
@@ -364,8 +365,23 @@ private sibling modules under an explicitly supplied agent-directory root. Its
 factory MUST remain inert without explicit observer markers; markers are not
 daemon authority. Only matching session start may validate and open descriptor 3
 as an observation socket. Duplicate loads MUST NOT wrap that descriptor twice.
-Temporary-root ownership and released-loader fixtures MUST NOT enable the public
-certified registry or imply production launch, reload or platform acceptance.
+Temporary-root ownership and released-loader fixtures MUST NOT imply universal
+vendor-version, reload or platform acceptance. Public bootstrap MAY install the
+compiled Pi artifact without an exact release pin.
+The explicit local `mez pi --executable ABSOLUTE --pane ID [--vendor-version TEXT]
+[-- PI_ARGS]` launcher MUST own a unique temporary primary for capability issuance,
+with same-user peer authentication and one bounded total authorization deadline.
+It MUST preallocate the Pi session ID, reject conflicting CLI session selectors,
+and keep daemon credentials in parent-only zeroizing storage. The child receives
+only an observation socket on descriptor 3 and inert session hints, not inherited
+Mezzanine routing/authority. The caller's ordinary vendor environment and stdio
+remain intact. Disabled extensions MUST NOT be overridden. Child exit MUST be
+reaped and reported independently of telemetry failure; no replay or child kill
+is permitted merely to repair telemetry. Final draining and exact-binding
+retirement MUST be finite, with lease expiry as the fallback. Initial-session
+support MUST disclose telemetry loss after reload/new/resume/fork rather than
+implicitly rebind credentials. Token coverage remains separately unavailable
+until an evidenced accounting source is implemented.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow

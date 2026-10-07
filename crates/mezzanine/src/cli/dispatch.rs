@@ -164,7 +164,12 @@ async fn run_with_inner<W: Write, E: Write>(
     if invocation.control_target.is_unix()
         && !matches!(
             invocation.command.as_ref(),
-            Some(CliCommand::Sandbox(_) | CliCommand::HarnessEvent | CliCommand::Bootstrap(_))
+            Some(
+                CliCommand::Sandbox(_)
+                    | CliCommand::HarnessEvent
+                    | CliCommand::Bootstrap(_)
+                    | CliCommand::Pi(_)
+            )
         )
     {
         cleanup_startup_stale_socket_files(&invocation, env.runtime.uid)?;
@@ -236,18 +241,22 @@ async fn run_with_inner<W: Write, E: Write>(
                 .await
                 .map(|()| 0);
             }
-            run_new(
+            Box::pin(run_new(
                 &socket_selection,
                 super::serve::NewCliArgs::default(),
                 env,
                 interactive,
                 output_format,
                 stdout,
-            )
+            ))
             .await?;
         }
         Some(CliCommand::HarnessEvent) => {
             super::harness_event::run(&socket_selection, stdout).await?;
+        }
+        Some(CliCommand::Pi(args)) => {
+            // Keep observer/child supervision out of unrelated CLI frame state.
+            exit_code = Box::pin(super::pi::run(args, &socket_selection)).await?;
         }
         Some(CliCommand::Bootstrap(args)) => {
             super::bootstrap::run(args, output_format, stdout)?;
@@ -323,14 +332,14 @@ async fn run_with_inner<W: Write, E: Write>(
                 .await?;
                 return Ok(0);
             }
-            run_new(
+            Box::pin(run_new(
                 &socket_selection,
                 args,
                 env,
                 interactive,
                 output_format,
                 stdout,
-            )
+            ))
             .await?
         }
         Some(CliCommand::Serve(args)) => {
@@ -489,14 +498,16 @@ async fn run_with_inner<W: Write, E: Write>(
             }
         }
         Some(CliCommand::Snapshot(args)) => {
-            run_snapshot(
+            // Snapshot restoration owns large runtime state; unrelated commands
+            // must not reserve that frame merely to enter shared dispatch.
+            Box::pin(run_snapshot(
                 args,
                 env,
                 &socket_selection,
                 interactive,
                 output_format,
                 stdout,
-            )
+            ))
             .await?;
         }
         Some(CliCommand::Auth(args)) => {
@@ -533,6 +544,28 @@ async fn run_with_inner<W: Write, E: Write>(
     }
 
     Ok(exit_code)
+}
+
+/// Every invocation shares this future even when it only lists sessions.
+/// Bound retained inline state independently of OS stack-size tuning so adding
+/// an adapter cannot silently make unrelated nested control fixtures overflow.
+#[cfg(test)]
+#[test]
+fn cli_dispatch_future_has_bounded_inline_state() {
+    let mut output = Vec::new();
+    let mut error = Vec::new();
+    let future = run_with_inner(
+        vec!["mez".into(), "version".into()],
+        CliEnv::default(),
+        false,
+        &mut output,
+        &mut error,
+    );
+    let bytes = std::mem::size_of_val(&future);
+    assert!(
+        bytes <= 64 * 1024,
+        "shared CLI inline future uses {bytes} bytes"
+    );
 }
 
 /// Removes unserved sockets from Mezzanine-owned runtime directories at CLI

@@ -7,6 +7,39 @@ use super::super::pi_session;
 use super::*;
 use tokio::io::AsyncWriteExt;
 
+/// Start activation preserves later bytes in the inherited stream and waits
+/// through idle silence. No running-only, malformed or truncated first fact
+/// may create a registration; the partial-frame deadline is not extended.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn pi_ipc_start_gate_requires_activation_and_preserves_following_frame() {
+    let (mut stream, mut writer) = tokio::net::UnixStream::pair().unwrap();
+    let (sent, arrived) = tokio::sync::oneshot::channel();
+    let producer = async {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        writer.write_all(b"{\"type\":\"session_start\",\"reason\":\"startup\"}\n{\"type\":\"agent_start\"}\n").await.unwrap();
+        sent.send(()).unwrap();
+    };
+    let consumer = async {
+        let fact = wait_for_start(&mut stream, "bound").await.unwrap();
+        arrived.await.unwrap();
+        assert_eq!(fact, pi::Observation::SessionStarted { reason: "startup" });
+        let mut suffix = [0; 23];
+        stream.read_exact(&mut suffix).await.unwrap();
+        assert_eq!(&suffix, b"{\"type\":\"agent_start\"}\n");
+    };
+    tokio::join!(producer, consumer);
+    for bytes in [
+        b"{\"type\":\"agent_start\"}\n".as_slice(),
+        b"{\n",
+        b"{\"type\":\"session_start\",\"reason\":\"startup\"}",
+    ] {
+        let (mut stream, mut writer) = tokio::net::UnixStream::pair().unwrap();
+        writer.write_all(bytes).await.unwrap();
+        writer.shutdown().await.unwrap();
+        assert!(wait_for_start(&mut stream, "bound").await.is_err());
+    }
+}
+
 /// Exact callback frames cannot smuggle routing, credentials or vendor content,
 /// even through unit event variants, duplicate fields or alternate event names.
 #[test]

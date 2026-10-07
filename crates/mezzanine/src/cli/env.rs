@@ -49,10 +49,12 @@ pub(super) enum SocketSelection {
 /// and agent slash commands intentionally use separate parsers.
 #[derive(Debug, Clone, Subcommand)]
 pub(super) enum CliCommand {
-    /// Plans or reconciles release-qualified harness hooks; never installs vendor binaries.
+    /// Plans or reconciles compiled best-effort hooks; never installs vendor binaries.
     Bootstrap(super::bootstrap::BootstrapCliArgs),
     /// Forwards one normalized observational event from bounded stdin; never initializes a client.
     HarnessEvent,
+    /// Explicitly launches Pi with private best-effort lifecycle telemetry.
+    Pi(super::pi::PiCliArgs),
     /// Manages Mezzanine configuration.
     Config(super::config::ConfigCliArgs),
     /// Creates a fresh local or explicitly selected remote session and attaches.

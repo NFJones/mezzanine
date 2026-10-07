@@ -57,7 +57,9 @@ pub(crate) fn normalize(
     observed_session: &str,
     bytes: &[u8],
 ) -> Result<Option<Observation>> {
-    if release != RELEASE
+    if release.is_empty()
+        || release.len() > 128
+        || release.chars().any(char::is_control)
         || !valid_session(bound_session)
         || !valid_session(observed_session)
         || bytes.len() > 64 * 1024
@@ -288,7 +290,11 @@ mod tests {
         ] {
             assert!(normalize(RELEASE, "bound", "bound", bytes).is_err());
         }
-        assert!(normalize("future", "bound", "bound", b"{}").is_err());
+        assert_eq!(
+            normalize("future", "bound", "bound", br#"{"type":"agent_start"}"#).unwrap(),
+            Some(Observation::Running)
+        );
+        assert!(normalize("", "bound", "bound", b"{}").is_err());
         assert!(normalize(RELEASE, "bound", "bound", &vec![b'x'; 65537]).is_err());
         let error = normalize(RELEASE, "PRIVATE\n", "bound", b"{}").unwrap_err();
         assert!(!error.message().contains("PRIVATE"));

@@ -1,7 +1,7 @@
-//! Daemon-free bootstrap admission for release-qualified harness integrations.
+//! Daemon-free bootstrap admission for compiled best-effort harness integrations.
 //!
-//! Candidate names are not certification. Unsupported versions fail before any
-//! root/config/socket mutation. This boundary never takes user-authored manifest
+//! Candidate names are not certification. Versions do not gate compiled adapters.
+//! This boundary never takes user-authored manifest
 //! JSON or executable templates; adapters must enter the compiled registry.
 
 use super::{Args, CliOutputFormat, MezError, PathBuf, Result, Write};
@@ -12,7 +12,7 @@ pub(super) struct BootstrapCliArgs {
     /// Harness whose compiled adapter should be consulted.
     #[arg(value_parser = ["claude", "codex", "copilot", "opencode", "cursor", "pi"])]
     harness: String,
-    /// Exact vendor release; no shell-based executable discovery is performed.
+    /// Observed vendor version; best-effort adapters do not require a version pin.
     #[arg(long)]
     vendor_version: Option<String>,
     /// Explicit existing user or project configuration root.
@@ -24,7 +24,7 @@ pub(super) struct BootstrapCliArgs {
     /// Check accepted ownership without publishing artifacts.
     #[arg(long, conflicts_with_all = ["apply", "uninstall", "recover"])]
     check: bool,
-    /// Explicitly accept a certified installation/reconciliation plan.
+    /// Explicitly accept a compiled installation/reconciliation plan.
     #[arg(long, conflicts_with_all = ["uninstall", "recover"])]
     apply: bool,
     /// Remove only unchanged, receipted adapter-owned artifacts.
@@ -35,21 +35,20 @@ pub(super) struct BootstrapCliArgs {
     recover: bool,
 }
 
-/// Reports candidates honestly and refuses mutations before filesystem access.
-/// Vendor-specific manifests are intentionally absent until independently certified.
+/// Uses compiled best-effort artifacts and reports absent adapters honestly.
 pub(super) fn run<W: Write>(
     args: BootstrapCliArgs,
     format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
-    let manifest = crate::integrations::bootstrap::certified_manifest(
+    let manifest = crate::integrations::bootstrap::compiled_manifest(
         &args.harness,
         args.vendor_version.as_deref(),
     );
     run_with_manifest(args, format, stdout, manifest)
 }
 
-/// Executes only a compiled manifest matching the exact requested release.
+/// Executes only a compiled manifest matching the requested harness.
 /// Tests inject content-free fixtures, not a process-visible manifest interface.
 fn run_with_manifest<W: Write>(
     args: BootstrapCliArgs,
@@ -65,11 +64,9 @@ fn run_with_manifest<W: Write>(
         ));
     }
     if let Some(manifest) = manifest {
-        if manifest.harness != args.harness
-            || args.vendor_version.as_deref() != Some(manifest.vendor_version.as_str())
-        {
+        if manifest.harness != args.harness {
             return Err(MezError::invalid_args(
-                "bootstrap requires an exact certified release",
+                "bootstrap manifest does not match the requested harness",
             ));
         }
         let root = args
@@ -113,7 +110,8 @@ fn run_with_manifest<W: Write>(
         return super::write_json_or_plain(stdout, format, &serde_json::json!({
             "harness":args.harness,"vendor_version":args.vendor_version,"operation":operation,
             "supported":true,"manifest_revision":manifest.revision,"changed_paths":changed_paths,"recovered":recovered,
-            "guidance":"Installation is observational only. Complete the adapter's vendor review/restart; installation does not certify a live session or token coverage",
+            "support":"best-effort",
+            "guidance":"Installation is observational only. Complete vendor review/restart; launch Pi with mez pi for private lifecycle telemetry. Token coverage may be unavailable",
         }).to_string());
     }
     if args.apply || args.uninstall || args.recover {
@@ -137,8 +135,9 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    /// Pi is a research candidate only: planning reports unavailable support
-    /// and mutation fails before root access until a full adapter is certified.
+    /// Public Pi installation accepts docs-based best-effort support without
+    /// a release pin. Explicit roots still gate filesystem access, while the
+    /// manifest owns only extension artifacts and not vendor settings.
     #[test]
     fn bootstrap_pi_candidate_is_not_installation_certification() {
         #[derive(Parser)]
@@ -146,11 +145,31 @@ mod tests {
             #[command(flatten)]
             args: BootstrapCliArgs,
         }
-        let parsed = Fixture::try_parse_from(["fixture", "pi", "--plan"]).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "mez-pi-public-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let parsed =
+            Fixture::try_parse_from(["fixture", "pi", "--root", root.to_str().unwrap(), "--apply"])
+                .unwrap();
         let mut output = Vec::new();
         run(parsed.args, CliOutputFormat::Json, &mut output).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(value["supported"], false);
+        assert_eq!(value["supported"], true);
+        assert!(root.join("extensions/mezzanine/index.mjs").is_file());
+        let parsed = Fixture::try_parse_from([
+            "fixture",
+            "pi",
+            "--vendor-version",
+            "future-local",
+            "--root",
+            root.to_str().unwrap(),
+            "--check",
+        ])
+        .unwrap();
+        run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
         let parsed =
             Fixture::try_parse_from(["fixture", "pi", "--root", "/missing/pi/root", "--apply"])
                 .unwrap();
