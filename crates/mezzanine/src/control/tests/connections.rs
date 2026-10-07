@@ -418,6 +418,61 @@ fn authenticated_peer_binding_is_immutable() {
     assert!(error.message().contains("cannot change"));
 }
 
+/// Kernel evidence is bound only to an uninitialized matching Unix connection.
+/// Clones retain one exact anchor; a fresh capture of the same PID cannot replace
+/// it, and capture never creates a client or supplies role/initialization rights.
+#[cfg(target_os = "linux")]
+#[test]
+fn unix_origin_binding_is_immutable_and_never_initializes() {
+    use std::os::fd::AsRawFd;
+    use std::sync::Arc;
+
+    let (socket, _other) = std::os::unix::net::UnixStream::pair().unwrap();
+    let uid = crate::runtime::current_effective_uid();
+    let captured = crate::runtime::capture_unix_origin(socket.as_raw_fd(), uid);
+    if let Err(error) = &captured
+        && error.raw_os_error() == Some(libc::ENOPROTOOPT)
+    {
+        return; // Old kernels retain UID control with no native origin authority.
+    }
+    let origin = Arc::new(captured.unwrap());
+    let mut connection = ControlConnectionState::new(false, false);
+    assert!(connection.bind_unix_origin(origin.clone()).is_err());
+    connection
+        .bind_authenticated_peer(AuthenticatedPeer::unix_user(uid))
+        .unwrap();
+    connection.bind_unix_origin(origin.clone()).unwrap();
+    connection.bind_unix_origin(origin.clone()).unwrap();
+    assert!(!connection.initialized());
+    assert!(connection.caller_client_id().is_none());
+    let cloned = connection.clone();
+    assert_eq!(cloned, connection);
+    assert!(Arc::ptr_eq(cloned.unix_origin().unwrap(), &origin));
+
+    let recaptured =
+        Arc::new(crate::runtime::capture_unix_origin(socket.as_raw_fd(), uid).unwrap());
+    assert_ne!(origin, recaptured);
+    assert!(connection.bind_unix_origin(recaptured).is_err());
+    assert!(Arc::ptr_eq(connection.unix_origin().unwrap(), &origin));
+    let mut wrong_uid = ControlConnectionState::new(true, true);
+    wrong_uid
+        .bind_authenticated_peer(AuthenticatedPeer::unix_user(uid.wrapping_add(1)))
+        .unwrap();
+    assert!(wrong_uid.bind_unix_origin(origin.clone()).is_err());
+    let mut remote = ControlConnectionState::new(true, true);
+    remote
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint("remote"))
+        .unwrap();
+    assert!(remote.bind_unix_origin(origin.clone()).is_err());
+    let (_, primary) = test_session();
+    let mut initialized = ControlConnectionState::trusted_existing_client(primary);
+    initialized
+        .bind_authenticated_peer(AuthenticatedPeer::unix_user(uid))
+        .unwrap();
+    assert!(initialized.bind_unix_origin(origin).is_err());
+    assert!(initialized.unix_origin().is_none());
+}
+
 /// Verifies a primary disconnect can be consumed only once from connection state.
 ///
 /// EOF, stream reset, and supervisor shutdown can race. The shared connection

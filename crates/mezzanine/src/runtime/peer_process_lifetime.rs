@@ -7,8 +7,9 @@
 //! before and after reading the native PID/parent/start record. Unsupported
 //! kernels/platforms fail closed, with no numeric-PID fallback. This is groundwork
 //! only: no role, producer ownership, pane attribution or current-writer proof
-//! follows from retaining a socket-origin anchor. Production admission does not
-//! yet consume these types; existing UID-only control gates remain unchanged.
+//! follows from retaining a socket-origin anchor. Unix runtime connections retain
+//! optional anchors before framing, but admission does not yet consume them;
+//! existing UID-only control gates remain unchanged.
 
 use std::io;
 #[cfg(target_os = "linux")]
@@ -20,9 +21,8 @@ use mez_mux::process::ProcessParentIdentity;
 use super::peer_credentials::UnixPeerProcess;
 
 /// Owns the exact connection-origin lifetime anchor and its first native record.
-#[allow(dead_code, reason = "ordinary admission integration is a later phase")]
 #[derive(Debug)]
-pub(super) struct UnixOriginProcess {
+pub(crate) struct UnixOriginProcess {
     /// Kernel connection-origin UID/PID, never a payload-supplied process claim.
     pub(super) peer: UnixPeerProcess,
     /// Native parent/start snapshot captured while the origin anchor was live.
@@ -32,10 +32,15 @@ pub(super) struct UnixOriginProcess {
 }
 
 impl UnixOriginProcess {
+    /// Returns the immutable kernel-authenticated UID for connection binding.
+    pub(crate) fn uid(&self) -> u32 {
+        self.peer.uid
+    }
+
     /// Rechecks the original lifetime and exact native record before use. Parent
     /// change, PID reuse, exit or unreadable evidence invalidates the observation.
     #[allow(dead_code, reason = "ordinary admission integration is a later phase")]
-    pub(super) fn reobserve(&self) -> io::Result<ProcessParentIdentity> {
+    pub(crate) fn reobserve(&self) -> io::Result<ProcessParentIdentity> {
         let identity = observe_live_origin(&self.lifetime, self.peer.pid)?;
         if identity != self.identity {
             return Err(unavailable());
@@ -43,6 +48,16 @@ impl UnixOriginProcess {
         Ok(identity)
     }
 }
+
+impl PartialEq for UnixOriginProcess {
+    /// Equality denotes the same retained object, never matching numeric PIDs.
+    /// Connection clones share this object through Arc; a recapture is distinct.
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+
+impl Eq for UnixOriginProcess {}
 
 /// Fixed diagnostic deliberately excludes all process metadata and callbacks.
 fn unavailable() -> io::Error {
@@ -113,8 +128,7 @@ fn observe_live_origin(_lifetime: &OwnedFd, _pid: u32) -> io::Result<ProcessPare
 /// kernels lacking SO_PEERPIDFD return their ordinary OS error without fallback.
 /// Call on a bounded connection worker, not the serialized runtime actor.
 #[cfg(target_os = "linux")]
-#[allow(dead_code, reason = "ordinary admission integration is a later phase")]
-pub(super) fn capture_unix_origin(raw_fd: RawFd, owner_uid: u32) -> io::Result<UnixOriginProcess> {
+pub(crate) fn capture_unix_origin(raw_fd: RawFd, owner_uid: u32) -> io::Result<UnixOriginProcess> {
     use std::os::fd::FromRawFd;
 
     let peer = super::peer_credentials::peer_process(raw_fd)?;
@@ -178,8 +192,7 @@ pub(super) fn capture_unix_origin(raw_fd: RawFd, owner_uid: u32) -> io::Result<U
 /// Fails closed until a native socket-origin lifetime/version interface is
 /// reviewed for this platform. Existing ordinary Unix control remains usable.
 #[cfg(not(target_os = "linux"))]
-#[allow(dead_code, reason = "ordinary admission integration is a later phase")]
-pub(super) fn capture_unix_origin(
+pub(crate) fn capture_unix_origin(
     _raw_fd: RawFd,
     _owner_uid: u32,
 ) -> io::Result<UnixOriginProcess> {

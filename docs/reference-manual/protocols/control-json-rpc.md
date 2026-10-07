@@ -573,6 +573,15 @@ closed. macOS requires a reviewed native lifetime/version equivalent before
 this boundary can support admission there. Ordinary UID-only control is
 unchanged, and lifetime evidence still does not attest a current writer.
 
+Ordinary Unix runtime connection adapters now retain optional lifetime anchors
+before frame handling. Capture runs off the runtime actor with an owned socket
+duplicate, so cancellation cannot recycle the worker's descriptor. Connection
+clones share the same anchor; unbound/remote/wrong-user/initialized connections
+cannot attach fresh evidence, and recapture cannot replace an existing anchor.
+Unsupported capture leaves ordinary UID-only control usable with no origin
+evidence. The persistent-host front door and ordinary enrollment protocol are
+not migrated by this groundwork; no new role or vendor registration is granted.
+
 The exact canonical harness `gemini` is retired: new launch and usage admission
 are rejected before capability or accounting-work allocation. Existing expense,
 history and replay tombstones are not deleted or relabelled. Provider names and

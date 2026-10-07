@@ -162,6 +162,18 @@ async fn async_control_connection_authorizes_and_round_trips_control_frame() {
     };
     let server = async {
         let mut connection = ControlConnectionState::new(true, true);
+        #[cfg(target_os = "linux")]
+        let origin_supported = {
+            use std::os::fd::AsRawFd;
+            match crate::runtime::capture_unix_origin(
+                server_stream.as_raw_fd(),
+                current_effective_uid(),
+            ) {
+                Ok(_) => true,
+                Err(error) if error.raw_os_error() == Some(libc::ENOPROTOOPT) => false,
+                Err(error) => panic!("origin capture failed: {error}"),
+            }
+        };
         let served = serve_async_runtime_control_connection(
             &mut server_stream,
             &handle,
@@ -172,6 +184,15 @@ async fn async_control_connection_authorizes_and_round_trips_control_frame() {
         .unwrap();
         assert_eq!(served, input.len());
         assert!(connection.initialized());
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(connection.unix_origin().is_some(), origin_supported);
+            if let Some(origin) = connection.unix_origin() {
+                assert_eq!(origin.reobserve().unwrap().process_id, std::process::id());
+                assert_eq!(origin.uid(), current_effective_uid());
+                assert_eq!(connection.clone(), connection);
+            }
+        }
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running

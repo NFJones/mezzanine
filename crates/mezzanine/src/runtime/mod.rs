@@ -342,6 +342,7 @@ mod pane_io;
 mod peer_credentials;
 /// Owns kernel lifetime anchors for connection-origin process evidence.
 mod peer_process_lifetime;
+pub(crate) use peer_process_lifetime::{UnixOriginProcess, capture_unix_origin};
 mod persistence;
 pub(crate) use persistence::RuntimePersistenceComponent;
 /// Exposes the processes module boundary.

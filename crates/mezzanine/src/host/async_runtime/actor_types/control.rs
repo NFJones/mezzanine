@@ -15,6 +15,34 @@ use tokio::io::{AsyncRead, AsyncWrite};
 /// finish writing before aborting non-responsive connection tasks.
 const TERMINAL_CONTROL_CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Captures optional native evidence before framing, outside the runtime actor.
+/// The worker owns a CLOEXEC duplicate so cancellation cannot recycle its socket
+/// FD underneath the native read. Missing capture leaves established UID control
+/// unchanged; future ordinary admission must require retained evidence explicitly.
+async fn bind_unix_connection_origin(
+    stream: &tokio::net::UnixStream,
+    peer_uid: u32,
+    connection: &mut ControlConnectionState,
+) -> Result<()> {
+    use std::os::fd::AsFd;
+
+    connection.bind_authenticated_peer(AuthenticatedPeer::unix_user(peer_uid))?;
+    if connection.unix_origin().is_some() || connection.initialized() {
+        return Ok(());
+    }
+    let Ok(socket) = stream.as_fd().try_clone_to_owned() else {
+        return Ok(());
+    };
+    let captured = tokio::task::spawn_blocking(move || {
+        crate::runtime::capture_unix_origin(socket.as_raw_fd(), peer_uid)
+    })
+    .await;
+    if let Ok(Ok(origin)) = captured {
+        connection.bind_unix_origin(std::sync::Arc::new(origin))?;
+    }
+    Ok(())
+}
+
 /// Runs the serve async runtime control connection operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -45,6 +73,7 @@ pub async fn serve_async_runtime_control_connection_with_snapshots(
     snapshots: Option<&SnapshotRepository>,
 ) -> Result<usize> {
     let peer_uid = authenticated_unix_peer_uid(stream.as_raw_fd(), config.owner_uid)?;
+    bind_unix_connection_origin(stream, peer_uid, connection).await?;
     serve_authenticated_async_runtime_control_connection_with_snapshots(
         stream,
         AuthenticatedPeer::unix_user(peer_uid),
@@ -133,6 +162,7 @@ where
     F: FnMut(u64, RuntimeLifecycleState) -> bool,
 {
     let peer_uid = authenticated_unix_peer_uid(stream.as_raw_fd(), config.owner_uid)?;
+    bind_unix_connection_origin(stream, peer_uid, connection).await?;
     serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
         stream,
         AuthenticatedPeer::unix_user(peer_uid),
@@ -484,6 +514,7 @@ where
         let connection_snapshots = snapshots.clone();
         tasks.spawn(async move {
             let mut connection = ControlConnectionState::new(true, true);
+            bind_unix_connection_origin(&stream, peer_uid, &mut connection).await?;
             serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
                 &mut stream,
                 peer,

@@ -26,6 +26,9 @@ pub struct ControlConnectionState {
     /// This identity is deliberately separate from the initialized client and
     /// its application role.
     pub(super) authenticated_peer: Option<AuthenticatedPeer>,
+    /// Optional immutable kernel lifetime evidence, independent of UID/roles.
+    /// Clones retain the same anchor; unavailable capture grants no enrollment.
+    unix_origin: Option<std::sync::Arc<crate::runtime::UnixOriginProcess>>,
     /// Application authority resolved from pairing or durable device proof.
     pub(super) remote_principal: Option<RemotePrincipal>,
     /// Stores the initialized value for this data structure.
@@ -87,6 +90,7 @@ impl ControlConnectionState {
     pub fn new(outer_authenticated: bool, trusted_interactive_assertion: bool) -> Self {
         Self {
             authenticated_peer: None,
+            unix_origin: None,
             remote_principal: None,
             initialized: false,
             outer_authenticated,
@@ -115,6 +119,7 @@ impl ControlConnectionState {
     pub fn trusted_existing_client(caller_client_id: ClientId) -> Self {
         Self {
             authenticated_peer: None,
+            unix_origin: None,
             remote_principal: None,
             initialized: true,
             outer_authenticated: true,
@@ -160,6 +165,42 @@ impl ControlConnectionState {
     /// Returns the identity established by the concrete transport adapter.
     pub fn authenticated_peer(&self) -> Option<&AuthenticatedPeer> {
         self.authenticated_peer.as_ref()
+    }
+
+    /// Retains native transport evidence before initialization. It cannot be
+    /// attached to remote/unbound/wrong-user connections or replace an anchor;
+    /// retaining it does not alter any authentication or application role flag.
+    pub(crate) fn bind_unix_origin(
+        &mut self,
+        origin: std::sync::Arc<crate::runtime::UnixOriginProcess>,
+    ) -> Result<()> {
+        if !matches!(self.authenticated_peer(), Some(AuthenticatedPeer::UnixUser { uid }) if *uid == origin.uid())
+        {
+            return Err(MezError::invalid_state(
+                "Unix origin requires matching authenticated user",
+            ));
+        }
+        if let Some(existing) = &self.unix_origin {
+            return if std::sync::Arc::ptr_eq(existing, &origin) {
+                Ok(())
+            } else {
+                Err(MezError::invalid_state(
+                    "control connection Unix origin cannot change",
+                ))
+            };
+        }
+        if self.initialized {
+            return Err(MezError::invalid_state(
+                "Unix origin must precede initialization",
+            ));
+        }
+        self.unix_origin = Some(origin);
+        Ok(())
+    }
+
+    /// Returns retained connection-origin evidence, not producer/pane authority.
+    pub(crate) fn unix_origin(&self) -> Option<&std::sync::Arc<crate::runtime::UnixOriginProcess>> {
+        self.unix_origin.as_ref()
     }
 
     /// Binds application authority resolved from remote pairing or device proof.

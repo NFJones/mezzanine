@@ -269,6 +269,13 @@ or changed origin evidence. Opening a pidfd by numeric PID is not equivalent.
 Unsupported kernel/platform lifetime APIs MUST fail closed without affecting
 existing UID-only control. This anchor still does not attest the current writer,
 vendor producer or client/session association; full admission remains unfinished.
+Ordinary Unix runtime connection adapters MAY retain optional origin anchors
+before frame processing, with native reads outside the runtime actor and an
+owned socket descriptor throughout capture. Connection clones MUST share the
+exact anchor. Binding MUST require a matching authenticated Unix UID before
+initialization and MUST NOT replace an existing anchor or grant client/role
+authority. Missing optional evidence MUST preserve existing UID-only control;
+future enrollment MUST require its own proven admission evidence explicitly.
 `agent/external/presentation` MUST require the same capability, generation and
 external session binding. Positive observation sequences MUST reject stale or
 conflicting updates; identical replay MUST be inert. Bounded title suggestions
