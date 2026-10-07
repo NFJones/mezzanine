@@ -32,6 +32,8 @@ pub(crate) mod pi;
     reason = "owned Pi artifacts await private-launch and assembled certification"
 )]
 pub(crate) mod pi_artifact;
+/// Strict content-free child session proposals; credentials remain parent-owned.
+pub(crate) mod pi_binding;
 #[allow(
     dead_code,
     reason = "Pi observer IPC awaits private launcher integration"

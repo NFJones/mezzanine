@@ -56,7 +56,7 @@ async fn pi_cli_silent_extension_does_not_register() {
 async fn pi_cli_public_launch_keeps_grant_in_parent() {
     let root = Fixture::new();
     let executable = root.0.join("pi-fixture");
-    std::fs::write(&executable, "#!/bin/sh\n[ \"$1\" = '--session-id' ] || exit 99\n[ \"$2\" = \"$MEZ_PI_OBSERVER_SESSION\" ] || exit 98\n[ \"$MEZ_PI_OBSERVER_FD\" = 3 ] || exit 97\n[ -z \"${MEZ_PANE:-}\" ] || exit 96\nprintf '%s\\n' '{\"type\":\"session_start\",\"reason\":\"startup\"}' '{\"type\":\"agent_start\"}' >&3\nexit 13\n").unwrap();
+    std::fs::write(&executable, "#!/bin/sh\n[ \"$1\" = '--session-id' ] || exit 99\n[ \"$2\" = \"$MEZ_PI_OBSERVER_SESSION\" ] || exit 98\n[ \"$MEZ_PI_OBSERVER_FD\" = 3 ] || exit 97\n[ \"$MEZ_PI_OBSERVER_PROTOCOL\" = 2 ] || exit 95\n[ -z \"${MEZ_PANE:-}\" ] || exit 96\nprintf '{\"session\":\"%s\",\"epoch\":1,\"event\":{\"type\":\"session_start\",\"reason\":\"startup\"}}\\n{\"session\":\"%s\",\"epoch\":1,\"event\":{\"type\":\"agent_start\"}}\\n' \"$2\" \"$2\" >&3\nexit 13\n").unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
     let socket = root.0.join("daemon");
     let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
@@ -157,7 +157,7 @@ async fn pi_cli_public_launch_keeps_grant_in_parent() {
         env.iter()
             .filter(|(key, _)| key.to_string_lossy().starts_with("MEZ_"))
             .count(),
-        2
+        3
     );
     assert!(
         !env.iter()

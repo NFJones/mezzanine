@@ -85,6 +85,15 @@ impl Ingress {
         self.0.closed().await;
     }
 
+    /// Enqueues an ordered observer EOF after all accepted facts. The owning
+    /// parent must continue polling the coordinator while this admission waits.
+    pub(crate) async fn observer_ended(&self) -> Result<()> {
+        self.0
+            .send(Input::ObserverEnded)
+            .await
+            .map_err(|_| unavailable())
+    }
+
     /// Attempts one callback admission without awaiting IPC. Full/closed ingress
     /// loses telemetry explicitly; callers must not alter vendor decisions.
     pub(crate) fn observe(&self, epoch: u64, session: &str, fact: Observation) -> Result<()> {

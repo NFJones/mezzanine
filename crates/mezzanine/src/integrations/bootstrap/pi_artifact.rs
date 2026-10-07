@@ -19,6 +19,7 @@ pub(crate) fn candidate_manifest() -> Manifest {
         ),
         ("index.mjs", include_bytes!("pi_entry.mjs")),
         ("pi_extension.mjs", include_bytes!("pi_extension.mjs")),
+        ("pi_binding.mjs", include_bytes!("pi_binding.mjs")),
         ("pi_observer.mjs", include_bytes!("pi_observer.mjs")),
         (
             "pi_observer_stream.mjs",
@@ -27,7 +28,7 @@ pub(crate) fn candidate_manifest() -> Manifest {
     ];
     Manifest {
         harness: "pi".into(),
-        revision: 1,
+        revision: 2,
         vendor_version: super::pi::RELEASE.into(),
         entries: files
             .iter()

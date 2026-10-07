@@ -521,7 +521,12 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
     ControlMethodSpec {
         method: "agent/external/launch",
         dispatch: ControlDispatchKind::ExternalAgent,
-        params_schema: ControlParamsSchema::Allowed(&["pane_id", "harness", "version"]),
+        params_schema: ControlParamsSchema::Allowed(&[
+            "pane_id",
+            "harness",
+            "version",
+            "root_generation",
+        ]),
     },
     ControlMethodSpec {
         method: "agent/external/register",

@@ -96,8 +96,11 @@ Pi's exit code and does not terminate/restart it on telemetry failure.
 Matched initial-session callbacks drive registration/status and idle renewal.
 Same-session reload retains one process-owned observation socket, fences old
 instances and confirms a replacement parent epoch without resetting delivery
-sequence or registration. New, resume and fork currently end telemetry; relaunch explicitly for another
-binding. Missing/changed callbacks or daemon outages may leave telemetry
+sequence or registration. New, resume and fork propose a new context session on
+the same observation stream; the parent acknowledges old-session retirement and
+requests a fresh exact-root-fenced capability before registering the replacement.
+Failed retirement, changed root or lost issuance replies end telemetry without
+altering Pi or reusing retired credentials. Missing/changed callbacks or daemon outages may leave telemetry
 unavailable; lease expiry cleans up missing end events. Tokens remain unavailable
 in this lifecycle-only delivery. No live provider, macOS or physical-terminal
 compatibility is implied by synthetic tests; user feedback guides repairs.
@@ -188,10 +191,10 @@ closure fences registration and outstanding delivery without draining buffered
 facts. Reload attachment first offers a proposal; an unread or dropped proposal
 leaves the observer suspended. Explicit confirmation activates the replacement;
 losing its result does not undo an accepted activation command. The inherited
-bridge confirms same-session reload after ordered shutdown; different-session
-rebinding remains unavailable in the public launcher.
+bridge confirms same-session reload after ordered shutdown. The v2 public parent
+separately authorizes new/resume/fork with an immutable fresh owner and capability.
 
-The internal inherited-stream bridge connects content-free observer facts to
+The internal v1 inherited-stream bridge connects content-free observer facts to
 coordinator ingress. The launcher supplies a connected same-user Unix stream,
 session and epoch; none is selected by a callback payload. Exact JSON lifecycle
 frames are limited to 1,024 bytes, with a 250 ms total partial-frame deadline
@@ -199,7 +202,11 @@ and no idle-silence timeout. The JavaScript sink bounds buffered writes to
 32 KiB and stops accepting telemetry after backpressure or error without
 changing vendor decisions. Daemon capabilities never cross this observer link.
 The launcher retains session lifetime separately from observer stream closure.
-The public launcher supplies this bridge without exposing its daemon capability.
+The public launcher uses a v2 envelope instead: bounded child-proposed session
+and observer epoch plus the same strict allowlisted lifecycle facts, limited to
+2,048 bytes with a 250 ms partial-frame deadline. Those proposals grant no
+authority. The parent validates initial/transition ordering and obtains fresh
+root-fenced credentials itself; credentials never cross the observer channel.
 
 The injectable Pi extension factory wires the observer to its stream sink only
 at session start. Factory loading opens no resources; a matching context session
@@ -226,7 +233,7 @@ semantics. Errors and cancellation preserve pending reducer evidence without
 automatic reconnect or vendor replay. Production authorization and replacement
 session ownership remain separate; the public launcher does not implicitly rebind.
 
-An internal compiled artifact candidate owns five files under
+An internal compiled artifact candidate owns six files under
 `extensions/mezzanine/` in an explicit agent-directory root. A package manifest
 selects one entry point; private `.mjs` siblings are not independently discovered
 as extensions. The entry is registration-only during loading and opens descriptor

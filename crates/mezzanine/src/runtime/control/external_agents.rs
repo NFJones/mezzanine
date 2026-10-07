@@ -131,6 +131,30 @@ impl RuntimeSessionService {
         if process.role != crate::runtime::processes::RuntimePaneProcessRole::AdapterOwnedRoot {
             return Err(MezError::conflict("external launch pane root unavailable"));
         }
+        if let Some(witness) = params.get("root_generation") {
+            let generation = witness.as_u64().filter(|value| *value > 0).ok_or_else(|| {
+                MezError::invalid_args("external launch root witness unavailable")
+            })?;
+            // Numeric provenance grants no authority. The attached primary is
+            // required above; this only narrows issuance to a retained exact
+            // predecessor root, including a retired registration's tombstone.
+            let predecessor = self
+                .control
+                .external_agents()
+                .bindings
+                .values()
+                .find(|binding| binding.generation == generation)
+                .filter(|binding| {
+                    binding.uid == crate::runtime::current_effective_uid()
+                        && binding.pane_id == pane_id
+                        && binding.harness == harness
+                        && binding.process.same_incarnation(&process)
+                })
+                .ok_or_else(|| MezError::conflict("external launch root changed"))?;
+            if predecessor.expires <= current_unix_seconds() {
+                return Err(MezError::conflict("external launch root witness expired"));
+            }
+        }
         let project_scope = self
             .trusted_project_root_for_pane(&pane_id)
             .map(mez_agent::messaging::ProjectMembership::from_canonical_root)

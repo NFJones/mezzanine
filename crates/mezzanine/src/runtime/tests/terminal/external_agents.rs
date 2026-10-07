@@ -6,6 +6,56 @@
 
 use super::*;
 
+/// A primary can issue fresh session authority only while its predecessor's
+/// exact pane root still exists. The numeric witness is not a credential: an
+/// attached primary is still required, and root replacement or missing witness
+/// must fail before allocating a new capability.
+#[test]
+fn runtime_external_launch_reauthorization_is_root_fenced() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let issue = |service: &mut RuntimeSessionService, witness: Option<serde_json::Value>| {
+        let mut params = serde_json::json!({"pane_id":"%1","harness":"pi","version":"any-local"});
+        if let Some(witness) = witness {
+            params["root_generation"] = witness;
+        }
+        let request = serde_json::json!({"jsonrpc":"2.0","id":"launch","method":"agent/external/launch","params":params});
+        serde_json::from_str::<serde_json::Value>(
+            &service.dispatch_runtime_control_body(&request.to_string(), &primary),
+        )
+        .unwrap()
+    };
+    let original = issue(&mut service, None);
+    let generation = original["result"]["generation"].clone();
+    let replacement = issue(&mut service, Some(generation.clone()));
+    assert!(
+        replacement.get("error").is_none(),
+        "same-root reauthorization must issue fresh authority"
+    );
+    assert_ne!(
+        replacement["result"]["launch_token"],
+        original["result"]["launch_token"]
+    );
+    for invalid in [
+        serde_json::json!(0),
+        serde_json::json!(999999),
+        serde_json::json!("1"),
+        serde_json::Value::Null,
+    ] {
+        assert!(issue(&mut service, Some(invalid)).get("error").is_some());
+    }
+    service.terminate_all_pane_processes().unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    assert!(
+        issue(&mut service, Some(generation)).get("error").is_some(),
+        "replaced root inherited launch authority"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// An explicitly launched child reports through the inherited observation stream
 /// and owned coordinator into real capability-only runtime ingress. Primary
 /// issuance stays in the parent; the child receives neither token nor daemon

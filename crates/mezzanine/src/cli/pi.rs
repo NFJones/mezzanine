@@ -4,8 +4,8 @@
 //! for an exact pane-root capability. The credential never enters child argv,
 //! environment or output. Only a session hint and observation-only fd3 cross
 //! exec. The child retains ordinary stdio and vendor policy; telemetry failure
-//! neither kills nor relaunches it. Same-session reload preserves sequencing;
-//! session changes still require a fresh explicit invocation and new binding.
+//! neither kills nor relaunches it. Reload preserves sequencing; new/resume/fork
+//! require ordered retirement and fresh parent-issued exact-root authority.
 
 use std::ffi::OsString;
 use std::os::fd::AsRawFd;
@@ -18,6 +18,9 @@ use zeroize::Zeroizing;
 
 use super::{Args, MezError, Result, SocketSelection};
 use crate::integrations::bootstrap::{pi_launch, pi_owner, pi_session, pi_transport};
+
+/// Owns ordered parent reauthorization and immutable vendor-session handoff.
+mod binding;
 
 /// User-selected executable and pane. No executable/version probing or install
 /// is implicit; remaining arguments are forwarded without shell expansion.
@@ -111,6 +114,17 @@ fn validate(args: &PiCliArgs) -> Result<()> {
 /// initialization and issuance, including slow-drip replies. Disconnect removes
 /// only this command's client. Environment hints grant no authority.
 async fn authorize(socket: &Path, pane: &str, version: &str) -> Result<Grant> {
+    authorize_root(socket, pane, version, None).await
+}
+
+/// Explicit primary issuance narrowed to the retained predecessor pane root.
+/// A witness is inert provenance, not a credential or permission escalation.
+async fn authorize_root(
+    socket: &Path,
+    pane: &str,
+    version: &str,
+    root_generation: Option<u64>,
+) -> Result<Grant> {
     tokio::time::timeout(Duration::from_secs(2), async {
         let mut stream = tokio::net::UnixStream::connect(socket).await.map_err(|_| unavailable())?;
         crate::runtime::authenticated_unix_peer_uid(stream.as_raw_fd(), crate::runtime::current_effective_uid())
@@ -126,12 +140,14 @@ async fn authorize(socket: &Path, pane: &str, version: &str) -> Result<Grant> {
             || initialized["id"] != "pi-init" || initialized["jsonrpc"] != "2.0" {
             return Err(unavailable());
         }
-        let request = serde_json::json!({"jsonrpc":"2.0","id":"cli","method":"agent/external/launch",
-            "params":{"pane_id":pane,"harness":"pi","version":version}}).to_string();
+        let mut params = serde_json::json!({"pane_id":pane,"harness":"pi","version":version});
+        if let Some(generation) = root_generation { params["root_generation"] = generation.into(); }
+        let request = serde_json::json!({"jsonrpc":"2.0","id":"cli","method":"agent/external/launch", "params":params}).to_string();
         let reply = exchange(&mut stream, &request).await?;
         let reply: GrantReply = serde_json::from_str(&reply).map_err(|_| unavailable())?;
         if reply.jsonrpc != "2.0" || reply.id != "cli" || reply.result.protocol != "external-agent/1"
             || reply.result.generation == 0
+            || root_generation.is_some_and(|old| reply.result.generation <= old)
             || reply.result.expires_at_unix_seconds <= super::current_unix_seconds().map_err(|_| unavailable())?
             || reply.result.lease_seconds == 0 || reply.result.lease_seconds > 60 {
             return Err(unavailable());
@@ -173,6 +189,7 @@ fn environment(session: &str) -> Vec<(OsString, OsString)> {
         .collect();
     values.push(("MEZ_PI_OBSERVER_FD".into(), "3".into()));
     values.push(("MEZ_PI_OBSERVER_SESSION".into(), session.into()));
+    values.push(("MEZ_PI_OBSERVER_PROTOCOL".into(), "2".into()));
     values
 }
 
@@ -186,13 +203,7 @@ pub(super) async fn run(args: PiCliArgs, selection: &SocketSelection) -> Result<
     let version = args.vendor_version.clone();
     let grant = authorize(&socket, &pane, &version).await?;
     let session = crate::storage::token_usage::new_token_usage_event_id();
-    let mut owner = pi_owner::LifecycleOwner::new(&session)?;
-    let transport = pi_transport::CapabilityTransport::new(
-        super::selected_socket_path(selection),
-        grant.launch_token,
-        grant.generation,
-        &owner,
-    )?;
+    let mut context = binding::Context::new(socket, pane, version, &session, grant)?;
     let mut arguments = vec!["--session-id".into(), session.clone().into()];
     arguments.extend(args.arguments);
     let launched = pi_launch::spawn(pi_launch::LaunchSpec {
@@ -204,13 +215,42 @@ pub(super) async fn run(args: PiCliArgs, selection: &SocketSelection) -> Result<
         stdout: Stdio::inherit(),
         stderr: Stdio::inherit(),
     })?;
-    supervise(launched, &mut owner, &transport).await
+    supervise_binding(launched, &mut context).await
+}
+
+/// Reaps one child independently of its binding coordinator. Finite draining
+/// and exact cleanup preserve observed effects without replaying provider work.
+async fn supervise_binding(
+    launched: pi_launch::Launched,
+    context: &mut binding::Context,
+) -> Result<u8> {
+    let mut child = launched.child;
+    let (stop, cancellation) = tokio::sync::watch::channel(false);
+    let status = {
+        let observer = context.run(launched.observer, cancellation);
+        tokio::pin!(observer);
+        tokio::select! {
+            status = child.wait() => {
+                let _ = tokio::time::timeout(Duration::from_millis(750), &mut observer).await;
+                status
+            }
+            _ = &mut observer => child.wait().await,
+        }
+    };
+    stop.send_replace(true);
+    context.retire().await;
+    let status = status.map_err(|_| MezError::invalid_state("Pi child wait failed"))?;
+    use std::os::unix::process::ExitStatusExt;
+    Ok(status
+        .code()
+        .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)) as u8)
 }
 
 /// Joins telemetry and child lifetimes without detached tasks. Child completion
 /// allows a finite final-fact drain; telemetry completion alone only drops the
 /// observer and stops renewal. Retirement is best-effort exact-capability work,
 /// not proof of remote acknowledgment; server expiry is the fallback.
+#[cfg(test)]
 async fn supervise(
     launched: pi_launch::Launched,
     owner: &mut pi_owner::LifecycleOwner,

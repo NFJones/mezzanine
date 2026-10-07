@@ -539,6 +539,15 @@ launcher must deliver the token privately; do not put it in argv, logs or config
 Launch issuance deliberately bypasses the generic request replay cache. A lost
 issuance reply requires a new capability; the unused binding expires.
 
+Optional positive `root_generation` narrows this attached-primary issuance to
+the retained predecessor's same UID, harness, pane and kernel root incarnation.
+It is numeric provenance, not a credential or authorization to initialize a
+primary. Missing/expired witnesses and replaced roots reject before allocation;
+no unfenced fallback is allowed. A retired registration's finite tombstone may
+supply provenance, but its old capability remains retired. Pi's parent uses this
+field for separately authorized new/resume/fork session handoff after exact old
+retirement acknowledgment; vendor callbacks never receive the new credential.
+
 The exact canonical harness `gemini` is retired: new launch and usage admission
 are rejected before capability or accounting-work allocation. Existing expense,
 history and replay tombstones are not deleted or relabelled. Provider names and

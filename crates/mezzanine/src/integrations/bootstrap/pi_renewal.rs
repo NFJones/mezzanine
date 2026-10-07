@@ -89,7 +89,7 @@ fn unavailable() -> MezError {
 
 /// Waits for explicit cancellation or loss of launcher ownership. False updates
 /// do not cancel, and closure is terminal rather than a busy ready branch.
-pub(super) async fn cancelled(stop: &mut watch::Receiver<bool>) {
+pub(crate) async fn cancelled(stop: &mut watch::Receiver<bool>) {
     loop {
         if *stop.borrow_and_update() || stop.changed().await.is_err() {
             return;

@@ -383,8 +383,16 @@ MUST retain the process-owned observation descriptor, release only the old
 extension lease/listeners, and explicitly confirm a parent-owned replacement
 epoch after FIFO shutdown admission. Delivery sequence and registration MUST
 survive reload; duplicate/stale instances MUST NOT borrow or close the current
-channel. New/resume/fork support MUST disclose telemetry loss rather than
-implicitly rebind credentials. Token coverage remains separately unavailable
+channel. New/resume/fork MUST first acknowledge the old immutable session's
+retirement, then obtain a fresh parent-issued capability with an actor-resolved
+`root_generation` predecessor witness. The witness only narrows attached-primary
+issuance to the same UID, harness, pane and kernel root incarnation; it MUST NOT
+grant authority or permit fallback after witness/root loss. V2 child frames
+MUST carry only bounded session proposals, safe monotonic observer epochs and
+strict allowlisted lifecycle facts (2048 bytes, 250ms partial-frame budget).
+Callbacks MUST NOT receive the fresh credential or alter registration metadata.
+Lost retirement/issuance acknowledgment ends telemetry rather than reusing an
+old capability or replaying vendor work. Token coverage remains separately unavailable
 until an evidenced accounting source is implemented.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized

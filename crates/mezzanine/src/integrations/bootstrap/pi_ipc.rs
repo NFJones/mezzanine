@@ -25,9 +25,9 @@ const MAX_FRAME: usize = 1024;
 const FRAME_DEADLINE: Duration = Duration::from_millis(250);
 
 /// Only the released observer's lifecycle facts may cross this stream.
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 #[serde(tag = "type", deny_unknown_fields)]
-enum Event {
+pub(crate) enum Event {
     #[serde(rename = "session_start")]
     Start { reason: StartReason },
     #[serde(rename = "agent_start")]
@@ -51,9 +51,9 @@ enum Event {
 }
 
 /// Known released session activation reasons, not authority to rebind a session.
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-enum StartReason {
+pub(crate) enum StartReason {
     Startup,
     Reload,
     New,
@@ -61,9 +61,9 @@ enum StartReason {
     Fork,
 }
 /// Known teardown reasons; none proves process death.
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-enum StopReason {
+pub(crate) enum StopReason {
     Quit,
     Reload,
     New,
@@ -71,15 +71,15 @@ enum StopReason {
     Fork,
 }
 /// Extension UI wait, not automatic permission approval.
-#[derive(Deserialize)]
-enum PromptReason {
+#[derive(Deserialize, serde::Serialize)]
+pub(crate) enum PromptReason {
     #[serde(rename = "ui_prompt")]
     Ui,
 }
 /// Released UI prompt forms; no prompt text or answer is accepted.
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-enum PromptKind {
+pub(crate) enum PromptKind {
     Select,
     Confirm,
     Input,
@@ -87,9 +87,9 @@ enum PromptKind {
     Custom,
 }
 /// Candidate outcome remains provisional until a separate final notification.
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-enum Outcome {
+pub(crate) enum Outcome {
     Completed,
     Aborted,
     Error,
@@ -101,7 +101,7 @@ fn unavailable() -> MezError {
 }
 
 /// Validates the wire allowlist before reusing the released Rust projector.
-fn observation(session: &str, bytes: &[u8]) -> Result<pi::Observation> {
+pub(crate) fn observation(session: &str, bytes: &[u8]) -> Result<pi::Observation> {
     if bytes.is_empty() || bytes.len() > MAX_FRAME {
         return Err(unavailable());
     }
