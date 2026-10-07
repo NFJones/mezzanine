@@ -91,7 +91,7 @@ mod publication;
 #[cfg(test)]
 mod publication_tests;
 /// Rejects ambiguous shared JSON before exact array-member reconciliation.
-mod strict_json;
+use crate::protocol::strict_json;
 
 #[allow(
     dead_code,

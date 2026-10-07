@@ -8,3 +8,4 @@ pub(crate) mod event;
 pub(crate) mod framing;
 pub(crate) mod identifiers;
 pub(crate) mod message;
+pub(crate) mod strict_json;

@@ -1061,3 +1061,46 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
 mod observer_epochs;
 mod persistent_client;
 mod pi_observation;
+
+/// Programmatic requests still undergo strict selector decoding before native
+/// reservations. Wire parsing is not the only boundary: escaped/duplicate
+/// session, kind and predecessor values must leave admission state untouched.
+#[tokio::test(flavor = "current_thread")]
+async fn external_enrollment_direct_metadata_rejects_duplicates_before_reservation() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    for suffix in [
+        r#", "harness":"pi""#,
+        r#", "observer_kind":"persistent""#,
+        r#", "external_session_id":"session-b""#,
+        r#", "\u0070ane_id":"%2""#,
+    ] {
+        let mut candidate = request();
+        let raw = candidate.params.as_ref().unwrap();
+        candidate.params = Some(format!("{}{suffix}}}", &raw[..raw.len() - 1]));
+        assert!(
+            fixture
+                .service
+                .prepare_external_enrollment(&candidate, &fixture.connection)
+                .is_err()
+        );
+        assert!(
+            fixture
+                .service
+                .control
+                .external_agents()
+                .enrollments
+                .pending
+                .is_empty()
+        );
+        assert!(
+            fixture
+                .service
+                .control
+                .external_agents()
+                .bindings
+                .is_empty()
+        );
+    }
+}

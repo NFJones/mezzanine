@@ -11538,6 +11538,11 @@ objects. Requests MUST include `"jsonrpc": "2.0"`, a non-null string or
 integer `id`, a string `method`, and optional object `params`. Notifications
 MUST include `"jsonrpc": "2.0"` and `method`, and MUST NOT include `id`.
 Responses MUST include `"jsonrpc": "2.0"` and the same `id` as the request.
+Control request object keys MUST be unique at every nested level after JSON
+escape decoding. Duplicate/escaped-alias keys MUST reject before selectors,
+authorization or canonicalization; normal unique JSON value semantics remain
+unchanged. Direct ordinary enrollment preparation MUST enforce the same strict
+metadata rule before allocating native admission reservations.
 A successful response MUST include `result` and MUST NOT include `error`. An
 error response MUST include `error` and MUST NOT include `result`.
 

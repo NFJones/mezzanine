@@ -112,19 +112,37 @@ fn connection_idempotency_replays_completed_error_responses() {
     assert_eq!(cache.len(), 1);
 }
 
-/// Typed Pi ingress must see original nested fields: materializing params as a
-/// generic Value first would overwrite duplicate event keys before validation.
-/// The fixed Pi wire envelope also rejects ambiguous duplicated root metadata.
+/// Duplicate Pi event fields reject before generic materialization; valid raw
+/// parameters still retain their exact bytes for typed metadata bounds. Root
+/// alias/duplicate fields cannot silently override the selected wire method.
 #[test]
 fn control_pi_observation_preserves_raw_nested_duplicate_validation() {
     let body = r#"{"jsonrpc":"2.0","id":1,"method":"agent/external/pi-observation","params":{"launch_token":"test","generation":1,"external_session_id":"session-a","sequence":1,"event":{"type":"agent_start","type":"agent_start"}}}"#;
+    assert!(parse_json_rpc_request(body).is_err());
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"agent/external/pi-observation","params":{ "event": { "type": "agent_start" } }}"#;
     let request = parse_json_rpc_request(body).unwrap();
-    let params = request.params.unwrap();
     assert_eq!(
-        params.matches("\"type\"").count(),
-        2,
-        "parser erased typed duplicate evidence"
+        request.params.as_deref(),
+        Some(r#"{ "event": { "type": "agent_start" } }"#)
     );
     let duplicate = r#"{"jsonrpc":"2.0","id":1,"method":"agent/external/pi-observation","method":"agent/external/pi-observation","params":{}}"#;
     assert!(parse_json_rpc_request(duplicate).is_err());
+}
+
+/// Enrollment selectors must remain unambiguous before native reservation. The
+/// common Value parser must not silently convert helper/unsupported metadata
+/// into a supported producer by overwriting duplicated or escaped aliases.
+#[test]
+fn control_external_enrollment_rejects_duplicate_wire_selectors() {
+    for body in [
+        r#"{"jsonrpc":"2.0","id":1,"method":"agent/external/enroll","params":{"harness":"codex","harness":"pi"}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"agent/external/enroll","params":{"observer_kind":"helper","observer_kind":"persistent"}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"agent/external/enroll","params":{"pane_id":"%2","\u0070ane_id":"%1"}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"agent/external/enroll","method":"agent/external/enroll","params":{}}"#,
+    ] {
+        assert!(
+            parse_json_rpc_request(body).is_err(),
+            "ambiguous enrollment wire was accepted"
+        );
+    }
 }

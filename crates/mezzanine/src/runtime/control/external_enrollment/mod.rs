@@ -218,8 +218,9 @@ impl RuntimeSessionService {
                 "external enrollment metadata exceeds limit",
             ));
         }
-        let params: serde_json::Value = serde_json::from_str(raw)
-            .map_err(|_| MezError::invalid_args("external enrollment requires an object"))?;
+        let params = crate::protocol::strict_json::decode(raw.as_bytes()).map_err(|_| {
+            MezError::invalid_args("external enrollment requires an unambiguous object")
+        })?;
         let harness = text(&params, "harness", 64)?;
         crate::integrations::harness_policy::require_active_external_harness(&harness)?;
         if !matches!(harness.as_str(), "pi" | "opencode")

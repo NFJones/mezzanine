@@ -280,8 +280,9 @@ fn cached_response_bytes(cache_key: &str, entry: &CachedControlResponse) -> usiz
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn parse_json_rpc_request(body: &str) -> Result<JsonRpcRequest> {
-    let value = serde_json::from_str::<serde_json::Value>(body)
-        .map_err(|_| MezError::invalid_args("JSON-RPC request body must be valid JSON"))?;
+    let value = crate::protocol::strict_json::decode(body.as_bytes()).map_err(|_| {
+        MezError::invalid_args("JSON-RPC request body must be valid JSON with unique object fields")
+    })?;
     let object = value
         .as_object()
         .ok_or_else(|| MezError::invalid_args("JSON-RPC request must be an object"))?;

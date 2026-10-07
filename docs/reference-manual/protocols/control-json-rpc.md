@@ -32,6 +32,14 @@ transient presentation.
 
 ## Transport, framing, and initialization
 
+Control request decoding rejects duplicate object keys at every nested level,
+including escaped aliases, before method/producer selectors are interpreted or
+parameters canonicalized. Valid unique JSON retains ordinary value semantics;
+errors omit raw keys/values and parser excerpts. Ordinary enrollment also checks
+its original metadata directly before reserving native work. Pi observation keeps
+valid original parameter bytes for typed bounds; ambiguous nested fields reject
+at the common boundary rather than being overwritten.
+
 ### Base transports and Iroh event streams
 
 The implemented transports are a user-private Unix-domain socket and the
@@ -673,7 +681,8 @@ not bypassed; supported Pi callback shapes remain best-effort observations.
 `agent/external/pi-observation` is restricted to ordinary Pi enrollment. It accepts
 the private token/generation/session, contiguous positive `sequence`, and one
 existing typed Pi `event` (maximum metadata4096/event1024 bytes). The original
-nested JSON is retained for duplicate-key rejection. The daemon reuses the Pi
+nested JSON bytes remain intact for typed bounds; duplicate fields reject before
+generic parsing can overwrite them. The daemon reuses the Pi
 LifecycleOwner reducer, not a second JavaScript outcome state machine. Exact
 latest reply-loss replay is inert; gaps/conflicts/content and mixed generic
 presentation reject. Replies carry `accepted`, exact `sequence` and `retired`;

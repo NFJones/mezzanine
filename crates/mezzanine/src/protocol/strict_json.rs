@@ -1,4 +1,4 @@
-//! Duplicate-safe shared JSON decoding before exact installer ownership edits.
+//! Duplicate-safe JSON decoding before protocol or exact ownership interpretation.
 //!
 //! Generic serde_json::Value erases duplicate keys. This visitor retains ordinary
 //! JSON values while rejecting duplicates at every depth, including escaped key
@@ -72,13 +72,52 @@ impl<'de> Deserialize<'de> for Unique {
     }
 }
 
-/// Rejects invalid/duplicate JSON before an installer computes replacement bytes.
-pub(super) fn decode(bytes: &[u8]) -> crate::Result<Value> {
+/// Rejects invalid/duplicate JSON before keys can select protocol or edit effects.
+pub(crate) fn decode(bytes: &[u8]) -> crate::Result<Value> {
     serde_json::from_slice::<Unique>(bytes)
         .map(|value| value.0)
-        .map_err(|_| {
-            crate::MezError::invalid_args(
-                "bootstrap requires unique strict JSON; authored document unchanged",
-            )
-        })
+        .map_err(|_| crate::MezError::invalid_args("JSON requires unique object fields"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Unique JSON must preserve ordinary serde values exactly, including signed
+    /// and unsigned bounds, floating numbers, nested arrays, null and escapes.
+    #[test]
+    fn strict_json_preserves_ordinary_value_semantics() {
+        for bytes in [
+            b"null".as_slice(),
+            b"true",
+            b"-9223372036854775808",
+            b"18446744073709551615",
+            b"1.25",
+            b"-0.0",
+            br#"{"nested":[null,true,{"value":"escaped\ntext","unicode":"\u0061"}],"number":4}"#,
+        ] {
+            assert_eq!(
+                decode(bytes).unwrap(),
+                serde_json::from_slice::<Value>(bytes).unwrap()
+            );
+        }
+    }
+
+    /// Duplicate aliases at any nested object level, trailing data and excessive
+    /// depth reject before interpretation. Generic diagnostics never echo raw
+    /// private identifiers, keys, values or serde parser excerpts.
+    #[test]
+    fn strict_json_rejects_nested_aliases_invalid_input_and_excessive_depth() {
+        for input in [
+            br#"{"PRIVATE":1,"PRIVATE":2}"#.as_slice(),
+            br#"{"nested":[{"key":1,"\u006bey":2}]}"#,
+            b"{} {}",
+            b"{invalid}",
+        ] {
+            let error = decode(input).unwrap_err();
+            assert!(!error.message().contains("PRIVATE"));
+        }
+        let input = format!("{}0{}", "[".repeat(129), "]".repeat(129));
+        assert!(decode(input.as_bytes()).is_err());
+    }
 }
