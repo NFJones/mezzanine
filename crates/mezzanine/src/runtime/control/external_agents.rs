@@ -57,6 +57,46 @@ pub(super) struct LaunchBinding {
     pub(super) pi_lifecycle: Option<super::pi_observation::PiLifecycleProjection>,
 }
 
+impl LaunchBinding {
+    /// Reports live telemetry without renewing or retiring anything. An ordinary
+    /// producer must remain natively live; its qualified connected observer can
+    /// bridge a delayed maintenance tick. Legacy launches require their actual
+    /// lease deadline because no ordinary observer provenance was established.
+    fn has_current_telemetry(&self, now: u64) -> bool {
+        !self.retired
+            && self
+                .enrollment
+                .as_ref()
+                .is_none_or(|enrollment| enrollment.origin.is_live())
+            && (self.expires > now
+                || self
+                    .enrollment
+                    .as_ref()
+                    .is_some_and(|enrollment| enrollment.has_live_observer()))
+    }
+
+    /// Labels server-observed transport health independently of vendor state.
+    /// Lost observers may retain a remaining lease, never proof of completion
+    /// or producer death. Legacy lease health carries no observer attestation.
+    fn telemetry_health(&self) -> &'static str {
+        match &self.enrollment {
+            Some(enrollment) if enrollment.has_live_observer() => "enrolled",
+            Some(_) => "connection-lost",
+            None => "lease-active",
+        }
+    }
+
+    /// Keeps ordinary-source accounting unavailability visible in discovery.
+    /// Legacy externally reported accounting is not a completeness/invoice claim.
+    fn usage_coverage(&self) -> &'static str {
+        if self.enrollment.is_some() {
+            "unavailable-source-continuity"
+        } else {
+            "external-reported"
+        }
+    }
+}
+
 /// Immutable registration metadata, bound to a single server-issued launch.
 #[derive(Debug)]
 pub(super) struct Registration {
@@ -452,15 +492,7 @@ impl RuntimeSessionService {
             .iter()
             .filter_map(|(digest, binding)| {
                 (!binding.retired
-                    && ((binding.expires <= now
-                        && binding
-                            .enrollment
-                            .as_ref()
-                            .is_none_or(|enrollment| !enrollment.has_live_observer()))
-                        || binding
-                            .enrollment
-                            .as_ref()
-                            .is_some_and(|enrollment| !enrollment.origin.is_live())
+                    && (!binding.has_current_telemetry(now)
                         || self.find_pane_descriptor(&binding.pane_id).is_none()
                         || !self
                             .pane_process_identity_is_current(&binding.pane_id, &binding.process)))
@@ -546,7 +578,7 @@ impl RuntimeSessionService {
         let now = current_unix_seconds();
         self.control.external_agents().bindings.values().filter_map(|binding| {
             let registration = binding.registration.as_ref()?;
-            if binding.retired || binding.expires <= now || !self.pane_process_identity_is_current(&binding.pane_id, &binding.process) { return None; }
+            if !binding.has_current_telemetry(now) || !self.pane_process_identity_is_current(&binding.pane_id, &binding.process) { return None; }
             let descriptor = self.find_pane_descriptor(&binding.pane_id)?;
             Some(serde_json::json!({"agent_id":registration.agent_id.as_str(),"pane_id":binding.pane_id,
                 "window_id":descriptor.window_id.as_str(),"kind":"primary","harness":binding.harness,
@@ -554,6 +586,7 @@ impl RuntimeSessionService {
                 "objective":registration.objective,"generation":binding.generation,
                 "external_session_id":registration.external_session_id,"status":registration.presentation.as_ref().map_or("available", |observation| observation.state.as_str()),
                 "status_source":"external-reported",
+                "telemetry_health":binding.telemetry_health(),"usage_coverage":binding.usage_coverage(),
                 "presence_source":"renewable-telemetry-lease","controls":[],"native":false}))
         }).collect()
     }

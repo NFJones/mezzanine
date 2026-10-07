@@ -267,7 +267,7 @@ impl RuntimeSessionService {
             };
             let (harness, model, reasoning) =
                 self.agent_browser_execution_metadata(&id, pane, external.as_ref());
-            let metadata = vec![
+            let mut metadata = vec![
                 ("Name".into(), name.clone()),
                 ("Kind".into(), self.runtime_agent_kind(&id).as_str().into()),
                 ("Harness".into(), harness),
@@ -314,6 +314,24 @@ impl RuntimeSessionService {
                 ("Project status".into(), project.status),
                 ("Controls".into(), controls.into()),
             ];
+            if let Some(external) = &external {
+                metadata.extend([
+                    (
+                        "Telemetry health".into(),
+                        external["telemetry_health"]
+                            .as_str()
+                            .unwrap_or("unavailable")
+                            .into(),
+                    ),
+                    (
+                        "Usage coverage".into(),
+                        external["usage_coverage"]
+                            .as_str()
+                            .unwrap_or("unavailable")
+                            .into(),
+                    ),
+                ]);
+            }
             records.push(RecordBrowserRecord {
                 id: id.clone(),
                 open_command: None,

@@ -216,6 +216,8 @@ impl RuntimeSessionService {
                     "controls",
                     "native",
                     "generation",
+                    "telemetry_health",
+                    "usage_coverage",
                 ] {
                     row[field] = external[field].clone();
                 }

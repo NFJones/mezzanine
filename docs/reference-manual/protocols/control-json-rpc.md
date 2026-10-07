@@ -652,6 +652,17 @@ observer endpoints permit reconnect without holding socket descriptors; old
 connection closure cannot erase a healthy observer. When every observer is lost,
 automatic renewal stops and the last lease can expire even with a live producer.
 Explicit primary-launched leases keep their existing caller-renewal contract.
+Read-only discovery metadata applies the same rule without renewing or retiring:
+overdue qualified connected observers remain visible until maintenance catches
+up, while a dead ordinary producer disappears even before identity retirement.
+Browser refresh may reconcile lifecycle before projecting its snapshot.
+External rows expose server-derived `telemetry_health`: `enrolled` for a live
+qualified observer, `connection-lost` for a missing observer within its remaining
+lease, and `lease-active` for a legacy caller-renewed launch. This is separate
+from the last vendor-reported `status`; connection loss does not mean completion
+or producer death. Browser details and agent discovery include the same health
+and `usage_coverage`, which is `unavailable-source-continuity` for ordinary runs
+or `external-reported` for legacy reports (not exhaustive invoice evidence).
 `usage: "unavailable-source-continuity"` is explicit: ordinary usage RPCs are
 rejected until durable source continuity exists, not billed under fresh owners.
 

@@ -330,6 +330,16 @@ reconnect; stale closure MUST NOT erase another connected observer. Lost observe
 health stops automatic renewal; expiry still means unavailable telemetry rather
 than producer death. Legacy explicit-launch leases remain caller-renewed. This
 idle coordination adds no new global per-callback scan or procfs observer lookup.
+Read-only discovery metadata projection MUST use that same live-telemetry rule
+without renewing leases or retiring identities. Existing browser refresh MAY
+reconcile lifecycle before capturing its snapshot. An overdue qualified connected ordinary
+observer MUST remain visible before delayed maintenance; a dead ordinary
+producer MUST not remain visible under a surviving pane shell's lease.
+External discovery rows and browser details MUST distinguish server-derived
+`telemetry_health` (`enrolled`, `connection-lost`, or legacy `lease-active`) from
+the vendor-reported status. Connection loss is not completion or process death.
+`usage_coverage` MUST explicitly report `unavailable-source-continuity` for
+ordinary enrollment; legacy `external-reported` is not exhaustive billing proof.
 Ordinary usage MUST remain explicitly unavailable until durable source continuity
 is implemented, rather than permitting fresh-owner historical recharge. This
 slice does not complete all-vendor activation, helper/shared-server association,

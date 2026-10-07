@@ -125,6 +125,15 @@ profile, or the selected scoped profile when idle. An unset reasoning level is
 `—`, not off. Unknown profile evidence is `unavailable`. External harness labels
 come from validated launch bindings; their model and reasoning remain unavailable
 under the current telemetry contract. Metadata grants no lifecycle authority.
+External details also expose **Telemetry health** and **Usage coverage**, separate
+from the last reported State. Ordinary observers report `enrolled` while their
+qualified transport remains live or `connection-lost` during a remaining lease;
+legacy launches report `lease-active`. These are not process-death or completion
+claims. Ordinary usage remains `unavailable-source-continuity`; legacy
+`external-reported` coverage is not exhaustive billing proof. Reads do not renew
+leases, and dead ordinary producers are omitted even before maintenance retires
+their registrations. A delayed maintenance tick does not hide a still-qualified
+connected ordinary observer merely because its last lease deadline passed.
 
 List help and feedback wrap to the available width without changing record
 identity or saved Markdown. Long unbreakable help tokens may split across rows.

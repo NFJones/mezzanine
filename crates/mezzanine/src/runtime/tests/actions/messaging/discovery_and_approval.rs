@@ -116,6 +116,66 @@ fn runtime_list_agents_defaults_to_primary_and_includes_self() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Model-facing discovery must preserve server-derived external health and
+/// coverage rather than losing them in its bounded projection. Registration
+/// uses the production restricted capability ingress; metadata cannot add
+/// native controls or disclose the private handle, and native self rows stay
+/// free of external-only diagnostics.
+#[test]
+fn runtime_list_agents_preserves_external_telemetry_health_without_native_powers() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let launch: serde_json::Value = serde_json::from_str(&service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"launch","method":"agent/external/launch","params":{"pane_id":"%1","harness":"codex","version":"fixture"}}"#, &primary,
+    )).unwrap();
+    assert!(launch.get("error").is_none());
+    let mut hook = crate::control::ControlConnectionState::new(true, false);
+    hook.bind_authenticated_peer(crate::control::AuthenticatedPeer::unix_user(
+        crate::runtime::current_effective_uid(),
+    ))
+    .unwrap();
+    let registration = serde_json::json!({"jsonrpc":"2.0","id":"register","method":"agent/external/register",
+        "params":{"launch_token":launch["result"]["launch_token"],"generation":launch["result"]["generation"],
+            "external_session_id":"health-fixture","display_name":"External health fixture"}});
+    let registered: serde_json::Value = serde_json::from_str(
+        &service.dispatch_runtime_control_body_for_connection(&registration.to_string(), &mut hook),
+    )
+    .unwrap();
+    assert!(registered.get("error").is_none());
+    assert!(!hook.initialized());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect session health")
+        .unwrap();
+    let turn = messaging_test_turn(&service, &started.turn_id);
+
+    let listed = execute_list_agents_action(&mut service, &turn, Some("all"), Some("session"));
+    let rows = listed["agents"].as_array().unwrap();
+    let external = rows
+        .iter()
+        .find(|row| row["agent_id"] == registered["result"]["agent_id"])
+        .unwrap();
+    assert_eq!(external["telemetry_health"], "lease-active");
+    assert_eq!(external["usage_coverage"], "external-reported");
+    assert_eq!(external["controls"], serde_json::json!([]));
+    assert_eq!(external["native"], false);
+    assert!(
+        !listed
+            .to_string()
+            .contains(launch["result"]["launch_token"].as_str().unwrap())
+    );
+    let native = rows.iter().find(|row| row["is_self"] == true).unwrap();
+    assert!(native.get("telemetry_health").is_none());
+    assert!(native.get("usage_coverage").is_none());
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Project-default discovery returns the requester and same-project peers,
 /// while an explicit session scope widens the same list without exposing roots.
 #[test]

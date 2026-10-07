@@ -554,6 +554,16 @@ fn runtime_external_presentation_immediate_root_replacement_hides_old_owner() {
             .metadata
             .contains(&("Reasoning".into(), "unavailable".into()))
     );
+    assert!(
+        external
+            .metadata
+            .contains(&("Telemetry health".into(), "lease-active".into()))
+    );
+    assert!(
+        external
+            .metadata
+            .contains(&("Usage coverage".into(), "external-reported".into()))
+    );
     assert!(targets[&external.id].lifecycle.is_none());
     service.terminate_all_pane_processes().unwrap();
     let descriptor = service.find_pane_descriptor("%1").unwrap();
@@ -891,6 +901,8 @@ fn runtime_external_registration_is_restricted_retry_safe_and_exact() {
         .unwrap();
     assert_eq!(row["harness"], "codex");
     assert_eq!(row["controls"], serde_json::json!([]));
+    assert_eq!(row["telemetry_health"], "lease-active");
+    assert_eq!(row["usage_coverage"], "external-reported");
     assert!(!list.to_string().contains(token));
     let second: serde_json::Value =
         serde_json::from_str(&service.dispatch_runtime_control_body(launch_request, &primary))

@@ -1151,6 +1151,7 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+mod health;
 mod observer_epochs;
 mod persistent_client;
 mod pi_observation;
