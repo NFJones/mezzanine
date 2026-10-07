@@ -1383,6 +1383,8 @@ pub struct AsyncFakeAttachedTerminalIo {
     input_batches: VecDeque<Vec<u8>>,
     /// Number of input reads that should remain pending until caller timeout.
     pending_input_reads: usize,
+    /// Keeps absent input pending through arbitrary cancellation/retry counts.
+    input_open_when_empty: bool,
     /// Stores the terminal size batches value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -1414,6 +1416,13 @@ impl AsyncFakeAttachedTerminalIo {
     /// Adds one input read that remains pending until the caller times out.
     pub fn push_pending_input_read(&mut self) {
         self.pending_input_reads = self.pending_input_reads.saturating_add(1);
+    }
+
+    /// Models a live terminal with no queued input, rather than manufacturing
+    /// EOF after a finite number of canceled readiness waits. Default behavior
+    /// remains EOF-on-empty for fixtures explicitly testing disconnect.
+    pub fn keep_input_open(&mut self) {
+        self.input_open_when_empty = true;
     }
 
     /// Installs a notification emitted after the fake captures a frame.
@@ -1451,6 +1460,9 @@ impl AsyncAttachedTerminalIo for AsyncFakeAttachedTerminalIo {
                 self.pending_input_reads -= 1;
                 tokio::time::sleep(Duration::from_secs(60 * 60)).await;
                 return Ok(Vec::new());
+            }
+            if self.input_batches.is_empty() && self.input_open_when_empty {
+                return std::future::pending().await;
             }
             let mut input = self.input_batches.pop_front().unwrap_or_default();
             input.truncate(max_bytes);
@@ -1530,6 +1542,31 @@ impl AsyncAttachedTerminalIo for AsyncFakeAttachedTerminalIo {
 
 #[cfg(test)]
 mod tests {
+    /// Explicitly open test input remains pending through canceled read futures
+    /// rather than producing artificial EOF on the ninth attempt. Queued bytes
+    /// still arrive, and ordinary default fixtures retain EOF-on-empty behavior.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn fake_terminal_open_input_survives_cancellation_without_eof() {
+        use super::{AsyncAttachedTerminalIo, AsyncFakeAttachedTerminalIo};
+        let mut input = AsyncFakeAttachedTerminalIo::default();
+        assert!(input.read_input(16).await.unwrap().is_empty());
+        input.keep_input_open();
+        for _ in 0..16 {
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(1), input.read_input(16))
+                    .await
+                    .is_err()
+            );
+        }
+        input.push_input(b"authored".to_vec());
+        assert_eq!(input.read_input(16).await.unwrap(), b"authored");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(1), input.read_input(16))
+                .await
+                .is_err()
+        );
+    }
+
     use super::{
         ATTACHED_TERMINAL_OUTPUT_WRITE_RECOVERY_FLUSHES, AsyncTerminalOutputWriteReport,
         AttachedTerminalOutputWriteBudget, DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,

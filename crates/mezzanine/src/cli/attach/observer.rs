@@ -534,9 +534,7 @@ mod pushed_snapshot_tests {
         );
         let mut event_server = tokio::net::UnixStream::from_std(event_server).unwrap();
         let mut terminal_io = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
-        for _ in 0..8 {
-            terminal_io.push_pending_input_read();
-        }
+        terminal_io.keep_input_open();
         let (settled, settlement) = tokio::sync::oneshot::channel();
         let server = async move {
             for text in ["initial", "latest"] {
