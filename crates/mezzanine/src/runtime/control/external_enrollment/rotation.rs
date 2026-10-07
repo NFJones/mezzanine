@@ -109,6 +109,7 @@ impl RuntimeSessionService {
         if let Some(registration) = &mut binding.registration {
             registration.presentation = None;
         }
+        binding.pi_lifecycle = None;
         binding.generation = generation;
         binding.expires = current_unix_seconds().saturating_add(60);
         let response = enrollment_response(&binding, &enrollment, &work.session_id);

@@ -17,6 +17,8 @@ pub(crate) mod codex;
     reason = "owned hook checkpoint exposes no standalone mutation interface"
 )]
 pub(crate) mod codex_artifact;
+/// Retains exact compiled historical source bytes, not active vendor entries.
+mod history;
 #[allow(
     dead_code,
     reason = "release-qualified vendor adapters consume the common installer"
@@ -109,9 +111,9 @@ pub(crate) fn compiled_manifest(
     }
 }
 
-/// Recognizes only exact immediately preceding compiled artifact sets for the
-/// shared-client addition. Receipts cannot supply historical authority. Older
-/// byte variants and interrupted old-target recovery remain installer work.
+/// Recognizes exact shipped predecessors using independent frozen source bytes.
+/// Receipts cannot supply authority; older byte variants/old-target recovery
+/// remain installer work, and unknown fixed-helper references fail closed.
 pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer::Manifest> {
     let (current, revision, paths) = match manifest.harness.as_str() {
         "pi" => (
@@ -136,12 +138,31 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         return Vec::new();
     }
     let mut previous = current;
+    previous.revision = revision + 1;
+    previous
+        .entries
+        .retain(|entry| entry.path != "extensions/mezzanine/pi_persistent.mjs");
+    for entry in &mut previous.entries {
+        let frozen = if entry.path == "extensions/mezzanine/index.mjs" {
+            Some(history::PI_ENTRY_V3)
+        } else if entry.path.ends_with("/persistent_client.mjs") {
+            Some(history::PERSISTENT_CLIENT_V1)
+        } else {
+            None
+        };
+        if let Some(bytes) = frozen {
+            entry.artifact = reconciliation::Artifact::File {
+                bytes: bytes.to_vec(),
+            };
+        }
+    }
+    let immediate = previous.clone();
     previous.revision = revision;
     previous
         .entries
         .retain(|entry| !paths.contains(&entry.path.as_str()));
     if compiled_predecessor_matches(&previous) {
-        vec![previous]
+        vec![immediate, previous]
     } else {
         Vec::new()
     }

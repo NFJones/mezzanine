@@ -1,4 +1,95 @@
-/** Restricted ordinary-producer lifecycle transport. Loading performs no I/O.
+//! Immutable shipped source bytes used only for exact historical ownership.
+//!
+//! These snapshots are data, not active entry points. Keeping them independent of
+//! current source prevents future edits from redefining accepted old manifests.
+//! Fixed helper references remain generated for the installing executable only;
+//! unknown historical paths/bytes never become installer authority.
+
+/// Exact Pi entry bytes shipped in revisions 2 and 3 before ordinary activation.
+pub(super) const PI_ENTRY_V3: &[u8] = br#"/**
+ * Best-effort Pi directory-extension entry point.
+ *
+ * Only an explicitly selected session and inherited observation socket can
+ * enable this observer. Environment markers are discovery hints, not daemon
+ * credentials or authority. Factory loading opens no descriptor or timer.
+ * A private launcher must supply descriptor 3; missing, stale or duplicate
+ * binding stays neutral. Same-session reload leases the process-owned stream
+ * once the old extension releases it; daemon capabilities never cross this link.
+ */
+import { Socket } from "node:net";
+import { fstatSync } from "node:fs";
+import { createPiStreamExtension } from "./pi_extension.mjs";
+import { createPiBindingExtension } from "./pi_binding.mjs";
+
+const channelOwner = Symbol.for("mezzanine.pi.observer-descriptor.v1");
+
+/** Acquire one instance lease from a process-owned observation channel. Reload
+ * releases only that lease; the fd and neutral error handler survive. Duplicate
+ * loads cannot borrow an active channel, and a closed channel never reopens. */
+export function acquireProcessObserverChannel(state, openStream, startReason) {
+  if (state.closed || state.lease) throw new Error("Pi observer channel unavailable");
+  if (startReason !== undefined && ((!state.stream && startReason !== "startup")
+      || (state.stream && state.transition !== startReason))) throw new Error("Pi observer transition unavailable");
+  if (!state.stream) {
+    state.stream = openStream();
+    state.stream.on("error", () => { state.closed = true; });
+    state.stream.on("close", () => { state.closed = true; });
+  }
+  const lease = {};
+  const epoch = (state.epoch ?? 0) + 1;
+  if (!Number.isSafeInteger(epoch)) throw new Error("Pi observer epoch exhausted");
+  state.epoch = epoch;
+  state.lease = lease;
+  state.transition = undefined;
+  return { stream: state.stream, epoch, persistent: true, fail() {
+    if (state.lease !== lease) return;
+    state.closed = true;
+    try { state.stream.end(); } catch { /* no vendor behavior change */ }
+  }, close(reason) {
+    if (state.lease !== lease) return;
+    state.lease = undefined;
+    state.transition = reason;
+    if (!["reload", "new", "resume", "fork"].includes(reason)) { state.closed = true; state.stream.end(); }
+  } };
+}
+
+/** Registers an explicitly bound observer without opening its stream. */
+export function registerInheritedObserver(pi, binding, open) {
+  if (binding?.descriptor !== "3" || typeof binding.session !== "string"
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,126}[A-Za-z0-9]$|^[A-Za-z0-9]$/.test(binding.session)
+      || typeof open !== "function") return;
+  createPiStreamExtension(binding.session, open)(pi);
+}
+
+/** Released-loader entry: missing launch markers leave the extension inert. */
+export default function mezzaninePiObserver(pi) {
+  if (process.env.MEZ_PI_OBSERVER_PROTOCOL === "2") {
+    const binding = { descriptor: process.env.MEZ_PI_OBSERVER_FD, session: process.env.MEZ_PI_OBSERVER_SESSION };
+    if (binding.descriptor !== "3" || typeof binding.session !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(binding.session)) return;
+    createPiBindingExtension(binding.session, (reason) => {
+      const state = globalThis[channelOwner] ??= {};
+      return acquireProcessObserverChannel(state, () => {
+        if (!fstatSync(3).isSocket()) throw new Error("Pi observer channel unavailable");
+        return new Socket({ fd: 3, readable: false, writable: true });
+      }, reason);
+    })(pi);
+    return;
+  }
+  registerInheritedObserver(pi, {
+    descriptor: process.env.MEZ_PI_OBSERVER_FD,
+    session: process.env.MEZ_PI_OBSERVER_SESSION,
+  }, () => {
+    const state = globalThis[channelOwner] ??= {};
+    return acquireProcessObserverChannel(state, () => {
+      if (!fstatSync(3).isSocket()) throw new Error("Pi observer channel unavailable");
+      return new Socket({ fd: 3, readable: false, writable: true });
+    });
+  });
+}
+"#;
+
+/// Exact shared-client bytes shipped with Pi revision 3/OpenCode revision 2.
+pub(super) const PERSISTENT_CLIENT_V1: &[u8] = br#"/** Restricted ordinary-producer lifecycle transport. Loading performs no I/O.
  * The producer owns its socket and sends allowlisted metadata directly; a fixed
  * native helper only verifies peer UID on a borrowed descriptor. No vendor
  * launch, general initialize/RPC, transcript reads, output pollution or usage
@@ -18,32 +109,6 @@ const unavailable = () => ({ delivered: false, reason: "telemetry-unavailable" }
 // no event-loop reference and is removed when the finite set becomes empty.
 const peerChecks = new Set();
 const cancelPeerChecks = () => { for (const cancel of [...peerChecks]) cancel(); };
-
-/** Reprojects only inert known Pi fields; arbitrary callback objects/content are
- * discarded before transport. Daemon Event validation remains authoritative. */
-function piFact(input) {
-  try {
-    if (!input || typeof input !== "object" || Array.isArray(input) || !Object.hasOwn(input, "type")) return;
-    const type = input.type;
-    if (["agent_start", "agent_settled"].includes(type)) return { type };
-    if (["session_start", "session_shutdown"].includes(type)) {
-      const allowed = type === "session_start" ? ["startup", "reload", "new", "resume", "fork"] : ["quit", "reload", "new", "resume", "fork"];
-      const reason = Object.hasOwn(input, "reason") ? input.reason : undefined;
-      if (allowed.includes(reason)) return { type, reason };
-    }
-    if (["ui_prompt_start", "ui_prompt_end"].includes(type)) {
-      const reason = Object.hasOwn(input, "reason") ? input.reason : undefined;
-      const kind = Object.hasOwn(input, "kind") ? input.kind : undefined;
-      if (reason === "ui_prompt" && ["select", "confirm", "input", "editor", "custom"].includes(kind)) {
-        return { type, reason, kind };
-      }
-    }
-    if (type === "agent_before_settle") {
-      const outcome = Object.hasOwn(input, "outcome") ? input.outcome : undefined;
-      if (["completed", "aborted", "error"].includes(outcome)) return { type, outcome };
-    }
-  } catch { /* telemetry input failure is neutral */ }
-}
 
 /** Reject duplicate keys (including escaped aliases) before JSON.parse can
  * overwrite them. Depth is finite; JSON.parse owns the remaining grammar. */
@@ -180,7 +245,6 @@ export function createPersistentTelemetryClient(options) {
   let buffer = Buffer.alloc(0);
   let disposed = false;
   let verifier;
-  let projectionMode;
 
   const lose = current => {
     if (current !== attempt) return;
@@ -287,27 +351,13 @@ export function createPersistentTelemetryClient(options) {
     status() { return Object.freeze({ phase, usage: "unavailable-source-continuity",
       run: handle?.run, epoch: handle?.epoch }); },
     presentation(state) {
-      if (!states.has(state) || projectionMode === "pi") return Promise.resolve(unavailable());
-      projectionMode = "generic";
+      if (!states.has(state)) return Promise.resolve(unavailable());
       return enqueue(async () => {
         if (!await start() || !Number.isSafeInteger(sequence + 1)) return unavailable();
         const result = await exchange("agent/external/presentation", { ...params(), sequence: ++sequence, state }, attempt);
         const accepted = result && typeof result.changed === "boolean" && result.sequence === sequence;
         if (!accepted) lose(attempt);
         return accepted ? { delivered: true } : unavailable();
-      });
-    },
-    piObservation(input) {
-      const event = metadata.harness === "pi" && piFact(input);
-      if (!event || projectionMode === "generic") return Promise.resolve(unavailable());
-      projectionMode = "pi";
-      return enqueue(async () => {
-        if (!await start() || !Number.isSafeInteger(sequence + 1)) return unavailable();
-        const result = await exchange("agent/external/pi-observation", { ...params(), sequence: ++sequence, event }, attempt);
-        const accepted = result?.accepted === true && result.sequence === sequence && typeof result.retired === "boolean";
-        if (!accepted) lose(attempt);
-        if (accepted && result.retired) { disposed = true; lose(attempt); }
-        return accepted ? { delivered: true, retired: result.retired } : unavailable();
       });
     },
     successor(instance) {
@@ -326,9 +376,35 @@ export function createPersistentTelemetryClient(options) {
         return result?.retired === true ? { delivered: true } : unavailable();
       });
     },
-    // Resource cancellation retains exact immutable attempt identity for later
-    // caller-owned recovery. It never retries work or transfers a successor.
-    disconnect() { lose(attempt); },
     detach() { disposed = true; lose(attempt); },
   });
+}
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    /// Historical data must remain byte-identical to the shipped inspected
+    /// sources, independently of later active entry/client implementation edits.
+    #[test]
+    fn bootstrap_history_source_snapshots_are_immutable() {
+        for (bytes, expected) in [
+            (
+                PI_ENTRY_V3,
+                "d8ac6138a1f2500609cb093ca27022f922a40e7f46dcc6f7a7a7a008c7f02257",
+            ),
+            (
+                PERSISTENT_CLIENT_V1,
+                "6affabd322422a5572973d2bd743086b5f6632154aa89e51b35e473aa92474a0",
+            ),
+        ] {
+            let actual = Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            assert_eq!(actual, expected);
+        }
+    }
 }

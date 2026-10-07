@@ -53,6 +53,8 @@ pub(super) struct LaunchBinding {
     pub(super) accounting_origin: crate::storage::token_usage::AccountingOrigin,
     /// Ordinary lifecycle credentials remain tied to the exact producer.
     pub(super) enrollment: Option<super::external_enrollment::EnrollmentBinding>,
+    /// Ordinary Pi reducer/receipt owner, isolated from generic presentation.
+    pub(super) pi_lifecycle: Option<super::pi_observation::PiLifecycleProjection>,
 }
 
 /// Immutable registration metadata, bound to a single server-issued launch.
@@ -197,6 +199,7 @@ impl RuntimeSessionService {
                 accounting_owner: crate::storage::token_usage::new_token_usage_event_id(),
                 accounting_origin,
                 enrollment: None,
+                pi_lifecycle: None,
             },
         );
         Ok(
@@ -249,6 +252,9 @@ impl RuntimeSessionService {
             enrollment.authorize(connection)?;
         }
         if binding.retired {
+            if request.method == "agent/external/pi-observation" {
+                return self.apply_external_pi_observation(digest, request);
+            }
             let session = text(&params, "external_session_id", 128)?;
             if binding
                 .registration
@@ -265,8 +271,17 @@ impl RuntimeSessionService {
             ));
         }
         let result = match request.method.as_str() {
+            "agent/external/pi-observation" => self.apply_external_pi_observation(digest, request),
             "agent/external/register" => self.register_external_agent(digest, &params),
-            "agent/external/presentation" => self.update_external_presentation(digest, &params),
+            "agent/external/presentation" => {
+                if binding.pi_lifecycle.is_some() {
+                    Err(MezError::conflict(
+                        "external Pi lifecycle owns presentation sequence",
+                    ))
+                } else {
+                    self.update_external_presentation(digest, &params)
+                }
+            }
             "agent/external/renew" => {
                 let external_session_id = text(&params, "external_session_id", 128)?;
                 let binding = self

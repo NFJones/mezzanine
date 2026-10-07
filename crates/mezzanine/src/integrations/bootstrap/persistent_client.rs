@@ -65,8 +65,8 @@ mod tests {
         );
     }
 
-    /// Exact predecessor upgrades add only the private client/helper siblings;
-    /// arbitrary receipt bytes cannot masquerade as compiled historical authority.
+    /// Exact predecessor upgrades install current private siblings and entry
+    /// wiring; arbitrary receipts cannot masquerade as compiled old authority.
     #[test]
     fn persistent_client_artifact_upgrade_recognizes_exact_previous_revision() {
         use super::super::installer::{Operation, plan};
@@ -110,6 +110,27 @@ mod tests {
             let mut foreign = current.clone();
             foreign.revision += 99;
             assert!(super::super::compiled_history(&foreign).is_empty());
+            std::fs::remove_dir_all(root).unwrap();
+            let immediate = super::super::compiled_history(&current).remove(0);
+            let root = std::env::temp_dir().join(format!(
+                "mez-client-immediate-upgrade-{}",
+                crate::storage::token_usage::new_token_usage_event_id()
+            ));
+            std::fs::create_dir(&root).unwrap();
+            plan(&root, &immediate, Operation::Install)
+                .unwrap()
+                .apply()
+                .unwrap();
+            plan(&root, &current, Operation::Install)
+                .unwrap()
+                .apply()
+                .unwrap();
+            assert!(
+                plan(&root, &current, Operation::Install)
+                    .unwrap()
+                    .changed_paths()
+                    .is_empty()
+            );
             std::fs::remove_dir_all(root).unwrap();
         }
     }

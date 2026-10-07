@@ -318,8 +318,8 @@ than producer death. Legacy explicit-launch leases remain caller-renewed. This
 idle coordination adds no new global per-callback scan or procfs observer lookup.
 Ordinary usage MUST remain explicitly unavailable until durable source continuity
 is implemented, rather than permitting fresh-owner historical recharge. This
-slice does not complete installed adapter activation, helper/shared-server
-association, installed reload/session-transition wiring or macOS admission.
+slice does not complete all-vendor activation, helper/shared-server association,
+durable usage continuity or macOS admission.
 `agent/external/presentation` MUST require the same capability, generation and
 external session binding. Positive observation sequences MUST reject stale or
 conflicting updates; identical replay MUST be inert. Bounded title suggestions
@@ -431,6 +431,23 @@ outcomes MUST NOT publish terminal presentation before settlement, and duplicate
 settlement MUST NOT erase its accepted outcome. Reload replacement stays bound
 to the same session; a new session requires separately authorized ownership.
 These reducer guarantees alone MUST NOT imply working transport or renewal.
+The ordinary installed Pi default entry MUST obtain its session from current
+callback context and use the verified persistent client, not vendor FD3,
+launcher markers, preallocated session IDs or private helper environment. Loading
+MUST register only observational callbacks and perform no socket/timer I/O. A
+bounded process-owned lease/queue MUST serialize same-session reload and genuine
+new/resume/fork teardown/start handoff; duplicate loads and old/child callbacks
+MUST NOT borrow the active lease. A lost replacement reply MUST retain the exact
+attempted instance for recovery, never guess an old predecessor or revive it.
+`agent/external/pi-observation` MUST require ordinary Pi producer-bound authority,
+exact session/generation, a positive contiguous observation sequence and the
+strict existing Pi Event enum. Raw nested duplicate fields MUST remain available
+for typed rejection. Its daemon-owned LifecycleOwner MUST distinguish provisional
+outcomes from settled results and restore input-wait state without vendor mutation.
+Exact latest replay MUST return the original bounded acknowledgment; conflicting,
+older/gapped or content-bearing facts MUST NOT change state. Typed Pi and generic
+presentation sources MUST NOT mix in an observer epoch; rotation resets both.
+This lifecycle delivery is not durable usage commitment or exhaustive token support.
 The Pi capability-only Unix transport MUST consume explicitly supplied private
 authority without initializing a primary or minting a launch. One 500 ms total
 deadline MUST cover connect, write and strict bounded reply decoding. Only a

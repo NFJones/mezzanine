@@ -111,3 +111,20 @@ fn connection_idempotency_replays_completed_error_responses() {
     );
     assert_eq!(cache.len(), 1);
 }
+
+/// Typed Pi ingress must see original nested fields: materializing params as a
+/// generic Value first would overwrite duplicate event keys before validation.
+/// The fixed Pi wire envelope also rejects ambiguous duplicated root metadata.
+#[test]
+fn control_pi_observation_preserves_raw_nested_duplicate_validation() {
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"agent/external/pi-observation","params":{"launch_token":"test","generation":1,"external_session_id":"session-a","sequence":1,"event":{"type":"agent_start","type":"agent_start"}}}"#;
+    let request = parse_json_rpc_request(body).unwrap();
+    let params = request.params.unwrap();
+    assert_eq!(
+        params.matches("\"type\"").count(),
+        2,
+        "parser erased typed duplicate evidence"
+    );
+    let duplicate = r#"{"jsonrpc":"2.0","id":1,"method":"agent/external/pi-observation","method":"agent/external/pi-observation","params":{}}"#;
+    assert!(parse_json_rpc_request(duplicate).is_err());
+}

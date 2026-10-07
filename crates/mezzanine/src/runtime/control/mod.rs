@@ -19,6 +19,7 @@ mod lifecycle;
 mod live_snapshot;
 mod message;
 mod mutations;
+mod pi_observation;
 mod protocol;
 mod remote;
 mod snapshot;
@@ -1414,6 +1415,7 @@ impl RuntimeSessionService {
                 | "agent/external/renew"
                 | "agent/external/deregister"
                 | "agent/external/presentation"
+                | "agent/external/pi-observation"
         ) {
             return match self.dispatch_external_agent_request(&request, connection) {
                 Ok(result) => format!(

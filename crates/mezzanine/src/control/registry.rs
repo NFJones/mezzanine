@@ -602,6 +602,17 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         ]),
     },
     ControlMethodSpec {
+        method: "agent/external/pi-observation",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "launch_token",
+            "generation",
+            "external_session_id",
+            "sequence",
+            "event",
+        ]),
+    },
+    ControlMethodSpec {
         method: "agent/spawn",
         dispatch: ControlDispatchKind::AgentSpawn,
         params_schema: ControlParamsSchema::Allowed(&[

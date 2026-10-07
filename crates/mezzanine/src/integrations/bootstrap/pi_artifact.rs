@@ -3,9 +3,9 @@
 //! The released 1.0.2 loader discovers one package entry, with private sibling
 //! modules that are not standalone extension candidates. Exact file ownership
 //! reuses the common installer; no settings, vendor dependency, shell profile,
-//! trust decision or capability is installed. Private shared client/helper
-//! siblings are deployed, while the current entry's descriptor activation remains
-//! legacy fixture plumbing; ordinary vendor entry migration is unfinished.
+//! trust decision or capability is installed. The ordinary default entry uses
+//! genuine callback context plus the native-qualified shared client; it needs no
+//! vendor observer descriptor or launcher markers. Token coverage stays unavailable.
 
 use super::installer::Manifest;
 use super::reconciliation::{Artifact, Entry};
@@ -22,6 +22,7 @@ pub(crate) fn candidate_manifest() -> Manifest {
         ("pi_extension.mjs", include_bytes!("pi_extension.mjs")),
         ("pi_binding.mjs", include_bytes!("pi_binding.mjs")),
         ("pi_observer.mjs", include_bytes!("pi_observer.mjs")),
+        ("pi_persistent.mjs", include_bytes!("pi_persistent.mjs")),
         (
             "pi_observer_stream.mjs",
             include_bytes!("pi_observer_stream.mjs"),
@@ -39,7 +40,7 @@ pub(crate) fn candidate_manifest() -> Manifest {
     entries.extend(super::persistent_client::entries("extensions/mezzanine"));
     Manifest {
         harness: "pi".into(),
-        revision: 3,
+        revision: 4,
         vendor_version: super::pi::RELEASE.into(),
         entries,
     }

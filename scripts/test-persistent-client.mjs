@@ -202,3 +202,20 @@ test("unsafe/malformed replies and bounded callback pressure lose telemetry only
     assert(f.requests.length <= 32, "unbounded producer retry pressure");
   } finally { client.detach(); await f.close(); }
 });
+
+test("Pi fact transport captures getter selectors once and isolates generic sources", async () => {
+  const f = await fixture(request => request.method === "agent/external/enroll" ? enrollment(request)
+    : { accepted: true, sequence: request.params.sequence, retired: false });
+  const client = createPersistentTelemetryClient(f.options);
+  try {
+    let reads = 0;
+    const event = { type: "session_start", prompt: "PRIVATE",
+      get reason() { return ++reads === 1 ? "startup" : "PRIVATE"; } };
+    assert.equal((await client.piObservation(event)).delivered, true);
+    assert.equal(reads, 1);
+    assert.deepEqual(f.requests.at(-1).params.event, { type: "session_start", reason: "startup" });
+    assert(!JSON.stringify(f.requests).includes("PRIVATE"));
+    assert.equal((await client.presentation("running")).delivered, false);
+    assert.equal((await client.piObservation({ type: "agent_end" })).delivered, false);
+  } finally { client.detach(); await f.close(); }
+});

@@ -1,19 +1,13 @@
 /**
  * Best-effort Pi directory-extension entry point.
  *
- * Only an explicitly selected session and inherited observation socket can
- * enable this observer. Environment markers are discovery hints, not daemon
- * credentials or authority. Factory loading opens no descriptor or timer.
- * A private launcher must supply descriptor 3; missing, stale or duplicate
- * binding stays neutral. Same-session reload leases the process-owned stream
- * once the old extension releases it; daemon capabilities never cross this link.
+ * Ordinary callback context selects the real session; native-qualified daemon
+ * enrollment supplies observational authority. Factory loading opens no socket
+ * or timer and needs no vendor FD3, launcher markers or preselected session.
+ * Legacy stream utility exports remain isolated fixtures, not default activation.
  */
-import { Socket } from "node:net";
-import { fstatSync } from "node:fs";
 import { createPiStreamExtension } from "./pi_extension.mjs";
-import { createPiBindingExtension } from "./pi_binding.mjs";
-
-const channelOwner = Symbol.for("mezzanine.pi.observer-descriptor.v1");
+import { registerOrdinaryPiObserver } from "./pi_persistent.mjs";
 
 /** Acquire one instance lease from a process-owned observation channel. Reload
  * releases only that lease; the fd and neutral error handler survive. Duplicate
@@ -53,28 +47,7 @@ export function registerInheritedObserver(pi, binding, open) {
   createPiStreamExtension(binding.session, open)(pi);
 }
 
-/** Released-loader entry: missing launch markers leave the extension inert. */
+/** Ordinary released-loader entry; standard route hints alone grant no authority. */
 export default function mezzaninePiObserver(pi) {
-  if (process.env.MEZ_PI_OBSERVER_PROTOCOL === "2") {
-    const binding = { descriptor: process.env.MEZ_PI_OBSERVER_FD, session: process.env.MEZ_PI_OBSERVER_SESSION };
-    if (binding.descriptor !== "3" || typeof binding.session !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(binding.session)) return;
-    createPiBindingExtension(binding.session, (reason) => {
-      const state = globalThis[channelOwner] ??= {};
-      return acquireProcessObserverChannel(state, () => {
-        if (!fstatSync(3).isSocket()) throw new Error("Pi observer channel unavailable");
-        return new Socket({ fd: 3, readable: false, writable: true });
-      }, reason);
-    })(pi);
-    return;
-  }
-  registerInheritedObserver(pi, {
-    descriptor: process.env.MEZ_PI_OBSERVER_FD,
-    session: process.env.MEZ_PI_OBSERVER_SESSION,
-  }, () => {
-    const state = globalThis[channelOwner] ??= {};
-    return acquireProcessObserverChannel(state, () => {
-      if (!fstatSync(3).isSocket()) throw new Error("Pi observer channel unavailable");
-      return new Socket({ fd: 3, readable: false, writable: true });
-    });
-  });
+  registerOrdinaryPiObserver(pi);
 }

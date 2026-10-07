@@ -467,6 +467,7 @@ impl RuntimeSessionService {
                     observers: vec![Arc::downgrade(&work.origin)],
                     token: SecretString::from(token),
                 }),
+                pi_lifecycle: None,
             },
         );
         if let Err(error) = self.register_external_agent(

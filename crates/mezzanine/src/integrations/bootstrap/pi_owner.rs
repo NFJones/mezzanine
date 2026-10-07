@@ -36,6 +36,7 @@ pub(crate) enum Operation {
 }
 
 /// One immutable privately authorized session with replaceable observer epochs.
+#[derive(Debug, Clone)]
 pub(crate) struct LifecycleOwner {
     /// Unique reducer incarnation, not a credential or vendor session identity.
     incarnation: String,

@@ -642,11 +642,29 @@ The client is bounded, unreferenced, allowlisted and neutral on loss. It exposes
 typed lifecycle delivery, not ledger commitment or fabricated usage.
 
 Private installation pins the installing binary, not a PATH/launcher helper
-variable. Pi revision3/OpenCode revision2 add these siblings; exact previous
-Pi2/OpenCode1 receipts are recognized under frozen ownership fingerprints.
+variable. Pi revision4 adds ordinary entry wiring; OpenCode revision3 refreshes
+shared client bytes without activating its fd3-only entry. Exact Pi2/Pi3 and
+OpenCode1/OpenCode2 receipts use independently frozen old entry/client bytes.
 Other historical variants, recovery/default-root/dry-run UX remain installer work.
-This is a shared runtime/client slice, not a claim that released vendor plugin
-entry points already use it. Their reload/session-transition wiring, short-lived
+Ordinary installed Pi entry callbacks now use this verified transport, with a
+bounded process lease/queue and genuine sessionManager selection. Same-session
+reload rotates observer credentials; new/resume/fork retire the exact prior
+session before creating a fresh one. Duplicate/child/stale callbacks are inert,
+and a lost handoff preserves its exact attempted instance for later recovery.
+No vendor observer descriptor, launcher helper environment or forced session flag
+is required for this lifecycle path. Vendor trust/disabled-extension policy is
+not bypassed; supported Pi callback shapes remain best-effort observations.
+
+`agent/external/pi-observation` is restricted to ordinary Pi enrollment. It accepts
+the private token/generation/session, contiguous positive `sequence`, and one
+existing typed Pi `event` (maximum metadata4096/event1024 bytes). The original
+nested JSON is retained for duplicate-key rejection. The daemon reuses the Pi
+LifecycleOwner reducer, not a second JavaScript outcome state machine. Exact
+latest reply-loss replay is inert; gaps/conflicts/content and mixed generic
+presentation reject. Replies carry `accepted`, exact `sequence` and `retired`;
+these acknowledge lifecycle delivery only, not incurred-usage storage.
+
+OpenCode entry activation, additional vendor callbacks, short-lived
 helper association, shared/preexisting server session association and macOS
 lifetime/sender equivalents remain unfinished. Unsupported platforms/kernels
 retain ordinary control without enrollment; no vendor relaunch/fallback occurs.

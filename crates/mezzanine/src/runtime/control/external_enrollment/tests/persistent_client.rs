@@ -9,6 +9,41 @@ use super::*;
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and locally built mez helper required"]
 async fn external_enrollment_installed_persistent_node_client_owns_native_sender() {
+    qualify_installed_node_entry(
+        "persistent-client-ordinary-fixture.mjs",
+        "persistent_client.mjs",
+        2,
+        1,
+        false,
+    )
+    .await;
+}
+
+/// The actual installed Pi default factory activates ordinary callbacks with no
+/// vendor observer descriptor, wrapper markers or injected session binding.
+/// Reload keeps one run while new/resume/fork create exact fresh registrations.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and locally built mez helper required"]
+async fn external_enrollment_installed_ordinary_pi_entry_uses_daemon_reducer() {
+    qualify_installed_node_entry(
+        "pi-persistent-ordinary-fixture.mjs",
+        "index.mjs",
+        5,
+        4,
+        true,
+    )
+    .await;
+}
+
+/// Runs an explicit offline installed-artifact producer through real native
+/// sender, peer helper, protocol actor and lifecycle settlement ownership.
+async fn qualify_installed_node_entry(
+    script_name: &str,
+    entry_name: &str,
+    connections: usize,
+    bindings: usize,
+    typed_pi: bool,
+) {
     /// Removes only the unique offline install/socket fixture on every exit.
     struct Directory(std::path::PathBuf);
     impl Drop for Directory {
@@ -77,7 +112,8 @@ async fn external_enrollment_installed_persistent_node_client_owns_native_sender
     let mut service = RuntimeServiceFixture::new().control_socket(&path).build();
     service.start_initial_pane_process(None).unwrap();
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../scripts/persistent-client-ordinary-fixture.mjs")
+        .join("../../scripts")
+        .join(script_name)
         .canonicalize()
         .unwrap();
     let command = format!(
@@ -85,7 +121,8 @@ async fn external_enrollment_installed_persistent_node_client_owns_native_sender
         shlex::try_quote(node.to_str().unwrap()).unwrap(),
         shlex::try_quote(script.to_str().unwrap()).unwrap(),
         shlex::try_quote(
-            root.join("extensions/mezzanine/persistent_client.mjs")
+            root.join("extensions/mezzanine")
+                .join(entry_name)
                 .to_str()
                 .unwrap()
         )
@@ -106,7 +143,7 @@ async fn external_enrollment_installed_persistent_node_client_owns_native_sender
     let server = async {
         let mut tasks = tokio::task::JoinSet::new();
         let mut producer = None;
-        for _ in 0..2 {
+        for _ in 0..connections {
             let (mut stream, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
                 .await
                 .unwrap()
@@ -161,17 +198,49 @@ async fn external_enrollment_installed_persistent_node_client_owns_native_sender
     .await
     .unwrap();
     assert_eq!(exit.service.session().clients().len(), clients);
-    assert_eq!(exit.service.control.external_agents().bindings.len(), 1);
+    assert_eq!(
+        exit.service.control.external_agents().bindings.len(),
+        bindings
+    );
+    assert!(
+        exit.service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .all(|binding| binding.retired)
+    );
     let binding = exit
         .service
         .control
         .external_agents()
         .bindings
         .values()
-        .next()
+        .max_by_key(|binding| binding.generation)
         .unwrap();
     assert!(binding.retired);
-    assert_eq!(binding.enrollment.as_ref().unwrap().epoch, 2);
+    assert_eq!(
+        binding.enrollment.as_ref().unwrap().epoch,
+        if typed_pi { 1 } else { 2 }
+    );
+    if typed_pi {
+        assert!(
+            exit.service
+                .control
+                .external_agents()
+                .bindings
+                .values()
+                .all(|binding| binding.pi_lifecycle.is_some())
+        );
+        assert!(
+            exit.service
+                .control
+                .external_agents()
+                .bindings
+                .values()
+                .any(|binding| binding.enrollment.as_ref().unwrap().epoch == 2)
+        );
+    }
     assert_eq!(
         binding
             .registration

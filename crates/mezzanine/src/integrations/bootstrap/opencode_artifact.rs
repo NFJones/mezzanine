@@ -10,7 +10,7 @@ pub(crate) fn manifest() -> Manifest {
     let mut manifest = Manifest {
         harness: "opencode".into(),
         vendor_version: "best-effort".into(),
-        revision: 2,
+        revision: 3,
         entries: vec![
             Entry {
                 path: "plugins/mezzanine.js".into(),

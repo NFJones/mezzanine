@@ -317,6 +317,28 @@ pub fn parse_json_rpc_request(body: &str) -> Result<JsonRpcRequest> {
         None => None,
     };
 
+    let params = if method == "agent/external/pi-observation" {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct PiWire {
+            /// Version and method are validated above; deriving catches duplicates.
+            #[serde(rename = "jsonrpc")]
+            _version: String,
+            /// Exact inert method spelling, already validated.
+            #[serde(rename = "method")]
+            _method: String,
+            /// Original reply identity, already validated.
+            #[serde(rename = "id")]
+            _id: serde_json::Value,
+            /// Original nested bytes retain duplicate keys for typed Pi validation.
+            params: Option<Box<serde_json::value::RawValue>>,
+        }
+        let wire: PiWire = serde_json::from_str(body)
+            .map_err(|_| MezError::invalid_args("Pi observation wire envelope is ambiguous"))?;
+        wire.params.map(|params| params.get().to_string())
+    } else {
+        params
+    };
     Ok(JsonRpcRequest { id, method, params })
 }
 
