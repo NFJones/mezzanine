@@ -29,17 +29,50 @@ pub(crate) struct UnixOriginProcess {
     pub(super) identity: ProcessParentIdentity,
     /// Connection-origin pidfd; never a newly opened pidfd for a numeric PID.
     lifetime: OwnedFd,
+    /// Unseen(0), sender-confirmed(1), or permanently unavailable/poisoned(2).
+    writer: std::sync::atomic::AtomicU8,
 }
 
 impl UnixOriginProcess {
+    /// Records kernel evidence for consumed bytes. A mismatch never recovers on
+    /// this connection, so buffered mixed-origin frames cannot gain admission.
+    pub(super) fn record_writer(&self, matches: bool) {
+        use std::sync::atomic::Ordering;
+        if matches {
+            let _ = self
+                .writer
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+        } else {
+            self.writer.store(2, Ordering::SeqCst);
+        }
+    }
+
+    /// Returns true only after every consumed segment has named the same live
+    /// socket origin. Native capture by itself never confirms a current writer.
+    pub(crate) fn writer_confirmed(&self) -> bool {
+        self.writer.load(std::sync::atomic::Ordering::SeqCst) == 1
+    }
+
     /// Returns the immutable kernel-authenticated UID for connection binding.
     pub(crate) fn uid(&self) -> u32 {
         self.peer.uid
     }
 
+    /// Polls the retained exact lifetime without reading procfs. Used for bounded
+    /// registry maintenance; unsupported platforms cannot report a live origin.
+    pub(crate) fn is_live(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            require_live_origin(&self.lifetime).is_ok()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+
     /// Rechecks the original lifetime and exact native record before use. Parent
     /// change, PID reuse, exit or unreadable evidence invalidates the observation.
-    #[allow(dead_code, reason = "ordinary admission integration is a later phase")]
     pub(crate) fn reobserve(&self) -> io::Result<ProcessParentIdentity> {
         let identity = observe_live_origin(&self.lifetime, self.peer.pid)?;
         if identity != self.identity {
@@ -186,6 +219,7 @@ pub(crate) fn capture_unix_origin(raw_fd: RawFd, owner_uid: u32) -> io::Result<U
         peer,
         identity,
         lifetime,
+        writer: std::sync::atomic::AtomicU8::new(0),
     })
 }
 

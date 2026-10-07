@@ -74,8 +74,10 @@ pub async fn serve_async_runtime_control_connection_with_snapshots(
 ) -> Result<usize> {
     let peer_uid = authenticated_unix_peer_uid(stream.as_raw_fd(), config.owner_uid)?;
     bind_unix_connection_origin(stream, peer_uid, connection).await?;
+    let mut qualified =
+        crate::runtime::UnixOriginStream::new(stream, connection.unix_origin().cloned());
     serve_authenticated_async_runtime_control_connection_with_snapshots(
-        stream,
+        &mut qualified,
         AuthenticatedPeer::unix_user(peer_uid),
         handle,
         connection,
@@ -163,8 +165,10 @@ where
 {
     let peer_uid = authenticated_unix_peer_uid(stream.as_raw_fd(), config.owner_uid)?;
     bind_unix_connection_origin(stream, peer_uid, connection).await?;
+    let mut qualified =
+        crate::runtime::UnixOriginStream::new(stream, connection.unix_origin().cloned());
     serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
-        stream,
+        &mut qualified,
         AuthenticatedPeer::unix_user(peer_uid),
         handle,
         connection,
@@ -479,6 +483,7 @@ where
             "async control listener max connections must be greater than zero",
         ));
     }
+    let _ = crate::runtime::enable_unix_writer_credentials(listener.as_raw_fd());
     let mut accepted = 0u64;
     let mut tasks = JoinSet::new();
     let mut lifecycle = handle.lifecycle_state_watcher();
@@ -515,8 +520,12 @@ where
         tasks.spawn(async move {
             let mut connection = ControlConnectionState::new(true, true);
             bind_unix_connection_origin(&stream, peer_uid, &mut connection).await?;
-            serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+            let mut qualified = crate::runtime::UnixOriginStream::new(
                 &mut stream,
+                connection.unix_origin().cloned(),
+            );
+            serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+                &mut qualified,
                 peer,
                 &connection_handle,
                 &mut connection,

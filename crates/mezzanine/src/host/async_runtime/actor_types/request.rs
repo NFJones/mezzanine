@@ -435,6 +435,21 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Original protocol reply owner.
         reply: oneshot::Sender<Result<AsyncControlInputResult>>,
     },
+    /// Settles one bounded native enrollment observation on the actor.
+    CompleteExternalEnrollmentInput {
+        /// Immutable root, origin, metadata and admission reservation.
+        work: crate::runtime::ExternalEnrollmentWork,
+        /// Bounded native ancestry outcome, never a caller-supplied proof.
+        result: Result<()>,
+        /// Exact retained connection, never initialized by enrollment.
+        connection: ControlConnectionState,
+        /// Prior responses on the captured control continuation.
+        output_prefix: Vec<u8>,
+        /// Bytes consumed through the admitted frame.
+        consumed: usize,
+        /// Original reply owner, possibly disconnected while observation ran.
+        reply: oneshot::Sender<Result<AsyncControlInputResult>>,
+    },
     /// Completes an actor-admitted external usage commit without replaying work.
     CompleteExternalUsageInput {
         /// Immutable credential-free attribution captured before storage work.
@@ -1444,6 +1459,7 @@ impl AsyncRuntimeRequest {
             | Self::HandleControlInput { .. }
             | Self::HandleControlInputWithSnapshots { .. }
             | Self::CompleteStatusControlInput { .. }
+            | Self::CompleteExternalEnrollmentInput { .. }
             | Self::CompleteExternalUsageInput { .. }
             | Self::CompleteSnapshotControlInput { .. }
             | Self::CreateHostCheckpoint { .. } => Family::Control,

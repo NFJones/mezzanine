@@ -549,8 +549,8 @@ primary API constraint, not a vendor-launch wrapper or ordinary enrollment path;
 vendor callbacks must not receive general primary authority.
 Internal ordinary-enrollment groundwork now supports native connection-origin
 UID/PID lookup on Linux and macOS with exact socket-option result bounds and
-positive PID checks. This is not a new enrollment method or role authorization:
-current control still uses its established user/role gates. An inherited/passed
+positive PID checks. Those primitives alone are not admission authority:
+ordinary control still uses its established user/role gates. An inherited/passed
 endpoint retains origin evidence rather than attesting its current writer.
 Native ancestry groundwork pairs parent and creation token in one bounded
 Linux procfs or macOS libproc record. The worker-oriented resolver retains at
@@ -558,10 +558,10 @@ most 128 links, checks a cooperative 100ms budget and reobserves every link;
 missing, changed, unrelated, cyclic and over-budget evidence fails closed.
 It does not read argv/environment or invoke helpers. Two passes are not an
 atomic tree snapshot, executable attestation, current-writer proof or vendor
-client/session association. Exact pane-root generation and producer fencing
-plus the ordinary admission protocol remain unfinished; these primitives grant
-no new control or enrollment authority. Only Linux execution is qualified in
-this checkpoint; macOS runtime behavior requires its own validation.
+client/session association. The persistent-producer admission slice below
+adds separate root/producer/sender fences; the primitives alone grant no new
+authority. Only Linux execution is qualified; macOS runtime behavior requires
+its own validation.
 
 Socket origin PIDs can remain visible after their process exits, so a fresh
 PID/start lookup alone cannot exclude reuse before the first observation.
@@ -579,8 +579,42 @@ duplicate, so cancellation cannot recycle the worker's descriptor. Connection
 clones share the same anchor; unbound/remote/wrong-user/initialized connections
 cannot attach fresh evidence, and recapture cannot replace an existing anchor.
 Unsupported capture leaves ordinary UID-only control usable with no origin
-evidence. The persistent-host front door and ordinary enrollment protocol are
-not migrated by this groundwork; no new role or vendor registration is granted.
+evidence. The persistent-host front door is not migrated; retaining an anchor
+alone grants no role or vendor registration.
+
+#### Ordinary persistent-producer enrollment (implemented slice)
+
+`agent/external/enroll` accepts `pane_id`, `harness` (`pi` or `opencode`),
+`version`, `external_session_id`, `display_name` and
+`observer_kind: "persistent"` over an uninitialized same-user Unix connection.
+The pane hint selects a candidate; native ancestry must prove it. No supplied
+PID, parent PID, launch token, idempotency key or general control target is accepted.
+Linux sender credentials are collected with the same read that consumes bytes;
+all segments must name the retained live socket origin. Inherited writers,
+missing/truncated/foreign ancillary data and passed descriptors cannot qualify.
+Received descriptors are closed; ordinary UID-only control bytes are unchanged.
+Linux listeners enable collection before accept for immediate first-frame sends.
+
+Native observation runs off actor with at most 32 pending admissions, an 8192-byte
+frame/4096-byte metadata bound, and a cooperative 2s admission deadline. Native
+syscalls are not hard-cancelled: reservations remain held until work completes,
+and late results reject. Actor settlement rechecks exact root/producer/connection
+and releases reservations even if the response owner disconnected.
+
+Success returns one private `launch_token`, `generation`, `agent_id`, exact
+external session, `registered: true`, `controls: []`, and the existing 60s lease.
+Identical live same-run retry returns the same handle/identity. Metadata conflict
+rejects. The existing lifecycle/presentation RPCs additionally require the same
+kernel-qualified producer and sender. Handle possession alone is insufficient.
+Producer exit retires telemetry independently of its surviving pane shell.
+`usage: "unavailable-source-continuity"` is explicit: ordinary usage RPCs are
+rejected until durable source continuity exists, not billed under fresh owners.
+
+This is a common runtime slice, not a claim that installed plugins already use
+it. Fixed installed clients, daemon-owned idle/reload coordination, short-lived
+helper association, shared/preexisting server session association and macOS
+lifetime/sender equivalents remain unfinished. Unsupported platforms/kernels
+retain ordinary control without enrollment; no vendor relaunch/fallback occurs.
 
 The exact canonical harness `gemini` is retired: new launch and usage admission
 are rejected before capability or accounting-work allocation. Existing expense,

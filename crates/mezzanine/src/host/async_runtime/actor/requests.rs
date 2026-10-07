@@ -50,6 +50,98 @@ impl AsyncRuntimeSessionActor {
         });
     }
 
+    /// Recognizes only one finite enrollment frame and reserves actor-owned work.
+    fn prepare_external_enrollment_input(
+        &mut self,
+        input: &[u8],
+        max_content_length: usize,
+        connection: &crate::control::ControlConnectionState,
+    ) -> Option<(
+        String,
+        usize,
+        crate::Result<crate::runtime::ExternalEnrollmentWork>,
+    )> {
+        let (body, consumed) = decode_control_frame(input, max_content_length).ok()?;
+        let request = crate::control::parse_json_rpc_request(&body).ok()?;
+        if request.method != "agent/external/enroll" {
+            return None;
+        }
+        let prepared = if consumed != input.len() || body.len() > 8192 {
+            Err(MezError::invalid_args(
+                "external enrollment requires one bounded control frame",
+            ))
+        } else {
+            self.service
+                .prepare_external_enrollment(&request, connection)
+        };
+        Some((request.id, consumed, prepared))
+    }
+
+    /// Owns bounded off-actor native observation and always returns settlement
+    /// to release its reservation; disconnected callers acquire no client role.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "ordered control framing and native admission own independent state"
+    )]
+    fn dispatch_external_enrollment_observation(
+        &self,
+        request_id: String,
+        prepared: crate::Result<crate::runtime::ExternalEnrollmentWork>,
+        connection: crate::control::ControlConnectionState,
+        mut output_prefix: Vec<u8>,
+        consumed: usize,
+        reply: tokio::sync::oneshot::Sender<crate::Result<AsyncControlInputResult>>,
+    ) {
+        let work = match prepared {
+            Ok(work) => work,
+            Err(error) => {
+                output_prefix.extend_from_slice(&encode_control_body(
+                    &crate::runtime::runtime_json_rpc_error(
+                        &request_id,
+                        error.kind(),
+                        error.message(),
+                    ),
+                ));
+                let _ = reply.send(Ok(AsyncControlInputResult {
+                    output: output_prefix,
+                    consumed,
+                    connection,
+                    connection_cleanup: None,
+                    terminal_lifecycle_flush: None,
+                }));
+                return;
+            }
+        };
+        let sender = self.sender.clone();
+        tokio::spawn(async move {
+            let worker = work.clone();
+            #[cfg(test)]
+            if let Some((started, release)) = &worker.worker_gate {
+                started.notify_one();
+                release.notified().await;
+            }
+            // Native reads cannot be hard-cancelled. Keep the reservation until
+            // this worker actually finishes, even after its cooperative budget;
+            // late evidence is rejected by observe/actor commit, never admitted.
+            let result = tokio::task::spawn_blocking(move || worker.observe())
+                .await
+                .map_err(|_| MezError::invalid_state("external enrollment worker failed"))
+                .and_then(|result| result);
+            let _ = sender
+                .send(AsyncRuntimeRequestEnvelope::new(
+                    AsyncRuntimeRequest::CompleteExternalEnrollmentInput {
+                        work,
+                        result,
+                        connection,
+                        output_prefix,
+                        consumed,
+                        reply,
+                    },
+                ))
+                .await;
+        });
+    }
+
     /// Runs bounded durable usage I/O outside serialized actor ownership. The
     /// task retains settlement after reply loss; a retry reads the same checkpoint.
     fn dispatch_external_usage_commit(
@@ -959,6 +1051,19 @@ impl AsyncRuntimeSessionActor {
                     }
                     return false;
                 }
+                if let Some((id, consumed, prepared)) =
+                    self.prepare_external_enrollment_input(&input, max_content_length, &connection)
+                {
+                    self.dispatch_external_enrollment_observation(
+                        id,
+                        prepared,
+                        connection,
+                        Vec::new(),
+                        consumed,
+                        reply,
+                    );
+                    return false;
+                }
                 if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
                     && let Ok(request) = crate::control::parse_json_rpc_request(&body)
                     && request.method == "agent/external/usage"
@@ -1153,6 +1258,19 @@ impl AsyncRuntimeSessionActor {
                             ));
                         }
                     }
+                    return false;
+                }
+                if let Some((id, consumed, prepared)) =
+                    self.prepare_external_enrollment_input(&input, max_content_length, &connection)
+                {
+                    self.dispatch_external_enrollment_observation(
+                        id,
+                        prepared,
+                        connection,
+                        output_prefix,
+                        consumed_prefix.saturating_add(consumed),
+                        reply,
+                    );
                     return false;
                 }
                 if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
@@ -1351,6 +1469,28 @@ impl AsyncRuntimeSessionActor {
                 if !terminal_lifecycle_deferred {
                     self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
                 }
+                false
+            }
+            AsyncRuntimeRequest::CompleteExternalEnrollmentInput {
+                work,
+                result,
+                connection,
+                mut output_prefix,
+                consumed,
+                reply,
+            } => {
+                let body = self
+                    .service
+                    .complete_external_enrollment(work, result, &connection);
+                output_prefix.extend_from_slice(&encode_control_body(&body));
+                let _ = reply.send(Ok(AsyncControlInputResult {
+                    output: output_prefix,
+                    consumed,
+                    connection,
+                    connection_cleanup: None,
+                    terminal_lifecycle_flush: None,
+                }));
+                self.notify_event_delivery();
                 false
             }
             AsyncRuntimeRequest::CompleteExternalUsageInput {

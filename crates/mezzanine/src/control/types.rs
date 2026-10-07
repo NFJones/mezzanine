@@ -620,6 +620,7 @@ pub(crate) const PRIMARY_CONTROL_METHODS: &[&str] = &[
     "agent/task/list",
     "agent/spawn",
     "agent/external/launch",
+    "agent/external/enroll",
     "agent/external/register",
     "agent/external/renew",
     "agent/external/deregister",

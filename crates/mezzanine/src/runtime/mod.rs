@@ -258,6 +258,7 @@ pub(crate) use config::{
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod control;
+pub(crate) use control::ExternalEnrollmentWork;
 pub(crate) use control::ExternalUsageWork;
 pub(crate) use control::RuntimeControlComponent;
 pub(crate) use control::status::StatusControlWork;
@@ -343,6 +344,9 @@ mod peer_credentials;
 /// Owns kernel lifetime anchors for connection-origin process evidence.
 mod peer_process_lifetime;
 pub(crate) use peer_process_lifetime::{UnixOriginProcess, capture_unix_origin};
+/// Couples Unix reads to native sender evidence without changing UID control.
+mod unix_writer;
+pub(crate) use unix_writer::{UnixOriginStream, enable_unix_writer_credentials};
 mod persistence;
 pub(crate) use persistence::RuntimePersistenceComponent;
 /// Exposes the processes module boundary.

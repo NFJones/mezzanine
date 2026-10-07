@@ -156,6 +156,13 @@ impl RuntimeSessionService {
                 "external usage registration unavailable",
             ));
         }
+        if let Some(enrollment) = &binding.enrollment {
+            enrollment.authorize(connection)?;
+            return Err(MezError::new(
+                crate::error::MezErrorKind::NotImplemented,
+                "ordinary external usage source continuity unavailable",
+            ));
+        }
         let sequence = params
             .get("sequence")
             .and_then(serde_json::Value::as_u64)

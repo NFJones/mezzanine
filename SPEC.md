@@ -230,9 +230,10 @@ fallback in diagnostics.
 The primary PID of a newly created pane MUST initially be the shell process.
 
 External harness identity uses the additive `external-agent/1` control contract.
-An attached primary MUST explicitly issue a short-lived launch capability for
-an exact local pane root incarnation through `agent/external/launch`. Hooks MUST
-present that capability and generation over authenticated Unix transport without
+The explicit launch path MUST require an attached primary to issue a short-lived
+capability for an exact local pane root through `agent/external/launch`; ordinary
+persistent producers MAY instead use the restricted enrollment path below.
+Callbacks MUST present their private capability and generation over Unix without
 initializing a general control-client role. Register, renew and deregister MUST
 bind immutable external session metadata to that launch; identical registration
 retries MUST retain the original identity and conflicting reuse MUST fail.
@@ -275,7 +276,30 @@ owned socket descriptor throughout capture. Connection clones MUST share the
 exact anchor. Binding MUST require a matching authenticated Unix UID before
 initialization and MUST NOT replace an existing anchor or grant client/role
 authority. Missing optional evidence MUST preserve existing UID-only control;
-future enrollment MUST require its own proven admission evidence explicitly.
+enrollment MUST require its own proven admission evidence explicitly.
+The additive `agent/external/enroll` persistent-producer slice MUST admit only
+uninitialized same-user Unix ingress for Pi/OpenCode with bounded inert
+`pane_id`, `harness`, `version`, `external_session_id`, `display_name` and exact
+`observer_kind: persistent`. Pane/session metadata is selection, not authority.
+Kernel lifetime, per-received-segment Linux SCM_CREDENTIALS sender evidence and
+off-actor ancestry MUST jointly bind the producer to the selected adapter root.
+Missing/foreign/truncated ancillary evidence MUST permanently disable enrollment
+on that connection without changing existing UID-only control. Unexpected passed
+descriptors MUST be closed, never admitted. Frame/metadata limits are 8192/4096
+bytes; pending observations MUST be bounded at 32 and use a cooperative 2s total
+admission deadline. A blocked native syscall cannot be hard-cancelled; its
+reservation MUST remain held until actual completion, and late evidence MUST NOT
+allocate authority. Actor completion MUST consume the exact reservation and
+recheck root incarnation, origin, writer and deadline before allocation.
+Identical same-run retry MUST retain one private producer-bound handle and
+observational identity; metadata conflict MUST NOT allocate another run.
+Renew/register/presentation/deregister MUST additionally require that producer's
+current native origin and sender evidence. Producer death MUST retire the exact
+registration even while its shell lives. No native client/primary role is granted.
+Ordinary usage MUST remain explicitly unavailable until durable source continuity
+is implemented, rather than permitting fresh-owner historical recharge. This
+slice does not complete installed adapter activation, helper/shared-server
+association, daemon-owned idle/reload coordination or macOS lifetime admission.
 `agent/external/presentation` MUST require the same capability, generation and
 external session binding. Positive observation sequences MUST reject stale or
 conflicting updates; identical replay MUST be inert. Bounded title suggestions

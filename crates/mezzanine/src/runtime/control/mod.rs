@@ -10,6 +10,7 @@ mod component;
 mod configuration;
 mod context;
 mod external_agents;
+mod external_enrollment;
 mod external_presentation;
 mod external_telemetry;
 pub(crate) mod external_usage;
@@ -91,6 +92,7 @@ pub(crate) use context::{
     RuntimeAgentTranscriptContext, execute_runtime_agent_prompt_history_work,
     runtime_agent_compaction_replay_context,
 };
+pub(crate) use external_enrollment::ExternalEnrollmentWork;
 pub(crate) use external_usage::ExternalUsageWork;
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
@@ -1423,6 +1425,13 @@ impl RuntimeSessionService {
         }
 
         if !connection.initialized() || request.method == "control/initialize" {
+            if request.method == "agent/external/enroll" {
+                return runtime_json_rpc_error(
+                    &request.id,
+                    crate::error::MezErrorKind::NotImplemented,
+                    "external enrollment requires bounded async native admission",
+                );
+            }
             let prepared = match self.prepare_remote_initialize_authority(&request, connection) {
                 Ok(prepared) => prepared,
                 Err(error) => {

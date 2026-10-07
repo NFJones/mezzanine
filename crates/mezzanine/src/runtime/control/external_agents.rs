@@ -1,8 +1,9 @@
-//! Restricted, launch-bound external harness registrations.
+//! Restricted external harness registrations from explicit launch or enrollment.
 //!
 //! An attached primary explicitly issues a capability for an exact local pane
 //! root. Hooks present that capability over authenticated Unix transport without
-//! becoming a primary, agent or automation client. Only digests are retained.
+//! becoming a primary, agent or automation client. Explicit launch retains only
+//! digests; ordinary enrollment retains a redacted service-owned producer handle.
 //! Registrations are observational: they cannot write input, approve actions or
 //! resume native tasks. Lease expiry means unavailable telemetry, not death.
 //! Runtime restart invalidates capabilities; no credential is persisted.
@@ -20,16 +21,17 @@ use crate::error::{MezError, Result};
 use crate::runtime::processes::RuntimePaneProcessIdentity;
 use crate::runtime::{RuntimeSessionService, current_unix_seconds};
 
-const MAX_BINDINGS: usize = 256;
+pub(super) const MAX_BINDINGS: usize = 256;
 const LAUNCH_SECONDS: u64 = 120;
 const LEASE_SECONDS: u64 = 60;
 const TOMBSTONE_SECONDS: u64 = 300;
 
-/// Bounded actor-owned credentials and live registrations, never raw tokens.
+/// Bounded actor-owned registrations; ordinary handles are private/redacted.
 #[derive(Debug, Default)]
 pub(super) struct ExternalAgentRegistry {
     pub(super) bindings: BTreeMap<[u8; 32], LaunchBinding>,
-    next_generation: u64,
+    pub(super) next_generation: u64,
+    pub(super) enrollments: super::external_enrollment::EnrollmentAdmissions,
     pub(super) usage: super::external_usage::ExternalUsageProjection,
 }
 
@@ -39,24 +41,26 @@ pub(super) struct LaunchBinding {
     pub(super) uid: u32,
     pub(super) pane_id: String,
     pub(super) process: RuntimePaneProcessIdentity,
-    project_scope: Option<ProjectScopeId>,
+    pub(super) project_scope: Option<ProjectScopeId>,
     pub(super) generation: u64,
     pub(super) harness: String,
-    version: String,
+    pub(super) version: String,
     pub(super) expires: u64,
     pub(super) registration: Option<Registration>,
     pub(super) retired: bool,
     pub(super) accounting_owner: String,
     /// Project attribution frozen at explicit launch, separate from MMP scope.
     pub(super) accounting_origin: crate::storage::token_usage::AccountingOrigin,
+    /// Ordinary lifecycle credentials remain tied to the exact producer.
+    pub(super) enrollment: Option<super::external_enrollment::EnrollmentBinding>,
 }
 
 /// Immutable registration metadata, bound to a single server-issued launch.
 #[derive(Debug)]
 pub(super) struct Registration {
-    agent_id: AgentId,
+    pub(super) agent_id: AgentId,
     pub(super) external_session_id: String,
-    display_name: String,
+    pub(super) display_name: String,
     objective: Option<String>,
     /// Latest normalized observation, retained independently of hook connections.
     pub(super) presentation: Option<super::external_telemetry::ExternalPresentation>,
@@ -192,6 +196,7 @@ impl RuntimeSessionService {
                 retired: false,
                 accounting_owner: crate::storage::token_usage::new_token_usage_event_id(),
                 accounting_origin,
+                enrollment: None,
             },
         );
         Ok(
@@ -239,6 +244,9 @@ impl RuntimeSessionService {
             return Err(MezError::forbidden(
                 "external launch capability unavailable",
             ));
+        }
+        if let Some(enrollment) = &binding.enrollment {
+            enrollment.authorize(connection)?;
         }
         if binding.retired {
             let session = text(&params, "external_session_id", 128)?;
@@ -294,7 +302,7 @@ impl RuntimeSessionService {
 
     /// Registers immutable bounded metadata once; identical reply-loss retries
     /// return the original identity, while conflicting reuse fails closed.
-    fn register_external_agent(
+    pub(super) fn register_external_agent(
         &mut self,
         digest: [u8; 32],
         params: &serde_json::Value,
@@ -366,7 +374,7 @@ impl RuntimeSessionService {
     }
 
     /// Retires only one exact registration and retains a bounded retry tombstone.
-    fn retire_external_agent_binding(&mut self, digest: [u8; 32]) {
+    pub(super) fn retire_external_agent_binding(&mut self, digest: [u8; 32]) {
         let Some(binding) = self.control.external_agents_mut().bindings.get_mut(&digest) else {
             return;
         };
@@ -401,6 +409,10 @@ impl RuntimeSessionService {
             .filter_map(|(digest, binding)| {
                 (!binding.retired
                     && (binding.expires <= now
+                        || binding
+                            .enrollment
+                            .as_ref()
+                            .is_some_and(|enrollment| !enrollment.origin.is_live())
                         || self.find_pane_descriptor(&binding.pane_id).is_none()
                         || !self
                             .pane_process_identity_is_current(&binding.pane_id, &binding.process)))
