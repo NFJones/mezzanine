@@ -16,6 +16,29 @@ fn origin(socket: &tokio::net::UnixStream) -> Option<Arc<UnixOriginProcess>> {
     }
 }
 
+/// Holding connection clones is not observer health. EOF releases the concrete
+/// adapter immediately, and its later Drop must not double-release ownership or
+/// let a still-live producer manufacture another connected observer.
+#[tokio::test(flavor = "current_thread")]
+async fn unix_writer_eof_releases_observer_without_producer_death() {
+    let (mut reader, mut writer) = tokio::net::UnixStream::pair().unwrap();
+    let Some(origin) = origin(&reader) else {
+        return;
+    };
+    let retained = origin.clone();
+    let mut qualified = UnixOriginStream::new(&mut reader, Some(origin.clone()));
+    writer.write_all(b"x").await.unwrap();
+    let mut byte = [0];
+    qualified.read_exact(&mut byte).await.unwrap();
+    assert!(origin.observer_connected());
+    drop(writer);
+    assert_eq!(qualified.read(&mut byte).await.unwrap(), 0);
+    assert!(!retained.observer_connected());
+    assert!(retained.is_live());
+    drop(qualified);
+    assert!(!retained.observer_connected());
+}
+
 /// A native matching sender confirms only bytes actually read, while a child
 /// writing the inherited endpoint poisons enrollment forever. Subsequent parent
 /// bytes are still delivered unchanged but cannot restore writer authority.

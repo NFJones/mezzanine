@@ -115,10 +115,15 @@ fn external_enrollment_ordinary_child_fixture() {
         .unwrap();
     if mode == "hold" {
         socket.write_all(&[1]).unwrap();
-        let mut release = [0];
-        socket.read_exact(&mut release).unwrap();
-        assert_eq!(release, [2]);
-        return;
+        loop {
+            let mut release = [0];
+            socket.read_exact(&mut release).unwrap();
+            if release == [2] {
+                return;
+            }
+            assert_eq!(release, [3]);
+            socket.write_all(&[1]).unwrap();
+        }
     }
     assert_eq!(mode, "flow");
     let enroll = serde_json::json!({"jsonrpc":"2.0","id":"enroll","method":"agent/external/enroll",
@@ -736,6 +741,39 @@ async fn external_enrollment_worker_is_off_actor_and_settles_lost_reply() {
     tokio::time::timeout(Duration::from_secs(5), settled.notified())
         .await
         .unwrap();
+    let timers = handle.drain_timer_side_effects(8).await.unwrap();
+    assert!(
+        timers.iter().any(|effect| matches!(effect,
+        crate::runtime::RuntimeSideEffect::ScheduleTimer { key, .. }
+        if key.kind == crate::runtime::RuntimeTimerKind::IdleCleanup)),
+        "first enrollment must arm idle cleanup even after reply loss"
+    );
+    let key = timers
+        .iter()
+        .find_map(|effect| match effect {
+            crate::runtime::RuntimeSideEffect::ScheduleTimer { key, .. }
+                if key.kind == crate::runtime::RuntimeTimerKind::IdleCleanup =>
+            {
+                Some(key.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    // No later vendor callback: the ordinary child exits after its fixture-only
+    // release, and the originally scheduled maintenance event must retire it.
+    tokio::io::AsyncWriteExt::write_all(&mut fixture.socket, &[2])
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while fixture.connection.unix_origin().unwrap().is_live() {
+        assert!(Instant::now() < deadline, "ordinary producer did not exit");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let mut tick = crate::runtime::RuntimeEventBatch::new();
+    tick.push(crate::runtime::RuntimeEvent::Timer(
+        crate::runtime::TimerEvent { key, now_ms: 1000 },
+    ));
+    assert!(handle.submit_runtime_events(tick).await.unwrap().applied > 0);
     handle.shutdown().await.unwrap();
     let mut exit = actor_task.await.unwrap();
     assert!(
@@ -747,8 +785,216 @@ async fn external_enrollment_worker_is_off_actor_and_settles_lost_reply() {
             .is_empty()
     );
     assert_eq!(exit.service.control.external_agents().bindings.len(), 1);
+    assert!(
+        exit.service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .all(|binding| binding.retired)
+    );
     assert!(!fixture.connection.initialized());
     exit.service.terminate_all_pane_processes().unwrap();
+}
+
+/// A verified connected observer must renew from daemon maintenance without
+/// callback traffic. Losing that transport must stop renewal even though the
+/// stable producer remains alive; expiry is unavailable telemetry, not death.
+#[tokio::test(flavor = "current_thread")]
+async fn external_enrollment_daemon_renews_idle_connected_observer_only() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let origin = fixture.connection.unix_origin().unwrap().clone();
+    let qualified =
+        crate::runtime::UnixOriginStream::new(&mut fixture.socket, Some(origin.clone()));
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&request(), &fixture.connection)
+        .unwrap();
+    let native = work.clone();
+    let observed = tokio::task::spawn_blocking(move || native.observe())
+        .await
+        .unwrap();
+    let response =
+        fixture
+            .service
+            .complete_external_enrollment(work, observed, &fixture.connection);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&response)
+            .unwrap()
+            .get("error")
+            .is_none()
+    );
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .bindings
+        .values_mut()
+        .next()
+        .unwrap()
+        .expires = current_unix_seconds() - 1;
+    fixture
+        .service
+        .reconcile_agent_runtime_progress_paths_with_actor_progress(&BTreeSet::new())
+        .unwrap();
+    assert_eq!(fixture.service.reconcile_external_agent_registrations(), 0);
+    let binding = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    assert!(!binding.retired);
+    assert!(binding.expires > current_unix_seconds());
+    drop(qualified);
+    assert!(
+        origin.is_live(),
+        "producer must remain distinct from lost observer"
+    );
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .bindings
+        .values_mut()
+        .next()
+        .unwrap()
+        .expires = current_unix_seconds() - 1;
+    assert_eq!(fixture.service.reconcile_external_agent_registrations(), 1);
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .all(|binding| binding.retired)
+    );
+}
+
+/// Requalified observer sockets may replace lost connections without a new run.
+/// Dead weak links and stale old adapter closure cannot erase a healthy current
+/// observer, and the retained set never exceeds its finite 16-endpoint bound.
+#[tokio::test(flavor = "current_thread")]
+async fn external_enrollment_requalified_observer_preserves_idle_run() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&request(), &fixture.connection)
+        .unwrap();
+    let native = work.clone();
+    let observed = tokio::task::spawn_blocking(move || native.observe())
+        .await
+        .unwrap();
+    let initial: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_enrollment(work, observed, &fixture.connection),
+    )
+    .unwrap();
+    assert!(initial.get("error").is_none());
+    let uid = crate::runtime::current_effective_uid();
+    let origin =
+        Arc::new(crate::runtime::capture_unix_origin(fixture.socket.as_raw_fd(), uid).unwrap());
+    let mut replacement = ControlConnectionState::new(true, false);
+    replacement
+        .bind_authenticated_peer(AuthenticatedPeer::unix_user(uid))
+        .unwrap();
+    replacement.bind_unix_origin(origin.clone()).unwrap();
+    let mut qualified =
+        crate::runtime::UnixOriginStream::new(&mut fixture.socket, Some(origin.clone()));
+    qualified.write_all(&[3]).await.unwrap();
+    let mut ready = [0];
+    qualified.read_exact(&mut ready).await.unwrap();
+    assert!(origin.writer_confirmed());
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&request(), &replacement)
+        .unwrap();
+    let native = work.clone();
+    let observed = tokio::task::spawn_blocking(move || native.observe())
+        .await
+        .unwrap();
+    let retry: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_enrollment(work, observed, &replacement),
+    )
+    .unwrap();
+    assert!(
+        retry["result"]["launch_token"] == initial["result"]["launch_token"],
+        "requalified observer changed run handle"
+    );
+    assert_eq!(retry["result"]["agent_id"], initial["result"]["agent_id"]);
+    // Old connection data may remain retained, but its adapter is already gone.
+    assert!(
+        !fixture
+            .connection
+            .unix_origin()
+            .unwrap()
+            .observer_connected()
+    );
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .bindings
+        .values_mut()
+        .next()
+        .unwrap()
+        .expires = current_unix_seconds() - 1;
+    fixture
+        .service
+        .reconcile_agent_runtime_progress_paths_with_actor_progress(&BTreeSet::new())
+        .unwrap();
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .all(|binding| !binding.retired && binding.expires > current_unix_seconds())
+    );
+    let binding = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    assert!(binding.enrollment.as_ref().unwrap().observers.len() <= 16);
+    drop(qualified);
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .bindings
+        .values_mut()
+        .next()
+        .unwrap()
+        .expires = current_unix_seconds() - 1;
+    fixture
+        .service
+        .reconcile_agent_runtime_progress_paths_with_actor_progress(&BTreeSet::new())
+        .unwrap();
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .all(|binding| binding.retired)
+    );
 }
 
 /// A normally invoked producer speaks real framed Unix ingress through the actor

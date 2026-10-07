@@ -47,6 +47,9 @@ pub(super) struct EnrollmentAdmissions {
 #[derive(Debug)]
 pub(super) struct EnrollmentBinding {
     pub(super) origin: Arc<UnixOriginProcess>,
+    /// Bounded authorized observer sockets; stale closure cannot clear a healthy
+    /// reconnect. Weak links hold no extra socket or process descriptor.
+    observers: Vec<std::sync::Weak<UnixOriginProcess>>,
     /// Redacted in Debug and never persisted or placed in generic replay caches.
     token: SecretString,
 }
@@ -104,6 +107,51 @@ impl ExternalEnrollmentWork {
 }
 
 impl EnrollmentBinding {
+    /// Records only an already-authorized producer connection, without changing
+    /// root/run identity or letting a stale disconnect retire its replacement.
+    pub(super) fn observe_connection(&mut self, origin: &Arc<UnixOriginProcess>) {
+        self.observers.retain(|observer| {
+            observer
+                .upgrade()
+                .is_some_and(|observer| observer.observer_connected())
+        });
+        if origin.observer_connected()
+            && self.observers.len() < 16
+            && !self
+                .observers
+                .iter()
+                .any(|observer| observer.ptr_eq(&Arc::downgrade(origin)))
+        {
+            self.observers.push(Arc::downgrade(origin));
+        }
+    }
+
+    /// Allows daemon idle renewal only while both the producer and an authorized
+    /// qualified observer transport remain live; no callback cadence is needed.
+    pub(super) fn idle_renewable(&mut self) -> bool {
+        self.observers.retain(|observer| {
+            observer.upgrade().is_some_and(|observer| {
+                observer.observer_connected()
+                    && observer.uid() == self.origin.uid()
+                    && observer.identity == self.origin.identity
+            })
+        });
+        self.origin.is_live() && !self.observers.is_empty()
+    }
+
+    /// Checks an overdue lease without a new registry sweep; immutable endpoint
+    /// polls let a delayed maintenance tick avoid retiring a connected observer.
+    pub(super) fn has_live_observer(&self) -> bool {
+        self.origin.is_live()
+            && self.observers.iter().any(|observer| {
+                observer.upgrade().is_some_and(|observer| {
+                    observer.observer_connected()
+                        && observer.uid() == self.origin.uid()
+                        && observer.identity == self.origin.identity
+                })
+            })
+    }
+
     /// Requires the same live kernel-qualified producer on every credential use;
     /// a same-user token holder on another origin cannot report on this run.
     pub(super) fn authorize(&self, connection: &ControlConnectionState) -> Result<()> {
@@ -310,9 +358,9 @@ impl RuntimeSessionService {
         self.reconcile_external_agent_registrations();
         if let Some(binding) = self
             .control
-            .external_agents()
+            .external_agents_mut()
             .bindings
-            .values()
+            .values_mut()
             .find(|binding| {
                 !binding.retired
                     && binding.pane_id == work.pane_id
@@ -336,9 +384,14 @@ impl RuntimeSessionService {
             }
             let enrollment = binding
                 .enrollment
-                .as_ref()
+                .as_mut()
                 .ok_or_else(|| MezError::invalid_state("external enrollment owner disappeared"))?;
             enrollment.authorize(connection)?;
+            enrollment.observe_connection(&work.origin);
+            let enrollment = binding
+                .enrollment
+                .as_ref()
+                .ok_or_else(|| MezError::invalid_state("external enrollment owner disappeared"))?;
             return Ok(enrollment_response(binding, enrollment, &work.session_id));
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
@@ -388,6 +441,7 @@ impl RuntimeSessionService {
                 accounting_origin,
                 enrollment: Some(EnrollmentBinding {
                     origin: work.origin.clone(),
+                    observers: vec![Arc::downgrade(&work.origin)],
                     token: SecretString::from(token),
                 }),
             },

@@ -607,11 +607,19 @@ Identical live same-run retry returns the same handle/identity. Metadata conflic
 rejects. The existing lifecycle/presentation RPCs additionally require the same
 kernel-qualified producer and sender. Handle possession alone is insufficient.
 Producer exit retires telemetry independently of its surviving pane shell.
+Ordinary leases renew from the existing daemon idle-maintenance owner while a
+verified observer socket and producer both remain live; no callback heartbeat
+frequency is required. Concrete adapter EOF/Drop releases observer health exactly
+once, independently of retained connection clones. Up to 16 weak qualified
+observer endpoints permit reconnect without holding socket descriptors; old
+connection closure cannot erase a healthy observer. When every observer is lost,
+automatic renewal stops and the last lease can expire even with a live producer.
+Explicit primary-launched leases keep their existing caller-renewal contract.
 `usage: "unavailable-source-continuity"` is explicit: ordinary usage RPCs are
 rejected until durable source continuity exists, not billed under fresh owners.
 
 This is a common runtime slice, not a claim that installed plugins already use
-it. Fixed installed clients, daemon-owned idle/reload coordination, short-lived
+it. Fixed installed clients, reload/observer-epoch migration, short-lived
 helper association, shared/preexisting server session association and macOS
 lifetime/sender equivalents remain unfinished. Unsupported platforms/kernels
 retain ordinary control without enrollment; no vendor relaunch/fallback occurs.

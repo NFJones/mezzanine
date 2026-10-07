@@ -31,9 +31,40 @@ pub(crate) struct UnixOriginProcess {
     lifetime: OwnedFd,
     /// Unseen(0), sender-confirmed(1), or permanently unavailable/poisoned(2).
     writer: std::sync::atomic::AtomicU8,
+    /// Bounded live concrete observer adapters, distinct from producer lifetime.
+    observers: std::sync::atomic::AtomicUsize,
 }
 
 impl UnixOriginProcess {
+    /// Retains one concrete observer transport owner. Overflow fails closed;
+    /// only the adapter that acquired this count may release it on Drop.
+    pub(super) fn enter_observer(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.observers
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                (count < 256).then_some(count + 1)
+            })
+            .is_ok()
+    }
+
+    /// Releases one successful adapter acquisition; guards call this exactly
+    /// once, so no disconnected clone can keep the observer count elevated.
+    pub(super) fn leave_observer(&self) {
+        use std::sync::atomic::Ordering;
+        let _ = self
+            .observers
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                count.checked_sub(1)
+            });
+    }
+
+    /// Observer transport health does not follow from a live producer PID alone.
+    pub(crate) fn observer_connected(&self) -> bool {
+        self.observers.load(std::sync::atomic::Ordering::SeqCst) > 0
+            && self.writer_confirmed()
+            && self.is_live()
+    }
+
     /// Records kernel evidence for consumed bytes. A mismatch never recovers on
     /// this connection, so buffered mixed-origin frames cannot gain admission.
     pub(super) fn record_writer(&self, matches: bool) {
@@ -220,6 +251,7 @@ pub(crate) fn capture_unix_origin(raw_fd: RawFd, owner_uid: u32) -> io::Result<U
         identity,
         lifetime,
         writer: std::sync::atomic::AtomicU8::new(0),
+        observers: std::sync::atomic::AtomicUsize::new(0),
     })
 }
 

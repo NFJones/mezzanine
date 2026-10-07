@@ -1483,13 +1483,18 @@ impl AsyncRuntimeSessionActor {
                     .service
                     .complete_external_enrollment(work, result, &connection);
                 output_prefix.extend_from_slice(&encode_control_body(&body));
-                let _ = reply.send(Ok(AsyncControlInputResult {
-                    output: output_prefix,
-                    consumed,
-                    connection,
-                    connection_cleanup: None,
-                    terminal_lifecycle_flush: None,
-                }));
+                // First enrollment must arm idle maintenance even after reply
+                // loss; event notification alone does not schedule timers.
+                let settlement = self.queue_shell_lifecycle_timer_side_effects().map(|_| {
+                    AsyncControlInputResult {
+                        output: output_prefix,
+                        consumed,
+                        connection,
+                        connection_cleanup: None,
+                        terminal_lifecycle_flush: None,
+                    }
+                });
+                let _ = reply.send(settlement);
                 self.notify_event_delivery();
                 false
             }

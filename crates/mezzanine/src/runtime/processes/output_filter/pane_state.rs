@@ -1191,6 +1191,7 @@ impl RuntimeSessionService {
         }
         let missing_pane_failures = self.fail_agent_turns_for_missing_panes()?;
         self.reconcile_human_pauses()?;
+        self.renew_connected_external_observers();
         let external_retirements = self.reconcile_external_agent_registrations();
         let terminal_join_recoveries = self.recover_terminal_joined_subagent_results()?;
         let dependency_wait_recoveries = self.recover_ready_dependency_waits()?;

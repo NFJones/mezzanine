@@ -296,10 +296,19 @@ observational identity; metadata conflict MUST NOT allocate another run.
 Renew/register/presentation/deregister MUST additionally require that producer's
 current native origin and sender evidence. Producer death MUST retire the exact
 registration even while its shell lives. No native client/primary role is granted.
+Daemon idle maintenance MUST renew ordinary lifecycle leases independently of
+callback frequency while a verified observer transport and the producer remain
+live. Retained connection clones and a surviving producer alone MUST NOT count
+as an observer. Concrete adapter Drop/EOF MUST release observer ownership exactly
+once. A bounded set of at most 16 weak authorized observer endpoints MAY survive
+reconnect; stale closure MUST NOT erase another connected observer. Lost observer
+health stops automatic renewal; expiry still means unavailable telemetry rather
+than producer death. Legacy explicit-launch leases remain caller-renewed. This
+idle coordination adds no new global per-callback scan or procfs observer lookup.
 Ordinary usage MUST remain explicitly unavailable until durable source continuity
 is implemented, rather than permitting fresh-owner historical recharge. This
 slice does not complete installed adapter activation, helper/shared-server
-association, daemon-owned idle/reload coordination or macOS lifetime admission.
+association, reload/observer-epoch migration or macOS lifetime admission.
 `agent/external/presentation` MUST require the same capability, generation and
 external session binding. Positive observation sequences MUST reject stale or
 conflicting updates; identical replay MUST be inert. Bounded title suggestions

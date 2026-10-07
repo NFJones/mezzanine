@@ -53,6 +53,8 @@ pub(crate) fn enable_unix_writer_credentials(_fd: RawFd) -> io::Result<()> {
 pub(crate) struct UnixOriginStream<'a> {
     stream: &'a mut tokio::net::UnixStream,
     origin: Option<Arc<UnixOriginProcess>>,
+    /// Exact successful concrete adapter acquisition, released by Drop.
+    observer_owner: bool,
 }
 
 impl<'a> UnixOriginStream<'a> {
@@ -67,7 +69,29 @@ impl<'a> UnixOriginStream<'a> {
         {
             origin.record_writer(false);
         }
-        Self { stream, origin }
+        let observer_owner = origin
+            .as_ref()
+            .is_some_and(|origin| origin.enter_observer());
+        if !observer_owner && let Some(origin) = &origin {
+            origin.record_writer(false);
+        }
+        Self {
+            stream,
+            origin,
+            observer_owner,
+        }
+    }
+}
+
+impl Drop for UnixOriginStream<'_> {
+    /// A retained connection clone or registry origin is not an observer socket.
+    /// Only the actual adapter lifetime may keep idle enrollment renewable.
+    fn drop(&mut self) {
+        if self.observer_owner
+            && let Some(origin) = &self.origin
+        {
+            origin.leave_observer();
+        }
     }
 }
 
@@ -111,6 +135,12 @@ impl AsyncRead for UnixOriginStream<'_> {
                                 uid == origin.uid() && pid == origin.identity.process_id
                             });
                             origin.record_writer(matches && origin.is_live());
+                        }
+                        if count == 0 && this.observer_owner {
+                            if let Some(origin) = &this.origin {
+                                origin.leave_observer();
+                            }
+                            this.observer_owner = false;
                         }
                         buf.advance(count);
                         return Poll::Ready(Ok(()));

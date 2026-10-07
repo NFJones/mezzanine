@@ -264,7 +264,7 @@ impl RuntimeSessionService {
                 "external launch has retired; request a new launch",
             ));
         }
-        match request.method.as_str() {
+        let result = match request.method.as_str() {
             "agent/external/register" => self.register_external_agent(digest, &params),
             "agent/external/presentation" => self.update_external_presentation(digest, &params),
             "agent/external/renew" => {
@@ -297,7 +297,20 @@ impl RuntimeSessionService {
             _ => Err(MezError::invalid_args(
                 "unsupported external agent operation",
             )),
+        };
+        if result.is_ok()
+            && request.method != "agent/external/deregister"
+            && let Some(enrollment) = self
+                .control
+                .external_agents_mut()
+                .bindings
+                .get_mut(&digest)
+                .and_then(|binding| binding.enrollment.as_mut())
+            && let Some(origin) = connection.unix_origin()
+        {
+            enrollment.observe_connection(origin);
         }
+        result
     }
 
     /// Registers immutable bounded metadata once; identical reply-loss retries
@@ -398,6 +411,22 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Refreshes connected ordinary observers from existing idle maintenance,
+    /// independent of callback cadence. No legacy launch is renewed this way.
+    pub(crate) fn renew_connected_external_observers(&mut self) {
+        let now = current_unix_seconds();
+        for binding in self.control.external_agents_mut().bindings.values_mut() {
+            if !binding.retired
+                && binding
+                    .enrollment
+                    .as_mut()
+                    .is_some_and(|enrollment| enrollment.idle_renewable())
+            {
+                binding.expires = now.saturating_add(LEASE_SECONDS);
+            }
+        }
+    }
+
     /// Expires missing renewal or replaced pane roots without claiming death.
     pub(crate) fn reconcile_external_agent_registrations(&mut self) -> usize {
         let now = current_unix_seconds();
@@ -408,7 +437,11 @@ impl RuntimeSessionService {
             .iter()
             .filter_map(|(digest, binding)| {
                 (!binding.retired
-                    && (binding.expires <= now
+                    && ((binding.expires <= now
+                        && binding
+                            .enrollment
+                            .as_ref()
+                            .is_none_or(|enrollment| !enrollment.has_live_observer()))
                         || binding
                             .enrollment
                             .as_ref()
