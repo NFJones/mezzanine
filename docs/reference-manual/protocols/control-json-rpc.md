@@ -552,9 +552,16 @@ UID/PID lookup on Linux and macOS with exact socket-option result bounds and
 positive PID checks. This is not a new enrollment method or role authorization:
 current control still uses its established user/role gates. An inherited/passed
 endpoint retains origin evidence rather than attesting its current writer.
-Process-start/ancestry checks, pane-root revalidation and the ordinary admission
-protocol remain unfinished. Only Linux execution is qualified in this checkpoint;
-macOS runtime behavior requires its own validation.
+Native ancestry groundwork pairs parent and creation token in one bounded
+Linux procfs or macOS libproc record. The worker-oriented resolver retains at
+most 128 links, checks a cooperative 100ms budget and reobserves every link;
+missing, changed, unrelated, cyclic and over-budget evidence fails closed.
+It does not read argv/environment or invoke helpers. Two passes are not an
+atomic tree snapshot, executable attestation, current-writer proof or vendor
+client/session association. Exact pane-root generation and producer fencing
+plus the ordinary admission protocol remain unfinished; these primitives grant
+no new control or enrollment authority. Only Linux execution is qualified in
+this checkpoint; macOS runtime behavior requires its own validation.
 
 The exact canonical harness `gemini` is retired: new launch and usage admission
 are rejected before capability or accounting-work allocation. Existing expense,

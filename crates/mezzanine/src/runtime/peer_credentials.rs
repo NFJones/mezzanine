@@ -193,6 +193,118 @@ pub(super) fn peer_effective_uid(_raw_fd: RawFd) -> io::Result<u32> {
 mod tests {
     use super::*;
 
+    /// Keeps a separately exec'd Rust fixture alive on its own connected socket.
+    /// Only the parent test supplies the private path; normal suite runs skip it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    #[ignore = "self-executing fixture; invoked by the connect/accept parent test"]
+    fn unix_peer_process_connect_child_fixture() {
+        use std::io::{Read, Write};
+        let Some(path) = std::env::var_os("MEZ_TEST_PEER_CONNECT_SOCKET") else {
+            return;
+        };
+        let mut socket = std::os::unix::net::UnixStream::connect(path).unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+            .unwrap();
+        socket.write_all(&[1]).unwrap();
+        let mut reply = [0];
+        socket.read_exact(&mut reply).unwrap();
+        assert_eq!(reply, [2]);
+    }
+
+    /// A separately exec'd process connects ordinarily (no inherited telemetry
+    /// descriptor/token). Kernel origin agrees with its native incarnation and
+    /// the exact ancestor chain; stale roots and reversed ancestry fail closed.
+    /// This is a transport/provenance fixture, not production pane admission.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test(flavor = "current_thread")]
+    async fn unix_peer_process_connect_accept_has_exact_native_ancestry() {
+        use mez_mux::process::{process_ancestry, process_parent_identity_for_pid};
+        use std::os::fd::AsRawFd;
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        /// Kills and reaps the fixture even if a parent assertion fails.
+        struct ChildGuard(std::process::Child);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        /// Removes only the uniquely created fixture directory on every exit.
+        struct DirectoryGuard(std::path::PathBuf);
+        impl Drop for DirectoryGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let directory = DirectoryGuard(std::path::Path::new("/tmp").join(format!(
+            "mez-peer-{}-{:x}",
+            std::process::id(),
+            rand::random::<u64>()
+        )));
+        std::fs::create_dir(&directory.0).unwrap();
+        let path = directory.0.join("peer.sock");
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let root = process_parent_identity_for_pid(std::process::id()).unwrap();
+        let mut child = ChildGuard(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "runtime::peer_credentials::tests::unix_peer_process_connect_child_fixture",
+                    "--ignored",
+                    "--quiet",
+                ])
+                .env("MEZ_TEST_PEER_CONNECT_SOCKET", &path)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let peer = peer_process(socket.as_raw_fd()).unwrap();
+        assert_eq!(peer.pid, child.0.id());
+        assert_eq!(peer.uid, crate::runtime::current_effective_uid());
+        let mut ready = [0];
+        tokio::time::timeout(Duration::from_secs(10), socket.read_exact(&mut ready))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready, [1]);
+        let origin = process_parent_identity_for_pid(peer.pid).unwrap();
+        let evidence = tokio::task::spawn_blocking(move || process_ancestry(origin, root))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(evidence.chain.first(), Some(&origin));
+        assert_eq!(evidence.chain.last(), Some(&root));
+        assert_eq!(origin.parent_process_id, root.process_id);
+        let mut stale = root;
+        stale.start_token += 1;
+        assert!(process_ancestry(origin, stale).is_err());
+        assert!(process_ancestry(root, origin).is_err());
+        socket.write_all(&[2]).await.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "peer fixture did not exit"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     /// A child can write on an inherited endpoint whose kernel peer identity
     /// still names its creator. This regression prevents treating peer PID alone
     /// as current-writer or vendor/pane authority in future automatic admission.

@@ -252,6 +252,15 @@ descriptors do not prove the current writer; fresh process incarnation/ancestry
 and actor revalidation remain required separate evidence. Existing UID-only
 control authorization MUST remain unchanged until the full admission contract
 is implemented and tested. Linux qualification MUST NOT imply macOS runtime proof.
+Native ancestry groundwork MUST pair PID, parent PID and creation token from
+one bounded native record, retain at most 128 links, impose a cooperative 100ms
+walk budget and reobserve every retained link before returning. Unreadable,
+replaced, reparented, cyclic, unrelated or over-budget evidence MUST fail closed.
+This two-pass evidence is not an atomic process-tree snapshot, executable
+attestation, current-writer proof or client/session association. It MUST run off
+the serialized actor and MUST NOT replace exact root-generation/producer fencing
+at admission. No environment, supplied PID, command-name or shell fallback may
+substitute for native evidence; this groundwork alone grants no new enrollment.
 `agent/external/presentation` MUST require the same capability, generation and
 external session binding. Positive observation sequences MUST reject stale or
 conflicting updates; identical replay MUST be inert. Bounded title suggestions

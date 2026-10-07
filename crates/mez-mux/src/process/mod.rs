@@ -15,6 +15,8 @@ mod manager;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod pane;
+/// Exposes bounded native parent/incarnation observations and ancestry evidence.
+mod process_ancestry;
 /// Exposes native pane-process metadata lookup behind one portable boundary.
 mod process_metadata;
 /// Exposes the pty module boundary.
@@ -45,6 +47,11 @@ pub use pane::{
     PTY_INPUT_WRITE_CHUNK_BYTES, SHELL_INPUT_RECORD_ACK_BYTE, loader_input_record_requires_ack,
     receiver_input_record_requires_ack, shell_input_record_requires_ack,
     write_pty_fd_nonblocking_io,
+};
+#[doc(hidden)]
+pub use process_ancestry::{
+    ProcessAncestry, ProcessAncestryUnavailable, ProcessParentIdentity, process_ancestry,
+    process_parent_identity_for_pid,
 };
 #[doc(hidden)]
 pub use process_metadata::filesystem_credentials_for_pid;
