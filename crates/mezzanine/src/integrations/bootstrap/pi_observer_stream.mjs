@@ -4,14 +4,18 @@
  * Construct at session start, not factory loading; dispose on observer teardown.
  * A failed/full stream loses telemetry and is never automatically reconnected.
  */
-export function createObserverStreamSink(stream, boundSession) {
+export function createObserverStreamSink(stream, boundSession, onFailure = () => {}) {
   if (!stream || typeof stream.write !== "function" || typeof stream.on !== "function"
       || typeof stream.off !== "function" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(boundSession)) {
     throw new Error("Pi observer stream unavailable");
   }
   let active = true;
   let closed = false;
-  const fail = () => { active = false; };
+  const fail = () => {
+    if (!active) return;
+    active = false;
+    try { onFailure(); } catch { /* observational failure stays neutral */ }
+  };
   const close = () => { active = false; closed = true; };
   stream.on("error", fail);
   stream.on("close", close);
@@ -50,7 +54,12 @@ export function createObserverStreamSink(stream, boundSession) {
     enqueue,
     // Keep the neutral error listener through final stream teardown: removing
     // it while an inherited write is outstanding can cause an uncaught error.
-    dispose() { active = false; },
+    dispose(detach = false) {
+      active = false;
+      // A process-owned channel retains its own permanent neutral listener.
+      // Instance reload may therefore remove only this sink's listeners.
+      if (detach) { stream.off("error", fail); stream.off("close", close); }
+    },
     releaseAfterClose() {
       active = false;
       if (closed) { stream.off("error", fail); stream.off("close", close); }

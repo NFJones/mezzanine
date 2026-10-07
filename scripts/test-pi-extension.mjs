@@ -3,7 +3,92 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { createPiStreamExtension } from "../crates/mezzanine/src/integrations/bootstrap/pi_extension.mjs";
-import { registerInheritedObserver } from "../crates/mezzanine/src/integrations/bootstrap/pi_entry.mjs";
+import { registerInheritedObserver, acquireProcessObserverChannel } from "../crates/mezzanine/src/integrations/bootstrap/pi_entry.mjs";
+
+test("same-session reload retains a process channel and fences the old observer", () => {
+  const stream = new EventEmitter();
+  const frames = [];
+  stream.writableLength = 0;
+  stream.write = (frame) => { frames.push(JSON.parse(frame)); return true; };
+  // A process owner, not an extension instance, retains this stream. Its
+  // permanent neutral error listener makes per-instance listener retirement safe.
+  stream.on("error", () => {});
+  let open = false;
+  const opener = () => {
+    assert.equal(open, false, "duplicate observer borrowed live stream");
+    open = true;
+    return { stream, persistent: true, close(reason) {
+      assert(["reload", "quit"].includes(reason), "extension did not preserve teardown reason");
+      open = false;
+      if (reason !== "reload") stream.emit("close");
+    } };
+  };
+  const old = fixture(opener);
+  old({ type: "session_start", reason: "startup" });
+  old({ type: "agent_start" });
+  old({ type: "session_shutdown", reason: "reload" });
+  const replacement = fixture(opener);
+  replacement({ type: "session_start", reason: "reload" });
+  replacement({ type: "agent_start" });
+  const count = frames.length;
+  old({ type: "agent_start" });
+  assert.equal(frames.length, count);
+  assert.deepEqual(frames.map((frame) => frame.type),
+    ["session_start", "agent_start", "session_shutdown", "session_start", "agent_start"]);
+  replacement({ type: "session_shutdown", reason: "quit" });
+  assert.equal(stream.listenerCount("error"), 1);
+});
+
+test("production channel owner reuses the descriptor only after reload release", () => {
+  const stream = new EventEmitter();
+  let opens = 0;
+  let ends = 0;
+  stream.end = () => { ends++; stream.emit("close"); };
+  const state = {};
+  const open = () => { opens++; return stream; };
+  const first = acquireProcessObserverChannel(state, open);
+  assert.throws(() => acquireProcessObserverChannel(state, open), /unavailable/);
+  first.close("reload");
+  const second = acquireProcessObserverChannel(state, open);
+  first.close("quit");
+  assert.equal(ends, 0, "stale instance closed replacement channel");
+  second.close("quit");
+  assert.equal(opens, 1);
+  assert.equal(ends, 1);
+  assert.throws(() => acquireProcessObserverChannel(state, open), /unavailable/);
+  stream.emit("error", new Error("late write"));
+});
+
+test("failed process sink cannot revive after dropping reload shutdown", () => {
+  for (const mode of ["backpressure", "budget", "throw"]) {
+    const stream = new EventEmitter();
+    const frames = [];
+    let failing = false;
+    stream.writableLength = 0;
+    stream.write = (frame) => {
+      if (failing && mode === "throw") throw new Error("write unavailable");
+      frames.push(JSON.parse(frame));
+      return !(failing && mode === "backpressure");
+    };
+    stream.end = () => stream.emit("close");
+    const state = {};
+    const opener = () => acquireProcessObserverChannel(state, () => stream);
+    const old = fixture(opener);
+    old({ type: "session_start", reason: "startup" });
+    failing = true;
+    if (mode === "budget") stream.writableLength = 32768;
+    old({ type: "agent_start" });
+    old({ type: "session_shutdown", reason: "reload" });
+    const count = frames.length;
+    failing = false;
+    stream.writableLength = 0;
+    const replacement = fixture(opener);
+    replacement({ type: "session_start", reason: "reload" });
+    replacement({ type: "agent_start" });
+    assert.equal(state.closed, true);
+    assert.equal(frames.length, count, `${mode} revived telemetry without shutdown`);
+  }
+});
 
 test("candidate entry stays inert without explicit valid binding and opens only at matching start", () => {
   for (const binding of [{}, { descriptor: "4", session: "bound" },

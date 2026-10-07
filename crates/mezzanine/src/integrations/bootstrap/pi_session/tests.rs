@@ -83,6 +83,53 @@ async fn reply(stream: &mut tokio::net::UnixStream, result: serde_json::Value) {
         .unwrap();
 }
 
+/// Reload observations on the same inherited stream preserve launch sequences
+/// and registration. The parent bridge confirms the replacement only after the
+/// old shutdown reaches FIFO ownership; late old facts are discarded while
+/// suspended, and no second registration or provider work is issued.
+#[tokio::test(flavor = "current_thread")]
+async fn pi_session_stream_reload_preserves_sequence_and_lease() {
+    let mut fixture = Fixture::new();
+    let (stream, mut writer) = tokio::net::UnixStream::pair().unwrap();
+    let (_stop, cancellation) = watch::channel(false);
+    let worker = run_observer_with_clock(
+        &mut fixture.owner,
+        &fixture.transport,
+        "Pi",
+        stream,
+        cancellation,
+        || Some(100),
+    );
+    let producer = async {
+        writer.write_all(b"{\"type\":\"session_start\",\"reason\":\"startup\"}\n{\"type\":\"agent_start\"}\n{\"type\":\"session_shutdown\",\"reason\":\"reload\"}\n{\"type\":\"agent_settled\"}\n{\"type\":\"session_start\",\"reason\":\"reload\"}\n{\"type\":\"agent_start\"}\n").await.unwrap();
+        writer.shutdown().await.unwrap();
+    };
+    let server = async {
+        let (mut stream, value) = request(&fixture.listener).await;
+        assert_eq!(value["method"], "agent/external/register");
+        reply(&mut stream, serde_json::json!({"registered":true,"agent_id":"agent","generation":1,"expires_at_unix_seconds":160})).await;
+        for (index, state) in ["ready", "running", "ready", "running"].iter().enumerate() {
+            let (mut stream, value) = request(&fixture.listener).await;
+            assert_eq!(value["method"], "agent/external/presentation");
+            assert_eq!(value["params"]["state"], *state);
+            assert_eq!(value["params"]["sequence"], index + 1);
+            reply(
+                &mut stream,
+                serde_json::json!({"sequence":index+1,"changed":true}),
+            )
+            .await;
+        }
+    };
+    let (result, (), ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(worker, producer, server)
+    })
+    .await
+    .unwrap();
+    result.unwrap();
+    assert_eq!(fixture.owner.observer_epoch(), 2);
+    assert!(fixture.owner.pending().is_none());
+}
+
 /// Clean observer EOF drains accepted facts without inventing process death or
 /// deregistration; an explicit quit alone supplies retirement authority within
 /// the already bound lifecycle. No detached future remains after return.

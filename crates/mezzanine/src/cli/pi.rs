@@ -4,8 +4,8 @@
 //! for an exact pane-root capability. The credential never enters child argv,
 //! environment or output. Only a session hint and observation-only fd3 cross
 //! exec. The child retains ordinary stdio and vendor policy; telemetry failure
-//! neither kills nor relaunches it. Session changes/reload currently stop
-//! telemetry; a fresh explicit invocation is required for a new binding.
+//! neither kills nor relaunches it. Same-session reload preserves sequencing;
+//! session changes still require a fresh explicit invocation and new binding.
 
 use std::ffi::OsString;
 use std::os::fd::AsRawFd;

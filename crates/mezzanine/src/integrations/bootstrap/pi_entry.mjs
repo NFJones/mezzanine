@@ -1,18 +1,41 @@
 /**
- * Candidate Pi 1.0.2 directory-extension entry point.
+ * Best-effort Pi directory-extension entry point.
  *
  * Only an explicitly selected session and inherited observation socket can
  * enable this observer. Environment markers are discovery hints, not daemon
  * credentials or authority. Factory loading opens no descriptor or timer.
  * A private launcher must supply descriptor 3; missing, stale or duplicate
- * binding stays neutral. Reload needs a new launcher-owned observer channel.
- * This artifact is not enabled in the certified bootstrap registry.
+ * binding stays neutral. Same-session reload leases the process-owned stream
+ * once the old extension releases it; daemon capabilities never cross this link.
  */
 import { Socket } from "node:net";
 import { fstatSync } from "node:fs";
 import { createPiStreamExtension } from "./pi_extension.mjs";
 
 const channelOwner = Symbol.for("mezzanine.pi.observer-descriptor.v1");
+
+/** Acquire one instance lease from a process-owned observation channel. Reload
+ * releases only that lease; the fd and neutral error handler survive. Duplicate
+ * loads cannot borrow an active channel, and a closed channel never reopens. */
+export function acquireProcessObserverChannel(state, openStream) {
+  if (state.closed || state.lease) throw new Error("Pi observer channel unavailable");
+  if (!state.stream) {
+    state.stream = openStream();
+    state.stream.on("error", () => { state.closed = true; });
+    state.stream.on("close", () => { state.closed = true; });
+  }
+  const lease = {};
+  state.lease = lease;
+  return { stream: state.stream, persistent: true, fail() {
+    if (state.lease !== lease) return;
+    state.closed = true;
+    try { state.stream.end(); } catch { /* no vendor behavior change */ }
+  }, close(reason) {
+    if (state.lease !== lease) return;
+    state.lease = undefined;
+    if (reason !== "reload") { state.closed = true; state.stream.end(); }
+  } };
+}
 
 /** Registers an explicitly bound observer without opening its stream. */
 export function registerInheritedObserver(pi, binding, open) {
@@ -28,13 +51,10 @@ export default function mezzaninePiObserver(pi) {
     descriptor: process.env.MEZ_PI_OBSERVER_FD,
     session: process.env.MEZ_PI_OBSERVER_SESSION,
   }, () => {
-    // Process-local duplicate loads may register callbacks but cannot wrap the
-    // same descriptor twice. Closed channels are not silently reopened/rebound.
-    if (globalThis[channelOwner] || !fstatSync(3).isSocket()) {
-      throw new Error("Pi observer channel unavailable");
-    }
-    globalThis[channelOwner] = true;
-    const stream = new Socket({ fd: 3, readable: false, writable: true });
-    return { stream, close() { stream.end(); } };
+    const state = globalThis[channelOwner] ??= {};
+    return acquireProcessObserverChannel(state, () => {
+      if (!fstatSync(3).isSocket()) throw new Error("Pi observer channel unavailable");
+      return new Socket({ fd: 3, readable: false, writable: true });
+    });
   });
 }

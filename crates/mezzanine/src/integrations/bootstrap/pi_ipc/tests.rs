@@ -7,6 +7,27 @@ use super::super::pi_session;
 use super::*;
 use tokio::io::AsyncWriteExt;
 
+/// Reload cannot activate a fresh launch or bypass ordered prior shutdown in
+/// an already active bridge. The strict first-frame gate and active bridge both
+/// reject unsolicited reload rather than borrowing an old registration epoch.
+#[tokio::test(flavor = "current_thread")]
+async fn pi_ipc_unsolicited_reload_cannot_activate_or_reuse_epoch() {
+    let bytes = b"{\"type\":\"session_start\",\"reason\":\"reload\"}\n";
+    let (mut stream, mut writer) = tokio::net::UnixStream::pair().unwrap();
+    writer.write_all(bytes).await.unwrap();
+    assert!(wait_for_start(&mut stream, "bound").await.is_err());
+    let (stream, mut writer) = tokio::net::UnixStream::pair().unwrap();
+    writer.write_all(bytes).await.unwrap();
+    writer.shutdown().await.unwrap();
+    let (ingress, _inputs) = pi_session::channel();
+    let (_stop, cancellation) = watch::channel(false);
+    assert!(
+        serve(stream, "bound", 1, ingress, cancellation)
+            .await
+            .is_err()
+    );
+}
+
 /// Start activation preserves later bytes in the inherited stream and waits
 /// through idle silence. No running-only, malformed or truncated first fact
 /// may create a registration; the partial-frame deadline is not extended.

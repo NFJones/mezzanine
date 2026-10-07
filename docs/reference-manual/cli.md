@@ -93,8 +93,10 @@ after `--` are forwarded literally, except conflicting session selectors are
 rejected. `--json` does not wrap Pi's inherited output. Parent supervision returns
 Pi's exit code and does not terminate/restart it on telemetry failure.
 
-Initial-session callbacks drive registration/status and idle renewal. Reload,
-new, resume and fork currently end telemetry; relaunch explicitly for another
+Matched initial-session callbacks drive registration/status and idle renewal.
+Same-session reload retains one process-owned observation socket, fences old
+instances and confirms a replacement parent epoch without resetting delivery
+sequence or registration. New, resume and fork currently end telemetry; relaunch explicitly for another
 binding. Missing/changed callbacks or daemon outages may leave telemetry
 unavailable; lease expiry cleans up missing end events. Tokens remain unavailable
 in this lifecycle-only delivery. No live provider, macOS or physical-terminal
@@ -185,8 +187,9 @@ preserve pending report identity. Closing ingress ends worker ownership. Actual
 closure fences registration and outstanding delivery without draining buffered
 facts. Reload attachment first offers a proposal; an unread or dropped proposal
 leaves the observer suspended. Explicit confirmation activates the replacement;
-losing its result does not undo an accepted activation command. Actual
-reload orchestration remains unavailable in the public initial-session launcher.
+losing its result does not undo an accepted activation command. The inherited
+bridge confirms same-session reload after ordered shutdown; different-session
+rebinding remains unavailable in the public launcher.
 
 The internal inherited-stream bridge connects content-free observer facts to
 coordinator ingress. The launcher supplies a connected same-user Unix stream,
@@ -220,8 +223,8 @@ lease delivery without detached tasks or child ownership. Clean stream EOF drain
 accepted facts before ending renewal; it does not imply process death or request
 deregistration. Explicit quit facts retain their existing exact-session retirement
 semantics. Errors and cancellation preserve pending reducer evidence without
-automatic reconnect or vendor replay. Production authorization, reload/replacement
-orchestration remains separate; the public launcher does not automatically rebind.
+automatic reconnect or vendor replay. Production authorization and replacement
+session ownership remain separate; the public launcher does not implicitly rebind.
 
 An internal compiled artifact candidate owns five files under
 `extensions/mezzanine/` in an explicit agent-directory root. A package manifest

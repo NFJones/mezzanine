@@ -378,8 +378,12 @@ Mezzanine routing/authority. The caller's ordinary vendor environment and stdio
 remain intact. Disabled extensions MUST NOT be overridden. Child exit MUST be
 reaped and reported independently of telemetry failure; no replay or child kill
 is permitted merely to repair telemetry. Final draining and exact-binding
-retirement MUST be finite, with lease expiry as the fallback. Initial-session
-support MUST disclose telemetry loss after reload/new/resume/fork rather than
+retirement MUST be finite, with lease expiry as the fallback. Same-session reload
+MUST retain the process-owned observation descriptor, release only the old
+extension lease/listeners, and explicitly confirm a parent-owned replacement
+epoch after FIFO shutdown admission. Delivery sequence and registration MUST
+survive reload; duplicate/stale instances MUST NOT borrow or close the current
+channel. New/resume/fork support MUST disclose telemetry loss rather than
 implicitly rebind credentials. Token coverage remains separately unavailable
 until an evidenced accounting source is implemented.
 `agent/external/usage` MUST use the current restricted registration capability.

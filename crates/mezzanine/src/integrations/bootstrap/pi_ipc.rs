@@ -175,7 +175,7 @@ pub(crate) async fn wait_for_start(
         }
         if byte[0] == b'\n' {
             let fact = observation(session, &bytes)?;
-            return if matches!(fact, pi::Observation::SessionStarted { .. }) {
+            return if matches!(fact, pi::Observation::SessionStarted { reason: "startup" }) {
                 Ok(fact)
             } else {
                 Err(unavailable())
@@ -195,7 +195,7 @@ pub(crate) async fn wait_for_start(
 pub(crate) async fn serve(
     mut stream: tokio::net::UnixStream,
     session: &str,
-    epoch: u64,
+    mut epoch: u64,
     ingress: Ingress,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
@@ -211,6 +211,7 @@ pub(crate) async fn serve(
     let mut pending = Vec::with_capacity(MAX_FRAME);
     let mut deadline = None;
     let mut buffer = [0; 256];
+    let mut awaiting_reload = false;
     loop {
         let read = stream.read(&mut buffer);
         let count = tokio::select! {
@@ -229,9 +230,29 @@ pub(crate) async fn serve(
         for &byte in &buffer[..count] {
             if byte == b'\n' {
                 let fact = observation(session, &pending)?;
+                if !awaiting_reload
+                    && matches!(fact, pi::Observation::SessionStarted { reason: "reload" })
+                {
+                    return Err(unavailable());
+                }
+                if awaiting_reload {
+                    if !matches!(fact, pi::Observation::SessionStarted { reason: "reload" }) {
+                        pending.clear();
+                        deadline = None;
+                        continue;
+                    }
+                    // FIFO ingress applies the old shutdown before making this
+                    // same-session proposal. Only explicit parent confirmation
+                    // activates the reducer's new epoch; callbacks cannot do so.
+                    let offer = ingress.attach_after_reload(session)?;
+                    epoch = offer.await.map_err(|_| unavailable())??.confirm().await?;
+                }
+                let reloading =
+                    matches!(fact, pi::Observation::SessionShutdown { reason: "reload" });
                 ingress
                     .observe(epoch, session, fact)
                     .map_err(|_| unavailable())?;
+                awaiting_reload = reloading;
                 pending.clear();
                 deadline = None;
             } else {

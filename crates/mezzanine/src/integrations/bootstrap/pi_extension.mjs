@@ -4,9 +4,9 @@
  * A launcher supplies an immutable authorized session and a synchronous opener
  * for its own inherited observer stream. Neither function receives a daemon
  * capability. Factory loading registers callbacks only; session_start opens
- * resources and session_shutdown closes only this observer's channel. Reload
- * requires a newly supplied opener/epoch outside this extension instance.
- * This injectable factory is not a production-certified installation artifact.
+ * resources and session_shutdown releases only this instance's channel lease.
+ * A process-owned persistent channel survives same-session reload; the parent
+ * separately confirms its replacement epoch. No vendor mutation is performed.
  */
 import { createPiObserver } from "./pi_observer.mjs";
 import { createObserverStreamSink } from "./pi_observer_stream.mjs";
@@ -21,12 +21,12 @@ export function createPiStreamExtension(boundSession, openChannel) {
     let channel;
     let sink;
     let attempted = false;
-    const close = () => {
-      sink?.dispose();
+    const close = (reason = "unavailable") => {
+      sink?.dispose(channel?.persistent === true);
       const previous = channel;
       channel = undefined;
       sink = undefined;
-      try { previous?.close(); } catch { /* telemetry-only cleanup */ }
+      try { previous?.close(reason); } catch { /* telemetry-only cleanup */ }
     };
     // Registered before the observer so the initial session fact can be sent.
     pi.on("session_start", (event, ctx) => {
@@ -43,14 +43,14 @@ export function createPiStreamExtension(boundSession, openChannel) {
           throw new Error("Pi observer channel unavailable");
         }
         channel = opened;
-        sink = createObserverStreamSink(opened.stream, boundSession);
+        sink = createObserverStreamSink(opened.stream, boundSession, () => opened.fail?.());
         const ownedSink = sink;
-        opened.stream.on("close", () => ownedSink.releaseAfterClose());
+        if (!opened.persistent) opened.stream.once("close", () => ownedSink.releaseAfterClose());
       } catch { close(); }
     });
     createPiObserver(boundSession, (item) => sink?.enqueue(item))(pi);
     // Registered after forwarding the teardown fact. Cleanup never changes
     // session decisions, injects continuation, or retires daemon authority.
-    pi.on("session_shutdown", () => { close(); });
+    pi.on("session_shutdown", (event) => { close(event.reason); });
   };
 }
