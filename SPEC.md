@@ -307,6 +307,14 @@ historical cutoff MUST prevent old completed snapshots charging a fresh owner.
 Finalized assistant-message coverage MUST exclude ambiguous counters, tool parts,
 auxiliary expense and costs rather than fabricate completeness. Telemetry loss
 MUST NOT terminate/restart the vendor or override child exit status.
+The best-effort Codex lifecycle projection MUST accept evidenced fields without
+an exact version gate, discard callback content/counters and reject ambiguous
+top-level identity keys under finite byte/member bounds. Exact main-session
+filtering MUST NOT grant launch authority or promote child events into parent
+status. Stop MUST remain a ready/turn boundary, not success proof, because later
+hook decisions may continue execution. Interrupt and SessionEnd observations
+MUST NOT imply vendor process death. This projection alone MUST NOT enable an
+installed adapter or imply exact token coverage.
 The best-effort Pi lifecycle projection MUST require an explicitly bound context
 session and discard callback content/paths. `agent_end` and `turn_end` MUST NOT
 prove final settlement; `agent_before_settle` outcomes remain provisional until

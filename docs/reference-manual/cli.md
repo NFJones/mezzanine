@@ -105,12 +105,19 @@ unavailable; lease expiry cleans up missing end events. Tokens remain unavailabl
 in this lifecycle-only delivery. No live provider, macOS or physical-terminal
 compatibility is implied by synthetic tests; user feedback guides repairs.
 
-The Codex `0.160.0` component currently projects bounded main-session lifecycle
-identifiers from its released hook schemas. It discards prompt/transcript/tool
+The best-effort Codex component projects bounded main-session lifecycle
+identifiers from documented hook schemas without requiring an exact version.
+An exact parent-owned session filter ignores other sessions; duplicate top-level
+identity/event keys and objects over 256 fields reject without exposing payloads.
+Stop is reported as ready/turn-boundary, not proof of success: other hooks may
+cause continuation. Interrupt remains an interrupted-turn observation, while
+SessionEnd does not attest process death. It discards prompt/transcript/tool
 content and child-context events, and does not infer token usage. This pure
 component does not deliver launch capabilities, renew idle leases, install hooks,
 or certify a live Codex process. Its release reference is
 `openai/codex` tag `rust-v0.160.0`, `codex-rs/hooks/schema/generated`.
+That reference is evidence, not a compatibility gate. Private installed hooks,
+launch binding, renewal and any optional structured usage remain unfinished.
 
 The best-effort OpenCode component projects settled assistant-message snapshots
 only for an explicitly bound session. Its released producer separates uncached
