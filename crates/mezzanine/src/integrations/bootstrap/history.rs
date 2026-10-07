@@ -381,6 +381,65 @@ export function createPersistentTelemetryClient(options) {
 }
 "#;
 
+/// Reconstructs exact shipped v2 from fixed v1 data and fixed inspected deltas.
+/// It never consults current source, receipts, paths or runtime user input.
+pub(super) fn persistent_client_v2() -> Vec<u8> {
+    let source = String::from_utf8_lossy(PERSISTENT_CLIENT_V1);
+    let source = source.replace("/** Reject duplicate keys", &format!("{PI_FACT_V2}/** Reject duplicate keys"))
+        .replace("  let verifier;\n", "  let verifier;\n  let projectionMode;\n")
+        .replace("      if (!states.has(state)) return Promise.resolve(unavailable());\n",
+            "      if (!states.has(state) || projectionMode === \"pi\") return Promise.resolve(unavailable());\n      projectionMode = \"generic\";\n")
+        .replace("    successor(instance) {\n", &format!("{PI_METHOD_V2}    successor(instance) {{\n"))
+        .replace("    detach() { disposed = true; lose(attempt); },\n",
+            "    // Resource cancellation retains exact immutable attempt identity for later\n    // caller-owned recovery. It never retries work or transfers a successor.\n    disconnect() { lose(attempt); },\n    detach() { disposed = true; lose(attempt); },\n");
+    source.into_bytes()
+}
+
+/// Exact inert projection addition shipped in the second shared client.
+const PI_FACT_V2: &str = r#"/** Reprojects only inert known Pi fields; arbitrary callback objects/content are
+ * discarded before transport. Daemon Event validation remains authoritative. */
+function piFact(input) {
+  try {
+    if (!input || typeof input !== "object" || Array.isArray(input) || !Object.hasOwn(input, "type")) return;
+    const type = input.type;
+    if (["agent_start", "agent_settled"].includes(type)) return { type };
+    if (["session_start", "session_shutdown"].includes(type)) {
+      const allowed = type === "session_start" ? ["startup", "reload", "new", "resume", "fork"] : ["quit", "reload", "new", "resume", "fork"];
+      const reason = Object.hasOwn(input, "reason") ? input.reason : undefined;
+      if (allowed.includes(reason)) return { type, reason };
+    }
+    if (["ui_prompt_start", "ui_prompt_end"].includes(type)) {
+      const reason = Object.hasOwn(input, "reason") ? input.reason : undefined;
+      const kind = Object.hasOwn(input, "kind") ? input.kind : undefined;
+      if (reason === "ui_prompt" && ["select", "confirm", "input", "editor", "custom"].includes(kind)) {
+        return { type, reason, kind };
+      }
+    }
+    if (type === "agent_before_settle") {
+      const outcome = Object.hasOwn(input, "outcome") ? input.outcome : undefined;
+      if (["completed", "aborted", "error"].includes(outcome)) return { type, outcome };
+    }
+  } catch { /* telemetry input failure is neutral */ }
+}
+
+"#;
+
+/// Exact fixed typed Pi operation shipped in the second shared client.
+const PI_METHOD_V2: &str = r#"    piObservation(input) {
+      const event = metadata.harness === "pi" && piFact(input);
+      if (!event || projectionMode === "generic") return Promise.resolve(unavailable());
+      projectionMode = "pi";
+      return enqueue(async () => {
+        if (!await start() || !Number.isSafeInteger(sequence + 1)) return unavailable();
+        const result = await exchange("agent/external/pi-observation", { ...params(), sequence: ++sequence, event }, attempt);
+        const accepted = result?.accepted === true && result.sequence === sequence && typeof result.retired === "boolean";
+        if (!accepted) lose(attempt);
+        if (accepted && result.retired) { disposed = true; lose(attempt); }
+        return accepted ? { delivered: true, retired: result.retired } : unavailable();
+      });
+    },
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,6 +449,14 @@ mod tests {
     /// sources, independently of later active entry/client implementation edits.
     #[test]
     fn bootstrap_history_source_snapshots_are_immutable() {
+        let v2 = persistent_client_v2();
+        assert_eq!(
+            Sha256::digest(&v2)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            "b01a4baee8c198b0edea9bf4adf03ae2c217a74c597d48502694cee69c7267d9"
+        );
         for (bytes, expected) in [
             (
                 PI_ENTRY_V3,

@@ -19,6 +19,11 @@ pub(crate) enum Artifact {
         pointer: String,
         value: serde_json::Value,
     },
+    /// One exact array member, never ownership of the containing shared array.
+    JsonArrayEntry {
+        pointer: String,
+        value: serde_json::Value,
+    },
 }
 
 /// One bounded adapter-owned destination, relative to an explicit root.
@@ -37,7 +42,7 @@ pub(crate) fn validate(entry: &Entry) -> Result<()> {
         Artifact::File { bytes } if bytes.len() > 1024 * 1024 => Err(MezError::invalid_args(
             "bootstrap artifact exceeds byte limit",
         )),
-        Artifact::JsonEntry { pointer, .. } => {
+        Artifact::JsonEntry { pointer, .. } | Artifact::JsonArrayEntry { pointer, .. } => {
             pointer_parts(pointer)?;
             Ok(())
         }
@@ -137,6 +142,9 @@ pub(crate) fn reconcile(
                 _ => Err(MezError::invalid_args("bootstrap artifact invalid")),
             }
         }
+        Artifact::JsonArrayEntry { pointer, .. } => {
+            reconcile_array(current, previous, desired, pointer)
+        }
         Artifact::JsonEntry { pointer, .. } => {
             let parts = pointer_parts(pointer)?;
             let mut document: serde_json::Value = match current {
@@ -213,6 +221,129 @@ pub(crate) fn reconcile(
     }
 }
 
+/// Reconciles a single exact owned array member while preserving sibling order.
+/// Missing or ambiguous prior ownership conflicts; unowned matching members are
+/// never adopted. Replacement retains its old position and uninstall keeps the
+/// shared document/array, not a stale whole-file backup.
+fn reconcile_array(
+    current: Option<&[u8]>,
+    previous: Option<&Artifact>,
+    desired: Option<&Artifact>,
+    pointer: &str,
+) -> Result<Option<Vec<u8>>> {
+    let parts = pointer_parts(pointer)?;
+    let old = match previous {
+        Some(Artifact::JsonArrayEntry {
+            pointer: old,
+            value,
+        }) if old == pointer => Some(value),
+        None => None,
+        _ => {
+            return Err(MezError::conflict(
+                "bootstrap array ownership location changed",
+            ));
+        }
+    };
+    let new = match desired {
+        Some(Artifact::JsonArrayEntry {
+            pointer: new,
+            value,
+        }) if new == pointer => Some(value),
+        None => None,
+        _ => {
+            return Err(MezError::conflict(
+                "bootstrap array ownership location changed",
+            ));
+        }
+    };
+    let mut document: serde_json::Value = match current {
+        Some(bytes) => super::strict_json::decode(bytes)?,
+        None => serde_json::json!({}),
+    };
+    let mut parent = &mut document;
+    for key in &parts[..parts.len() - 1] {
+        parent = parent
+            .get_mut(key)
+            .ok_or_else(|| MezError::conflict("bootstrap array parent unavailable"))?;
+    }
+    let object = parent
+        .as_object_mut()
+        .ok_or_else(|| MezError::conflict("bootstrap array parent must be object"))?;
+    let key = &parts[parts.len() - 1];
+    if !object.contains_key(key) {
+        if old.is_some() {
+            return Err(MezError::conflict(
+                "bootstrap owned array entry disappeared",
+            ));
+        }
+        object.insert(key.clone(), serde_json::json!([]));
+    }
+    let array = object
+        .get_mut(key)
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| MezError::conflict("bootstrap target must be an array"))?;
+    if array.len() > 4096 {
+        return Err(MezError::invalid_args(
+            "bootstrap array exceeds entry limit",
+        ));
+    }
+    let indices = old.map(|old| {
+        array
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| (value == old).then_some(index))
+            .collect::<Vec<_>>()
+    });
+    if indices.as_ref().is_some_and(|indices| indices.len() != 1) {
+        return Err(MezError::conflict(
+            "bootstrap owned array entry changed or ambiguous",
+        ));
+    }
+    let position = indices
+        .as_ref()
+        .and_then(|indices| indices.first())
+        .copied();
+    if new.is_some_and(|new| {
+        array
+            .iter()
+            .enumerate()
+            .any(|(index, value)| Some(index) != position && value == new)
+    }) {
+        return Err(MezError::conflict(
+            "bootstrap array target has unowned matching entry",
+        ));
+    }
+    match (position, new) {
+        (Some(index), Some(value)) => array[index] = value.clone(),
+        (Some(index), None) => {
+            array.remove(index);
+        }
+        (None, Some(value)) => {
+            if array.len() == 4096 {
+                return Err(MezError::invalid_args("bootstrap array capacity exhausted"));
+            }
+            array.push(value.clone());
+        }
+        (None, None) => {}
+    }
+    if let Some(bytes) = current {
+        let original: serde_json::Value = serde_json::from_slice(bytes)
+            .map_err(|_| MezError::invalid_args("bootstrap JSON unavailable"))?;
+        if original == document {
+            return Ok(Some(bytes.to_vec()));
+        }
+    }
+    let mut bytes = serde_json::to_vec_pretty(&document)
+        .map_err(|_| MezError::invalid_state("bootstrap array encoding failed"))?;
+    bytes.push(b'\n');
+    if bytes.len() > 1024 * 1024 {
+        return Err(MezError::invalid_args(
+            "bootstrap array replacement exceeds byte limit",
+        ));
+    }
+    Ok(Some(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +409,84 @@ mod tests {
         };
         assert!(reconcile(Some(b"{}"), None, Some(&entry)).is_err());
         assert!(reconcile(Some(b"{/*comment*/}"), None, Some(&entry)).is_err());
+    }
+
+    /// Exact array ownership preserves authored order/settings across install,
+    /// repeat, upgrade and uninstall; unreceipted/duplicate/edited matches refuse
+    /// mutation instead of adopting arbitrary sibling plugin registrations.
+    #[test]
+    fn bootstrap_array_reconciliation_preserves_siblings_and_exact_ownership() {
+        let first = Artifact::JsonArrayEntry {
+            pointer: "/plugin".into(),
+            value: serde_json::json!("./mezzanine-tui.mjs"),
+        };
+        let original = br#"{"plugin":["user-a",["user-b",{"enabled":true}]],"theme":"authored"}"#;
+        let installed = reconcile(Some(original), None, Some(&first))
+            .unwrap()
+            .unwrap();
+        assert!(reconcile(Some(&installed), None, Some(&first)).is_err());
+        assert_eq!(
+            reconcile(Some(&installed), Some(&first), Some(&first))
+                .unwrap()
+                .unwrap(),
+            installed
+        );
+        let mut authored: serde_json::Value = serde_json::from_slice(&installed).unwrap();
+        authored["plugin"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!("user-c"));
+        let authored = serde_json::to_vec(&authored).unwrap();
+        let second = Artifact::JsonArrayEntry {
+            pointer: "/plugin".into(),
+            value: serde_json::json!("./mezzanine-tui-v2.mjs"),
+        };
+        let upgraded = reconcile(Some(&authored), Some(&first), Some(&second))
+            .unwrap()
+            .unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&upgraded).unwrap();
+        assert_eq!(
+            document["plugin"],
+            serde_json::json!(["user-a",["user-b",{"enabled":true}],"./mezzanine-tui-v2.mjs","user-c"])
+        );
+        let removed = reconcile(Some(&upgraded), Some(&second), None)
+            .unwrap()
+            .unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&removed).unwrap();
+        assert_eq!(
+            document["plugin"],
+            serde_json::json!(["user-a",["user-b",{"enabled":true}],"user-c"])
+        );
+        assert_eq!(document["theme"], "authored");
+        for current in [
+            br#"{"plugin":{}}"#.as_slice(),
+            br#"{"plugin":["./mezzanine-tui.mjs","./mezzanine-tui.mjs"]}"#,
+            br#"{"plugin":[]}"#,
+        ] {
+            assert!(reconcile(Some(current), Some(&first), Some(&second)).is_err());
+        }
+        let created = reconcile(None, None, Some(&first)).unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&created).unwrap()["plugin"],
+            serde_json::json!(["./mezzanine-tui.mjs"])
+        );
+    }
+
+    /// Generic JSON parsing overwrites duplicate keys and could discard authored
+    /// plugins while appending ours. Ambiguous root/nested fields must refuse
+    /// mutation before producing replacement bytes, including escaped aliases.
+    #[test]
+    fn bootstrap_array_reconciliation_refuses_duplicate_authored_fields() {
+        let entry = Artifact::JsonArrayEntry {
+            pointer: "/plugin".into(),
+            value: serde_json::json!("./mez-tui.mjs"),
+        };
+        for input in [
+            br#"{"plugin":["user"],"plugin":[]}"#.as_slice(),
+            br#"{"plugin":["user"],"\u0070lugin":[]}"#,
+            br#"{"plugin":[],"authored":{"value":1,"value":2}}"#,
+        ] {
+            assert!(reconcile(Some(input), None, Some(&entry)).is_err());
+        }
     }
 }

@@ -40,7 +40,7 @@ pub(crate) fn candidate_manifest() -> Manifest {
     entries.extend(super::persistent_client::entries("extensions/mezzanine"));
     Manifest {
         harness: "pi".into(),
-        revision: 4,
+        revision: 5,
         vendor_version: super::pi::RELEASE.into(),
         entries,
     }

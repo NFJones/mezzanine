@@ -357,6 +357,10 @@ vendor versions MUST NOT gate implementation or installation; untested behavior
 MUST be labelled rather than claimed as certified. Planning/checking MUST be distinct from explicit apply,
 uninstall and recovery, with no daemon dependency or credential installation.
 Owned-file and exact-JSON-entry receipts MUST protect unrelated settings;
+Exact JSON-array-member ownership MUST preserve unrelated members and order,
+replace at the owned position, and uninstall only that member, not the containing
+document. Duplicate JSON keys, edited/ambiguous ownership and unowned matching
+members MUST conflict; strict JSON planning MUST NOT strip authored JSONC comments.
 edited ownership MUST conflict. Publication MUST retain bounded recovery intent
 before changing destinations, reject symlink/special-node traversal, and never
 claim whole-install atomicity or external-writer CAS. Vendor adapters remain
@@ -387,7 +391,21 @@ ends producer telemetry rather than evicting identities and guessing activity.
 Unknown/prototype-named event values MUST NOT become status. Missing or
 ambiguous counters remain unavailable, and message-part usage MUST NOT be added
 to completed-message usage. The compiled OpenCode installer MAY own a local
-plugin entry and private dependency-free siblings, never vendor settings or trust.
+plugin entry and private dependency-free siblings, plus one exact owned TUI
+plugin-array member, never whole vendor settings/exporters/trust.
+The ordinary OpenCode TUI adapter MUST use the client-local selected route and
+cached root metadata, not the first server-wide session event or inherited server
+pane. Native admission MUST still prove the actual local frontend producer/root.
+Client-local metadata/event subscriptions MUST filter exact selected session and
+reject child/home/unknown associations. The adapter MUST NOT navigate, inject input,
+approve, call remote client APIs, read message/part/transcript history or fabricate
+unknown idle/completion. Cached wait IDs and bounded resolved history MUST remain
+content-free. A 250ms unreferenced cache sampler MAY detect silent route changes;
+bounded source handoff and one process-owned finalizer MUST not block vendor
+disposal. Lifecycle status may coalesce; ordinary expense MUST remain unavailable
+until durable source continuity is implemented. Transport recovery MUST retain
+exact instance/wait identity and have finite retry bounds, never replay provider
+work. Unsupported TUI API/disabled vendor policy remains explicit unavailable.
 Ordinary OpenCode integration MUST preserve vendor options, disabled policy and
 process behavior. Qualified session association, not a vendor wrapper or inherited
 pane claim, supplies authority. Durable source identity MUST prevent historical

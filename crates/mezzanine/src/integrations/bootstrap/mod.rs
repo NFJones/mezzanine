@@ -90,6 +90,8 @@ pub(crate) mod pi_transport;
 mod publication;
 #[cfg(test)]
 mod publication_tests;
+/// Rejects ambiguous shared JSON before exact array-member reconciliation.
+mod strict_json;
 
 #[allow(
     dead_code,
@@ -138,10 +140,27 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         return Vec::new();
     }
     let mut previous = current;
+    let mut last_shipped = previous.clone();
+    last_shipped.revision = if manifest.harness == "pi" { 4 } else { 3 };
+    last_shipped.entries.retain(|entry| {
+        !["plugins/mezzanine/opencode_tui.mjs", "tui.json"].contains(&entry.path.as_str())
+    });
+    for entry in &mut last_shipped.entries {
+        if entry.path.ends_with("/persistent_client.mjs") {
+            entry.artifact = reconciliation::Artifact::File {
+                bytes: history::persistent_client_v2(),
+            };
+        }
+    }
     previous.revision = revision + 1;
-    previous
-        .entries
-        .retain(|entry| entry.path != "extensions/mezzanine/pi_persistent.mjs");
+    previous.entries.retain(|entry| {
+        ![
+            "extensions/mezzanine/pi_persistent.mjs",
+            "plugins/mezzanine/opencode_tui.mjs",
+            "tui.json",
+        ]
+        .contains(&entry.path.as_str())
+    });
     for entry in &mut previous.entries {
         let frozen = if entry.path == "extensions/mezzanine/index.mjs" {
             Some(history::PI_ENTRY_V3)
@@ -162,7 +181,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         .entries
         .retain(|entry| !paths.contains(&entry.path.as_str()));
     if compiled_predecessor_matches(&previous) {
-        vec![immediate, previous]
+        vec![last_shipped, immediate, previous]
     } else {
         Vec::new()
     }

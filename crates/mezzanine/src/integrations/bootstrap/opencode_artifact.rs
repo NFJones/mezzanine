@@ -10,7 +10,7 @@ pub(crate) fn manifest() -> Manifest {
     let mut manifest = Manifest {
         harness: "opencode".into(),
         vendor_version: "best-effort".into(),
-        revision: 3,
+        revision: 4,
         entries: vec![
             Entry {
                 path: "plugins/mezzanine.js".into(),
@@ -29,6 +29,19 @@ pub(crate) fn manifest() -> Manifest {
                 path: "plugins/mezzanine/opencode_observer.mjs".into(),
                 artifact: Artifact::File {
                     bytes: include_bytes!("opencode_observer.mjs").to_vec(),
+                },
+            },
+            Entry {
+                path: "plugins/mezzanine/opencode_tui.mjs".into(),
+                artifact: Artifact::File {
+                    bytes: include_bytes!("opencode_tui.mjs").to_vec(),
+                },
+            },
+            Entry {
+                path: "tui.json".into(),
+                artifact: Artifact::JsonArrayEntry {
+                    pointer: "/plugin".into(),
+                    value: serde_json::json!("./plugins/mezzanine/opencode_tui.mjs"),
                 },
             },
         ],
@@ -57,6 +70,11 @@ mod tests {
             b"// authored\n{\"plugin\":[\"unrelated\"]}\n",
         )
         .unwrap();
+        std::fs::write(
+            root.join("tui.json"),
+            br#"{"plugin":["user-a",["user-b",{"enabled":true}]],"theme":"authored"}"#,
+        )
+        .unwrap();
         let manifest = manifest();
         plan(&root, &manifest, Operation::Install)
             .unwrap()
@@ -78,6 +96,13 @@ mod tests {
             .apply()
             .unwrap();
         assert!(!entry.exists());
+        let tui: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("tui.json")).unwrap()).unwrap();
+        assert_eq!(
+            tui["plugin"],
+            serde_json::json!(["user-a",["user-b",{"enabled":true}]])
+        );
+        assert_eq!(tui["theme"], "authored");
         assert_eq!(
             std::fs::read(root.join("opencode.jsonc")).unwrap(),
             b"// authored\n{\"plugin\":[\"unrelated\"]}\n"

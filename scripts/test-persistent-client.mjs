@@ -219,3 +219,16 @@ test("Pi fact transport captures getter selectors once and isolates generic sour
     assert.equal((await client.piObservation({ type: "agent_end" })).delivered, false);
   } finally { client.detach(); await f.close(); }
 });
+
+test("connected-only lifecycle delivery never auto-enrolls after a socket loss", async () => {
+  const f = await fixture(request => request.method === "agent/external/enroll" ? enrollment(request)
+    : { changed: true, sequence: request.params.sequence });
+  const client = createPersistentTelemetryClient(f.options);
+  try {
+    assert.equal(await client.start(), true);
+    client.disconnect();
+    const count = f.requests.length;
+    assert.equal((await client.presentation("running", true)).delivered, false);
+    assert.equal(f.requests.length, count, "connected-only delivery opened another enrollment");
+  } finally { client.detach(); await f.close(); }
+});

@@ -36,6 +36,23 @@ async fn external_enrollment_installed_ordinary_pi_entry_uses_daemon_reducer() {
 }
 
 /// Runs an explicit offline installed-artifact producer through real native
+/// The installed TUI config resolves the real default {id,tui} module. A local
+/// client-selected cache/route drives native Bun-origin enrollment, exact session
+/// filtering and retirement; no server-owned pane hints or provider work occur.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY (Bun host) and built mez helper required"]
+async fn external_enrollment_installed_opencode_tui_uses_client_local_association() {
+    qualify_installed_node_entry(
+        "opencode-tui-ordinary-fixture.mjs",
+        "opencode_tui.mjs",
+        2,
+        2,
+        false,
+    )
+    .await;
+}
+
+/// Runs an explicit offline installed-artifact producer through real native
 /// sender, peer helper, protocol actor and lifecycle settlement ownership.
 async fn qualify_installed_node_entry(
     script_name: &str,
@@ -82,9 +99,18 @@ async fn qualify_installed_node_entry(
     let listener = tokio::net::UnixListener::bind(&path).unwrap();
     std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
     crate::runtime::enable_unix_writer_credentials(listener.as_raw_fd()).unwrap();
-    let root = directory.join("pi-config");
+    let opencode = entry_name == "opencode_tui.mjs";
+    let root = directory.join(if opencode {
+        "opencode-config"
+    } else {
+        "pi-config"
+    });
     std::fs::create_dir(&root).unwrap();
-    let mut manifest = crate::integrations::bootstrap::pi_artifact::candidate_manifest();
+    let mut manifest = if opencode {
+        crate::integrations::bootstrap::opencode_artifact::manifest()
+    } else {
+        crate::integrations::bootstrap::pi_artifact::candidate_manifest()
+    };
     // This fixture selects the already-built product as the installing executable
     // instead of libtest itself; no runtime admission evidence is supplied here.
     let entry = manifest
@@ -117,20 +143,28 @@ async fn qualify_installed_node_entry(
         .canonicalize()
         .unwrap();
     let command = format!(
-        "{} {} {} {}\n",
+        "{}{} {} {} {}\n",
+        if opencode { "BUN_BE_BUN=1 " } else { "" },
         shlex::try_quote(node.to_str().unwrap()).unwrap(),
         shlex::try_quote(script.to_str().unwrap()).unwrap(),
         shlex::try_quote(
-            root.join("extensions/mezzanine")
-                .join(entry_name)
-                .to_str()
-                .unwrap()
+            (if opencode {
+                root.join("tui.json")
+            } else {
+                root.join("extensions/mezzanine").join(entry_name)
+            })
+            .to_str()
+            .unwrap()
         )
         .unwrap(),
         shlex::try_quote(
-            root.join("extensions/mezzanine/peer_helper.mjs")
-                .to_str()
-                .unwrap()
+            root.join(if opencode {
+                "plugins/mezzanine/peer_helper.mjs"
+            } else {
+                "extensions/mezzanine/peer_helper.mjs"
+            })
+            .to_str()
+            .unwrap()
         )
         .unwrap()
     );
@@ -221,7 +255,7 @@ async fn qualify_installed_node_entry(
     assert!(binding.retired);
     assert_eq!(
         binding.enrollment.as_ref().unwrap().epoch,
-        if typed_pi { 1 } else { 2 }
+        if typed_pi || opencode { 1 } else { 2 }
     );
     if typed_pi {
         assert!(
@@ -250,7 +284,7 @@ async fn qualify_installed_node_entry(
             .as_ref()
             .unwrap()
             .state,
-        "complete"
+        if opencode { "running" } else { "complete" }
     );
     assert!(
         exit.service

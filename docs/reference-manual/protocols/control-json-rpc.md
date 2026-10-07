@@ -642,9 +642,10 @@ The client is bounded, unreferenced, allowlisted and neutral on loss. It exposes
 typed lifecycle delivery, not ledger commitment or fabricated usage.
 
 Private installation pins the installing binary, not a PATH/launcher helper
-variable. Pi revision4 adds ordinary entry wiring; OpenCode revision3 refreshes
-shared client bytes without activating its fd3-only entry. Exact Pi2/Pi3 and
-OpenCode1/OpenCode2 receipts use independently frozen old entry/client bytes.
+variable. Pi revision5 refreshes shared client bytes; OpenCode revision4 installs
+a TUI-only default `{id,tui}` entry and one owned `tui.json` `/plugin` array member.
+Exact Pi2/Pi3/Pi4 and OpenCode1/OpenCode2/OpenCode3 receipts use independently frozen
+old client bytes; unknown historical helper references remain non-destructive errors.
 Other historical variants, recovery/default-root/dry-run UX remain installer work.
 Ordinary installed Pi entry callbacks now use this verified transport, with a
 bounded process lease/queue and genuine sessionManager selection. Same-session
@@ -664,8 +665,28 @@ latest reply-loss replay is inert; gaps/conflicts/content and mixed generic
 presentation reject. Replies carry `accepted`, exact `sequence` and `retired`;
 these acknowledge lifecycle delivery only, not incurred-usage storage.
 
-OpenCode entry activation, additional vendor callbacks, short-lived
-helper association, shared/preexisting server session association and macOS
+The OpenCode TUI entry uses the actual local frontend's `route.current` and cached
+root session metadata, not a server plugin's first root event. This permits local
+client/session association even when several clients receive the same server bus.
+It only reads selected metadata/status/wait IDs and subscribes to scoped events;
+it calls no navigation, approval, input or remote client/transcript API. Foreign,
+child, home and unknown sessions cannot borrow the active source. A scoped,
+unreferenced 250ms cache sampler detects silent selection changes. Exact old-source
+retirement is serialized; status may coalesce, but wait identities are not evicted.
+Unknown underlying state is not reported as idle. Transport recovery is bounded
+to four same-instance attempts spaced at least5s, with locally observed wait
+history retained. TUI scope disposal queues one finalizer without returning a
+network promise to the vendor. The legacy server entry remains inert without its
+old private fixture channel; it does not attribute server-wide activity.
+
+TUI registration owns only its exact strict-JSON array member, preserving authored
+plugin order/options/settings; uninstall leaves the shared document. Ambiguous
+duplicate keys/members or edits conflict. JSONC merge/general bootstrap UX remain
+separate unfinished installer work. The inspected local binary's embedded Bun
+runtime qualifies client/native-sender fixtures, not a live interactive UI or all
+vendor releases. Vendor disabled/pure/trust policy is not overridden.
+
+Additional vendor callbacks, short-lived helper association and macOS
 lifetime/sender equivalents remain unfinished. Unsupported platforms/kernels
 retain ordinary control without enrollment; no vendor relaunch/fallback occurs.
 

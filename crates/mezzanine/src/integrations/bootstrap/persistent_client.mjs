@@ -6,7 +6,7 @@
 import { Socket } from "node:net";
 import { lstatSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
-import { spawn } from "node:child_process";
+import childProcess from "node:child_process";
 
 const states = new Set(["ready", "running", "approval-wait", "input-wait", "complete", "interrupted", "failed", "background"]);
 const text = (value, max) => typeof value === "string" && value.trim().length > 0
@@ -133,7 +133,7 @@ function verifyPeer(socket, helper, signal) {
       // Node/platform handle shapes fail closed without a transport fallback.
       const fd = socket._handle?.fd;
       if (!Number.isSafeInteger(fd) || fd < 0) { finish(false); return; }
-      child = spawn(helper, ["harness-peer"], { shell: false,
+      child = childProcess.spawn(helper, ["harness-peer"], { shell: false,
         stdio: ["ignore", "pipe", "ignore", fd], env: {} });
       child.once("error", () => finish(false));
       if (!child.stdout || typeof child.stdout.unref !== "function") { finish(false); return; }
@@ -286,11 +286,12 @@ export function createPersistentTelemetryClient(options) {
   return Object.freeze({ start,
     status() { return Object.freeze({ phase, usage: "unavailable-source-continuity",
       run: handle?.run, epoch: handle?.epoch }); },
-    presentation(state) {
+    presentation(state, connectedOnly = false) {
       if (!states.has(state) || projectionMode === "pi") return Promise.resolve(unavailable());
       projectionMode = "generic";
       return enqueue(async () => {
-        if (!await start() || !Number.isSafeInteger(sequence + 1)) return unavailable();
+        if (connectedOnly ? phase !== "enrolled" : !await start()) return unavailable();
+        if (!Number.isSafeInteger(sequence + 1)) return unavailable();
         const result = await exchange("agent/external/presentation", { ...params(), sequence: ++sequence, state }, attempt);
         const accepted = result && typeof result.changed === "boolean" && result.sequence === sequence;
         if (!accepted) lose(attempt);
