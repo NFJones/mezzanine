@@ -261,6 +261,14 @@ attestation, current-writer proof or client/session association. It MUST run off
 the serialized actor and MUST NOT replace exact root-generation/producer fencing
 at admission. No environment, supplied PID, command-name or shell fallback may
 substitute for native evidence; this groundwork alone grants no new enrollment.
+Origin capture intended for admission MUST anchor the socket's original kernel
+process lifetime before reading fresh numeric PID/start evidence. Linux
+SO_PEERPIDFD groundwork MUST check original-process liveness before and after
+native record reads, retain a private close-on-exec descriptor and reject dead
+or changed origin evidence. Opening a pidfd by numeric PID is not equivalent.
+Unsupported kernel/platform lifetime APIs MUST fail closed without affecting
+existing UID-only control. This anchor still does not attest the current writer,
+vendor producer or client/session association; full admission remains unfinished.
 `agent/external/presentation` MUST require the same capability, generation and
 external session binding. Positive observation sequences MUST reject stale or
 conflicting updates; identical replay MUST be inert. Bounded title suggestions

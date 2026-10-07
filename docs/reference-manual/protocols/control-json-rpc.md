@@ -563,6 +563,16 @@ plus the ordinary admission protocol remain unfinished; these primitives grant
 no new control or enrollment authority. Only Linux execution is qualified in
 this checkpoint; macOS runtime behavior requires its own validation.
 
+Socket origin PIDs can remain visible after their process exits, so a fresh
+PID/start lookup alone cannot exclude reuse before the first observation.
+Linux-only lifetime groundwork uses `SO_PEERPIDFD`, not `pidfd_open(pid)`, and
+checks the exact socket-origin process is alive around each native record read.
+Its retained descriptor is private and close-on-exec. Dead origins and changed
+records reject; older kernels without the option and other platforms fail
+closed. macOS requires a reviewed native lifetime/version equivalent before
+this boundary can support admission there. Ordinary UID-only control is
+unchanged, and lifetime evidence still does not attest a current writer.
+
 The exact canonical harness `gemini` is retired: new launch and usage admission
 are rejected before capability or accounting-work allocation. Existing expense,
 history and replay tombstones are not deleted or relabelled. Provider names and

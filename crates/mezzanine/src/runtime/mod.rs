@@ -340,6 +340,8 @@ mod lifecycle;
 mod pane_io;
 /// Exposes operating-system Unix peer credential lookup.
 mod peer_credentials;
+/// Owns kernel lifetime anchors for connection-origin process evidence.
+mod peer_process_lifetime;
 mod persistence;
 pub(crate) use persistence::RuntimePersistenceComponent;
 /// Exposes the processes module boundary.

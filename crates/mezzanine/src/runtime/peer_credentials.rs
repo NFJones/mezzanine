@@ -279,6 +279,19 @@ mod tests {
             .unwrap();
         assert_eq!(ready, [1]);
         let origin = process_parent_identity_for_pid(peer.pid).unwrap();
+        #[cfg(target_os = "linux")]
+        let lifetime = match super::super::peer_process_lifetime::capture_unix_origin(
+            socket.as_raw_fd(),
+            crate::runtime::current_effective_uid(),
+        ) {
+            Ok(lifetime) => {
+                assert_eq!(lifetime.identity, origin);
+                assert_eq!(lifetime.reobserve().unwrap(), origin);
+                Some(lifetime)
+            }
+            Err(error) if error.raw_os_error() == Some(libc::ENOPROTOOPT) => None,
+            Err(error) => panic!("origin lifetime capture failed: {error}"),
+        };
         let evidence = tokio::task::spawn_blocking(move || process_ancestry(origin, root))
             .await
             .unwrap()
@@ -302,6 +315,19 @@ mod tests {
                 "peer fixture did not exit"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(lifetime) = lifetime {
+            // The open socket and numeric peer PID cannot keep the dead origin
+            // usable. Reobservation must reject its anchored lifetime on exit.
+            assert!(lifetime.reobserve().is_err());
+            assert!(
+                super::super::peer_process_lifetime::capture_unix_origin(
+                    socket.as_raw_fd(),
+                    crate::runtime::current_effective_uid(),
+                )
+                .is_err()
+            );
         }
     }
 
@@ -330,6 +356,18 @@ mod tests {
         let peer = peer_process(stream.as_raw_fd()).unwrap();
         assert_eq!(peer.pid, std::process::id());
         assert_ne!(peer.pid, child_pid);
+        #[cfg(target_os = "linux")]
+        match super::super::peer_process_lifetime::capture_unix_origin(
+            stream.as_raw_fd(),
+            crate::runtime::current_effective_uid(),
+        ) {
+            Ok(origin) => {
+                assert_eq!(origin.reobserve().unwrap().process_id, std::process::id());
+                assert_ne!(origin.peer.pid, child_pid);
+            }
+            Err(error) if error.raw_os_error() == Some(libc::ENOPROTOOPT) => {}
+            Err(error) => panic!("origin lifetime capture failed: {error}"),
+        }
         let mut bytes = Vec::new();
         stream.read_to_end(&mut bytes).await.unwrap();
         assert_eq!(&bytes, b"inherited-writer");
