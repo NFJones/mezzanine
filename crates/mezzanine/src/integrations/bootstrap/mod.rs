@@ -22,6 +22,10 @@ pub(crate) mod installer;
     reason = "pinned projection awaits launch-bound plugin qualification"
 )]
 pub(crate) mod opencode;
+/// Owns compiled dependency-free OpenCode plugin files, not vendor packages.
+pub(crate) mod opencode_artifact;
+/// Strict private child observations for an exact parent-bound root session.
+pub(crate) mod opencode_stream;
 #[allow(
     dead_code,
     reason = "pinned lifecycle projection awaits private Pi launch qualification"
@@ -86,6 +90,7 @@ pub(crate) fn compiled_manifest(
 ) -> Option<installer::Manifest> {
     match harness {
         "pi" => Some(pi_artifact::candidate_manifest()),
+        "opencode" => Some(opencode_artifact::manifest()),
         _ => None,
     }
 }

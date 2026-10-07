@@ -293,7 +293,20 @@ Pending and resolved wait history MUST remain finite; exhaustion or ingress loss
 ends producer telemetry rather than evicting identities and guessing activity.
 Unknown/prototype-named event values MUST NOT become status. Missing or
 ambiguous counters remain unavailable, and message-part usage MUST NOT be added
-to completed-message usage. Installation and private launch remain separate.
+to completed-message usage. The compiled OpenCode installer MAY own a local
+plugin entry and private dependency-free siblings, never vendor settings or trust.
+Explicit local `mez opencode` MUST keep credentials in the parent, gate activation
+on exact root metadata from its inherited observation stream, and preserve
+disabled-plugin mode and user policy. An explicit existing session or the first
+fresh root is bound once; shared/remote or later-session events MUST NOT borrow
+that binding. Parent renewal MUST run independently of activity and during
+delivery. Strict 8192-byte frames, 250ms partial deadline and 32768-byte writer
+budget MUST bound observations. Usage requires typed durable acknowledgment;
+lost/undurable replies end telemetry without replaying provider work. Launch-time
+historical cutoff MUST prevent old completed snapshots charging a fresh owner.
+Finalized assistant-message coverage MUST exclude ambiguous counters, tool parts,
+auxiliary expense and costs rather than fabricate completeness. Telemetry loss
+MUST NOT terminate/restart the vendor or override child exit status.
 The best-effort Pi lifecycle projection MUST require an explicitly bound context
 session and discard callback content/paths. `agent_end` and `turn_end` MUST NOT
 prove final settlement; `agent_before_settle` outcomes remain provisional until

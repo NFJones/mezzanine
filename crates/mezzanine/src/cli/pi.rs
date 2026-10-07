@@ -42,11 +42,11 @@ pub(super) struct PiCliArgs {
 
 /// Credential-bearing acknowledgment intentionally has no Debug implementation.
 #[derive(serde::Deserialize)]
-struct Grant {
+pub(super) struct Grant {
     protocol: String,
     #[serde(deserialize_with = "deserialize_secret")]
-    launch_token: SecretString,
-    generation: u64,
+    pub(super) launch_token: SecretString,
+    pub(super) generation: u64,
     expires_at_unix_seconds: u64,
     lease_seconds: u64,
 }
@@ -125,6 +125,22 @@ async fn authorize_root(
     version: &str,
     root_generation: Option<u64>,
 ) -> Result<Grant> {
+    authorize_harness(socket, pane, "pi", version, root_generation).await
+}
+
+/// Shared explicit-parent issuance for compiled local adapters only. Hook code
+/// cannot invoke it; a unique primary and same-user finite exchange still gate
+/// every grant. This neither probes nor enables a vendor or alters its policy.
+pub(super) async fn authorize_harness(
+    socket: &Path,
+    pane: &str,
+    harness: &str,
+    version: &str,
+    root_generation: Option<u64>,
+) -> Result<Grant> {
+    if !matches!(harness, "pi" | "opencode") {
+        return Err(unavailable());
+    }
     tokio::time::timeout(Duration::from_secs(2), async {
         let mut stream = tokio::net::UnixStream::connect(socket).await.map_err(|_| unavailable())?;
         crate::runtime::authenticated_unix_peer_uid(stream.as_raw_fd(), crate::runtime::current_effective_uid())
@@ -140,7 +156,7 @@ async fn authorize_root(
             || initialized["id"] != "pi-init" || initialized["jsonrpc"] != "2.0" {
             return Err(unavailable());
         }
-        let mut params = serde_json::json!({"pane_id":pane,"harness":"pi","version":version});
+        let mut params = serde_json::json!({"pane_id":pane,"harness":harness,"version":version});
         if let Some(generation) = root_generation { params["root_generation"] = generation.into(); }
         let request = serde_json::json!({"jsonrpc":"2.0","id":"cli","method":"agent/external/launch", "params":params}).to_string();
         let reply = exchange(&mut stream, &request).await?;

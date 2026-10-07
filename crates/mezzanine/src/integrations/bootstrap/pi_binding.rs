@@ -79,42 +79,54 @@ impl Reader {
     /// Reads one frame with a non-resetting 250ms deadline after its first byte.
     /// Idle silence is allowed; clean EOF is separate from truncated-frame loss.
     pub(crate) async fn next(&mut self) -> Result<Option<Frame>> {
-        let mut bytes = Vec::with_capacity(MAX_FRAME);
-        let mut deadline = None;
-        loop {
-            let mut byte = [0];
-            if deadline.is_some_and(|end| Instant::now() >= end) {
-                return Err(unavailable());
-            }
-            let count = if let Some(end) = deadline {
-                tokio::time::timeout_at(end, self.0.read(&mut byte))
-                    .await
-                    .map_err(|_| unavailable())?
-            } else {
-                self.0.read(&mut byte).await
-            }
-            .map_err(|_| unavailable())?;
-            if deadline.is_some_and(|end| Instant::now() >= end) {
-                return Err(unavailable());
-            }
-            if count == 0 {
-                return if bytes.is_empty() {
-                    Ok(None)
-                } else {
-                    Err(unavailable())
-                };
-            }
-            if byte[0] == b'\n' {
-                return Frame::decode(&bytes).map(Some);
-            }
-            if bytes.len() == MAX_FRAME {
-                return Err(unavailable());
-            }
-            if bytes.is_empty() {
-                deadline = Some(Instant::now() + Duration::from_millis(250));
-            }
-            bytes.push(byte[0]);
+        read_frame(&mut self.0, MAX_FRAME)
+            .await?
+            .map(|bytes| Frame::decode(&bytes))
+            .transpose()
+    }
+}
+
+/// Shared private line framing with a caller-fixed finite physical budget and
+/// non-resetting partial deadline. Payload validation stays in each adapter.
+pub(crate) async fn read_frame(
+    stream: &mut tokio::net::UnixStream,
+    max: usize,
+) -> Result<Option<Vec<u8>>> {
+    let mut bytes = Vec::with_capacity(max);
+    let mut deadline = None;
+    loop {
+        let mut byte = [0];
+        if deadline.is_some_and(|end| Instant::now() >= end) {
+            return Err(unavailable());
         }
+        let count = if let Some(end) = deadline {
+            tokio::time::timeout_at(end, stream.read(&mut byte))
+                .await
+                .map_err(|_| unavailable())?
+        } else {
+            stream.read(&mut byte).await
+        }
+        .map_err(|_| unavailable())?;
+        if deadline.is_some_and(|end| Instant::now() >= end) {
+            return Err(unavailable());
+        }
+        if count == 0 {
+            return if bytes.is_empty() {
+                Ok(None)
+            } else {
+                Err(unavailable())
+            };
+        }
+        if byte[0] == b'\n' {
+            return Ok(Some(bytes));
+        }
+        if bytes.len() == max {
+            return Err(unavailable());
+        }
+        if bytes.is_empty() {
+            deadline = Some(Instant::now() + Duration::from_millis(250));
+        }
+        bytes.push(byte[0]);
     }
 }
 

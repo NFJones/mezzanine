@@ -111,7 +111,7 @@ fn run_with_manifest<W: Write>(
             "harness":args.harness,"vendor_version":args.vendor_version,"operation":operation,
             "supported":true,"manifest_revision":manifest.revision,"changed_paths":changed_paths,"recovered":recovered,
             "support":"best-effort",
-            "guidance":"Installation is observational only. Complete vendor review/restart; launch Pi with mez pi for private lifecycle telemetry. Token coverage may be unavailable",
+            "guidance":"Installation is observational only. Complete vendor review/restart; use mez pi or mez opencode for private launch-bound telemetry. Token coverage may be unavailable",
         }).to_string());
     }
     if args.apply || args.uninstall || args.recover {

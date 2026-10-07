@@ -55,6 +55,8 @@ pub(super) enum CliCommand {
     HarnessEvent,
     /// Explicitly launches Pi with private best-effort lifecycle telemetry.
     Pi(super::pi::PiCliArgs),
+    /// Explicitly launches local OpenCode with privately bound root telemetry.
+    Opencode(super::opencode::OpenCodeCliArgs),
     /// Manages Mezzanine configuration.
     Config(super::config::ConfigCliArgs),
     /// Creates a fresh local or explicitly selected remote session and attaches.

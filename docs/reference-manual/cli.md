@@ -61,7 +61,7 @@ daemon; add
 
 `mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
 accepts `claude`, `codex`, `copilot`, `opencode`, `cursor`, and `pi` as adapter
-candidates. Pi has compiled best-effort artifacts; other candidates currently
+candidates. Pi and OpenCode have compiled best-effort artifacts; other candidates currently
 report unavailable installation. The default or `--plan` inspects a plan;
 `--check` checks owned state. Explicit `--apply`, `--uninstall`, and `--recover`
 are separate intents. The command is daemon-free and does not perform socket
@@ -134,9 +134,31 @@ settle only their exact request IDs; overlapping waits remain visible and stale
 or duplicate replies cannot clear newer ones. Pending/resolved history is capped
 at 256 IDs; exhaustion reports unavailable once and disables producer telemetry
 instead of evicting history. Unknown/prototype-named statuses remain inert.
-It installs nothing, opens no channel or client API, and
-relies on caller-owned bounded ingress; private launch/renewal/durable delivery
-are still unfinished. Offline checks: `timeout 120s node --test scripts/test-opencode-observer.mjs`.
+The pure producer opens no channel or client API. Its owned dependency-free entry
+is installed by `mez bootstrap opencode --root /absolute/opencode-config --apply`
+as `plugins/mezzanine.js` plus private siblings, preserving settings and other
+plugins. Launch with `mez opencode --executable /absolute/opencode --pane %1`, or
+add `--session ses_ID` for an explicitly selected existing root. No implicit
+continue/fork or shared/remote attach is admitted. Options after `--` are limited
+to literal `--pure`, `--mini`, `--no-replay`, `--print-logs`, and inline
+`--model=...`, `--agent=...`, `--log-level=DEBUG|INFO|WARN|ERROR`,
+`--replay-limit=NUMBER`. Short/grouped aliases and unknown options reject before
+authorization. `--pure` stays disabled. Ordinary vendor starts without private
+fd3 hints leave the entry inert. Switching to another session does not reassign
+telemetry; use a separate explicit launch for that target.
+
+Matched root metadata opens the observation-only stream; parent credentials never
+enter plugin argv/environment. The parent registers/renews while idle, uses strict
+8 KiB frames with a 250 ms partial deadline and a 32 KiB writer budget, and consumes
+usage only after `accepted=true,durable=true` acknowledgment. Duplicate finalized
+messages charge once; lost/undurable replies end telemetry without provider replay.
+Completed timestamps before the exact launch cutoff are excluded to avoid
+historical recharge on resume. Usage coverage is finalized assistant messages
+with evidenced complete counters, not tool parts/auxiliary calls or invoice cost.
+Finite stream/queue capacity, outage or malformed metadata may lose telemetry;
+expiry is the fallback and does not prove vendor death. Child exit behavior is
+independent. No live provider/macOS/physical-terminal conformance is implied.
+Offline checks: `timeout 120s node --test scripts/test-opencode-*.mjs`.
 
 The Pi coding-agent `1.0.2` component projects content-free lifecycle facts only
 for an explicitly bound context session. `agent_end` and `turn_end` are not final

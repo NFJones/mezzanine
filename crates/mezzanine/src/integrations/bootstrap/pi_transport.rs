@@ -60,6 +60,23 @@ struct Params<'a> {
     sequence: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<&'a str>,
+    #[serde(flatten)]
+    usage: Option<Usage<'a>>,
+}
+
+/// Typed normalized accounting fields; authority/project/harness never come
+/// from observations and arbitrary JSON cannot override transport credentials.
+#[derive(Serialize)]
+struct Usage<'a> {
+    epoch: &'a str,
+    event_id: &'a str,
+    sequence: u64,
+    mode: &'a str,
+    baseline: bool,
+    observed_at: u64,
+    provider: &'a str,
+    model: &'a str,
+    counters: &'a crate::storage::token_usage::ExternalCounters,
 }
 
 /// Rejects ambiguous error/result envelopes and wrong reply ownership.
@@ -196,6 +213,81 @@ impl CapabilityTransport {
         owner.transport_binding() == (self.session.as_str(), self.owner.as_str())
     }
 
+    /// Sends a validated coarse observation under this exact registration.
+    /// A matching sequence/changed acknowledgment is required, never process exit.
+    pub(crate) async fn present(&self, sequence: u64, state: &str) -> Result<()> {
+        if sequence == 0
+            || !matches!(
+                state,
+                "ready"
+                    | "running"
+                    | "approval-wait"
+                    | "input-wait"
+                    | "complete"
+                    | "interrupted"
+                    | "failed"
+            )
+        {
+            return Err(unavailable());
+        }
+        let result = self
+            .exchange("agent/external/presentation", None, Some((sequence, state)))
+            .await?;
+        if result.get("sequence").and_then(serde_json::Value::as_u64) != Some(sequence)
+            || result
+                .get("changed")
+                .and_then(serde_json::Value::as_bool)
+                .is_none()
+        {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+
+    /// Delivers normalized delta evidence and consumes only a durable typed
+    /// acknowledgment. No replay/retry or provider work is performed here.
+    pub(crate) async fn usage(
+        &self,
+        report: &crate::storage::token_usage::ExternalUsageReport,
+    ) -> Result<()> {
+        report.counters.validate().map_err(|_| unavailable())?;
+        if report.mode != "delta" || report.sequence == 0 || report.baseline {
+            return Err(unavailable());
+        }
+        let result = self
+            .exchange_with_usage(
+                "agent/external/usage",
+                None,
+                None,
+                Some(Usage {
+                    epoch: &report.epoch,
+                    event_id: &report.event_id,
+                    sequence: report.sequence,
+                    mode: &report.mode,
+                    baseline: report.baseline,
+                    observed_at: report.observed_at,
+                    provider: &report.model.provider,
+                    model: &report.model.model,
+                    counters: &report.counters,
+                }),
+            )
+            .await?;
+        if result.get("accepted").and_then(serde_json::Value::as_bool) != Some(true)
+            || result.get("durable").and_then(serde_json::Value::as_bool) != Some(true)
+            || result
+                .get("applied")
+                .and_then(serde_json::Value::as_bool)
+                .is_none()
+            || result
+                .get("revision")
+                .and_then(serde_json::Value::as_u64)
+                .is_none_or(|revision| revision < report.sequence)
+        {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+
     /// Sends one retained lifecycle delivery after immutable owner validation.
     /// A successful matching RPC result, not EOF, establishes acknowledgment.
     async fn deliver(&self, delivery: &Delivery) -> Result<()> {
@@ -251,6 +343,18 @@ impl CapabilityTransport {
         name: Option<&str>,
         presentation: Option<(u64, &str)>,
     ) -> Result<serde_json::Value> {
+        self.exchange_with_usage(method, name, presentation, None)
+            .await
+    }
+
+    /// Shares framing/peer/deadline checks across lifecycle and typed usage.
+    async fn exchange_with_usage(
+        &self,
+        method: &'static str,
+        name: Option<&str>,
+        presentation: Option<(u64, &str)>,
+        usage: Option<Usage<'_>>,
+    ) -> Result<serde_json::Value> {
         tokio::time::timeout(DEADLINE, async {
             let body = Zeroizing::new(
                 serde_json::to_string(&Request {
@@ -264,6 +368,7 @@ impl CapabilityTransport {
                         display_name: name,
                         sequence: presentation.map(|(sequence, _)| sequence),
                         state: presentation.map(|(_, state)| state),
+                        usage,
                     },
                 })
                 .map_err(|_| unavailable())?,

@@ -34,7 +34,7 @@ impl ActiveLease {
     }
 
     /// Returns the conservative expiry for bounding an already-issued delivery.
-    pub(super) fn deadline(&self) -> Instant {
+    pub(crate) fn deadline(&self) -> Instant {
         self.expires
     }
 
