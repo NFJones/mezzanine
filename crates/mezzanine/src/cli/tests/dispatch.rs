@@ -2,6 +2,88 @@
 
 use super::*;
 
+/// External vendors are invoked normally after bootstrap, not through a Mez
+/// wrapper, hidden alias or generic launcher fallback. Parser admission must
+/// reject removed names before process, socket or capability work can start.
+#[test]
+fn cli_rejects_vendor_wrappers_and_omits_root_completion_routes() {
+    use clap::{CommandFactory, Parser};
+    let command = crate::cli::env::CliArgv::command();
+    let names = command
+        .get_subcommands()
+        .map(|command| command.get_name())
+        .collect::<Vec<_>>();
+    let help = command.clone().render_long_help().to_string();
+    let aliases = command
+        .get_subcommands()
+        .flat_map(|command| command.get_all_aliases())
+        .collect::<Vec<_>>();
+    for vendor in ["pi", "opencode", "codex", "claude", "copilot", "cursor"] {
+        assert!(!aliases.contains(&vendor));
+        assert!(
+            !help
+                .lines()
+                .any(|line| line.trim_start().starts_with(&format!("{vendor} ")))
+        );
+        assert!(
+            !names.contains(&vendor),
+            "vendor wrapper still exposed: {vendor}"
+        );
+        assert!(crate::cli::env::CliArgv::try_parse_from(["mez", vendor]).is_err());
+        assert!(crate::cli::env::CliArgv::try_parse_from(["mez", vendor, "--help"]).is_err());
+    }
+    assert!(names.contains(&"bootstrap"));
+    assert!(names.contains(&"harness-event"));
+    assert!(names.contains(&"codex-hook"));
+    let mut completion = Vec::new();
+    clap_complete::generate(
+        clap_complete::Shell::Bash,
+        &mut crate::cli::env::CliArgv::command(),
+        "mez",
+        &mut completion,
+    );
+    let completion = String::from_utf8(completion).unwrap();
+    for route in [
+        "mez__pi)",
+        "mez__opencode)",
+        "mez__codex)",
+        "mez__claude)",
+        "mez__copilot)",
+        "mez__cursor)",
+    ] {
+        assert!(
+            !completion.contains(route),
+            "vendor completion route still exposed: {route}"
+        );
+    }
+}
+
+/// Removed vendor wrappers fail before any runtime/socket namespace is created;
+/// invalid admission cannot launch a vendor or initialize a control primary.
+#[test]
+fn cli_removed_vendor_wrappers_reject_before_runtime_mutation() {
+    for vendor in ["pi", "opencode", "codex"] {
+        let (env, home) = test_env("removed-vendor-wrapper");
+        let directory = default_socket_directory(&env.runtime).unwrap();
+        assert!(!directory.path.exists());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert!(
+            run_with_plain(
+                vec!["mez".into(), vendor.into()],
+                env,
+                false,
+                &mut stdout,
+                &mut stderr
+            )
+            .is_err()
+        );
+        assert!(!directory.path.exists());
+        assert!(stdout.is_empty());
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+
 /// Verifies CLI startup creates the selected private runtime directory.
 ///
 /// Daemon discovery and stale-socket cleanup both run before command dispatch,

@@ -53,10 +53,9 @@ pub(super) enum CliCommand {
     Bootstrap(super::bootstrap::BootstrapCliArgs),
     /// Forwards one normalized observational event from bounded stdin; never initializes a client.
     HarnessEvent,
-    /// Explicitly launches Pi with private best-effort lifecycle telemetry.
-    Pi(super::pi::PiCliArgs),
-    /// Explicitly launches local OpenCode with privately bound root telemetry.
-    Opencode(super::opencode::OpenCodeCliArgs),
+    /// Forwards one content-free Codex callback to an inherited observation socket.
+    #[command(hide = true)]
+    CodexHook,
     /// Manages Mezzanine configuration.
     Config(super::config::ConfigCliArgs),
     /// Creates a fresh local or explicitly selected remote session and attaches.

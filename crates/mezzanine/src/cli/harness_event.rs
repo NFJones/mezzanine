@@ -93,7 +93,10 @@ fn read_input() -> Result<Zeroizing<Vec<u8>>> {
 }
 
 /// Reads an owned input descriptor under the same bounded hook input contract.
-fn read_input_from(input: &impl std::os::fd::AsFd, limit: Duration) -> Result<Zeroizing<Vec<u8>>> {
+pub(super) fn read_input_from(
+    input: &impl std::os::fd::AsFd,
+    limit: Duration,
+) -> Result<Zeroizing<Vec<u8>>> {
     let deadline = Instant::now() + limit;
     let mut bytes = Zeroizing::new(Vec::new());
     loop {

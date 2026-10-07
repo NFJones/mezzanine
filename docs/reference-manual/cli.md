@@ -61,7 +61,7 @@ daemon; add
 
 `mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
 accepts `claude`, `codex`, `copilot`, `opencode`, `cursor`, and `pi` as adapter
-candidates. Pi and OpenCode have compiled best-effort artifacts; other candidates currently
+candidates. Pi, OpenCode and the Codex hook candidate have compiled artifacts; other candidates currently
 report unavailable installation. The default or `--plan` inspects a plan;
 `--check` checks owned state. Explicit `--apply`, `--uninstall`, and `--recover`
 are separate intents. The command is daemon-free and does not perform socket
@@ -73,37 +73,16 @@ and external usage admission are also rejected. Historical expense and replay
 guards remain intact; independent Google/Gemini provider and model usage under
 native or other harnesses is unaffected. No vendor files or user hooks are removed.
 
-**Pi installation and initial-session lifecycle support are best-effort, not
-version-certified.** An omitted or arbitrary inert `--vendor-version` does not
-gate installation. Use an existing agent-directory root (including a custom
-`PI_CODING_AGENT_DIR`) or explicitly trusted project `.pi` root:
-
-```sh
-mez bootstrap pi --root /absolute/pi-agent-directory --apply
-mez pi --executable /absolute/path/to/pi --pane %1
-```
-
-The launcher uses the selected local Unix socket and an explicit temporary
-primary, with a two-second authorization deadline. The daemon token remains in
-the parent; Pi receives only fd3 observation access and a preallocated session
-hint. Install into the same agent directory Pi discovers; no forced `-e`, vendor
-package installation, shell-profile change or trust bypass occurs. Ordinary Pi
-invocations leave the extension inert. `--no-extensions` stays disabled. Options
-after `--` are forwarded literally, except conflicting session selectors are
-rejected. `--json` does not wrap Pi's inherited output. Parent supervision returns
-Pi's exit code and does not terminate/restart it on telemetry failure.
-
-Matched initial-session callbacks drive registration/status and idle renewal.
-Same-session reload retains one process-owned observation socket, fences old
-instances and confirms a replacement parent epoch without resetting delivery
-sequence or registration. New, resume and fork propose a new context session on
-the same observation stream; the parent acknowledges old-session retirement and
-requests a fresh exact-root-fenced capability before registering the replacement.
-Failed retirement, changed root or lost issuance replies end telemetry without
-altering Pi or reusing retired credentials. Missing/changed callbacks or daemon outages may leave telemetry
-unavailable; lease expiry cleans up missing end events. Tokens remain unavailable
-in this lifecycle-only delivery. No live provider, macOS or physical-terminal
-compatibility is implied by synthetic tests; user feedback guides repairs.
+**External vendors are invoked normally, not through Mez wrappers.** The CLI
+contains no vendor-launch routes, aliases, hidden launchers or deprecated
+forwarding. Bootstrap and observation-only internal helpers do not launch vendors.
+Pi/OpenCode/Codex artifacts and reducers are retained, but ordinary-command
+automatic enrollment, durable source continuity and the new default-install/
+dry-run/upgrade UX are still implementation work. Installation is not proof that
+callbacks are loaded, enrolled or accounted; current descriptor-gated artifacts
+may remain inert under ordinary invocation until migration is complete. Vendor
+trust review and disabled policy remain intact. No live/provider/platform
+conformance is implied by component or historical launcher tests.
 
 The best-effort Codex component projects bounded main-session lifecycle
 identifiers from documented hook schemas without requiring an exact version.
@@ -116,8 +95,13 @@ content and child-context events, and does not infer token usage. This pure
 component does not deliver launch capabilities, renew idle leases, install hooks,
 or certify a live Codex process. Its release reference is
 `openai/codex` tag `rust-v0.160.0`, `codex-rs/hooks/schema/generated`.
-That reference is evidence, not a compatibility gate. Private installed hooks,
-launch binding, renewal and any optional structured usage remain unfinished.
+That reference is evidence, not a compatibility gate. The fixed internal helper
+normalizes at most 64 KiB/250 ms of stdin and remains neutral on unavailable
+telemetry; it never starts Codex, initializes a primary or bypasses vendor trust.
+The current whole-file hook candidate conflicts on authored files rather than
+overwriting them. Independently resolvable ordinary-command helper admission and
+shared hook-array migration remain unfinished. No token expense is inferred from
+hooks or ambiguous context/cumulative structured samples.
 
 The best-effort OpenCode component projects settled assistant-message snapshots
 only for an explicitly bound session. Its released producer separates uncached
@@ -141,30 +125,15 @@ settle only their exact request IDs; overlapping waits remain visible and stale
 or duplicate replies cannot clear newer ones. Pending/resolved history is capped
 at 256 IDs; exhaustion reports unavailable once and disables producer telemetry
 instead of evicting history. Unknown/prototype-named statuses remain inert.
-The pure producer opens no channel or client API. Its owned dependency-free entry
-is installed by `mez bootstrap opencode --root /absolute/opencode-config --apply`
-as `plugins/mezzanine.js` plus private siblings, preserving settings and other
-plugins. Launch with `mez opencode --executable /absolute/opencode --pane %1`, or
-add `--session ses_ID` for an explicitly selected existing root. No implicit
-continue/fork or shared/remote attach is admitted. Options after `--` are limited
-to literal `--pure`, `--mini`, `--no-replay`, `--print-logs`, and inline
-`--model=...`, `--agent=...`, `--log-level=DEBUG|INFO|WARN|ERROR`,
-`--replay-limit=NUMBER`. Short/grouped aliases and unknown options reject before
-authorization. `--pure` stays disabled. Ordinary vendor starts without private
-fd3 hints leave the entry inert. Switching to another session does not reassign
-telemetry; use a separate explicit launch for that target.
-
-Matched root metadata opens the observation-only stream; parent credentials never
-enter plugin argv/environment. The parent registers/renews while idle, uses strict
-8 KiB frames with a 250 ms partial deadline and a 32 KiB writer budget, and consumes
-usage only after `accepted=true,durable=true` acknowledgment. Duplicate finalized
-messages charge once; lost/undurable replies end telemetry without provider replay.
-Completed timestamps before the exact launch cutoff are excluded to avoid
-historical recharge on resume. Usage coverage is finalized assistant messages
-with evidenced complete counters, not tool parts/auxiliary calls or invoice cost.
-Finite stream/queue capacity, outage or malformed metadata may lose telemetry;
-expiry is the fallback and does not prove vendor death. Child exit behavior is
-independent. No live provider/macOS/physical-terminal conformance is implied.
+The pure producer opens no channel or client API. The dependency-free owned entry
+remains `plugins/mezzanine.js` plus private siblings; settings and other plugins
+are preserved. Its current descriptor gate is legacy activation, not a supported
+ordinary-command enrollment path or wrapper fallback. Normal process-qualified
+admission and accounting-source continuity are unfinished. Existing checked
+completed-message ledger replay/conflict protection and strict frame fixtures
+remain reusable, but do not prove normal callback connectivity. Coverage remains
+finalized assistant messages with complete evidenced counters, excluding tool
+parts/auxiliary calls and invoice costs. Vendor pure/disabled behavior is unchanged.
 Offline checks: `timeout 120s node --test scripts/test-opencode-*.mjs`.
 
 The Pi coding-agent `1.0.2` component projects content-free lifecycle facts only
@@ -218,8 +187,8 @@ registration identity and increasing server expiry; a monotonic expiry fence
 accounts for reply latency and integer-second rounding. Failure, cancellation or
 worker drop clears local availability without automatic retry or rebind. A lost
 renewal reply is not proof that no remote renewal occurred.
-The public initial-session launcher composes these components; no version
-certification or accounting completeness follows from lifecycle availability.
+These integration primitives remain reusable after wrapper removal; they do not
+establish ordinary-command enrollment or complete accounting on their own.
 
 The internal session coordinator combines lifecycle delivery and idle renewal
 without spawning detached tasks. Callback ingress is nonblocking and limited to
@@ -243,11 +212,11 @@ and no idle-silence timeout. The JavaScript sink bounds buffered writes to
 32 KiB and stops accepting telemetry after backpressure or error without
 changing vendor decisions. Daemon capabilities never cross this observer link.
 The launcher retains session lifetime separately from observer stream closure.
-The public launcher uses a v2 envelope instead: bounded child-proposed session
+The retained v2 protocol fixture carries bounded child-proposed session
 and observer epoch plus the same strict allowlisted lifecycle facts, limited to
 2,048 bytes with a 250 ms partial-frame deadline. Those proposals grant no
-authority. The parent validates initial/transition ordering and obtains fresh
-root-fenced credentials itself; credentials never cross the observer channel.
+authority. Future ordinary-process admission must establish ownership separately;
+credentials never cross this observation channel.
 
 The injectable Pi extension factory wires the observer to its stream sink only
 at session start. Factory loading opens no resources; a matching context session
@@ -262,9 +231,9 @@ handoff used by the offline loader fixture. Its caller supplies an absolute
 executable and directory, exact arguments, environment and stdio; no ambient
 environment or executable discovery is used. Descriptor 3 carries observations
 only. The process owner must reap the child, independently of observer disposal
-or telemetry failure. The separate public `mez pi` command supplies explicit
-authorization and fresh session selection. This primitive does not itself mint
-authority or establish live/platform conformance.
+or telemetry failure. This primitive is test-only for offline descriptor
+qualification, not a public/hidden launch command. It does not establish normal
+enrollment, live/platform conformance or a vendor-launch fallback.
 
 The internal owned observer runner joins strict callback ingress and session
 lease delivery without detached tasks or child ownership. Clean stream EOF drains
@@ -272,7 +241,7 @@ accepted facts before ending renewal; it does not imply process death or request
 deregistration. Explicit quit facts retain their existing exact-session retirement
 semantics. Errors and cancellation preserve pending reducer evidence without
 automatic reconnect or vendor replay. Production authorization and replacement
-session ownership remain separate; the public launcher does not implicitly rebind.
+session ownership remain separate and require the normal-path enrollment owner.
 
 An internal compiled artifact candidate owns six files under
 `extensions/mezzanine/` in an explicit agent-directory root. A package manifest

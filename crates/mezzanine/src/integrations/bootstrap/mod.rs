@@ -14,6 +14,11 @@
 pub(crate) mod codex;
 #[allow(
     dead_code,
+    reason = "owned hook checkpoint exposes no standalone mutation interface"
+)]
+pub(crate) mod codex_artifact;
+#[allow(
+    dead_code,
     reason = "release-qualified vendor adapters consume the common installer"
 )]
 pub(crate) mod installer;
@@ -25,6 +30,10 @@ pub(crate) mod opencode;
 /// Owns compiled dependency-free OpenCode plugin files, not vendor packages.
 pub(crate) mod opencode_artifact;
 /// Strict private child observations for an exact parent-bound root session.
+#[allow(
+    dead_code,
+    reason = "retained strict observations await ordinary-process enrollment"
+)]
 pub(crate) mod opencode_stream;
 #[allow(
     dead_code,
@@ -37,16 +46,18 @@ pub(crate) mod pi;
 )]
 pub(crate) mod pi_artifact;
 /// Strict content-free child session proposals; credentials remain parent-owned.
+#[allow(
+    dead_code,
+    reason = "retained protocol fixtures await ordinary-process enrollment"
+)]
 pub(crate) mod pi_binding;
 #[allow(
     dead_code,
     reason = "Pi observer IPC awaits private launcher integration"
 )]
 pub(crate) mod pi_ipc;
-#[allow(
-    dead_code,
-    reason = "explicit Pi observer launch awaits production authorization and certification"
-)]
+/// Test-only descriptor qualification, not a public or hidden vendor launcher.
+#[cfg(test)]
 pub(crate) mod pi_launch;
 #[allow(
     dead_code,
@@ -91,6 +102,7 @@ pub(crate) fn compiled_manifest(
     match harness {
         "pi" => Some(pi_artifact::candidate_manifest()),
         "opencode" => Some(opencode_artifact::manifest()),
+        "codex" => Some(codex_artifact::manifest()),
         _ => None,
     }
 }

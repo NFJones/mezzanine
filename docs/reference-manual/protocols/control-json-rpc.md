@@ -544,9 +544,9 @@ the retained predecessor's same UID, harness, pane and kernel root incarnation.
 It is numeric provenance, not a credential or authorization to initialize a
 primary. Missing/expired witnesses and replaced roots reject before allocation;
 no unfenced fallback is allowed. A retired registration's finite tombstone may
-supply provenance, but its old capability remains retired. Pi's parent uses this
-field for separately authorized new/resume/fork session handoff after exact old
-retirement acknowledgment; vendor callbacks never receive the new credential.
+supply provenance, but its old capability remains retired. This is an explicit
+primary API constraint, not a vendor-launch wrapper or ordinary enrollment path;
+vendor callbacks must not receive general primary authority.
 
 The exact canonical harness `gemini` is retired: new launch and usage admission
 are rejected before capability or accounting-work allocation. Existing expense,

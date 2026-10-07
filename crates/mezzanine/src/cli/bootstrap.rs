@@ -111,7 +111,7 @@ fn run_with_manifest<W: Write>(
             "harness":args.harness,"vendor_version":args.vendor_version,"operation":operation,
             "supported":true,"manifest_revision":manifest.revision,"changed_paths":changed_paths,"recovered":recovered,
             "support":"best-effort",
-            "guidance":"Installation is observational only. Complete vendor review/restart; use mez pi or mez opencode for private launch-bound telemetry. Token coverage may be unavailable",
+            "guidance":"Installation is observational only. Use ordinary vendor commands and preserve vendor review/disabled policy. Automatic enrollment and accounting capabilities may still be unavailable; no Mez vendor-launch wrappers exist",
         }).to_string());
     }
     if args.apply || args.uninstall || args.recover {
@@ -290,7 +290,7 @@ mod tests {
         }
         let parsed = Fixture::try_parse_from([
             "fixture",
-            "codex",
+            "claude",
             "--root",
             "/missing/bootstrap/root",
             "--plan",
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(value["supported"], false);
         let parsed = Fixture::try_parse_from([
             "fixture",
-            "codex",
+            "claude",
             "--root",
             "/missing/bootstrap/root",
             "--apply",

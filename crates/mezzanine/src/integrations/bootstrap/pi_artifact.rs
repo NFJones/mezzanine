@@ -3,8 +3,8 @@
 //! The released 1.0.2 loader discovers one package entry, with private sibling
 //! modules that are not standalone extension candidates. Exact file ownership
 //! reuses the common installer; no settings, vendor dependency, shell profile,
-//! trust decision or capability is installed. Explicit launch authority remains
-//! in the CLI parent; ordinary Pi launches leave this extension inert.
+//! trust decision or capability is installed. Current descriptor activation is
+//! legacy fixture plumbing; ordinary-process enrollment migration is unfinished.
 
 use super::installer::Manifest;
 use super::reconciliation::{Artifact, Entry};

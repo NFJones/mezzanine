@@ -85,6 +85,8 @@ mod attach;
 mod auth;
 /// Owns daemon-free admission for certified harness installation.
 mod bootstrap;
+/// Owns neutral Codex callback normalization and inherited observation writes.
+mod codex_hook;
 /// Exposes the config module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -133,10 +135,6 @@ mod mcp;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod memory;
-/// Owns explicit local OpenCode launch and parent-only telemetry credentials.
-mod opencode;
-/// Owns explicit Pi child launch and parent-held telemetry authority.
-mod pi;
 /// Exposes the project trust command boundary.
 ///
 /// The nested module owns direct-user inspection and persistence of project

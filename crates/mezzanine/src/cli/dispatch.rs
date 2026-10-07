@@ -167,9 +167,8 @@ async fn run_with_inner<W: Write, E: Write>(
             Some(
                 CliCommand::Sandbox(_)
                     | CliCommand::HarnessEvent
+                    | CliCommand::CodexHook
                     | CliCommand::Bootstrap(_)
-                    | CliCommand::Pi(_)
-                    | CliCommand::Opencode(_)
             )
         )
     {
@@ -255,15 +254,11 @@ async fn run_with_inner<W: Write, E: Write>(
         Some(CliCommand::HarnessEvent) => {
             super::harness_event::run(&socket_selection, stdout).await?;
         }
-        Some(CliCommand::Pi(args)) => {
-            // Keep observer/child supervision out of unrelated CLI frame state.
-            exit_code = Box::pin(super::pi::run(args, &socket_selection)).await?;
+        Some(CliCommand::CodexHook) => {
+            super::codex_hook::run(stdout)?;
         }
         Some(CliCommand::Bootstrap(args)) => {
             super::bootstrap::run(args, output_format, stdout)?;
-        }
-        Some(CliCommand::Opencode(args)) => {
-            exit_code = Box::pin(super::opencode::run(args, &socket_selection)).await?;
         }
         Some(CliCommand::Version) => write!(stdout, "{}", super::render_cli_version()?)?,
         Some(CliCommand::Completion(args)) => {

@@ -295,15 +295,12 @@ Unknown/prototype-named event values MUST NOT become status. Missing or
 ambiguous counters remain unavailable, and message-part usage MUST NOT be added
 to completed-message usage. The compiled OpenCode installer MAY own a local
 plugin entry and private dependency-free siblings, never vendor settings or trust.
-Explicit local `mez opencode` MUST keep credentials in the parent, gate activation
-on exact root metadata from its inherited observation stream, and preserve
-disabled-plugin mode and user policy. An explicit existing session or the first
-fresh root is bound once; shared/remote or later-session events MUST NOT borrow
-that binding. Parent renewal MUST run independently of activity and during
-delivery. Strict 8192-byte frames, 250ms partial deadline and 32768-byte writer
-budget MUST bound observations. Usage requires typed durable acknowledgment;
-lost/undurable replies end telemetry without replaying provider work. Launch-time
-historical cutoff MUST prevent old completed snapshots charging a fresh owner.
+Ordinary OpenCode integration MUST preserve vendor options, disabled policy and
+process behavior. Qualified session association, not a vendor wrapper or inherited
+pane claim, supplies authority. Durable source identity MUST prevent historical
+recharge; unavailable normal-path enrollment/accounting MUST remain explicit.
+Usage requires typed durable acknowledgment; lost/undurable replies MUST NOT
+replay provider work. Retained strict protocol fixtures do not prove enrollment.
 Finalized assistant-message coverage MUST exclude ambiguous counters, tool parts,
 auxiliary expense and costs rather than fabricate completeness. Telemetry loss
 MUST NOT terminate/restart the vendor or override child exit status.
@@ -315,6 +312,11 @@ status. Stop MUST remain a ready/turn boundary, not success proof, because later
 hook decisions may continue execution. Interrupt and SessionEnd observations
 MUST NOT imply vendor process death. This projection alone MUST NOT enable an
 installed adapter or imply exact token coverage.
+Fixed observation-only Codex helpers MUST remain bounded and neutral without
+launching vendors, initializing primaries or modifying approval/trust policy.
+Ordinary-command enrollment and exact shared-hook reconciliation remain separate
+implementation contracts; an inert helper/manifest MUST NOT imply runtime support.
+SessionEnd retires exact telemetry ownership, never attests process death.
 The best-effort Pi lifecycle projection MUST require an explicitly bound context
 session and discard callback content/paths. `agent_end` and `turn_end` MUST NOT
 prove final settlement; `agent_before_settle` outcomes remain provisional until
@@ -401,32 +403,15 @@ as an observation socket. Duplicate loads MUST NOT wrap that descriptor twice.
 Temporary-root ownership and released-loader fixtures MUST NOT imply universal
 vendor-version, reload or platform acceptance. Public bootstrap MAY install the
 compiled Pi artifact without an exact release pin.
-The explicit local `mez pi --executable ABSOLUTE --pane ID [--vendor-version TEXT]
-[-- PI_ARGS]` launcher MUST own a unique temporary primary for capability issuance,
-with same-user peer authentication and one bounded total authorization deadline.
-It MUST preallocate the Pi session ID, reject conflicting CLI session selectors,
-and keep daemon credentials in parent-only zeroizing storage. The child receives
-only an observation socket on descriptor 3 and inert session hints, not inherited
-Mezzanine routing/authority. The caller's ordinary vendor environment and stdio
-remain intact. Disabled extensions MUST NOT be overridden. Child exit MUST be
-reaped and reported independently of telemetry failure; no replay or child kill
-is permitted merely to repair telemetry. Final draining and exact-binding
-retirement MUST be finite, with lease expiry as the fallback. Same-session reload
-MUST retain the process-owned observation descriptor, release only the old
-extension lease/listeners, and explicitly confirm a parent-owned replacement
-epoch after FIFO shutdown admission. Delivery sequence and registration MUST
-survive reload; duplicate/stale instances MUST NOT borrow or close the current
-channel. New/resume/fork MUST first acknowledge the old immutable session's
-retirement, then obtain a fresh parent-issued capability with an actor-resolved
-`root_generation` predecessor witness. The witness only narrows attached-primary
-issuance to the same UID, harness, pane and kernel root incarnation; it MUST NOT
-grant authority or permit fallback after witness/root loss. V2 child frames
-MUST carry only bounded session proposals, safe monotonic observer epochs and
-strict allowlisted lifecycle facts (2048 bytes, 250ms partial-frame budget).
-Callbacks MUST NOT receive the fresh credential or alter registration metadata.
-Lost retirement/issuance acknowledgment ends telemetry rather than reusing an
-old capability or replaying vendor work. Token coverage remains separately unavailable
-until an evidenced accounting source is implemented.
+The Mez CLI MUST NOT expose vendor-launch wrappers, including aliases, hidden
+commands, deprecated forwarding or renamed generic launcher fallbacks. Pi,
+OpenCode, Codex, Claude, Copilot and Cursor are invoked by their ordinary vendor
+commands after bootstrap. Mez's own session-management commands and fixed
+observation-only helpers remain distinct. Removing wrappers MUST NOT delete
+vendor installations, user configuration, credentials, receipts or accounting
+history, and MUST NOT be advertised as enabling unfinished automatic enrollment.
+Reusable telemetry reducers/framing/usage projection remain integration-owned;
+descriptor-qualified subprocess fixtures are test-only, not a runtime fallback.
 `agent/external/usage` MUST use the current restricted registration capability.
 The server MUST freeze harness and pane-root attribution before handing normalized
 content-free counters to an off-actor storage worker. Acknowledgment MUST follow
