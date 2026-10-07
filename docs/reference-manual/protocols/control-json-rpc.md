@@ -773,6 +773,16 @@ must send explicit renewal during long idle sessions.
 
 `mez harness-event` is a fixed normalized helper, not an upstream hook parser.
 See the [CLI reference](../cli.md) for its bounded stdin envelope and limits.
+Its raw stdin envelope must be an object with recursively unique decoded fields,
+including `data` and nested counters. Duplicate or escaped-alias fields reject
+before canonicalization; positional arrays and other non-object roots also
+reject and are never forwarded. Errors remain neutral and
+sanitized; valid Unicode and null/zero/absent counter semantics are unchanged.
+Internal replies also require recursive uniqueness, JSON-RPC 2.0, the exact
+request ID, an object result with no error member, and no buffered trailing
+frame/data. Rejection never resends the event or exposes the reply. Neither
+neutral callback success nor generic JSON-RPC acknowledgment is a durable usage
+receipt; accounting consumers must use their operation-specific commit evidence.
 
 ### Durable external usage reports
 

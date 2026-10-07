@@ -32,8 +32,15 @@ fn request(bytes: &[u8]) -> Result<Zeroizing<String>> {
     if bytes.len() > MAX_EVENT_BYTES {
         return Err(MezError::invalid_args("event unavailable"));
     }
+    // Outgoing control validation cannot recover keys already overwritten by
+    // Value decoding inside data/counters. Reject ambiguity at the raw boundary.
+    let unique = crate::protocol::strict_json::decode(bytes)
+        .map_err(|_| MezError::invalid_args("event unavailable"))?;
+    if !unique.is_object() {
+        return Err(MezError::invalid_args("event unavailable"));
+    }
     let event: Event =
-        serde_json::from_slice(bytes).map_err(|_| MezError::invalid_args("event unavailable"))?;
+        serde_json::from_value(unique).map_err(|_| MezError::invalid_args("event unavailable"))?;
     let method = match event.operation.as_str() {
         "register" => "agent/external/register",
         "renew" => "agent/external/renew",
@@ -148,12 +155,20 @@ async fn exchange(socket: &std::path::Path, body: &str) -> Result<()> {
             if response.len() > MAX_EVENT_BYTES {
                 return Err(MezError::invalid_state("event reply unavailable"));
             }
-            if let Ok((body, _)) = crate::control::decode_control_frame(&response, MAX_EVENT_BYTES)
+            if let Ok((body, consumed)) =
+                crate::control::decode_control_frame(&response, MAX_EVENT_BYTES)
             {
-                let value: serde_json::Value = serde_json::from_str(&body)
+                if consumed != response.len() {
+                    return Err(MezError::invalid_state("event reply unavailable"));
+                }
+                let value = crate::protocol::strict_json::decode(body.as_bytes())
                     .map_err(|_| MezError::invalid_state("event reply unavailable"))?;
-                if value.get("id").and_then(serde_json::Value::as_str) != Some("harness-event")
-                    || value.get("result").is_none()
+                if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+                    || value.get("id").and_then(serde_json::Value::as_str) != Some("harness-event")
+                    || !value
+                        .get("result")
+                        .is_some_and(serde_json::Value::is_object)
+                    || value.get("error").is_some()
                 {
                     return Err(MezError::invalid_state("event rejected"));
                 }
@@ -253,6 +268,210 @@ mod tests {
         let (result, ()) = tokio::join!(exchange(&socket, &body), stalled);
         assert!(result.is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The helper's internal exchange result must not accept overwritten reply
+    /// IDs or result fields, simultaneous error/result, non-object results or
+    /// buffered trailing frames/data. A real same-user Unix server receives one
+    /// original request per case; failures must neither resend it nor echo the
+    /// rejected body. A valid object acknowledgment remains accepted, without
+    /// claiming that generic JSON-RPC success is a durable usage ledger receipt.
+    #[tokio::test(flavor = "current_thread")]
+    async fn harness_event_helper_rejects_ambiguous_acknowledgments_without_replay() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-hook-reply-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let event = serde_json::json!({"operation":"renew","launch_token":"x".repeat(43),"generation":1,"external_session_id":"run","data":{}});
+        let request_body = request(event.to_string().as_bytes()).unwrap();
+        for (body, trailing, accepted) in [
+            (
+                r#"{"jsonrpc":"2.0","id":"harness-event","result":{"renewed":true}}"#,
+                false,
+                true,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":"PRIVATE","\u0069d":"harness-event","result":{}}"#,
+                false,
+                false,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":"harness-event","result":{"sequence":1,"sequence":2}}"#,
+                false,
+                false,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":"harness-event","result":{},"error":{"message":"PRIVATE"}}"#,
+                false,
+                false,
+            ),
+            (r#"{"id":"harness-event","result":{}}"#, false, false),
+            (
+                r#"{"jsonrpc":"1.0","id":"harness-event","result":{}}"#,
+                false,
+                false,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":"harness-event","result":null}"#,
+                false,
+                false,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":"harness-event","result":{}}"#,
+                true,
+                false,
+            ),
+        ] {
+            let server = async {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                let mut input = Vec::new();
+                let (received, consumed) = loop {
+                    let count = stream.read(&mut bytes).await.unwrap();
+                    assert_ne!(count, 0, "request frame unexpectedly closed");
+                    input.extend_from_slice(&bytes[..count]);
+                    assert!(input.len() <= MAX_EVENT_BYTES);
+                    if let Ok(frame) = crate::control::decode_control_frame(&input, MAX_EVENT_BYTES)
+                    {
+                        break frame;
+                    }
+                };
+                assert_eq!(consumed, input.len());
+                assert_eq!(received, *request_body);
+                let mut reply = crate::control::encode_control_body(body);
+                if trailing {
+                    reply.extend_from_slice(b"PRIVATE trailing data");
+                }
+                stream.write_all(&reply).await.unwrap();
+                let count = stream.read(&mut bytes).await.unwrap();
+                assert_eq!(
+                    count, 0,
+                    "rejected acknowledgment must not replay the request"
+                );
+            };
+            let (result, ()) = tokio::join!(exchange(&socket, &request_body), server);
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "helper acknowledgment classification differed"
+            );
+            if let Err(error) = result {
+                assert!(!error.message().contains("PRIVATE"));
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Nested stdin objects must retain unique decoded membership before any
+    /// canonicalization. Generic Value decoding would erase conflicting or even
+    /// identical state/sequence/title/counter keys, including escaped aliases,
+    /// before outgoing control validation could reject them. Diagnostics must
+    /// not echo the private envelope or a hidden earlier field value.
+    #[test]
+    fn harness_event_helper_rejects_recursive_duplicate_aliases() {
+        let token = "x".repeat(43);
+        let binding =
+            format!(r#""launch_token":"{token}","generation":1,"external_session_id":"run""#);
+        let mut inputs = Vec::new();
+        for data in [
+            r#"{"sequence":1,"state":"running","state":"failed"}"#,
+            r#"{"sequence":1,"state":"running","\u0073tate":"failed"}"#,
+            r#"{"sequence":1,"sequence":1,"state":"running"}"#,
+            r#"{"sequence":1,"state":"running","title":"PRIVATE","\u0074itle":"Task"}"#,
+        ] {
+            inputs.push(format!(
+                r#"{{"operation":"presentation",{binding},"data":{data}}}"#
+            ));
+        }
+        for counters in [
+            r#"{"input_tokens":1,"input_tokens":2,"output_tokens":1}"#,
+            r#"{"input_tokens":2,"\u0069nput_tokens":2,"output_tokens":1}"#,
+            r#"{"input_tokens":2,"output_tokens":1,"cached_input_tokens":0,"cached_input_tokens":1}"#,
+        ] {
+            inputs.push(format!(r#"{{"operation":"usage",{binding},"data":{{"epoch":"epoch","event_id":"event","sequence":1,"mode":"delta","observed_at":"2026-10-01T00:00:00Z","provider":"fixture","model":"fixture","counters":{counters}}}}}"#));
+        }
+        inputs.push(format!(
+            r#"{{"operation":"end","\u006fperation":"renew",{binding},"data":{{}}}}"#
+        ));
+        inputs.push(format!(
+            r#"{{"operation":"renew",{binding},"\u0067eneration":1,"data":{{}}}}"#
+        ));
+        for input in inputs {
+            let decoded = request(input.as_bytes());
+            assert!(
+                decoded.is_err(),
+                "ambiguous helper input reached normalization"
+            );
+            let error = decoded.err().unwrap();
+            assert!(!error.message().contains(&token));
+            assert!(!error.message().contains("PRIVATE"));
+            assert!(!error.message().contains("input_tokens"));
+        }
+    }
+
+    /// Unique input retains ordinary Unicode and null/zero/absent counter
+    /// semantics at the exact byte boundary. Trailing JSON, malformed input and
+    /// excessive depth fail without leaking the envelope; the unique decoder
+    /// does not interpret JSON-looking strings as nested objects.
+    #[test]
+    fn harness_event_helper_unique_input_preserves_bounds_and_values() {
+        let token = "x".repeat(43);
+        let event = serde_json::json!({"operation":"presentation","launch_token":token,"generation":1,
+            "external_session_id":"run","data":{"sequence":1,"state":"running","title":"Task ✓"}});
+        let mut bytes = event.to_string().into_bytes();
+        bytes.resize(MAX_EVENT_BYTES, b' ');
+        let body = request(&bytes).unwrap();
+        let projected: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(projected["params"]["title"], "Task ✓");
+        bytes.push(b' ');
+        assert!(request(&bytes).is_err());
+
+        let text = r#"{"state":"running","state":"failed"}"#;
+        let mut opaque = event.clone();
+        opaque["data"]["title"] = serde_json::json!(text);
+        let body = request(opaque.to_string().as_bytes()).unwrap();
+        let projected: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(projected["params"]["title"], text);
+
+        let usage = serde_json::json!({"operation":"usage","launch_token":token,"generation":1,
+            "external_session_id":"run","data":{"epoch":"epoch","event_id":"event","sequence":1,
+                "mode":"delta","observed_at":"2026-10-01T00:00:00Z","provider":"fixture","model":"fixture",
+                "counters":{"input_tokens":2,"output_tokens":1,"reasoning_tokens":null,"cached_input_tokens":0}}});
+        let body = request(usage.to_string().as_bytes()).unwrap();
+        let projected: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let counters = &projected["params"]["counters"];
+        assert_eq!(counters["input_tokens"], 2);
+        assert_eq!(counters["cached_input_tokens"], 0);
+        assert!(counters["reasoning_tokens"].is_null());
+        assert!(counters.get("cache_write_input_tokens").is_none());
+        for input in [
+            format!("{event} {{}}"),
+            "{invalid PRIVATE}".to_string(),
+            format!("{}0{}", "[".repeat(129), "]".repeat(129)),
+        ] {
+            let error = request(input.as_bytes()).err().unwrap();
+            assert!(!error.message().contains(&token));
+            assert!(!error.message().contains("PRIVATE"));
+        }
+    }
+
+    /// The documented envelope is a named object, not a positional array that
+    /// serde's derived struct sequence visitor could otherwise reinterpret as
+    /// operation/credential/session fields. Other non-object roots reject too.
+    #[test]
+    fn harness_event_helper_requires_object_envelope() {
+        let positional = serde_json::json!(["renew", "x".repeat(43), 1, "run", {}]);
+        assert!(
+            request(positional.to_string().as_bytes()).is_err(),
+            "positional fields are not a fixed object envelope"
+        );
+        for input in [b"null".as_slice(), b"true", b"1", b"\"PRIVATE\""] {
+            let error = request(input).err().unwrap();
+            assert!(!error.message().contains("PRIVATE"));
+        }
     }
 
     /// Fixed operation mapping refuses passthrough methods, credentials in data,

@@ -279,6 +279,15 @@ It authenticates the Unix daemon's same-user peer and does not initialize a clie
 Input is capped at 64 KiB with a 250 ms EOF deadline; the single exchange is bounded
 to 500 ms. No retries or subprocesses are issued. Telemetry errors produce neutral
 `{}` output and success exit, without echoing credentials or daemon errors.
+The envelope must be a JSON object with recursively unique decoded fields,
+including `data` and nested counters. Duplicate or escaped-alias fields are
+rejected before normalization; positional arrays, malformed/trailing JSON and
+excessive depth are not alternate envelope formats. Rejected input is not sent
+to the daemon. Valid Unicode and null/zero/absent counter semantics are preserved.
+Internal replies must be duplicate-safe JSON-RPC 2.0 with the matching ID, an
+object result and no error member or buffered trailing frame/data. A rejected
+reply does not cause a retry or appear on vendor stdout. Neutral `{}`/success
+exit and a generic JSON-RPC acknowledgment are not durable usage ledger receipts.
 
 This is not vendor hook installation or certification. Adapters must privately
 deliver launch credentials, normalize content-free released payloads, serialize

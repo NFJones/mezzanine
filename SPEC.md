@@ -356,8 +356,18 @@ The fixed `mez harness-event` helper MUST accept only bounded normalized stdin,
 map fixed operations to restricted RPCs, and never initialize a client, execute
 auxiliary commands, forward arbitrary vendor payloads or retry effects. It MUST
 use same-user Unix peer authentication, finite input/exchange deadlines and
-neutral output on telemetry failure. Vendor normalization, private launch-token
-delivery and renewable-lease scheduling remain explicit adapter responsibilities.
+neutral output on telemetry failure. Raw stdin MUST require an object envelope
+and reject duplicate decoded object keys recursively, including escaped aliases
+in data/counters, before
+typed interpretation or canonicalization. Invalid/trailing/over-depth input
+MUST fail with sanitized diagnostics and no forwarding. Unique values, Unicode,
+null/zero/absent counters and the existing byte/deadline bounds MUST be preserved.
+Internal replies MUST have recursively unique fields, exact JSON-RPC version
+and request ID, an object result without an error member, and no buffered trailing
+frame/data. Rejection MUST NOT resend the request or expose reply content. Neutral
+callback success and generic JSON-RPC acknowledgment are not durable usage receipts.
+Vendor normalization, private launch-token delivery and renewable-lease
+scheduling remain explicit adapter responsibilities.
 The private dependency-free persistent client MUST perform no I/O at module
 loading, use only nonsecret MEZ route hints, and send enrollment/presentation/end
 directly from the persistent producer. It MUST NOT initialize a general role,
