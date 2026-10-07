@@ -244,6 +244,14 @@ replacement, closure, expiry or runtime restart MUST retire the exact registrati
 without erasing independent settled accounting. Old end events MUST NOT retire a
 new launch. This same-user observational capability does not certify vendor
 telemetry or prove which executable holds the credential.
+Native Unix process-witness groundwork MAY expose connection-origin UID/PID
+using platform kernel APIs, but MUST reject malformed option size/nonpositive
+PID and fail closed on unsupported process lookup. That witness MUST NOT grant
+a role, pane association or automatic enrollment on its own. Inherited/passed
+descriptors do not prove the current writer; fresh process incarnation/ancestry
+and actor revalidation remain required separate evidence. Existing UID-only
+control authorization MUST remain unchanged until the full admission contract
+is implemented and tested. Linux qualification MUST NOT imply macOS runtime proof.
 `agent/external/presentation` MUST require the same capability, generation and
 external session binding. Positive observation sequences MUST reject stale or
 conflicting updates; identical replay MUST be inert. Bounded title suggestions

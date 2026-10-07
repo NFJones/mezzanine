@@ -547,6 +547,14 @@ no unfenced fallback is allowed. A retired registration's finite tombstone may
 supply provenance, but its old capability remains retired. This is an explicit
 primary API constraint, not a vendor-launch wrapper or ordinary enrollment path;
 vendor callbacks must not receive general primary authority.
+Internal ordinary-enrollment groundwork now supports native connection-origin
+UID/PID lookup on Linux and macOS with exact socket-option result bounds and
+positive PID checks. This is not a new enrollment method or role authorization:
+current control still uses its established user/role gates. An inherited/passed
+endpoint retains origin evidence rather than attesting its current writer.
+Process-start/ancestry checks, pane-root revalidation and the ordinary admission
+protocol remain unfinished. Only Linux execution is qualified in this checkpoint;
+macOS runtime behavior requires its own validation.
 
 The exact canonical harness `gemini` is retired: new launch and usage admission
 are rejected before capability or accounting-work allocation. Existing expense,
