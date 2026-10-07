@@ -1,4 +1,4 @@
-//! Content-free settled assistant snapshots pinned to OpenCode v1.17.13.
+//! Content-free best-effort settled assistant snapshots from OpenCode contracts.
 //!
 //! Release owners: packages/schema/src/v1/session.ts (AssistantMessage) and
 //! packages/opencode/src/session/session.ts (getUsage). Upstream input excludes
@@ -66,7 +66,9 @@ pub(crate) fn normalize(
     bound_session: &str,
     bytes: &[u8],
 ) -> Result<Option<Snapshot>> {
-    if release != RELEASE
+    if release.is_empty()
+        || release.len() > 128
+        || release.chars().any(char::is_control)
         || bound_session.is_empty()
         || bound_session.len() > 128
         || bytes.len() > 64 * 1024
@@ -141,7 +143,6 @@ pub(crate) fn completed_report(
     // must meet the existing receipt, not create a second charged stream.
     let identity = serde_json::to_vec(&(
         "opencode-completed-message/1",
-        release,
         &snapshot.session,
         &snapshot.message,
     ))
@@ -187,6 +188,17 @@ mod tests {
         let report = completed_report(RELEASE, "bound", "server-owner", None, bytes)
             .unwrap()
             .unwrap();
+        let other_version =
+            completed_report("any-local-version", "bound", "server-owner", None, bytes)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            other_version.epoch, report.epoch,
+            "version must not mint charged identity"
+        );
+        assert_eq!(other_version.event_id, report.event_id);
+        assert_eq!(other_version.counters, report.counters);
+        assert_eq!(other_version.model, report.model);
         assert_eq!(report.mode, "delta");
         assert_eq!(report.sequence, 1);
         assert_eq!(report.observed_at, 100);
@@ -276,7 +288,8 @@ mod tests {
     }
 
     /// Partial/user snapshots stay inert; missing/fractional/negative/inexact
-    /// counters fail instead of fabricated zero. Wrong release is not admitted.
+    /// counters fail instead of fabricated zero. Version text is observational
+    /// and cannot gate supported fields or alter stable accounting identity.
     #[test]
     fn opencode_pinned_snapshot_refuses_ambiguous_counters_and_unbound_work() {
         assert_eq!(
@@ -292,7 +305,8 @@ mod tests {
             .unwrap(),
             None
         );
-        assert!(normalize("future", "bound", b"{}").is_err());
+        assert_eq!(normalize("future", "bound", b"{}").unwrap(), None);
+        assert!(normalize("", "bound", b"{}").is_err());
         assert!(normalize(RELEASE, "bound", &vec![b'x'; 65537]).is_err());
         for invalid in [
             serde_json::json!(-1),

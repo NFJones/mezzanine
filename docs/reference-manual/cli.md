@@ -112,7 +112,7 @@ component does not deliver launch capabilities, renew idle leases, install hooks
 or certify a live Codex process. Its release reference is
 `openai/codex` tag `rust-v0.160.0`, `codex-rs/hooks/schema/generated`.
 
-The OpenCode `1.17.13` component projects settled assistant-message snapshots
+The best-effort OpenCode component projects settled assistant-message snapshots
 only for an explicitly bound session. Its released producer separates uncached
 input and non-reasoning output; the projection restores inclusive counters with
 checked arithmetic and rejects ambiguous numbers. Message IDs are snapshot/upsert
@@ -125,6 +125,18 @@ This component does not
 install a plugin, bind a shared server, deliver credentials or certify live usage.
 Release references are `anomalyco/opencode` tag `v1.17.13`,
 `packages/schema/src/v1/session.ts` and `packages/opencode/src/session/session.ts`.
+These are evidence, not required runtime versions. Observed version text does
+not alter the stable bound-session/message accounting identity. A transport-free
+plugin producer emits only coarse root-session status and allowlisted completed
+message counters; content, paths, tool parts and cost estimates are dropped.
+Session metadata updates do not imply idle, and permission/question replies
+settle only their exact request IDs; overlapping waits remain visible and stale
+or duplicate replies cannot clear newer ones. Pending/resolved history is capped
+at 256 IDs; exhaustion reports unavailable once and disables producer telemetry
+instead of evicting history. Unknown/prototype-named statuses remain inert.
+It installs nothing, opens no channel or client API, and
+relies on caller-owned bounded ingress; private launch/renewal/durable delivery
+are still unfinished. Offline checks: `timeout 120s node --test scripts/test-opencode-observer.mjs`.
 
 The Pi coding-agent `1.0.2` component projects content-free lifecycle facts only
 for an explicitly bound context session. `agent_end` and `turn_end` are not final

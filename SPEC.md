@@ -276,12 +276,24 @@ category coverage, project attribution and replay guards MUST remain intact.
 Independent Google/Gemini provider/model accounting under native or other
 harnesses MUST remain supported. Retirement MUST NOT delete vendor/user files,
 relabel history, synthesize fallback usage or filter already-admitted completion.
-The pinned OpenCode completed-message projection MUST bind an explicit session
+The best-effort OpenCode completed-message projection MUST bind an explicit session
 and use one immutable message-scoped delta stream. Identical completed snapshots
 MUST replay without new expense; changed counters, model or completion time MUST
 conflict, not create a new charged stream. Partial snapshots and callback-local
 revision numbers MUST NOT establish consumed usage. This component alone MUST
-NOT enable a certified plugin manifest or claim live vendor conformance.
+NOT imply installed-plugin or live vendor conformance. Observed version metadata
+MUST NOT gate supported fields or create a distinct charged message identity.
+The transport-free OpenCode producer MUST export only explicitly bound root
+lifecycle facts and finalized assistant counters through bounded caller ingress;
+it MUST remain neutral, avoid client/permission mutation, and discard paths,
+content and billing-cost estimates. Metadata updates MUST NOT reset activity;
+wait replies settle only exact bounded request identities, retaining other
+permission/question waits and ignoring duplicate/stale/reordered resolution.
+Pending and resolved wait history MUST remain finite; exhaustion or ingress loss
+ends producer telemetry rather than evicting identities and guessing activity.
+Unknown/prototype-named event values MUST NOT become status. Missing or
+ambiguous counters remain unavailable, and message-part usage MUST NOT be added
+to completed-message usage. Installation and private launch remain separate.
 The best-effort Pi lifecycle projection MUST require an explicitly bound context
 session and discard callback content/paths. `agent_end` and `turn_end` MUST NOT
 prove final settlement; `agent_before_settle` outcomes remain provisional until
