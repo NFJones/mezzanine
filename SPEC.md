@@ -385,6 +385,13 @@ helper MUST have its own retained live origin and per-segment writer evidence.
 Off-actor native direct-parent capture MUST match the independently enrolled
 producer's retained UID/PID/start identity, and bounded ancestry MUST reach the
 current pane root. Supplied PID/parent/pane claims MUST NOT replace this evidence.
+Qualified helper native work MUST retain the independently verified producer as
+the parent-backed ancestry source, including its exact duplicate lifetime. Actor
+settlement MUST match that source's captured UID/birth/relationship to the
+original enrolled producer; a source-less helper/root witness or successful
+worker Result alone MUST NOT substitute for it. The helper's original socket
+origin/writer and live child-parent relationship remain separate requirements.
+Ordinary producer enrollment MUST retain its original socket-backed path.
 This operation MUST share the 32 pending/8192 frame/4096 metadata/2s admission
 limits and consume its reservation on every completion. Actor settlement MUST
 recheck connection, writer, root, deadline, producer, child-parent relationship,

@@ -128,7 +128,7 @@ impl ExternalEnrollmentWork {
                 "external producer must be a distinct pane descendant",
             ));
         }
-        if let Some(helper) = &self.helper {
+        let parent = if let Some(helper) = &self.helper {
             helper
                 .producer
                 .reobserve()
@@ -150,23 +150,27 @@ impl ExternalEnrollmentWork {
                 .producer
                 .reobserve()
                 .map_err(|_| MezError::forbidden("external helper producer changed"))?;
-        }
+            Some(parent)
+        } else {
+            None
+        };
         let root = mez_mux::process::process_parent_identity_for_pid(self.process.process_id)
             .filter(|root| root.start_token == self.process.start_token)
             .ok_or_else(|| MezError::conflict("external enrollment pane root changed"))?;
-        let ancestry = self
-            .origin
-            .capture_ancestry(root, &self.ancestry_budget)
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::WouldBlock {
-                    MezError::new(
-                        crate::error::MezErrorKind::RateLimited,
-                        "external ancestry capacity unavailable",
-                    )
-                } else {
-                    MezError::forbidden("external producer ancestry unavailable")
-                }
-            })?;
+        let ancestry = match parent {
+            Some(parent) => parent.capture_ancestry(root, &self.ancestry_budget),
+            None => self.origin.capture_ancestry(root, &self.ancestry_budget),
+        }
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                MezError::new(
+                    crate::error::MezErrorKind::RateLimited,
+                    "external ancestry capacity unavailable",
+                )
+            } else {
+                MezError::forbidden("external producer ancestry unavailable")
+            }
+        })?;
         self.origin
             .reobserve()
             .map_err(|_| MezError::forbidden("external producer changed"))?;

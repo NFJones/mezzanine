@@ -213,10 +213,10 @@ impl RuntimeSessionService {
         if child.parent_process_id != producer.origin.identity.process_id
             || Instant::now() >= work.deadline
             || !producer.provenance_is_live()
-            || !work
-                .ancestry
-                .get()
-                .is_some_and(|ancestry| ancestry.is_live())
+            || !work.ancestry.get().is_some_and(|ancestry| {
+                ancestry.is_live()
+                    && ancestry.source_matches(producer.origin.uid(), producer.origin.identity)
+            })
             || !work.origin.writer_confirmed()
         {
             return Err(MezError::forbidden(

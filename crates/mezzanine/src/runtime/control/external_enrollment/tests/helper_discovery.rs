@@ -17,6 +17,109 @@ fn observation(enrolled: &serde_json::Value, sequence: u64) -> JsonRpcRequest {
         "sequence":sequence,"state":"running"}}).to_string()).unwrap()
 }
 
+/// Qualified helper work must retain its independently enrolled producer, not
+/// merely a live helper-origin/root chain. Exact source matching and clone-owned
+/// descriptor accounting remain fenced through actor settlement without adding
+/// an observer, renewal or accounting owner.
+#[tokio::test(flavor = "current_thread")]
+async fn external_helper_discovery_retains_exact_producer_source_through_settlement() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let enrolled = enroll_producer(&mut fixture).await;
+    let (_socket, connection) = child(&mut fixture).await;
+    let event = observation(&enrolled, 1);
+    let producer = fixture.connection.unix_origin().unwrap().clone();
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&event, &connection)
+        .unwrap();
+    let held = work.clone();
+    let worker = work.clone();
+    let observed = tokio::task::spawn_blocking(move || worker.observe())
+        .await
+        .unwrap();
+    assert!(observed.is_ok());
+    let witness = held.ancestry.get().unwrap();
+    assert!(witness.source_matches(producer.uid(), producer.identity));
+    assert!(!witness.source_matches(producer.uid().wrapping_add(1), producer.identity));
+    assert!(!witness.source_matches(producer.uid(), connection.unix_origin().unwrap().identity));
+    let budget = fixture
+        .service
+        .control
+        .external_agents()
+        .enrollments
+        .ancestry_budget
+        .clone();
+    assert_eq!(
+        budget.reserved(),
+        3,
+        "one original run ancestor plus two helper witness descriptors"
+    );
+    let result: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_enrollment(work, observed, &connection),
+    )
+    .unwrap();
+    assert_eq!(result["result"]["changed"], true);
+    assert_eq!(budget.reserved(), 3, "held work still owns its witness");
+    drop(held);
+    assert_eq!(budget.reserved(), 1);
+    assert_eq!(fixture.service.control.external_agents().bindings.len(), 1);
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
+
+    let mut work = fixture
+        .service
+        .prepare_external_helper_presentation(&event, &connection)
+        .unwrap();
+    let worker = work.clone();
+    let observed = tokio::task::spawn_blocking(move || worker.observe())
+        .await
+        .unwrap();
+    assert!(observed.is_ok());
+    let root = mez_mux::process::process_parent_identity_for_pid(work.process.process_id).unwrap();
+    let origin = work.origin.clone();
+    let worker_budget = work.ancestry_budget.clone();
+    let source_less =
+        tokio::task::spawn_blocking(move || origin.capture_ancestry(root, &worker_budget))
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(source_less.is_live());
+    assert!(!source_less.source_matches(producer.uid(), producer.identity));
+    // Fresh real native evidence, but deliberately the wrong witness kind.
+    // Successful worker Result alone cannot substitute its retained source.
+    let replacement = Arc::new(OnceLock::new());
+    replacement.set(Arc::new(source_less)).unwrap();
+    work.ancestry = replacement;
+    let result: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_enrollment(work, observed, &connection),
+    )
+    .unwrap();
+    assert!(result.get("error").is_some());
+    assert_eq!(budget.reserved(), 1);
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
+}
+
 /// Numeric generations can repeat in separate daemon instances. The original
 /// observer witness must reject missing/foreign instance data even when every
 /// other selector matches and a real child has valid native parent evidence.

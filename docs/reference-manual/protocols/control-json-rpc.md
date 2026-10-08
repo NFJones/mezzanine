@@ -737,7 +737,15 @@ producer admission remains unavailable; parent ancestry alone never creates one.
 The helper must be a live native direct child of that retained producer, with its
 own uninitialized same-user Unix connection and matching per-segment sender
 evidence. Native parent capture and pane-root ancestry run off actor using the
-same admission pool, limits and deadline as enrollment. Actor settlement rechecks
+same admission pool, limits and deadline as enrollment.
+Qualified helper work now captures the verified parent's source/root witness,
+not merely the helper-origin ancestor chain. The exact retained source must
+match the independently enrolled producer at settlement. A living source-less
+root chain cannot replace it, even if a worker reports success. Helper socket
+origin/current writer/liveness and child-parent checks still run separately;
+ordinary persistent admission keeps its original socket-backed witness. Work
+clones hold their own shared witness charge until the actual last drop.
+Actor settlement rechecks
 the exact child/producer/root/connection and current run authority before updating
 presentation. PID/parent/pane hints, a stolen handle alone, unrelated children,
 changed roots, expired or replaced handles and late work cannot qualify.

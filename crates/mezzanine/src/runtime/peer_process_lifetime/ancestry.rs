@@ -106,6 +106,15 @@ pub(crate) struct UnixAncestryWitness {
 }
 
 impl UnixAncestryWitness {
+    /// Verifies a parent-backed witness retains the exact code-owned producer
+    /// UID/birth/relationship record, not merely a living root/ancestor chain.
+    /// This selector comparison grants no sender or enrollment authority.
+    pub(crate) fn source_matches(&self, uid: u32, identity: ProcessParentIdentity) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(|source| source.uid() == uid && source.identity == identity)
+    }
+
     /// Nonblocking kernel polls only. Any retained ancestor exit invalidates the
     /// whole relationship even if root, producer and immediate parent survive.
     pub(crate) fn is_live(&self) -> bool {
@@ -146,10 +155,6 @@ impl UnixParentProcess {
     /// reopened numerically; a CLOEXEC duplicate and every ancestor share the
     /// finite budget. No sender/vendor/client/session or enrollment authority is
     /// inferred. Source-as-root, changed/unreadable evidence or unsupported OS fail.
-    #[allow(
-        dead_code,
-        reason = "source-qualified parent-backed consumer is unfinished"
-    )]
     pub(crate) fn capture_ancestry(
         &self,
         root: ProcessParentIdentity,
