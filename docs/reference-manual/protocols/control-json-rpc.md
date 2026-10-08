@@ -732,9 +732,11 @@ The client is bounded, unreferenced, allowlisted and neutral on loss. It exposes
 typed lifecycle delivery, not ledger commitment or fabricated usage.
 
 Private installation pins the installing binary, not a PATH/launcher helper
-variable. Pi revision5 refreshes shared client bytes; OpenCode revision4 installs
-a TUI-only default `{id,tui}` entry and one owned `tui.json` `/plugin` array member.
-Exact Pi2/Pi3/Pi4 and OpenCode1/OpenCode2/OpenCode3 receipts use independently frozen
+variable. Pi revision6 and OpenCode revision5 align the shared persistent factory
+with the six canonical daemon labels; this does not install missing vendor adapters.
+The OpenCode TUI-only default `{id,tui}` entry and owned `tui.json` `/plugin` array
+member are unchanged. Exact Pi2/Pi3/Pi4/Pi5 and
+OpenCode1/OpenCode2/OpenCode3/OpenCode4 receipts use independently frozen
 old client bytes; unknown historical helper references remain non-destructive errors.
 Other historical variants, recovery/default-root/dry-run UX remain installer work.
 Ordinary installed Pi entry callbacks now use this verified transport, with a

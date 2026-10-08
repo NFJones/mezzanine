@@ -15,6 +15,7 @@ async fn external_enrollment_installed_persistent_node_client_owns_native_sender
         2,
         1,
         false,
+        None,
     )
     .await;
 }
@@ -31,6 +32,7 @@ async fn external_enrollment_installed_ordinary_pi_entry_uses_daemon_reducer() {
         5,
         4,
         true,
+        None,
     )
     .await;
 }
@@ -48,18 +50,39 @@ async fn external_enrollment_installed_opencode_tui_uses_client_local_associatio
         2,
         2,
         false,
+        None,
     )
     .await;
 }
 
 /// Runs an explicit offline installed-artifact producer through real native
 /// sender, peer helper, protocol actor and lifecycle settlement ownership.
+/// Shared-client label qualification is not a vendor installation/loader claim.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and locally built mez helper required"]
+async fn external_enrollment_installed_shared_client_supports_six_canonical_labels() {
+    for harness in ["claude", "codex", "copilot", "opencode", "cursor", "pi"] {
+        qualify_installed_node_entry(
+            "persistent-client-ordinary-fixture.mjs",
+            "persistent_client.mjs",
+            2,
+            1,
+            false,
+            Some(harness),
+        )
+        .await;
+    }
+}
+
+/// Qualifies actual installed shared bytes, native process ownership and exact
+/// observer replacement, without impersonating six vendor loader integrations.
 async fn qualify_installed_node_entry(
     script_name: &str,
     entry_name: &str,
     connections: usize,
     bindings: usize,
     typed_pi: bool,
+    harness: Option<&str>,
 ) {
     /// Removes only the unique offline install/socket fixture on every exit.
     struct Directory(std::path::PathBuf);
@@ -143,7 +166,7 @@ async fn qualify_installed_node_entry(
         .canonicalize()
         .unwrap();
     let command = format!(
-        "{}{} {} {} {}\n",
+        "{}{} {} {} {} {}\n",
         if opencode { "BUN_BE_BUN=1 " } else { "" },
         shlex::try_quote(node.to_str().unwrap()).unwrap(),
         shlex::try_quote(script.to_str().unwrap()).unwrap(),
@@ -166,7 +189,8 @@ async fn qualify_installed_node_entry(
             .to_str()
             .unwrap()
         )
-        .unwrap()
+        .unwrap(),
+        shlex::try_quote(harness.unwrap_or("pi")).unwrap()
     );
     service
         .write_runtime_pane_input("%1", command.as_bytes())
@@ -253,6 +277,9 @@ async fn qualify_installed_node_entry(
         .max_by_key(|binding| binding.generation)
         .unwrap();
     assert!(binding.retired);
+    if let Some(harness) = harness {
+        assert_eq!(binding.harness, harness);
+    }
     assert_eq!(
         binding.enrollment.as_ref().unwrap().epoch,
         if typed_pi || opencode { 1 } else { 2 }

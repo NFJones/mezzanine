@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 const lifetime = setTimeout(() => { process.exitCode = 1; }, 20000);
 const { createPersistentTelemetryClient } = await import(pathToFileURL(process.argv[2]).href);
 const { peerHelper } = await import(pathToFileURL(process.argv[3]).href);
-const old = createPersistentTelemetryClient({ harness: "pi", session: "session-a",
+const old = createPersistentTelemetryClient({ harness: process.argv[4] ?? "pi", session: "session-a",
   version: "fixture", displayName: "ordinary Node fixture", instance: "node-instance-a", peerHelper });
 let replacement;
 try {

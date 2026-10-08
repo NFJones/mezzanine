@@ -409,7 +409,14 @@ Vendor normalization, private launch-token delivery and renewable-lease
 scheduling remain explicit adapter responsibilities.
 The private dependency-free persistent client MUST perform no I/O at module
 loading, use only nonsecret MEZ route hints, and send enrollment/presentation/end
-directly from the persistent producer. It MUST NOT initialize a general role,
+directly from the persistent producer. Its canonical harness eligibility MUST
+match the shared six-label daemon
+contract. Unknown/case-alias/retired labels MUST remain inert before resource
+creation. Factory eligibility MUST NOT imply an installed vendor adapter or
+initial short-lived hook/shared-server association. Changed installed client
+bytes MUST receive new immutable manifest revisions with exact frozen historical
+client data; receipts MUST NOT redefine previous artifact ownership. It MUST NOT
+initialize a general role,
 forward arbitrary RPC or vendor content, transmit fabricated usage, or keep the
 vendor alive with referenced telemetry sockets/timers. Queue/write/reply bounds
 MUST remain finite; malformed/duplicate-key replies and untyped acknowledgments

@@ -395,6 +395,20 @@ pub(super) fn persistent_client_v2() -> Vec<u8> {
     source.into_bytes()
 }
 
+/// Reconstructs the exact third shipped client from frozen v2 and inspected
+/// literal deltas, never current source or receipt-supplied content. Its digest
+/// is pinned below so later shared-client changes cannot redefine Pi5/OpenCode4.
+pub(super) fn persistent_client_v3() -> Vec<u8> {
+    let previous = persistent_client_v2();
+    let source = String::from_utf8_lossy(&previous);
+    source.replace("import { spawn } from \"node:child_process\";", "import childProcess from \"node:child_process\";")
+        .replace("      child = spawn(helper, [\"harness-peer\"],", "      child = childProcess.spawn(helper, [\"harness-peer\"],")
+        .replace("    presentation(state) {", "    presentation(state, connectedOnly = false) {")
+        .replace("      projectionMode = \"generic\";\n      return enqueue(async () => {\n        if (!await start() || !Number.isSafeInteger(sequence + 1)) return unavailable();\n",
+            "      projectionMode = \"generic\";\n      return enqueue(async () => {\n        if (connectedOnly ? phase !== \"enrolled\" : !await start()) return unavailable();\n        if (!Number.isSafeInteger(sequence + 1)) return unavailable();\n")
+        .into_bytes()
+}
+
 /// Exact inert projection addition shipped in the second shared client.
 const PI_FACT_V2: &str = r#"/** Reprojects only inert known Pi fields; arbitrary callback objects/content are
  * discarded before transport. Daemon Event validation remains authoritative. */
@@ -449,6 +463,14 @@ mod tests {
     /// sources, independently of later active entry/client implementation edits.
     #[test]
     fn bootstrap_history_source_snapshots_are_immutable() {
+        let v3 = persistent_client_v3();
+        assert_eq!(
+            Sha256::digest(&v3)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            "8502fb83910f9457af58524ba0cd70e62e4f9620805333dbd8f868ad03cbccc6"
+        );
         let v2 = persistent_client_v2();
         assert_eq!(
             Sha256::digest(&v2)

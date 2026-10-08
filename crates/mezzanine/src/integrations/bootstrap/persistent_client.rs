@@ -134,4 +134,68 @@ mod tests {
             std::fs::remove_dir_all(root).unwrap();
         }
     }
+
+    /// A shared-client byte revision must preserve every compiled historical
+    /// upgrade, not just the oldest or immediate predecessor. Historical client
+    /// data stays independent of active source and upgrade touches no authored
+    /// sibling configuration. The immediate shipped bytes remain exact v3.
+    #[test]
+    fn persistent_client_artifact_upgrade_retains_all_frozen_predecessors() {
+        use super::super::installer::{Operation, plan};
+        for harness in ["pi", "opencode"] {
+            let current = super::super::compiled_manifest(harness, None).unwrap();
+            assert_eq!(current.revision, if harness == "pi" { 6 } else { 5 });
+            let history = super::super::compiled_history(&current);
+            assert_eq!(history.len(), 4);
+            let immediate = &history[0];
+            assert_eq!(immediate.revision + 1, current.revision);
+            let frozen = immediate
+                .entries
+                .iter()
+                .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
+                .unwrap();
+            assert_eq!(
+                frozen.artifact,
+                Artifact::File {
+                    bytes: super::super::history::persistent_client_v3()
+                }
+            );
+            for previous in history {
+                let root = std::env::temp_dir().join(format!(
+                    "mez-client-frozen-upgrade-{}",
+                    crate::storage::token_usage::new_token_usage_event_id()
+                ));
+                std::fs::create_dir(&root).unwrap();
+                std::fs::write(root.join("authored.json"), b"{\"authored\":true}\n").unwrap();
+                plan(&root, &previous, Operation::Install)
+                    .unwrap()
+                    .apply()
+                    .unwrap();
+                plan(&root, &current, Operation::Install)
+                    .unwrap()
+                    .apply()
+                    .unwrap();
+                assert!(
+                    plan(&root, &current, Operation::Install)
+                        .unwrap()
+                        .changed_paths()
+                        .is_empty()
+                );
+                assert_eq!(
+                    std::fs::read(root.join("authored.json")).unwrap(),
+                    b"{\"authored\":true}\n"
+                );
+                let client = current
+                    .entries
+                    .iter()
+                    .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
+                    .unwrap();
+                let Artifact::File { bytes } = &client.artifact else {
+                    panic!("shared client must be a file");
+                };
+                assert_eq!(std::fs::read(root.join(&client.path)).unwrap(), *bytes);
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
 }

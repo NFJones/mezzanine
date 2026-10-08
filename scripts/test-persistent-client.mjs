@@ -98,6 +98,34 @@ test("native peer-verified producer sends only fixed lifecycle metadata", async 
   } finally { client.detach(); await f.close(); }
 });
 
+test("shared persistent client supports only six canonical labels without adapter attestation", async () => {
+  for (const harness of ["claude", "codex", "copilot", "opencode", "cursor", "pi"]) {
+    const f = await fixture(request => request.method === "agent/external/enroll" ? enrollment(request)
+      : { changed: true, sequence: request.params.sequence, retired: true });
+    const client = createPersistentTelemetryClient({ ...f.options, harness });
+    try {
+      assert.equal(f.sockets.size, 0, "factory performed I/O");
+      assert.equal(await client.start(), true, `persistent label ${harness} rejected`);
+      assert.equal((await client.presentation("running")).delivered, true);
+      assert.equal(f.requests[0].params.harness, harness);
+      assert.equal(f.requests[0].params.observer_kind, "persistent");
+      assert.equal(client.status().usage, "unavailable-source-continuity");
+      assert.equal(client.usage, undefined);
+      assert.equal(client.initialize, undefined);
+      assert.equal((await client.end()).delivered, true);
+    } finally { client.detach(); await f.close(); }
+  }
+  for (const harness of ["gemini", "unknown", "Claude", "codex-hook"]) {
+    const f = await fixture(request => enrollment(request));
+    const client = createPersistentTelemetryClient({ ...f.options, harness });
+    try {
+      assert.equal(await client.start(), false);
+      assert.equal(f.sockets.size, 0);
+      assert.equal(f.requests.length, 0);
+    } finally { client.detach(); await f.close(); }
+  }
+});
+
 test("successor sends exact predecessor and has its own sequence/private state", async () => {
   const f = await fixture(request => request.method === "agent/external/enroll"
     ? enrollment(request, request.params.observer_instance === "instance-a" ? 1 : 2,

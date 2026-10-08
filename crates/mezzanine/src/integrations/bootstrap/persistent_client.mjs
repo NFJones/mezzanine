@@ -163,7 +163,7 @@ export function createPersistentTelemetryClient(options) {
   };
   if (options?.predecessor !== undefined) metadata.predecessor_generation = options.predecessor;
   const helper = options?.peerHelper;
-  const valid = route && ["pi", "opencode"].includes(metadata.harness)
+  const valid = route && ["claude", "codex", "copilot", "opencode", "cursor", "pi"].includes(metadata.harness)
     && text(metadata.version, 128) && text(metadata.external_session_id, 128)
     && text(metadata.display_name, 128) && text(metadata.observer_instance, 128)
     && (metadata.predecessor_generation === undefined || positive(metadata.predecessor_generation));
