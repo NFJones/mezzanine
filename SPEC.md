@@ -288,11 +288,16 @@ initialization and MUST NOT replace an existing anchor or grant client/role
 authority. Missing optional evidence MUST preserve existing UID-only control;
 enrollment MUST require its own proven admission evidence explicitly.
 The additive `agent/external/enroll` persistent-producer slice MUST admit only
-uninitialized same-user Unix ingress for Pi/OpenCode with bounded inert
+uninitialized same-user Unix ingress for canonical `claude`, `codex`, `copilot`,
+`opencode`, `cursor` or `pi` labels with bounded inert
 `pane_id`, `harness`, `version`, `external_session_id`, `display_name`,
 `observer_instance` and exact `observer_kind: persistent`. The optional positive
 `predecessor_generation` narrows observer replacement. These are selectors, not
 authority; first enrollment MUST NOT claim an unavailable predecessor.
+Shared protocol eligibility MUST NOT be presented as installed/loaded vendor
+adapter support or executable/vendor attestation. Unknown labels and retired
+Gemini MUST reject before reservation. The label MUST NOT enable initial helper,
+shared-server or daemon-client association without its separate provenance contract.
 Kernel lifetime, per-received-segment Linux SCM_CREDENTIALS sender evidence and
 off-actor ancestry MUST jointly bind the producer to the selected adapter root.
 The producer MUST be a distinct descendant, not the pane-root process itself.

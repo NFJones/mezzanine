@@ -457,7 +457,7 @@ async fn external_enrollment_metadata_boundary_and_contracts_are_strict() {
     for (field, value) in [
         ("observer_kind", serde_json::json!("helper")),
         ("harness", serde_json::json!("gemini")),
-        ("harness", serde_json::json!("codex")),
+        ("harness", serde_json::json!("unknown")),
         ("display_name", serde_json::json!(false)),
         ("observer_instance", serde_json::json!("")),
         ("observer_instance", serde_json::json!(false)),
@@ -1195,6 +1195,7 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
 }
 
 mod ancestry;
+mod harnesses;
 mod health;
 mod helper_presentation;
 mod observer_epochs;

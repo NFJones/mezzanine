@@ -3,7 +3,8 @@
 //! A pane hint selects one candidate, never authority. The connection's retained
 //! kernel lifetime anchor supplies the producer; bounded native ancestry runs off
 //! actor, and completion fences the exact root and producer before allocation.
-//! This slice supports persistent Pi/OpenCode extensions only. Hook helpers and
+//! Persistent protocol eligibility covers the six supported harness labels,
+//! independently of whether a vendor adapter is installed/loaded. Hook helpers and
 //! shared/preexisting vendor servers require separate association evidence and
 //! cannot substitute payload PIDs, inherited pane hints or temporary primaries.
 //! Credentials are service-owned, private, runtime-only and producer-bound. Usage
@@ -305,11 +306,13 @@ impl RuntimeSessionService {
         })?;
         let harness = text(&params, "harness", 64)?;
         crate::integrations::harness_policy::require_active_external_harness(&harness)?;
-        if !matches!(harness.as_str(), "pi" | "opencode")
-            || params
-                .get("observer_kind")
-                .and_then(serde_json::Value::as_str)
-                != Some("persistent")
+        if !matches!(
+            harness.as_str(),
+            "claude" | "codex" | "copilot" | "opencode" | "cursor" | "pi"
+        ) || params
+            .get("observer_kind")
+            .and_then(serde_json::Value::as_str)
+            != Some("persistent")
         {
             return Err(MezError::new(
                 crate::error::MezErrorKind::NotImplemented,

@@ -606,12 +606,20 @@ actor commit fences; two observations do not form an atomic process-tree snapsho
 
 #### Ordinary persistent-producer enrollment (implemented slice)
 
-`agent/external/enroll` accepts `pane_id`, `harness` (`pi` or `opencode`),
+`agent/external/enroll` accepts `pane_id`, `harness` (`claude`, `codex`, `copilot`,
+`opencode`, `cursor`, or `pi`),
 `version`, `external_session_id`, `display_name`, bounded `observer_instance` and
 `observer_kind: "persistent"` over an uninitialized same-user Unix connection.
 First enrollment omits `predecessor_generation`; replacement supplies the exact
 positive generation returned for its current predecessor. Neither field grants
 authority or replaces the native root/producer/writer evidence.
+These six labels describe shared persistent-producer API eligibility, not proof
+that a vendor adapter is installed, loaded, enrolled or has accounting support.
+They are not executable/vendor attestation. Unknown/case-alias labels and retired
+Gemini reject before admission reservation. A helper/server label cannot grant
+initial short-lived callback enrollment or shared-daemon client/session association;
+those require their own stable-producer and session contracts. Generic enrolled
+presentation remains available; ordinary usage remains explicitly unavailable.
 The pane hint selects a candidate; native ancestry must prove it. No supplied
 PID, parent PID, launch token, idempotency key or general control target is accepted.
 The producer must be a distinct descendant of the pane root. A sender at the
