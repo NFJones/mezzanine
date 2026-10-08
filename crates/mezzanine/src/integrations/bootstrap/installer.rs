@@ -267,7 +267,13 @@ impl Plan {
 
 /// Explicitly settles previously accepted intent; conflicts preserve the journal.
 pub(crate) fn recover(root: &Path, manifest: &Manifest) -> Result<bool> {
-    recover_with_history(root, manifest, &[])
+    recover_with_history(root, manifest, &super::compiled_history(manifest))
+}
+
+/// Previews accepted recovery with compiled authority and no root/state writes.
+/// None means no pending journal; Some(empty) still means accepted pending work.
+pub(crate) fn preview_recovery(root: &Path, manifest: &Manifest) -> Result<Option<Vec<String>>> {
+    recover_with_history_mode(root, manifest, &super::compiled_history(manifest), true)
 }
 
 /// Authorizes recovery only for the selected compiled release and recognized
@@ -277,9 +283,24 @@ pub(crate) fn recover_with_history(
     manifest: &Manifest,
     history: &[Manifest],
 ) -> Result<bool> {
+    Ok(recover_with_history_mode(root, manifest, history, false)?.is_some())
+}
+
+/// Uses one authorization closure for read-only preview and locked recovery;
+/// journal payloads never become new path/manifest authority in either mode.
+fn recover_with_history_mode(
+    root: &Path,
+    manifest: &Manifest,
+    history: &[Manifest],
+    preview: bool,
+) -> Result<Option<Vec<String>>> {
     validate_manifest(manifest)?;
-    let publisher = Publisher::open(root)?;
-    publisher.recover_authorized(|value, changes| {
+    let publisher = if preview {
+        Publisher::inspect(root)?
+    } else {
+        Publisher::open(root)?
+    };
+    let authorize = |value: &serde_json::Value, changes: &[Change]| {
         let intent: Intent = serde_json::from_value(value.clone())
             .map_err(|_| MezError::conflict("bootstrap journal intent invalid"))?;
         if intent.manifest != *manifest
@@ -382,7 +403,14 @@ pub(crate) fn recover_with_history(
             }
         }
         Ok(())
-    })
+    };
+    if preview {
+        Ok(publisher
+            .inspect_recovery_authorized(authorize)?
+            .map(|changes| changes.into_iter().map(|change| change.path).collect()))
+    } else {
+        Ok(publisher.recover_authorized(authorize)?.then(Vec::new))
+    }
 }
 
 #[cfg(test)]
@@ -390,6 +418,43 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Public preview and recovery use the same frozen compiled predecessor
+    /// history after a genuine interrupted upgrade. Neither a preview nor the
+    /// later settlement requires a caller-supplied historical authority list.
+    #[test]
+    fn bootstrap_recovery_preview_and_apply_share_compiled_upgrade_history() {
+        let current = super::super::compiled_manifest("pi", None).unwrap();
+        let previous = super::super::compiled_history(&current).remove(0);
+        let root = std::env::temp_dir().join(format!(
+            "mez-preview-upgrade-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        fs::create_dir(&root).unwrap();
+        plan(&root, &previous, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        let accepted = plan(&root, &current, Operation::Install).unwrap();
+        assert!(!accepted.changed_paths().is_empty());
+        accepted.publisher.stop_after.set(Some(1));
+        assert!(accepted.apply().is_err());
+        let journal = fs::read(root.join(".mez-bootstrap-journal")).unwrap();
+        assert!(preview_recovery(&root, &current).unwrap().is_some());
+        assert_eq!(
+            fs::read(root.join(".mez-bootstrap-journal")).unwrap(),
+            journal
+        );
+        assert!(recover(&root, &current).unwrap());
+        assert!(
+            plan(&root, &current, Operation::Install)
+                .unwrap()
+                .changed_paths()
+                .is_empty()
+        );
+        assert!(preview_recovery(&root, &current).unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     /// Missing selected roots produce a complete read-only install preview,
     /// retaining a native ancestor/absence witness. Apply may create only that
@@ -581,15 +646,39 @@ mod tests {
         assert!(accepted.apply().is_err());
         let journal_path = root.join(".mez-bootstrap-journal");
         let original = fs::read(&journal_path).unwrap();
+        fs::remove_file(root.join(".mez-bootstrap-lock")).unwrap();
+        let preview = preview_recovery(&root, &manifest).unwrap().unwrap();
+        assert!(preview.contains(&"owned".to_string()));
+        assert_eq!(fs::read(&journal_path).unwrap(), original);
+        assert!(!root.join(".mez-bootstrap-lock").exists());
+        let holder = Publisher::open(&root).unwrap();
+        assert_eq!(
+            preview_recovery(&root, &manifest).unwrap().unwrap(),
+            preview
+        );
+        drop(holder);
         let mut wrong = manifest.clone();
         wrong.harness = "other".into();
+        assert!(preview_recovery(&root, &wrong).is_err());
         assert!(recover(&root, &wrong).is_err());
         wrong = manifest.clone();
         wrong.vendor_version = "different-release".into();
+        assert!(preview_recovery(&root, &wrong).is_err());
         assert!(recover(&root, &wrong).is_err());
         fs::write(copy.join(".mez-bootstrap-journal"), &original).unwrap();
         fs::write(copy.join("owned"), b"owned").unwrap();
+        assert!(preview_recovery(&copy, &manifest).is_err());
         assert!(recover(&copy, &manifest).is_err());
+        let mut wrong_version: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        wrong_version["version"] = 999.into();
+        fs::write(&journal_path, serde_json::to_vec(&wrong_version).unwrap()).unwrap();
+        assert!(preview_recovery(&root, &manifest).is_err());
+        fs::write(&journal_path, &original).unwrap();
+        fs::write(root.join("owned"), b"foreign preimage").unwrap();
+        assert!(preview_recovery(&root, &manifest).is_err());
+        assert_eq!(fs::read(root.join("owned")).unwrap(), b"foreign preimage");
+        assert_eq!(fs::read(&journal_path).unwrap(), original);
+        fs::write(root.join("owned"), b"owned").unwrap();
         let mut forged: serde_json::Value = serde_json::from_slice(&original).unwrap();
         forged["changes"]
             .as_array_mut()
@@ -599,6 +688,7 @@ mod tests {
             }));
         fs::write(root.join("unrelated"), b"authored").unwrap();
         fs::write(&journal_path, serde_json::to_vec(&forged).unwrap()).unwrap();
+        assert!(preview_recovery(&root, &manifest).is_err());
         assert!(recover(&root, &manifest).is_err());
         assert_eq!(fs::read(root.join("unrelated")).unwrap(), b"authored");
         assert!(!root.join("mez-bootstrap-ownership-fixture.json").exists());

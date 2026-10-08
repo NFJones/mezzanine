@@ -62,15 +62,20 @@ daemon; add
 `mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
 accepts `claude`, `codex`, `copilot`, `opencode`, `cursor`, and `pi` as adapter
 candidates. Pi, OpenCode and the Codex hook candidate have compiled artifacts; other candidates currently
-report unavailable installation. The default or `--plan` inspects a plan;
-`--check` checks owned state. Explicit `--apply`, `--uninstall`, and `--recover`
-are separate intents. The command is daemon-free and does not perform socket
+report unavailable installation. Bare bootstrap installs/reconciles; `--dry-run`
+previews without writes, and `--check` observes owned state. `--uninstall` and
+`--recover` are separate maintenance intents, both supporting `--dry-run`.
+`--check` conflicts with maintenance/dry-run; uninstall and recovery conflict.
+The old `--apply` and `--plan` flags are rejected, not aliases: scripts should
+remove `--apply` for installation and replace `--plan` with `--dry-run` for preview.
+The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
 `--root` is an optional override, not a prerequisite: compiled adapters select
 their documented user root from vendor environment/defaults. Those selected roots
 may be absent: inspection stays write-free and accepted installation creates only
-the captured missing suffix. Default-install/`--dry-run` migration remains
-unfinished. Root-policy availability does not imply a compiled adapter exists.
+the captured missing suffix. Root-policy availability does not imply a compiled
+adapter exists. Missing adapters fail mutating intents before root discovery;
+check/dry-run return unavailable diagnostics without mutation.
 
 The Gemini external harness is retired, with no replacement. Every Gemini
 bootstrap intent is rejected before root access. New canonical `gemini` launch
@@ -82,8 +87,9 @@ native or other harnesses is unaffected. No vendor files or user hooks are remov
 contains no vendor-launch routes, aliases, hidden launchers or deprecated
 forwarding. Bootstrap and observation-only internal helpers do not launch vendors.
 Pi/OpenCode/Codex artifacts and reducers are retained, but ordinary-command
-automatic enrollment, durable source continuity and the new default-install/
-dry-run/upgrade UX are still implementation work. Installation is not proof that
+automatic enrollment, durable source continuity and preservation/upgrade recovery
+remain implementation work; bare install and write-free dry-run are available.
+Installation is not proof that
 callbacks are loaded, enrolled or accounted; current descriptor-gated artifacts
 may remain inert under ordinary invocation until migration is complete. Vendor
 trust review and disabled policy remain intact. No live/provider/platform
@@ -280,8 +286,14 @@ the normal locked publication boundary. Competing creation/replacement rejects
 before artifact publication. Existing ancestor modes/ownership stay untouched.
 No-op uninstall stays absent; explicit recovery never creates a root. Creation
 is not atomic: an error may leave created directories, with no foreign/nonempty
-cleanup sweep. Default install/`--dry-run` grammar and normal-directory permission
-policy/private-state migration remain unfinished.
+cleanup sweep. Normal-directory permission policy/private-state migration remains
+unfinished. Recovery dry-run uses the same journal version/root, compiled-intent
+and before/after preimage checks as recovery, but takes no lock and finishes no
+effects. JSON `operation` is install/check/uninstall/recover; `dry_run` is explicit,
+`changed_paths` describes planned edits and `recovered` requires actual settlement.
+`recovery_pending` distinguishes accepted recovery preview from no journal. Check
+currently returns success when inspection succeeds, even if changes are needed;
+scripts should inspect `changed_paths`, not infer installed/active state from exit0.
 
 For compiled adapters, `--root` is now optional. The selector uses an explicit
 absolute override first, then the vendor directory variable, then its user default:
@@ -305,8 +317,9 @@ for non-UTF8 Unix spellings) and fixed `root_source`; actual filesystem path byt
 remain exact. No vendor probing or cwd/focus/project ancestor discovery occurs.
 The six root policies do not imply six compiled adapters: absent adapter diagnostics
 still perform no root discovery or mutation. Missing selected roots now support
-read-only preview and installation-only anchored creation; the new default-install/
-`--dry-run` grammar remains unfinished.
+read-only preview and installation-only anchored creation. Bare install and
+`--dry-run` now use these owners; historical pending-target automatic recovery,
+missing/edited owned repair/preservation and broader adapter activation remain work.
 
 ### Normalized observational hook helper
 

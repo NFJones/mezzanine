@@ -325,8 +325,26 @@ impl Publisher {
         authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
     ) -> Result<bool> {
         self.require_lock()?;
-        let Some(bytes) = read_at(self.directory.file()?, JOURNAL, MAX_JOURNAL)? else {
+        let Some(changes) = self.inspect_recovery_authorized(authorize)? else {
             return Ok(false);
+        };
+        self.finish(&changes)?;
+        Ok(true)
+    }
+
+    /// Read-only recovery preview verifies the same accepted root/version,
+    /// compiled intent and actual before/after states as recovery. It neither
+    /// creates a missing root nor acquires a writer lock or finishes effects.
+    pub(super) fn inspect_recovery_authorized(
+        &self,
+        authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
+    ) -> Result<Option<Vec<Change>>> {
+        self.validate_root()?;
+        if self.directory.is_missing() {
+            return Ok(None);
+        }
+        let Some(bytes) = read_at(self.directory.file()?, JOURNAL, MAX_JOURNAL)? else {
+            return Ok(None);
         };
         let journal: Journal = serde_json::from_slice(&bytes).map_err(|_| {
             MezError::invalid_state("bootstrap journal invalid; manual review required")
@@ -342,8 +360,8 @@ impl Publisher {
             ));
         }
         authorize(&journal.intent, &journal.changes)?;
-        self.finish(&journal.changes)?;
-        Ok(true)
+        self.validate_changes(&journal.changes, true)?;
+        Ok(Some(journal.changes))
     }
 
     /// Commits an already planned transaction; never silently recovers old intent.

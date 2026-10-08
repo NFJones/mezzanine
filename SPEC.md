@@ -638,8 +638,17 @@ vendor entry-point activation, complete bootstrap UX or live vendor conformance.
 The common `mez bootstrap <harness>` installer MUST admit only compiled,
 best-effort manifests based on docs or available local installations. Observed
 vendor versions MUST NOT gate implementation or installation; untested behavior
-MUST be labelled rather than claimed as certified. Planning/checking MUST be distinct from explicit apply,
-uninstall and recovery, with no daemon dependency or credential installation.
+MUST be labelled rather than claimed as certified. Bare bootstrap MUST install/
+reconcile, with optional root/version and no daemon dependency. `--dry-run` MUST
+preview install/uninstall/recovery without writes; `--check` MUST observe owned
+state without mutation and conflict with dry-run/maintenance. Uninstall/recovery
+MUST be exclusive. Obsolete `--apply`/`--plan` MUST reject, not alias new intents.
+Missing compiled adapters MUST fail mutating intents before root discovery;
+read-only check/dry-run MUST remain unavailable diagnostics, not fake installation.
+Recovery preview MUST share version/root/compiled-intent/preimage authorization
+with recovery, without writer lock or publication. JSON MUST distinguish operation,
+dry_run, changed_paths, recovered and accepted recovery_pending. Check success
+MUST mean inspection succeeded, not necessarily unchanged/installed state.
 Inspection MUST be read-only: no lock acquisition/creation, journal, receipt,
 artifact parent, stage or vendor-root creation. Holding an inspection descriptor
 MUST NOT block a cooperating writer or release its lock. Mutating publication
@@ -671,8 +680,8 @@ its migrated legacy XDG root. File-only OpenCode config overrides MUST NOT be
 interpreted as plugin directories. Unknown/retired names MUST reject before
 environment/root discovery; absent compiled adapters MUST remain no-mutation
 diagnostics rather than selecting/writing guessed integration roots. The
-default-install/dry-run grammar and directory policy remain unfinished UX work,
-not completed by automatic root selection and anchored materialization.
+directory/private-state policy, historical pending-target recovery and preservation
+repair remain unfinished UX work, not completed by new intent grammar alone.
 Owned-file and exact-JSON-entry receipts MUST protect unrelated settings;
 Exact JSON-array-member ownership MUST preserve unrelated members and order,
 replace at the owned position, and uninstall only that member, not the containing

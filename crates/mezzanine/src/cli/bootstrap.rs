@@ -6,7 +6,7 @@
 
 use super::{Args, CliOutputFormat, MezError, PathBuf, Result, Write};
 
-/// Explicit installer intent; read-only planning is the default.
+/// Default install/reconcile, with explicit read-only previews and maintenance.
 #[derive(Debug, Clone, Args)]
 pub(super) struct BootstrapCliArgs {
     /// Harness whose compiled adapter should be consulted.
@@ -18,15 +18,12 @@ pub(super) struct BootstrapCliArgs {
     /// Optional user/project root override; otherwise use documented vendor user roots.
     #[arg(long)]
     root: Option<PathBuf>,
-    /// Inspect a plan without publishing artifacts.
-    #[arg(long, conflicts_with_all = ["check", "apply", "uninstall", "recover"])]
-    plan: bool,
+    /// Preview install/uninstall/recovery without creating or changing any state.
+    #[arg(long, conflicts_with = "check")]
+    dry_run: bool,
     /// Check accepted ownership without publishing artifacts.
-    #[arg(long, conflicts_with_all = ["apply", "uninstall", "recover"])]
-    check: bool,
-    /// Explicitly accept a compiled installation/reconciliation plan.
     #[arg(long, conflicts_with_all = ["uninstall", "recover"])]
-    apply: bool,
+    check: bool,
     /// Remove only unchanged, receipted adapter-owned artifacts.
     #[arg(long, conflicts_with = "recover")]
     uninstall: bool,
@@ -93,9 +90,19 @@ fn run_with_root_selector<W: Write>(
         let selected = select_root(&args.harness, args.root.as_deref())?;
         let root = &selected.path;
         let mut recovered = false;
+        let mut recovery_pending = false;
         let mut changed_paths = Vec::new();
         let operation = if args.recover {
-            recovered = crate::integrations::bootstrap::installer::recover(root, &manifest)?;
+            if args.dry_run {
+                if let Some(paths) =
+                    crate::integrations::bootstrap::installer::preview_recovery(root, &manifest)?
+                {
+                    recovery_pending = true;
+                    changed_paths = paths;
+                }
+            } else {
+                recovered = crate::integrations::bootstrap::installer::recover(root, &manifest)?;
+            }
             "recover"
         } else {
             use crate::integrations::bootstrap::installer::{Operation, plan};
@@ -113,39 +120,38 @@ fn run_with_root_selector<W: Write>(
                 .into_iter()
                 .map(str::to_string)
                 .collect();
-            if args.apply || args.uninstall {
+            if !args.dry_run && !args.check {
                 plan.apply()?;
             }
             if args.uninstall {
                 "uninstall"
-            } else if args.apply {
-                "apply"
             } else if args.check {
                 "check"
             } else {
-                "plan"
+                "install"
             }
         };
         return super::write_json_or_plain(stdout, format, &serde_json::json!({
             "harness":args.harness,"vendor_version":args.vendor_version,"operation":operation,
             "scope_root":root.to_string_lossy(),"root_source":selected.source,
             "supported":true,"manifest_revision":manifest.revision,"changed_paths":changed_paths,"recovered":recovered,
+            "dry_run":args.dry_run,"recovery_pending":recovery_pending,
             "support":"best-effort",
             "guidance":"Installation is observational only. Use ordinary vendor commands and preserve vendor review/disabled policy. Automatic enrollment and accounting capabilities may still be unavailable; no Mez vendor-launch wrappers exist",
         }).to_string());
     }
-    if args.apply || args.uninstall || args.recover {
+    if !args.dry_run && !args.check {
         return Err(MezError::invalid_state(format!(
-            "bootstrap {}: no release-qualified adapter manifest is installed; no files changed. Candidate support is not certification",
+            "bootstrap {}: no compiled adapter manifest is installed; no files changed. Candidate support is not installation",
             args.harness
         )));
     }
     let output = serde_json::json!({
         "harness":args.harness, "vendor_version":args.vendor_version,
-        "scope_root":args.root, "operation":if args.check {"check"} else {"plan"},
+        "scope_root":args.root, "operation":if args.recover {"recover"} else if args.uninstall {"uninstall"} else if args.check {"check"} else {"install"},"dry_run":args.dry_run,
         "supported":false, "certification":"unavailable", "changed_paths":[],
         "lifecycle":"unavailable", "usage":"unavailable",
-        "reason":"No release-qualified adapter manifest; no vendor configuration, credentials or hook trust changed",
+        "reason":"No compiled adapter manifest; no vendor configuration, credentials or hook trust changed",
     }).to_string();
     super::write_json_or_plain(stdout, format, &output)
 }
@@ -154,6 +160,180 @@ fn run_with_root_selector<W: Write>(
 mod tests {
     use super::*;
     use clap::Parser;
+
+    /// Bare bootstrap installs at its captured automatic root, while explicit
+    /// dry-run keeps even absent roots untouched. Repetition is unchanged;
+    /// uninstall preview preserves exact installed artifacts before removal.
+    #[test]
+    fn bootstrap_default_install_and_explicit_dry_run_are_distinct() {
+        #[derive(Parser)]
+        struct Fixture {
+            #[command(flatten)]
+            args: BootstrapCliArgs,
+        }
+        let home = std::env::temp_dir().join(format!(
+            "mez-bootstrap-intents-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir(&home).unwrap();
+        let root = home.join(".pi/agent");
+        let invoke = |flags: &[&str]| {
+            let mut arguments = vec!["fixture", "pi"];
+            arguments.extend_from_slice(flags);
+            let parsed = Fixture::try_parse_from(arguments).unwrap();
+            let mut output = Vec::new();
+            run_with_root_selector(
+                parsed.args,
+                CliOutputFormat::Json,
+                &mut output,
+                crate::integrations::bootstrap::compiled_manifest("pi", None),
+                |name, explicit| {
+                    crate::integrations::bootstrap::roots::resolve_with_environment(
+                        name,
+                        explicit,
+                        |key| (key == "HOME").then(|| home.clone().into_os_string()),
+                        false,
+                    )
+                },
+            )
+            .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&output).unwrap()
+        };
+        assert_eq!(invoke(&["--dry-run"])["dry_run"], true);
+        assert!(!home.join(".pi").exists());
+        assert_eq!(invoke(&[])["operation"], "install");
+        assert!(root.join("extensions/mezzanine/index.mjs").is_file());
+        assert!(invoke(&[])["changed_paths"].as_array().unwrap().is_empty());
+        assert_eq!(
+            invoke(&["--uninstall", "--dry-run"])["operation"],
+            "uninstall"
+        );
+        assert!(root.join("extensions/mezzanine/index.mjs").is_file());
+        invoke(&["--uninstall"]);
+        assert!(!root.join("extensions/mezzanine/index.mjs").exists());
+        assert!(Fixture::try_parse_from(["fixture", "pi", "--plan"]).is_err());
+        assert!(Fixture::try_parse_from(["fixture", "pi", "--apply"]).is_err());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// Intent grammar removes obsolete flags rather than aliases them, rejects
+    /// ambiguous maintenance/check combinations, and admits explicit previews
+    /// for every mutating intent without a root or version prerequisite.
+    #[test]
+    fn bootstrap_intent_grammar_has_no_legacy_apply_or_plan_alias() {
+        #[derive(Parser)]
+        struct Fixture {
+            #[command(flatten)]
+            args: BootstrapCliArgs,
+        }
+        for flags in [
+            vec!["--dry-run"],
+            vec!["--recover", "--dry-run"],
+            vec!["--uninstall", "--dry-run"],
+            vec!["--check"],
+        ] {
+            assert!(Fixture::try_parse_from(["fixture", "pi"].into_iter().chain(flags)).is_ok());
+        }
+        for flags in [
+            vec!["--plan"],
+            vec!["--apply"],
+            vec!["--recover", "--uninstall"],
+            vec!["--check", "--dry-run"],
+            vec!["--check", "--uninstall"],
+            vec!["--check", "--recover"],
+        ] {
+            assert!(Fixture::try_parse_from(["fixture", "pi"].into_iter().chain(flags)).is_err());
+        }
+        let help = <Fixture as clap::CommandFactory>::command()
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("--dry-run"));
+        assert!(!help.contains("--apply") && !help.contains("--plan"));
+    }
+
+    /// A real rooted journal with compiled test intent previews through the
+    /// production CLI without locking or publication. Typed output distinguishes
+    /// pending work from no journal, and actual recovery subsequently settles
+    /// the same bounded changes. Raw JSON is test evidence, never public input.
+    #[test]
+    fn bootstrap_recovery_dry_run_preserves_tree_and_reports_pending() {
+        use crate::integrations::bootstrap::{
+            installer::Manifest,
+            reconciliation::{Artifact, Entry},
+        };
+        use std::os::unix::fs::MetadataExt;
+        #[derive(Parser)]
+        struct Fixture {
+            #[command(flatten)]
+            args: BootstrapCliArgs,
+        }
+        #[derive(serde::Serialize)]
+        struct TestReceipt<'a> {
+            schema: u32,
+            manifest: &'a Manifest,
+        }
+        let root = std::env::temp_dir().join(format!(
+            "mez-cli-recovery-preview-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let manifest = Manifest {
+            harness: "codex".into(),
+            revision: 1,
+            vendor_version: "fixture-only".into(),
+            entries: vec![Entry {
+                path: "owned".into(),
+                artifact: Artifact::File {
+                    bytes: b"owned".to_vec(),
+                },
+            }],
+        };
+        let metadata = std::fs::metadata(&root).unwrap();
+        let receipt = serde_json::to_vec(&TestReceipt {
+            schema: 1,
+            manifest: &manifest,
+        })
+        .unwrap();
+        let journal = serde_json::to_vec(&serde_json::json!({"version":2,"root_device":metadata.dev(),"root_inode":metadata.ino(),"intent":{"manifest":manifest,"previous":null,"operation":"Install"},"changes":[{"path":"owned","before":null,"after":b"owned".to_vec()},{"path":"mez-bootstrap-ownership-codex.json","before":null,"after":receipt}]})).unwrap();
+        std::fs::write(root.join(".mez-bootstrap-journal"), &journal).unwrap();
+        let invoke = |preview: bool| {
+            let mut arguments = vec![
+                "fixture",
+                "codex",
+                "--root",
+                root.to_str().unwrap(),
+                "--recover",
+            ];
+            if preview {
+                arguments.push("--dry-run");
+            }
+            let parsed = Fixture::try_parse_from(arguments).unwrap();
+            let mut output = Vec::new();
+            run_with_manifest(
+                parsed.args,
+                CliOutputFormat::Json,
+                &mut output,
+                Some(manifest.clone()),
+            )
+            .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&output).unwrap()
+        };
+        let preview = invoke(true);
+        assert_eq!(preview["operation"], "recover");
+        assert_eq!(preview["dry_run"], true);
+        assert_eq!(preview["recovery_pending"], true);
+        assert_eq!(preview["recovered"], false);
+        assert_eq!(preview["changed_paths"].as_array().unwrap().len(), 2);
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read(root.join(".mez-bootstrap-journal")).unwrap(),
+            journal
+        );
+        assert_eq!(invoke(false)["recovered"], true);
+        assert_eq!(std::fs::read(root.join("owned")).unwrap(), b"owned");
+        assert_eq!(invoke(true)["recovery_pending"], false);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// Normal compiled harness commands can select their user roots without
     /// --root, vendor execution or daemon discovery. Injected HOME/directory
@@ -178,8 +358,12 @@ mod tests {
         ] {
             let root = home.join(suffix);
             assert!(!root.exists());
-            for intent in ["--check", "--apply", "--check"] {
-                let parsed = Fixture::try_parse_from(["fixture", harness, intent]).unwrap();
+            for intent in ["--check", "", "--check"] {
+                let mut arguments = vec!["fixture", harness];
+                if !intent.is_empty() {
+                    arguments.push(intent);
+                }
+                let parsed = Fixture::try_parse_from(arguments).unwrap();
                 let manifest = crate::integrations::bootstrap::compiled_manifest(harness, None);
                 let mut output = Vec::new();
                 run_with_root_selector(
@@ -200,7 +384,7 @@ mod tests {
                 let output: serde_json::Value = serde_json::from_slice(&output).unwrap();
                 assert_eq!(output["scope_root"], root.to_str().unwrap());
                 assert_eq!(output["root_source"], "vendor-default");
-                if intent == "--apply" {
+                if intent.is_empty() {
                     assert!(
                         root.join(format!("mez-bootstrap-ownership-{harness}.json"))
                             .is_file()
@@ -250,9 +434,8 @@ mod tests {
             harness: "pi".into(),
             vendor_version: None,
             root: None,
-            plan: false,
+            dry_run: false,
             check: true,
-            apply: false,
             uninstall: false,
             recover: false,
         };
@@ -368,21 +551,23 @@ mod tests {
         let root = parent.join(std::ffi::OsString::from_vec(b"vendor-\xff".to_vec()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("authored"), b"preserved").unwrap();
-        for intent in ["--check", "--apply", "--check"] {
-            let parsed = Fixture::try_parse_from(vec![
+        for intent in ["--check", "", "--check"] {
+            let mut arguments = vec![
                 std::ffi::OsString::from("fixture"),
                 "pi".into(),
                 "--root".into(),
                 root.clone().into_os_string(),
-                intent.into(),
-            ])
-            .unwrap();
+            ];
+            if !intent.is_empty() {
+                arguments.push(intent.into());
+            }
+            let parsed = Fixture::try_parse_from(arguments).unwrap();
             let mut output = Vec::new();
             run(parsed.args, CliOutputFormat::Json, &mut output).unwrap();
             let output: serde_json::Value = serde_json::from_slice(&output).unwrap();
             assert_eq!(output["scope_root"], root.to_string_lossy().as_ref());
             assert_eq!(output["root_source"], "explicit");
-            if intent == "--apply" {
+            if intent.is_empty() {
                 assert!(root.join("extensions/mezzanine/index.mjs").is_file());
             }
             assert_eq!(std::fs::read(root.join("authored")).unwrap(), b"preserved");
@@ -410,7 +595,7 @@ mod tests {
         std::fs::write(root.join("authored.json"), b"{\"user\":true}\n").unwrap();
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o500)).unwrap();
         for harness in ["pi", "opencode", "codex"] {
-            for intent in ["--check", "--plan"] {
+            for intent in ["--check", "--dry-run"] {
                 let parsed = Fixture::try_parse_from([
                     "fixture",
                     harness,
@@ -465,8 +650,7 @@ mod tests {
         ));
         std::fs::create_dir(&root).unwrap();
         let parsed =
-            Fixture::try_parse_from(["fixture", "pi", "--root", root.to_str().unwrap(), "--apply"])
-                .unwrap();
+            Fixture::try_parse_from(["fixture", "pi", "--root", root.to_str().unwrap()]).unwrap();
         let mut output = Vec::new();
         run(parsed.args, CliOutputFormat::Json, &mut output).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
@@ -485,8 +669,7 @@ mod tests {
         run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
         let parsed =
-            Fixture::try_parse_from(["fixture", "pi", "--root", root.to_str().unwrap(), "--apply"])
-                .unwrap();
+            Fixture::try_parse_from(["fixture", "pi", "--root", root.to_str().unwrap()]).unwrap();
         run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).unwrap();
         assert!(root.join("extensions/mezzanine/index.mjs").is_file());
         std::fs::remove_dir_all(root).unwrap();
@@ -501,7 +684,7 @@ mod tests {
             #[command(flatten)]
             args: BootstrapCliArgs,
         }
-        for flag in ["--plan", "--check", "--apply", "--uninstall", "--recover"] {
+        for flag in ["--dry-run", "--check", "--uninstall", "--recover"] {
             assert!(
                 Fixture::try_parse_from([
                     "fixture",
@@ -515,7 +698,7 @@ mod tests {
         }
         assert!(Fixture::try_parse_from(["fixture", "gemini"]).is_err());
         for harness in ["claude", "codex", "copilot", "opencode", "cursor"] {
-            assert!(Fixture::try_parse_from(["fixture", harness, "--plan"]).is_ok());
+            assert!(Fixture::try_parse_from(["fixture", harness, "--dry-run"]).is_ok());
         }
     }
 
@@ -551,16 +734,18 @@ mod tests {
             }],
         };
         let invoke = |flag: &str| {
-            let parsed = Fixture::try_parse_from([
+            let mut arguments = vec![
                 "fixture",
                 "codex",
                 "--vendor-version",
                 "fixture-only",
                 "--root",
                 root.to_str().unwrap(),
-                flag,
-            ])
-            .unwrap();
+            ];
+            if !flag.is_empty() {
+                arguments.push(flag);
+            }
+            let parsed = Fixture::try_parse_from(arguments).unwrap();
             let mut output = Vec::new();
             run_with_manifest(
                 parsed.args,
@@ -572,11 +757,14 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&output).unwrap()
         };
         assert_eq!(
-            invoke("--plan")["changed_paths"].as_array().unwrap().len(),
+            invoke("--dry-run")["changed_paths"]
+                .as_array()
+                .unwrap()
+                .len(),
             2
         );
         assert!(!root.join("owned.json").exists());
-        invoke("--apply");
+        invoke("");
         assert_eq!(std::fs::read(root.join("owned.json")).unwrap(), b"{}\n");
         assert!(
             invoke("--check")["changed_paths"]
@@ -584,12 +772,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(
-            invoke("--apply")["changed_paths"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(invoke("")["changed_paths"].as_array().unwrap().is_empty());
         invoke("--uninstall");
         assert!(!root.join("owned.json").exists());
         std::fs::remove_dir_all(root).unwrap();
@@ -609,22 +792,17 @@ mod tests {
             "claude",
             "--root",
             "/missing/bootstrap/root",
-            "--plan",
+            "--dry-run",
         ])
         .unwrap();
         let mut output = Vec::new();
         run(parsed.args, CliOutputFormat::Json, &mut output).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(value["supported"], false);
-        let parsed = Fixture::try_parse_from([
-            "fixture",
-            "claude",
-            "--root",
-            "/missing/bootstrap/root",
-            "--apply",
-        ])
-        .unwrap();
+        let parsed =
+            Fixture::try_parse_from(["fixture", "claude", "--root", "/missing/bootstrap/root"])
+                .unwrap();
         assert!(run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).is_err());
-        assert!(Fixture::try_parse_from(["fixture", "codex", "--plan", "--apply"]).is_err());
+        assert!(Fixture::try_parse_from(["fixture", "codex", "--check", "--dry-run"]).is_err());
     }
 }
