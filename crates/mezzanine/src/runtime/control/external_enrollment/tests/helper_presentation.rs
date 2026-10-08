@@ -4,6 +4,180 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// Invoked as a genuine direct child of the ordinary producer. The actual CLI
+/// parser/dispatcher discovers its route from ordinary MEZ environment and
+/// consumes the private envelope only on stdin. Even daemon rejection must
+/// preserve neutral output, successful exit and empty diagnostics. This is a
+/// self-executing Rust fixture, not an installed vendor/helper-binary assertion.
+#[test]
+#[ignore = "self-executing fixed CLI helper fixture"]
+fn external_helper_presentation_cli_child_fixture() {
+    if std::env::var_os("MEZ_TEST_ENROLL_MODE").is_none() {
+        return;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = runtime
+        .block_on(crate::cli::run_with(
+            vec!["mez".into(), "harness-event".into()],
+            crate::cli::CliEnv::from_process(),
+            false,
+            &mut stdout,
+            &mut stderr,
+        ))
+        .unwrap();
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"{}\n");
+    assert!(stderr.is_empty());
+}
+
+/// A normally invoked, independently enrolled producer spawns the actual fixed
+/// CLI dispatcher as a direct child with private stdin, not argv/env credentials.
+/// Each helper opens its own Unix connection and sends a real framed request;
+/// native sender/parent/ancestry and actor settlement decide attribution. Allowed
+/// updates and identical replay preserve the original run, while the ordinary
+/// producer-only method and wrong handles remain neutral but cannot update it.
+#[tokio::test(flavor = "current_thread")]
+async fn external_helper_presentation_cli_unix_actor_roundtrip_is_neutral() {
+    use crate::host::async_runtime::{
+        AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
+        serve_async_runtime_control_connection_loop,
+    };
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let response = enroll_producer(&mut fixture).await;
+    let binding = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    let before = (
+        binding.generation,
+        binding.accounting_owner.clone(),
+        binding.expires,
+        binding.enrollment.as_ref().unwrap().observers.len(),
+    );
+    let clients = fixture.service.session().clients().len();
+    let service = std::mem::replace(&mut fixture.service, RuntimeServiceFixture::new().build());
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let actor_task = tokio::spawn(actor.run());
+    for (operation, wrong_handle, sequence, state) in [
+        ("helper-presentation", false, 1, "running"),
+        ("helper-presentation", false, 1, "running"),
+        ("presentation", false, 2, "failed"),
+        ("helper-presentation", true, 2, "failed"),
+    ] {
+        let token = if wrong_handle {
+            serde_json::json!("x".repeat(43))
+        } else {
+            response["result"]["launch_token"].clone()
+        };
+        let event = zeroize::Zeroizing::new(serde_json::json!({"operation":operation,
+            "launch_token":token,"generation":response["result"]["generation"],"external_session_id":"session-a",
+            "data":{"sequence":sequence,"state":state,"title":"CLI fixture"}}).to_string());
+        let length = u32::try_from(event.len()).unwrap().to_be_bytes();
+        fixture.socket.write_all(&[5]).await.unwrap();
+        fixture.socket.write_all(&length).await.unwrap();
+        fixture.socket.write_all(event.as_bytes()).await.unwrap();
+        let (mut socket, _) =
+            tokio::time::timeout(Duration::from_secs(10), fixture.listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+        let uid = crate::runtime::current_effective_uid();
+        let origin =
+            Arc::new(crate::runtime::capture_unix_origin(socket.as_raw_fd(), uid).unwrap());
+        let mut connection = ControlConnectionState::new(true, false);
+        connection
+            .bind_authenticated_peer(AuthenticatedPeer::unix_user(uid))
+            .unwrap();
+        connection.bind_unix_origin(origin.clone()).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            serve_async_runtime_control_connection_loop(
+                &mut socket,
+                &handle,
+                &mut connection,
+                AsyncRuntimeControlConnectionConfig::new(8192, uid).unwrap(),
+                |served, _| served >= 1,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(origin.writer_confirmed());
+        assert!(!connection.initialized());
+        assert!(connection.caller_client_id().is_none());
+        let mut neutral_success = [0];
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            fixture.socket.read_exact(&mut neutral_success),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            neutral_success,
+            [1],
+            "fixed helper changed output or exit behavior"
+        );
+        assert!(
+            !origin.is_live(),
+            "producer must reap the completed helper before acknowledgment"
+        );
+    }
+    handle.shutdown().await.unwrap();
+    let mut exit = actor_task.await.unwrap();
+    assert_eq!(exit.service.session().clients().len(), clients);
+    assert_eq!(exit.service.control.external_agents().bindings.len(), 1);
+    let binding = exit
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    assert!(!binding.retired);
+    assert_eq!(
+        (
+            binding.generation,
+            binding.accounting_owner.clone(),
+            binding.expires,
+            binding.enrollment.as_ref().unwrap().observers.len()
+        ),
+        before
+    );
+    let presentation = binding
+        .registration
+        .as_ref()
+        .unwrap()
+        .presentation
+        .as_ref()
+        .unwrap();
+    assert_eq!(presentation.sequence, 1);
+    assert_eq!(presentation.state, "running");
+    assert!(
+        exit.service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
+    assert_eq!(exit.service.reconcile_external_agent_registrations(), 0);
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Runs genuine off-actor native observation and returns the parsed settlement
 /// without printing private handles or presentation metadata on failure.
 async fn settle(

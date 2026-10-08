@@ -140,6 +140,24 @@ fn external_enrollment_ordinary_child_fixture() {
                 helpers.push(child);
                 continue;
             }
+            if release == [5] {
+                let mut length = [0; 4];
+                socket.read_exact(&mut length).unwrap();
+                let length = u32::from_be_bytes(length) as usize;
+                assert!(length <= 4096);
+                let mut event = zeroize::Zeroizing::new(vec![0; length]);
+                socket.read_exact(&mut event).unwrap();
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "runtime::control::external_enrollment::tests::helper_presentation::external_helper_presentation_cli_child_fixture", "--ignored", "--quiet"])
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn().unwrap();
+                child.stdin.take().unwrap().write_all(&event).unwrap();
+                let success = child.wait().unwrap().success();
+                socket.write_all(&[u8::from(success)]).unwrap();
+                continue;
+            }
             assert_eq!(release, [3]);
             socket.write_all(&[1]).unwrap();
         }
