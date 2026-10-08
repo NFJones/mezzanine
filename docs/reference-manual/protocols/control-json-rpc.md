@@ -630,6 +630,25 @@ syscalls are not hard-cancelled: reservations remain held until work completes,
 and late results reject. Actor settlement rechecks exact root/producer/connection
 and releases reservations even if the response owner disconnected.
 
+Linux workers retain exact ancestor pidfds through the pane root using bracketed
+native parent/birth/UID evidence. The socket-original producer anchor is never
+replaced by a numerical PID reopen. Retaining the whole chain rejects intermediate
+ancestor exit even when the producer, its immediate parent and pane root survive.
+Actor settlement and live authorization, idle renewal and read-only discovery,
+title and status projection poll these lifetimes without actor procfs ancestry
+walks. Pending observations and live registrations share a 512-ancestor descriptor
+budget; exhaustion rejects without evicting current runs. Capture's cooperative
+100ms total budget is inside the overall 2s admission deadline. Failed work and
+retirement release their witness ownership; in-flight clones retain their reserved
+capacity until last drop. Same-run retries/observer rotation keep original ancestry.
+
+Retired tombstones may acknowledge only their existing inert end/shutdown receipts
+with original producer/writer proof; they retain no ancestry authority. Native
+capture and final lifetime polls are not an atomic tree snapshot or atomic with
+actor publication. Exit immediately after a final check remains possible; later
+projection/authorization rejects dead witnesses. This is not executable/vendor
+attestation, cross-user ancestry admission or macOS qualification.
+
 Success returns one private `launch_token`, `generation`, stable `run_id`,
 `observer_epoch`, `observer_instance`, `agent_id`, exact
 external session, `registered: true`, `controls: []`, and the existing 60s lease.
@@ -682,6 +701,8 @@ same admission pool, limits and deadline as enrollment. Actor settlement recheck
 the exact child/producer/root/connection and current run authority before updating
 presentation. PID/parent/pane hints, a stolen handle alone, unrelated children,
 changed roots, expired or replaced handles and late work cannot qualify.
+Helper native work shares the same aggregate retained-ancestor budget and fences
+its full chain through settlement; ancestor exit invalidates queued callbacks.
 
 No producer, registration, accounting namespace, observer endpoint or client role
 is created. The callback neither renews nor retires the existing lease; helper

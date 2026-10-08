@@ -307,6 +307,24 @@ admission deadline. A blocked native syscall cannot be hard-cancelled; its
 reservation MUST remain held until actual completion, and late evidence MUST NOT
 allocate authority. Actor completion MUST consume the exact reservation and
 recheck root incarnation, origin, writer and deadline before allocation.
+Linux ordinary admission MUST retain every natively qualified ancestor lifetime
+through the pane root, not discard the chain after the worker walk. Exact native
+parent relationship/birth/UID observations MUST bracket each parent pidfd capture;
+numeric PID opening MUST NOT replace the socket-original origin anchor. Actor
+settlement and live-run authorization/renewal/discovery/title/status MUST fence
+the retained chain using nonblocking lifetime polls, without actor ancestry walks.
+Intermediate ancestor exit MUST invalidate association even if producer, immediate
+parent and pane root survive. Pending workers and live runs MUST share an aggregate
+512-ancestor descriptor bound; exhaustion MUST reject without evicting live grants.
+Failed capture/work and retired registration MUST release their witness ownership;
+remaining in-flight clones retain capacity until their actual last drop. Tombstones
+MAY replay only existing inert end/shutdown receipts under exact original producer
+and writer proof, without retaining ancestry or granting renewal/presentation.
+Capture has a cooperative 100ms total budget inside the 2s admission budget.
+Lifetime capture/polls are not an atomic process-tree snapshot or atomic with actor
+publication; concurrent exit after the final check remains possible, and later
+projections/authorization MUST reject invalidated evidence. No executable/vendor
+attestation, cross-user parent fallback or macOS admission is established here.
 Identical same-instance retry MUST retain one private producer-bound handle and
 observational identity, including its original predecessor witness. A verified
 replacement instance MUST name the current predecessor generation, receive fresh

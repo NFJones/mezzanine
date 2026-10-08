@@ -62,12 +62,12 @@ impl LaunchBinding {
     /// producer must remain natively live; its qualified connected observer can
     /// bridge a delayed maintenance tick. Legacy launches require their actual
     /// lease deadline because no ordinary observer provenance was established.
-    fn has_current_telemetry(&self, now: u64) -> bool {
+    pub(super) fn has_current_telemetry(&self, now: u64) -> bool {
         !self.retired
             && self
                 .enrollment
                 .as_ref()
-                .is_none_or(|enrollment| enrollment.origin.is_live())
+                .is_none_or(|enrollment| enrollment.provenance_is_live())
             && (self.expires > now
                 || self
                     .enrollment
@@ -289,7 +289,11 @@ impl RuntimeSessionService {
             ));
         }
         if let Some(enrollment) = &binding.enrollment {
-            enrollment.authorize(connection)?;
+            if binding.retired {
+                enrollment.authorize_connection(connection)?;
+            } else {
+                enrollment.authorize(connection)?;
+            }
         }
         if binding.retired {
             if request.method == "agent/external/pi-observation" {
@@ -451,6 +455,9 @@ impl RuntimeSessionService {
         }
         binding.retired = true;
         binding.expires = current_unix_seconds().saturating_add(TOMBSTONE_SECONDS);
+        if let Some(enrollment) = &mut binding.enrollment {
+            enrollment.ancestry = None;
+        }
         let pane_id = binding.pane_id.clone();
         let owner = format!("external-registration:{}", binding.generation);
         let agent_id = binding

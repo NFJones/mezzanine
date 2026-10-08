@@ -20,7 +20,9 @@ use mez_mux::process::ProcessParentIdentity;
 
 use super::peer_credentials::UnixPeerProcess;
 
+mod ancestry;
 mod parent;
+pub(crate) use ancestry::{UnixAncestryBudget, UnixAncestryWitness};
 
 /// Owns the exact connection-origin lifetime anchor and its first native record.
 #[derive(Debug)]

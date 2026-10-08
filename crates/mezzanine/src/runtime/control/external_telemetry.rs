@@ -100,7 +100,8 @@ impl RuntimeSessionService {
         Ok(serde_json::json!({"changed":true,"sequence":sequence}).to_string())
     }
 
-    /// Returns the latest live launch's title without I/O or changing provenance.
+    /// Returns the latest live launch's title without native metadata reads or
+    /// changing provenance; ordinary ancestry uses bounded nonblocking polls.
     pub(crate) fn external_agent_pane_title(&self, pane: &str) -> Option<String> {
         let now = crate::runtime::current_unix_seconds();
         self.control
@@ -109,8 +110,7 @@ impl RuntimeSessionService {
             .values()
             .filter(|binding| {
                 binding.pane_id == pane
-                    && !binding.retired
-                    && binding.expires > now
+                    && binding.has_current_telemetry(now)
                     && self.pane_process_identity_is_current(pane, &binding.process)
             })
             .filter_map(|binding| {
@@ -143,8 +143,7 @@ impl RuntimeSessionService {
                     .any(|binding| {
                         binding.generation == generation
                             && binding.pane_id == pane
-                            && !binding.retired
-                            && binding.expires > now
+                            && binding.has_current_telemetry(now)
                             && binding.registration.is_some()
                             && self.pane_process_identity_is_current(pane, &binding.process)
                     })

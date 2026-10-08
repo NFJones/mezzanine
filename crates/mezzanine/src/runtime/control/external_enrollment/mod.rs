@@ -10,7 +10,7 @@
 //! remains unavailable until durable ordinary-source continuity is implemented.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -21,7 +21,10 @@ use sha2::{Digest, Sha256};
 use crate::control::{AuthenticatedPeer, ControlConnectionState, JsonRpcRequest};
 use crate::error::{MezError, Result};
 use crate::runtime::processes::{RuntimePaneProcessIdentity, RuntimePaneProcessRole};
-use crate::runtime::{RuntimeSessionService, UnixOriginProcess, current_unix_seconds};
+use crate::runtime::{
+    RuntimeSessionService, UnixAncestryBudget, UnixAncestryWitness, UnixOriginProcess,
+    current_unix_seconds,
+};
 
 use super::external_agents::{LaunchBinding, text};
 
@@ -40,6 +43,8 @@ mod rotation;
 pub(super) struct EnrollmentAdmissions {
     pending: BTreeSet<u64>,
     next: u64,
+    /// Aggregate native ancestry descriptors across workers and live runs.
+    ancestry_budget: Arc<UnixAncestryBudget>,
     /// Test-owned native worker barrier; production has no global timing hooks.
     #[cfg(test)]
     worker_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
@@ -52,6 +57,9 @@ pub(super) struct EnrollmentAdmissions {
 #[derive(Debug)]
 pub(super) struct EnrollmentBinding {
     pub(super) origin: Arc<UnixOriginProcess>,
+    /// Original qualified ancestry; retirement releases it without dropping
+    /// observational retry tombstones or immutable accounting provenance.
+    pub(super) ancestry: Option<Arc<UnixAncestryWitness>>,
     /// Stable server-owned run identity, independent of credential replacement.
     run_generation: u64,
     /// Fresh presentation/credential epoch for each accepted observer instance.
@@ -86,6 +94,10 @@ pub(crate) struct ExternalEnrollmentWork {
     deadline: Instant,
     /// Existing run only; no helper observation may allocate a producer owner.
     helper: Option<helper::HelperPresentation>,
+    /// Worker clones publish the original immutable evidence once. A caller's
+    /// successful Result alone cannot fabricate or replace native ancestry.
+    ancestry: Arc<OnceLock<Arc<UnixAncestryWitness>>>,
+    ancestry_budget: Arc<UnixAncestryBudget>,
     /// Deterministic test-owned barrier proving native work does not hold actor.
     #[cfg(test)]
     pub(crate) worker_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
@@ -138,9 +150,19 @@ impl ExternalEnrollmentWork {
         let root = mez_mux::process::process_parent_identity_for_pid(self.process.process_id)
             .filter(|root| root.start_token == self.process.start_token)
             .ok_or_else(|| MezError::conflict("external enrollment pane root changed"))?;
-        mez_mux::process::process_ancestry(origin, root).map_err(|_| {
-            MezError::forbidden("external producer is not a verified pane descendant")
-        })?;
+        let ancestry = self
+            .origin
+            .capture_ancestry(root, &self.ancestry_budget)
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    MezError::new(
+                        crate::error::MezErrorKind::RateLimited,
+                        "external ancestry capacity unavailable",
+                    )
+                } else {
+                    MezError::forbidden("external producer ancestry unavailable")
+                }
+            })?;
         self.origin
             .reobserve()
             .map_err(|_| MezError::forbidden("external producer changed"))?;
@@ -149,11 +171,24 @@ impl ExternalEnrollmentWork {
                 "external enrollment observation expired",
             ));
         }
+        self.ancestry
+            .set(Arc::new(ancestry))
+            .map_err(|_| MezError::conflict("external ancestry already observed"))?;
         Ok(())
     }
 }
 
 impl EnrollmentBinding {
+    /// Whole-chain lifetime fencing uses only bounded nonblocking kernel polls;
+    /// a live producer cannot keep an orphaned pane association authoritative.
+    pub(super) fn provenance_is_live(&self) -> bool {
+        self.origin.is_live()
+            && self
+                .ancestry
+                .as_ref()
+                .is_some_and(|ancestry| ancestry.is_live())
+    }
+
     /// Records only an already-authorized producer connection, without changing
     /// root/run identity or letting a stale disconnect retire its replacement.
     pub(super) fn observe_connection(&mut self, origin: &Arc<UnixOriginProcess>) {
@@ -183,13 +218,13 @@ impl EnrollmentBinding {
                     && observer.identity == self.origin.identity
             })
         });
-        self.origin.is_live() && !self.observers.is_empty()
+        self.provenance_is_live() && !self.observers.is_empty()
     }
 
     /// Checks an overdue lease without a new registry sweep; immutable endpoint
     /// polls let a delayed maintenance tick avoid retiring a connected observer.
     pub(super) fn has_live_observer(&self) -> bool {
-        self.origin.is_live()
+        self.provenance_is_live()
             && self.observers.iter().any(|observer| {
                 observer.upgrade().is_some_and(|observer| {
                     observer.observer_connected()
@@ -202,6 +237,22 @@ impl EnrollmentBinding {
     /// Requires the same live kernel-qualified producer on every credential use;
     /// a same-user token holder on another origin cannot report on this run.
     pub(super) fn authorize(&self, connection: &ControlConnectionState) -> Result<()> {
+        if !self.provenance_is_live() {
+            return Err(MezError::forbidden(
+                "external producer ancestry unavailable",
+            ));
+        }
+        self.authorize_connection(connection)?;
+        if !self.provenance_is_live() {
+            return Err(MezError::forbidden("external producer ancestry changed"));
+        }
+        Ok(())
+    }
+
+    /// Matches the original live producer and current writer for exact inert
+    /// tombstone receipts. This does not grant ancestry, renewal or presentation
+    /// authority; retired dispatch must separately permit only its old receipt.
+    pub(super) fn authorize_connection(&self, connection: &ControlConnectionState) -> Result<()> {
         let origin = connection
             .unix_origin()
             .ok_or_else(|| MezError::forbidden("external producer evidence unavailable"))?;
@@ -350,6 +401,8 @@ impl RuntimeSessionService {
             predecessor_generation,
             deadline: Instant::now() + ADMISSION_BUDGET,
             helper: None,
+            ancestry: Arc::new(OnceLock::new()),
+            ancestry_budget: registry.enrollments.ancestry_budget.clone(),
             #[cfg(test)]
             worker_gate: registry.enrollments.worker_gate.clone(),
             #[cfg(test)]
@@ -426,6 +479,11 @@ impl RuntimeSessionService {
         work.origin
             .reobserve()
             .map_err(|_| MezError::forbidden("external producer changed"))?;
+        let ancestry = work
+            .ancestry
+            .get()
+            .filter(|ancestry| ancestry.is_live())
+            .ok_or_else(|| MezError::forbidden("external producer ancestry changed"))?;
         if let Some(helper) = &work.helper {
             return self.commit_external_helper_presentation(work, helper);
         }
@@ -472,6 +530,7 @@ impl RuntimeSessionService {
         if Instant::now() >= work.deadline
             || !work.origin.is_live()
             || !work.origin.writer_confirmed()
+            || !ancestry.is_live()
         {
             return Err(MezError::conflict(
                 "external enrollment evidence expired before allocation",
@@ -503,6 +562,7 @@ impl RuntimeSessionService {
                 accounting_origin,
                 enrollment: Some(EnrollmentBinding {
                     origin: work.origin.clone(),
+                    ancestry: Some(ancestry.clone()),
                     run_generation: generation,
                     epoch: 1,
                     instance: work.observer_instance.clone(),

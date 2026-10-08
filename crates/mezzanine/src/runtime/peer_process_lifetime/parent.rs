@@ -25,11 +25,11 @@ const PARENT_BUDGET: std::time::Duration = std::time::Duration::from_millis(100)
 #[derive(Debug)]
 pub(crate) struct UnixParentProcess {
     /// Bounded same-user identity; no environment or vendor payload supplies it.
-    uid: u32,
+    pub(super) uid: u32,
     /// Paired native PID/parent/start evidence at original capture.
     pub(crate) identity: ProcessParentIdentity,
     /// Owned close-on-exec parent pidfd, independent of helper transport lifetime.
-    lifetime: OwnedFd,
+    pub(super) lifetime: OwnedFd,
 }
 
 impl UnixParentProcess {
@@ -130,7 +130,7 @@ impl UnixOriginProcess {
 /// Reuses bounded complete Linux credential evidence and its existing fail-closed
 /// FSUID/GID guards; this grants no filesystem rights and never changes credentials.
 #[cfg(target_os = "linux")]
-fn parent_uid(pid: u32) -> io::Result<u32> {
+pub(super) fn parent_uid(pid: u32) -> io::Result<u32> {
     mez_mux::process::filesystem_credentials_for_pid(pid)
         .map(|credentials| credentials.user_id)
         .ok_or_else(unavailable)
@@ -139,7 +139,7 @@ fn parent_uid(pid: u32) -> io::Result<u32> {
 /// Opens only the native selected parent; caller-supplied origin PID fallback is
 /// forbidden. The full capture owner verifies pre/post birth and relationship.
 #[cfg(target_os = "linux")]
-fn open_parent(pid: u32) -> io::Result<OwnedFd> {
+pub(super) fn open_parent(pid: u32) -> io::Result<OwnedFd> {
     use std::os::fd::FromRawFd;
     let pid = libc::pid_t::try_from(pid).map_err(|_| unavailable())?;
     // SAFETY: pidfd_open has scalar arguments and returns a newly owned fd.
@@ -170,7 +170,7 @@ fn open_parent(pid: u32) -> io::Result<OwnedFd> {
     dead_code,
     reason = "qualified short-lived hook consumer is unfinished"
 )]
-fn capture_parent_with<F>(
+pub(super) fn capture_parent_with<F>(
     uid: u32,
     mut helper: impl FnMut() -> io::Result<ProcessParentIdentity>,
     mut parent: impl FnMut(u32) -> io::Result<ProcessParentIdentity>,

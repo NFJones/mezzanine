@@ -230,7 +230,9 @@ fn callback(response: &serde_json::Value, sequence: u64) -> JsonRpcRequest {
 /// Starts a genuine direct child through the normally invoked producer; only
 /// nonsecret ordinary MEZ discovery is inherited. Kernel sender evidence is
 /// consumed from the helper's own transport, with no injected process identity.
-async fn child(fixture: &mut Fixture) -> (tokio::net::UnixStream, ControlConnectionState) {
+pub(super) async fn child(
+    fixture: &mut Fixture,
+) -> (tokio::net::UnixStream, ControlConnectionState) {
     fixture.socket.write_all(&[4]).await.unwrap();
     let (mut socket, _) = tokio::time::timeout(Duration::from_secs(10), fixture.listener.accept())
         .await

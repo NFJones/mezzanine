@@ -105,6 +105,13 @@ impl RuntimeSessionService {
                 producer: enrollment.origin.clone(),
                 params: SecretString::from(params.to_string()),
             }),
+            ancestry: Arc::new(OnceLock::new()),
+            ancestry_budget: self
+                .control
+                .external_agents()
+                .enrollments
+                .ancestry_budget
+                .clone(),
             #[cfg(test)]
             worker_gate: None,
             #[cfg(test)]
@@ -173,6 +180,12 @@ impl RuntimeSessionService {
             .map_err(|_| MezError::forbidden("external helper unavailable"))?;
         if child.parent_process_id != producer.origin.identity.process_id
             || Instant::now() >= work.deadline
+            || !producer.provenance_is_live()
+            || !work
+                .ancestry
+                .get()
+                .is_some_and(|ancestry| ancestry.is_live())
+            || !work.origin.writer_confirmed()
         {
             return Err(MezError::forbidden(
                 "external helper relationship or deadline changed",

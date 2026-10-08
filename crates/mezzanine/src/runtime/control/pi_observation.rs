@@ -4,6 +4,8 @@
 //! in restricted external ingress. This owner accepts only the existing Pi IPC
 //! event enum, enforces contiguous observation identity and exact latest replay,
 //! and reuses LifecycleOwner for provisional versus settled outcomes/UI waits.
+//! Retired runs replay only a shutdown receipt that actually retired its owner;
+//! nonterminal/reload receipts cannot bypass lost ancestry through a tombstone.
 //! No vendor callback/content, native control, provider work or usage is admitted.
 //! Observer rotation resets this reducer together with presentation ownership.
 
@@ -40,6 +42,8 @@ struct Receipt {
     sequence: u64,
     event: Vec<u8>,
     response: String,
+    /// True only when this accepted event actually retired its lifecycle owner.
+    retired: bool,
 }
 
 /// Bounded reducer state, independent of process and transport lifetime facts.
@@ -87,6 +91,11 @@ impl RuntimeSessionService {
             && input.sequence == receipt.sequence
             && event == receipt.event
         {
+            if binding.retired
+                && (!receipt.retired || !matches!(&input.event, pi_ipc::Event::Shutdown { .. }))
+            {
+                return Err(MezError::conflict("Pi observer has retired"));
+            }
             return Ok(receipt.response.clone());
         }
         if binding.retired {
@@ -149,6 +158,7 @@ impl RuntimeSessionService {
             sequence: input.sequence,
             event,
             response: response.clone(),
+            retired,
         });
         self.control
             .external_agents_mut()

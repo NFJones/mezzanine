@@ -71,7 +71,7 @@ async fn fixture(mode: &str) -> Option<Fixture> {
         .bind_authenticated_peer(AuthenticatedPeer::unix_user(uid))
         .unwrap();
     connection.bind_unix_origin(Arc::new(origin)).unwrap();
-    if mode_name == "hold" {
+    if mode_name == "hold" || mode_name == "tree" {
         use tokio::io::AsyncReadExt;
         let mut qualified =
             crate::runtime::UnixOriginStream::new(&mut socket, connection.unix_origin().cloned());
@@ -113,6 +113,17 @@ fn external_enrollment_ordinary_child_fixture() {
         .split(crate::runtime::MEZ_ENV_FIELD_SEPARATOR)
         .next()
         .unwrap();
+    if mode == "tree" || mode == "middle" {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "runtime::control::external_enrollment::tests::external_enrollment_ordinary_child_fixture", "--ignored", "--quiet"])
+            .env("MEZ_TEST_ENROLL_MODE", if mode == "tree" { "middle" } else { "hold" })
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn().unwrap();
+        assert!(child.wait().unwrap().success());
+        return;
+    }
     let mut socket = std::os::unix::net::UnixStream::connect(path).unwrap();
     socket
         .set_read_timeout(Some(Duration::from_secs(15)))
@@ -1183,6 +1194,7 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+mod ancestry;
 mod health;
 mod helper_presentation;
 mod observer_epochs;

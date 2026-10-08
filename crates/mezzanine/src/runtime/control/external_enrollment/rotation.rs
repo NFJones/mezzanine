@@ -83,6 +83,7 @@ impl RuntimeSessionService {
         if Instant::now() >= work.deadline
             || !work.origin.is_live()
             || !work.origin.writer_confirmed()
+            || !enrollment.provenance_is_live()
         {
             return Err(MezError::conflict(
                 "external observer evidence expired before replacement",
