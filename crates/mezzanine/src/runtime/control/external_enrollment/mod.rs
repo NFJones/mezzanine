@@ -32,6 +32,7 @@ const ADMISSION_BUDGET: Duration = Duration::from_secs(2);
 /// Retired instance identities remain fenced for the live run; no silent eviction.
 const MAX_OBSERVER_INSTANCES: usize = 128;
 
+mod helper;
 mod rotation;
 
 /// Actor-owned reservations consumed on every completion, including reply loss.
@@ -83,6 +84,8 @@ pub(crate) struct ExternalEnrollmentWork {
     observer_instance: String,
     predecessor_generation: Option<u64>,
     deadline: Instant,
+    /// Existing run only; no helper observation may allocate a producer owner.
+    helper: Option<helper::HelperPresentation>,
     /// Deterministic test-owned barrier proving native work does not hold actor.
     #[cfg(test)]
     pub(crate) worker_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
@@ -108,6 +111,29 @@ impl ExternalEnrollmentWork {
             return Err(MezError::forbidden(
                 "external producer must be a distinct pane descendant",
             ));
+        }
+        if let Some(helper) = &self.helper {
+            helper
+                .producer
+                .reobserve()
+                .map_err(|_| MezError::forbidden("external helper producer unavailable"))?;
+            let parent = self
+                .origin
+                .capture_parent()
+                .map_err(|_| MezError::forbidden("external helper parent unavailable"))?;
+            if parent.uid() != helper.producer.uid() || parent.identity != helper.producer.identity
+            {
+                return Err(MezError::forbidden(
+                    "external helper is not a direct child of its enrolled producer",
+                ));
+            }
+            parent
+                .reobserve()
+                .map_err(|_| MezError::forbidden("external helper parent changed"))?;
+            helper
+                .producer
+                .reobserve()
+                .map_err(|_| MezError::forbidden("external helper producer changed"))?;
         }
         let root = mez_mux::process::process_parent_identity_for_pid(self.process.process_id)
             .filter(|root| root.start_token == self.process.start_token)
@@ -323,6 +349,7 @@ impl RuntimeSessionService {
             observer_instance,
             predecessor_generation,
             deadline: Instant::now() + ADMISSION_BUDGET,
+            helper: None,
             #[cfg(test)]
             worker_gate: registry.enrollments.worker_gate.clone(),
             #[cfg(test)]
@@ -399,6 +426,9 @@ impl RuntimeSessionService {
         work.origin
             .reobserve()
             .map_err(|_| MezError::forbidden("external producer changed"))?;
+        if let Some(helper) = &work.helper {
+            return self.commit_external_helper_presentation(work, helper);
+        }
         self.reconcile_external_agent_registrations();
         let existing = self
             .control

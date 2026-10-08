@@ -46,6 +46,7 @@ fn request(bytes: &[u8]) -> Result<Zeroizing<String>> {
         "renew" => "agent/external/renew",
         "end" => "agent/external/deregister",
         "presentation" => "agent/external/presentation",
+        "helper-presentation" => "agent/external/helper-presentation",
         "usage" => "agent/external/usage",
         _ => return Err(MezError::invalid_args("event unavailable")),
     };
@@ -482,6 +483,15 @@ mod tests {
         let body = request(base.to_string().as_bytes()).unwrap();
         assert!(body.contains("agent/external/presentation"));
         assert!(!body.contains("control/initialize"));
+        let mut helper = base.clone();
+        helper["operation"] = serde_json::json!("helper-presentation");
+        let body = request(helper.to_string().as_bytes()).unwrap();
+        assert!(body.contains("agent/external/helper-presentation"));
+        for field in ["pid", "parent_pid", "pane_id", "event", "objective"] {
+            let mut bad = helper.clone();
+            bad["data"][field] = serde_json::json!("forbidden selector");
+            assert!(request(bad.to_string().as_bytes()).is_err());
+        }
         for (field, value) in [
             ("prompt", serde_json::json!("SECRET")),
             ("pane_id", serde_json::json!("%2")),

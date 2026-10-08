@@ -63,13 +63,19 @@ impl AsyncRuntimeSessionActor {
     )> {
         let (body, consumed) = decode_control_frame(input, max_content_length).ok()?;
         let request = crate::control::parse_json_rpc_request(&body).ok()?;
-        if request.method != "agent/external/enroll" {
+        if !matches!(
+            request.method.as_str(),
+            "agent/external/enroll" | "agent/external/helper-presentation"
+        ) {
             return None;
         }
         let prepared = if consumed != input.len() || body.len() > 8192 {
             Err(MezError::invalid_args(
                 "external enrollment requires one bounded control frame",
             ))
+        } else if request.method == "agent/external/helper-presentation" {
+            self.service
+                .prepare_external_helper_presentation(&request, connection)
         } else {
             self.service
                 .prepare_external_enrollment(&request, connection)

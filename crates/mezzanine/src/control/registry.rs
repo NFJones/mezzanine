@@ -554,6 +554,18 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         ]),
     },
     ControlMethodSpec {
+        method: "agent/external/helper-presentation",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "launch_token",
+            "generation",
+            "external_session_id",
+            "sequence",
+            "state",
+            "title",
+        ]),
+    },
+    ControlMethodSpec {
         method: "agent/external/renew",
         dispatch: ControlDispatchKind::ExternalAgent,
         params_schema: ControlParamsSchema::Allowed(&[

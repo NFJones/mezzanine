@@ -666,6 +666,30 @@ or `external-reported` for legacy reports (not exhaustive invoice evidence).
 `usage: "unavailable-source-continuity"` is explicit: ordinary usage RPCs are
 rejected until durable source continuity exists, not billed under fresh owners.
 
+#### Qualified helpers for existing ordinary producers
+
+`agent/external/helper-presentation` accepts only `launch_token`, `generation`,
+`external_session_id`, `sequence`, `state`, and optional `title`. It uses the
+generic presentation reducer below, including identical replay and stale/conflict
+rejection. The current private handle must belong to an independently enrolled
+ordinary producer; explicit-launch handles and Pi lifecycle-owned presentation
+are not eligible.
+
+The helper must be a live native direct child of that retained producer, with its
+own uninitialized same-user Unix connection and matching per-segment sender
+evidence. Native parent capture and pane-root ancestry run off actor using the
+same admission pool, limits and deadline as enrollment. Actor settlement rechecks
+the exact child/producer/root/connection and current run authority before updating
+presentation. PID/parent/pane hints, a stolen handle alone, unrelated children,
+changed roots, expired or replaced handles and late work cannot qualify.
+
+No producer, registration, accounting namespace, observer endpoint or client role
+is created. The callback neither renews nor retires the existing lease; helper
+EOF/exit is not producer death. Initial hook-only enrollment, ordinary vendor
+adapters, shared-daemon association, durable accounting and macOS admission remain
+separate incomplete work. Synchronous/offline control rejects this operation;
+only bounded asynchronous native admission may execute it.
+
 Private shared client artifacts are now included by Pi/OpenCode manifests.
 They open no resources at loading; genuine adapter starts must call the client.
 The client discovers only nonsecret MEZ route hints and verifies socket/private

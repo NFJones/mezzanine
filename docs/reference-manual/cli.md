@@ -271,8 +271,9 @@ Final check plus rename is not atomic CAS against arbitrary external writers.
 ```
 
 The token is stdin-only, never an argument or persisted configuration value.
-An attached primary must first authorize the exact pane-root launch. The helper
-maps only `register`, `renew`, `end`, `presentation`, and `usage` to their restricted
+Existing lifecycle operations use a primary-authorized launch or an independently
+qualified ordinary producer, according to their control contract. The helper
+maps only `register`, `renew`, `end`, `presentation`, `helper-presentation`, and `usage` to their restricted
 external-agent operations; `data` uses the documented RPC fields without identity
 overrides, arbitrary methods, paths, prompts, transcripts or nested vendor payloads.
 It authenticates the Unix daemon's same-user peer and does not initialize a client.
@@ -289,8 +290,16 @@ object result and no error member or buffered trailing frame/data. A rejected
 reply does not cause a retry or appear on vendor stdout. Neutral `{}`/success
 exit and a generic JSON-RPC acknowledgment are not durable usage ledger receipts.
 
+`helper-presentation` is narrower: the private handle must already belong to an
+independently enrolled ordinary producer, and the caller must be its kernel-qualified
+direct child. Only generic sequence/state/title metadata is accepted; no PID/pane
+claim, initial parent enrollment, accounting, observer, renewal or retirement is
+granted. Pi lifecycle-owned sequences reject generic helper updates. It shares
+the server's bounded asynchronous native-admission path; helper exit does not
+retire the producer. This does not yet install or activate ordinary hook adapters.
+
 This is not vendor hook installation or certification. Adapters must privately
-deliver launch credentials, normalize content-free released payloads, serialize
+deliver existing run credentials, normalize content-free released payloads, serialize
 presentation sequences, renew leases during idle periods, and verify that `{}` is
 neutral for the pinned vendor event. An absent daemon loses telemetry without
 changing approvals, sandbox policy, focus or continuation behavior. Remote/shared

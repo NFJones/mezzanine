@@ -344,6 +344,22 @@ Ordinary usage MUST remain explicitly unavailable until durable source continuit
 is implemented, rather than permitting fresh-owner historical recharge. This
 slice does not complete all-vendor activation, helper/shared-server association,
 durable usage continuity or macOS admission.
+The separate `agent/external/helper-presentation` slice MUST accept only a current
+private ordinary-run handle, positive generation, exact external session and
+generic `sequence`, `state`, optional `title`. An uninitialized same-user Unix
+helper MUST have its own retained live origin and per-segment writer evidence.
+Off-actor native direct-parent capture MUST match the independently enrolled
+producer's retained UID/PID/start identity, and bounded ancestry MUST reach the
+current pane root. Supplied PID/parent/pane claims MUST NOT replace this evidence.
+This operation MUST share the 32 pending/8192 frame/4096 metadata/2s admission
+limits and consume its reservation on every completion. Actor settlement MUST
+recheck connection, writer, root, deadline, producer, child-parent relationship,
+current handle/generation/session and retirement. Pi lifecycle sequence ownership
+MUST reject generic helpers. Helpers MUST NOT allocate a run/accounting owner,
+enroll the parent, acquire observer/client authority, renew or retire a lease.
+Helper exit MUST NOT retire its producer. Stale helper work MUST NOT overwrite a
+replacement observer. This is existing-producer generic presentation only, not
+initial hook enrollment or shared-daemon client/session association.
 `agent/external/presentation` MUST require the same capability, generation and
 external session binding. Positive observation sequences MUST reject stale or
 conflicting updates; identical replay MUST be inert. Bounded title suggestions

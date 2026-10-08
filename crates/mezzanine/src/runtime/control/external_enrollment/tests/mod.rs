@@ -10,6 +10,7 @@ use std::os::fd::AsRawFd;
 struct Fixture {
     service: RuntimeSessionService,
     directory: std::path::PathBuf,
+    listener: tokio::net::UnixListener,
     socket: tokio::net::UnixStream,
     connection: ControlConnectionState,
 }
@@ -85,6 +86,7 @@ async fn fixture(mode: &str) -> Option<Fixture> {
     Some(Fixture {
         service,
         directory,
+        listener,
         socket,
         connection,
     })
@@ -120,11 +122,23 @@ fn external_enrollment_ordinary_child_fixture() {
         .unwrap();
     if mode == "hold" {
         socket.write_all(&[1]).unwrap();
+        let mut helpers = Vec::new();
         loop {
             let mut release = [0];
             socket.read_exact(&mut release).unwrap();
             if release == [2] {
                 return;
+            }
+            if release == [4] {
+                let child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "runtime::control::external_enrollment::tests::external_enrollment_ordinary_child_fixture", "--ignored", "--quiet"])
+                    .env("MEZ_TEST_ENROLL_MODE", "hold")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn().unwrap();
+                helpers.push(child);
+                continue;
             }
             assert_eq!(release, [3]);
             socket.write_all(&[1]).unwrap();
@@ -1152,6 +1166,7 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
 }
 
 mod health;
+mod helper_presentation;
 mod observer_epochs;
 mod persistent_client;
 mod pi_observation;

@@ -1427,7 +1427,10 @@ impl RuntimeSessionService {
         }
 
         if !connection.initialized() || request.method == "control/initialize" {
-            if request.method == "agent/external/enroll" {
+            if matches!(
+                request.method.as_str(),
+                "agent/external/enroll" | "agent/external/helper-presentation"
+            ) {
                 return runtime_json_rpc_error(
                     &request.id,
                     crate::error::MezErrorKind::NotImplemented,
