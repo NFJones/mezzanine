@@ -261,6 +261,16 @@ silently converted. Publication uses no-follow directory handles, bounded regula
 files, a cooperating-installer lock, exact preimages and a private forward-recovery
 journal. A partial transaction remains explicit; recovery refuses foreign edits.
 Final check plus rename is not atomic CAS against arbitrary external writers.
+Planning and `--check` now inspect through held no-follow read-only handles,
+without creating or acquiring an installer lock, journal, receipt, artifact
+parent or stage. They can inspect a normally readable nonwritable root and do
+not contend with a cooperating publisher. Apply/recovery acquire the private
+nonwaiting lock and recheck physical root identity, pending journal and every
+captured preimage, including unchanged artifacts and receipt. A no-op apply also
+rejects changed observations without writing a journal. Missing explicit roots
+still fail with their actual I/O error and no directory creation; automatic roots,
+default install/`--dry-run` grammar and directory permission-policy migration are
+not completed by this inspection change.
 
 ### Normalized observational hook helper
 

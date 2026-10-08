@@ -2,7 +2,7 @@
 //!
 //! Adapters supply compiled best-effort manifests, never user-provided executable
 //! templates. JSON ownership is one exact entry, not its surrounding document;
-//! whole-file ownership requires exact equality. Planning is pure and publication
+//! whole-file ownership requires exact equality. Inspection is read-only and publication
 //! uses held no-follow directory descriptors, preimage checks and a private journal.
 //! No vendor binary, credential, hook trust or daemon authority is installed here.
 //! An external writer can still race final check and rename: this is not atomic CAS.

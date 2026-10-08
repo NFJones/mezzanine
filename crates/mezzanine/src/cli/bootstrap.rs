@@ -135,6 +135,64 @@ mod tests {
     use super::*;
     use clap::Parser;
 
+    /// Public check/plan uses the compiled registry but needs no writable root,
+    /// lock, artifact parent or daemon. Missing explicit roots fail without
+    /// creating directories; this does not yet implement automatic root discovery.
+    #[test]
+    fn bootstrap_public_check_and_plan_leave_root_tree_unchanged() {
+        use std::os::unix::fs::PermissionsExt;
+        #[derive(Parser)]
+        struct Fixture {
+            #[command(flatten)]
+            args: BootstrapCliArgs,
+        }
+        let root = std::env::temp_dir().join(format!(
+            "mez-cli-inspect-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("authored.json"), b"{\"user\":true}\n").unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o500)).unwrap();
+        for harness in ["pi", "opencode", "codex"] {
+            for intent in ["--check", "--plan"] {
+                let parsed = Fixture::try_parse_from([
+                    "fixture",
+                    harness,
+                    "--root",
+                    root.to_str().unwrap(),
+                    intent,
+                ])
+                .unwrap();
+                let mut output = Vec::new();
+                run(parsed.args, CliOutputFormat::Json, &mut output).unwrap();
+                let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(value["supported"], true);
+                assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+                assert_eq!(
+                    std::fs::read(root.join("authored.json")).unwrap(),
+                    b"{\"user\":true}\n"
+                );
+                assert_eq!(
+                    std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+                    0o500
+                );
+            }
+        }
+        let missing = root.join("missing/vendor");
+        let parsed = Fixture::try_parse_from([
+            "fixture",
+            "pi",
+            "--root",
+            missing.to_str().unwrap(),
+            "--check",
+        ])
+        .unwrap();
+        assert!(run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).is_err());
+        assert!(!root.join("missing").exists());
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// Public Pi installation accepts docs-based best-effort support without
     /// a release pin. Explicit roots still gate filesystem access, while the
     /// manifest owns only extension artifacts and not vendor settings.

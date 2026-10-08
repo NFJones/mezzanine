@@ -47,10 +47,12 @@ struct Intent {
     operation: Operation,
 }
 
-/// One locked plan; publication verifies captured preimages again at commit.
+/// One read-only inspected plan; publication acquires ownership and revalidates
+/// all captured preimages, including unchanged artifacts and the receipt.
 pub(crate) struct Plan {
     publisher: Publisher,
     changes: Vec<Change>,
+    observed: Vec<(String, Option<Vec<u8>>)>,
     intent: Intent,
 }
 
@@ -119,7 +121,7 @@ pub(crate) fn plan_with_history(
     history: &[Manifest],
 ) -> Result<Plan> {
     validate_manifest(manifest)?;
-    let publisher = Publisher::open(root)?;
+    let publisher = Publisher::inspect(root)?;
     publisher.require_no_pending_journal()?;
     let receipt_path = format!("mez-bootstrap-ownership-{}.json", manifest.harness);
     let receipt_bytes = publisher.read(&receipt_path)?;
@@ -174,8 +176,10 @@ pub(crate) fn plan_with_history(
         ));
     }
     let mut changes = Vec::new();
+    let mut observed = vec![(receipt_path.clone(), receipt_bytes.clone())];
     for path in paths {
         let before = publisher.read(&path)?;
+        observed.push((path.clone(), before.clone()));
         let after = reconcile(
             before.as_deref(),
             old.get(&path).copied(),
@@ -220,6 +224,7 @@ pub(crate) fn plan_with_history(
     Ok(Plan {
         publisher,
         changes,
+        observed,
         intent: Intent {
             manifest: manifest.clone(),
             previous: previous.map(|receipt| receipt.manifest),
@@ -238,7 +243,18 @@ impl Plan {
     }
 
     /// Publishes the accepted plan once; no-op plans do not write any journal.
-    pub(crate) fn apply(self) -> Result<()> {
+    pub(crate) fn apply(mut self) -> Result<()> {
+        if !self.changes.is_empty() {
+            self.publisher.acquire_lock()?;
+        }
+        self.publisher.require_no_pending_journal()?;
+        for (path, before) in &self.observed {
+            if self.publisher.read(path)? != *before {
+                return Err(MezError::conflict(
+                    "bootstrap inspected preimage changed; no publication",
+                ));
+            }
+        }
         if self.changes.is_empty() {
             return Ok(());
         }
@@ -374,6 +390,119 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Inspection must create no lock, journal, receipt, stage or parent and
+    /// must not contend with another cooperating publisher. Publication alone
+    /// acquires ownership; rejection leaves every planned artifact untouched.
+    #[test]
+    fn bootstrap_installer_planning_is_read_only_and_publication_owns_lock() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-readonly-plan-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(root.join("authored.json"), b"{\"user\":true}\n").unwrap();
+        let manifest = Manifest {
+            harness: "fixture".into(),
+            revision: 1,
+            vendor_version: "test-only".into(),
+            entries: vec![Entry {
+                path: "nested/owned".into(),
+                artifact: super::super::reconciliation::Artifact::File {
+                    bytes: b"owned".to_vec(),
+                },
+            }],
+        };
+        let first = plan(&root, &manifest, Operation::Install).unwrap();
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            1,
+            "inspection mutated vendor root"
+        );
+        let second = plan(&root, &manifest, Operation::Install).unwrap();
+        let holder = Publisher::open(&root).unwrap();
+        assert!(
+            plan(&root, &manifest, Operation::Install).is_ok(),
+            "inspection acquired a cooperating writer lock"
+        );
+        assert!(first.apply().is_err());
+        assert!(!root.join("nested").exists());
+        assert!(!root.join(".mez-bootstrap-journal").exists());
+        assert!(!root.join("mez-bootstrap-ownership-fixture.json").exists());
+        drop(holder);
+        second.apply().unwrap();
+        assert_eq!(fs::read(root.join("nested/owned")).unwrap(), b"owned");
+        assert_eq!(
+            fs::read(root.join("authored.json")).unwrap(),
+            b"{\"user\":true}\n"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Apply revalidates all inspected bytes, even artifacts unchanged by an
+    /// upgrade and no-op receipt plans. A newly pending journal or replaced root
+    /// must reject before artifact publication, not retarget a held descriptor.
+    #[test]
+    fn bootstrap_installer_inspected_plan_revalidates_unchanged_noop_and_root() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-plan-preimages-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let manifest = Manifest {
+            harness: "fixture".into(),
+            revision: 1,
+            vendor_version: "test-only".into(),
+            entries: vec![Entry {
+                path: "owned".into(),
+                artifact: super::super::reconciliation::Artifact::File {
+                    bytes: b"owned".to_vec(),
+                },
+            }],
+        };
+        plan(&root, &manifest, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        let noop = plan(&root, &manifest, Operation::Install).unwrap();
+        assert!(noop.changed_paths().is_empty());
+        fs::write(root.join("owned"), b"edited").unwrap();
+        assert!(noop.apply().is_err());
+        fs::write(root.join("owned"), b"owned").unwrap();
+        let mut upgraded = manifest.clone();
+        upgraded.revision = 2;
+        let receipt = fs::read(root.join("mez-bootstrap-ownership-fixture.json")).unwrap();
+        let upgrade = plan_with_history(
+            &root,
+            &upgraded,
+            Operation::Install,
+            std::slice::from_ref(&manifest),
+        )
+        .unwrap();
+        fs::write(root.join("owned"), b"foreign").unwrap();
+        assert!(upgrade.apply().is_err());
+        assert_eq!(
+            fs::read(root.join("mez-bootstrap-ownership-fixture.json")).unwrap(),
+            receipt
+        );
+        assert!(!root.join(".mez-bootstrap-journal").exists());
+        fs::write(root.join("owned"), b"owned").unwrap();
+        let pending = plan(&root, &manifest, Operation::Install).unwrap();
+        fs::write(root.join(".mez-bootstrap-journal"), b"pending").unwrap();
+        assert!(pending.apply().is_err());
+        assert_eq!(fs::read(root.join("owned")).unwrap(), b"owned");
+        fs::remove_file(root.join(".mez-bootstrap-journal")).unwrap();
+        let stale_root = plan(&root, &manifest, Operation::Install).unwrap();
+        let moved = root.with_extension("moved");
+        fs::rename(&root, &moved).unwrap();
+        fs::create_dir(&root).unwrap();
+        assert!(stale_root.apply().is_err());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(moved).unwrap();
+    }
 
     /// Recovery must bind the selected compiled release and original directory
     /// object, and recompute every change rather than trusting journal payloads.

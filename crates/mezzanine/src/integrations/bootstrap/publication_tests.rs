@@ -17,6 +17,32 @@ fn root() -> std::path::PathBuf {
     path
 }
 
+/// A read-only holder cannot publish or recover by accidentally using shared
+/// methods. It neither creates a lock nor unlocks another cooperating holder.
+#[test]
+fn bootstrap_publication_inspection_cannot_mutate_or_release_foreign_lock() {
+    let root = root();
+    let inspected = Publisher::inspect(&root).unwrap();
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    assert!(
+        inspected
+            .apply(vec![Change {
+                path: "owned".into(),
+                before: None,
+                after: Some(b"owned".to_vec())
+            }])
+            .is_err()
+    );
+    assert!(inspected.recover().is_err());
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    let holder = Publisher::open(&root).unwrap();
+    drop(inspected);
+    assert!(Publisher::open(&root).is_err());
+    drop(holder);
+    assert!(Publisher::open(&root).is_ok());
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// A crash after one destination leaves exact recovery intent. Recovery must
 /// refuse foreign edits before changing any remaining destination, then finish
 /// the original accepted operation after the conflict is explicitly repaired.

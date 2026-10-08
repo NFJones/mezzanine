@@ -1,6 +1,8 @@
 //! Descriptor-relative bounded publication and forward recovery for owned edits.
 //!
-//! A private root lock serializes cooperating installers. A synced journal owns
+//! Read-only inspection holds root handles without lock creation/acquisition.
+//! Publication/recovery explicitly acquire a private cooperating-installer lock.
+//! A synced journal owns
 //! exact before/after bytes before any destination is changed. Recovery finishes
 //! only when every current preimage equals one of those states; foreign edits
 //! leave the journal intact. This is not atomic CAS against arbitrary writers.
@@ -43,11 +45,11 @@ struct Journal {
     changes: Vec<Change>,
 }
 
-/// Held root and exclusive cooperating-installer lock.
+/// Held root, with optional exclusive ownership acquired only for publication.
 pub(super) struct Publisher {
     root: PathBuf,
     pub(super) directory: File,
-    _lock: File,
+    _lock: Option<File>,
     /// Task-local publication barrier; no shared fault state.
     #[cfg(test)]
     pub(super) stop_after: std::cell::Cell<Option<usize>>,
@@ -120,12 +122,36 @@ fn read_at(directory: &File, name: &str, limit: usize) -> Result<Option<Vec<u8>>
 }
 
 impl Publisher {
+    /// Holds a no-follow root for read-only inspection. No lock, journal,
+    /// artifact parent or other filesystem state is created or acquired.
+    pub(super) fn inspect(root: &Path) -> Result<Self> {
+        Ok(Self {
+            root: root.into(),
+            directory: open_directory(root)?,
+            _lock: None,
+            #[cfg(test)]
+            stop_after: std::cell::Cell::new(None),
+        })
+    }
+
     /// Acquires a private lock without waiting indefinitely or changing vendor files.
     pub(super) fn open(root: &Path) -> Result<Self> {
-        let directory = open_directory(root)?;
+        let mut publisher = Self::inspect(root)?;
+        publisher.acquire_lock()?;
+        Ok(publisher)
+    }
+
+    /// Converts an inspected root to one bounded cooperating writer. The held
+    /// root must still match its spelling before and after lock acquisition;
+    /// no destination/journal work is authorized until this returns successfully.
+    pub(super) fn acquire_lock(&mut self) -> Result<()> {
+        self.validate_root()?;
+        if self._lock.is_some() {
+            return Ok(());
+        }
         let lock = File::from(
             openat(
-                &directory,
+                &self.directory,
                 LOCK,
                 OFlags::RDWR
                     | OFlags::CREATE
@@ -149,13 +175,19 @@ impl Publisher {
         flock(&lock, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
             MezError::conflict(format!("bootstrap installer lock unavailable: {error}"))
         })?;
-        Ok(Self {
-            root: root.into(),
-            directory,
-            _lock: lock,
-            #[cfg(test)]
-            stop_after: std::cell::Cell::new(None),
-        })
+        self._lock = Some(lock);
+        self.validate_root()
+    }
+
+    /// Read-only holders cannot accidentally publish/recover through the shared
+    /// descriptor helpers. Mutation requires explicitly acquired writer ownership.
+    fn require_lock(&self) -> Result<()> {
+        if self._lock.is_none() {
+            return Err(MezError::invalid_state(
+                "bootstrap publication requires installer lock",
+            ));
+        }
+        self.validate_root()
     }
 
     /// Revalidates held root spelling before publishing through its descriptors.
@@ -316,6 +348,7 @@ impl Publisher {
         &self,
         authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
     ) -> Result<bool> {
+        self.require_lock()?;
         let Some(bytes) = read_at(&self.directory, JOURNAL, MAX_JOURNAL)? else {
             return Ok(false);
         };
@@ -351,6 +384,7 @@ impl Publisher {
         changes: Vec<Change>,
         intent: serde_json::Value,
     ) -> Result<()> {
+        self.require_lock()?;
         self.require_no_pending_journal()?;
         self.validate_changes(&changes, false)?;
         let root = self.directory.metadata()?;
@@ -394,6 +428,8 @@ impl Drop for Publisher {
     /// Releases advisory ownership even if a concurrent fork inherited a copy
     /// of the open description. Descriptor closure alone can leave it locked.
     fn drop(&mut self) {
-        let _ = flock(&self._lock, FlockOperation::Unlock);
+        if let Some(lock) = &self._lock {
+            let _ = flock(lock, FlockOperation::Unlock);
+        }
     }
 }

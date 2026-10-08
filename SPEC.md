@@ -640,6 +640,17 @@ best-effort manifests based on docs or available local installations. Observed
 vendor versions MUST NOT gate implementation or installation; untested behavior
 MUST be labelled rather than claimed as certified. Planning/checking MUST be distinct from explicit apply,
 uninstall and recovery, with no daemon dependency or credential installation.
+Inspection MUST be read-only: no lock acquisition/creation, journal, receipt,
+artifact parent, stage or vendor-root creation. Holding an inspection descriptor
+MUST NOT block a cooperating writer or release its lock. Mutating publication
+and recovery MUST explicitly acquire nonwaiting cooperating ownership, revalidate
+the held root spelling/object and pending journal, and verify every inspected
+preimage including unchanged artifacts/receipt before publication. No-op apply
+MUST still reject observed drift or newly pending recovery without creating a
+journal. Read-only holders MUST reject mutation methods without writer ownership.
+An absent selected root MAY currently return its actual I/O error without writes;
+automatic root discovery/creation and normal-directory permission policy remain
+separate unfinished bootstrap UX work, not implied by the inspection primitive.
 Owned-file and exact-JSON-entry receipts MUST protect unrelated settings;
 Exact JSON-array-member ownership MUST preserve unrelated members and order,
 replace at the owned position, and uninstall only that member, not the containing
