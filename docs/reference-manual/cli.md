@@ -347,6 +347,13 @@ only matching observed/sequence/changed data or `{"observed":false}`. This is
 native-qualified original-epoch observer freshness, not direct lease renewal or
 billing; equal sequence replay cannot refresh freshness. A source adapter must pin
 its captured scope, serialize/bound timer work and keep SDK timer output private.
+The reusable literal curated source does this with one in-flight fixed helper,
+no queued timer work, finite helper timeouts and recurring original-epoch proofs.
+It preserves the middleware result/error and never prints raw receipts or
+re-enrolls on failure. Its real init-only SDK fixture qualifies three recurring
+callbacks while SessionStart is held open, not a deployed adapter, post-start
+idle lifetime, reload/session replacement or accounting. Bootstrap does not yet
+install or enable this source.
 
 This is not vendor hook installation or certification. Adapters must privately
 deliver existing run credentials, normalize content-free released payloads, serialize

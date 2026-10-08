@@ -684,8 +684,19 @@ strictly projects a matching observed/sequence/change receipt or
 `{"observed":false}` on unavailable delivery. An isolated real SDK `$.clock.after`
 fixture pins original public fields directly after actual conversation admission,
 runs outside callback cadence and drives the built helper/native actor freshness
-path. It proves the actual timer API and daemon renewal, not a deployed recurrent
-adapter, module reload/new/resume handoff, full60s wall-clock wait, or accounting.
+path. A second isolated fixture runs the shared rendered source through actual
+`$.clock.every` callbacks and three distinct short-lived built helpers, requiring
+sequences 1–3 on the original native creator/epoch with no client initialization.
+The shared source uses a fixed absolute helper, projected session metadata,
+1–10s periods, 3s helper timeouts and one in-flight helper with no pending queue.
+It pins original public selectors, validates bounded public receipts, keeps
+results/output private and never re-enrolls after unavailable telemetry. Tests
+preserve exact middleware results/errors and cover overlap and transport failure.
+The init-only fixture deliberately holds SessionStart open while timers run:
+this proves the actual recurring API and daemon renewal, not timers surviving
+SessionStart return, a deployed adapter, module reload/new/resume handoff, full60s
+wall-clock idle lifetime, or accounting. SDK timers stop on module reload; that
+is not daemon retirement or replacement authority.
 
 This is a core admission primitive, not bare bootstrap or installed real SDK
 transport. Actual adapter deployment/consent/disabled policy, idle/reload/session

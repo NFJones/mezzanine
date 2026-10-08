@@ -351,6 +351,16 @@ window plus 60s lease; source death overrides even a recent proof. Retired names
 MUST NOT revive through late heartbeat. This does not grant producer sockets,
 primary/client roles, input/approval/task rights or billing/usage commitment.
 Public callbacks MUST retain original selectors and existing native helper fences.
+The reusable literal curated SDK source MUST call only a fixed absolute helper
+with a projected public session capsule, then pin the original admitted selectors.
+Its 1–10s recurring proof timer MUST serialize helpers without a pending queue,
+use finite helper timeouts and JS-safe increasing sequences, and leave middleware
+results/errors untouched. Missing/rejected/malformed transport MUST NOT trigger
+vendor work, re-enrollment, raw output or permission changes. A timer callback or
+helper exit MUST NOT be presented as a lease or usage acknowledgment. This source
+is not automatically installed/enabled, and its original epoch MUST NOT be reused
+as a replacement/reload/new-session policy. SDK timer cancellation on reload is
+not a daemon retirement acknowledgment.
 Actual SDK/helper deployment, observer/session continuity, vendor policy/disabled
 conditions, shared-server mapping, durable accounting and macOS remain separate
 unfinished integration work, not completion implied by this admission primitive.

@@ -17,6 +17,9 @@ pub(crate) mod codex;
     reason = "owned hook checkpoint exposes no standalone mutation interface"
 )]
 pub(crate) mod codex_artifact;
+/// Literal no-Node original-epoch observer source; installation is adapter-owned.
+#[allow(dead_code, reason = "curated adapter installation is a separate owner")]
+pub(crate) mod curated_client;
 /// Retains exact compiled historical source bytes, not active vendor entries.
 mod history;
 #[allow(

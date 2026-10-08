@@ -167,7 +167,7 @@ fn external_claude_curated_command_helper_fixture() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY; isolated --init-only source probe"]
 async fn external_claude_curated_command_native_parent_is_local_pane_descendant() {
-    qualify_curated_probe(false, false).await;
+    qualify_curated_probe(false, 0).await;
 }
 
 /// Real curated argv API -> built fixed source helper -> current-writer Unix
@@ -176,7 +176,7 @@ async fn external_claude_curated_command_native_parent_is_local_pane_descendant(
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated source transport"]
 async fn external_claude_curated_builtin_source_helper_registers_actual_creator() {
-    qualify_curated_probe(true, false).await;
+    qualify_curated_probe(true, 0).await;
 }
 
 /// The actual curated clock runs outside conversation callbacks and emits only
@@ -186,13 +186,22 @@ async fn external_claude_curated_builtin_source_helper_registers_actual_creator(
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated clock proof"]
 async fn external_claude_curated_clock_helper_proves_original_observer_epoch() {
-    qualify_curated_probe(true, true).await;
+    qualify_curated_probe(true, 1).await;
+}
+
+/// Repeated actual SDK timer callbacks must advance the same original observer
+/// epoch through distinct short-lived helpers, without conversation callbacks,
+/// client initialization, provider work or a replacement accounting namespace.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated recurring proof"]
+async fn external_claude_curated_clock_every_advances_original_observer_epoch() {
+    qualify_curated_probe(true, 3).await;
 }
 
 /// Shared owned temporary source fixture for provenance-only and real transport
 /// qualification. Actor shutdown returns the owned runtime before source exit
 /// assertions, preserving pane cleanup and exact native creator inspection.
-async fn qualify_curated_probe(admission: bool, freshness: bool) {
+async fn qualify_curated_probe(admission: bool, proofs: u64) {
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
         serve_async_runtime_control_connection_loop,
@@ -273,7 +282,12 @@ async fn qualify_curated_probe(admission: bool, freshness: bool) {
         .parent()
         .unwrap()
         .join("mez");
-    let source_call = if admission {
+    if admission {
+        assert!(helper.is_file());
+    }
+    let source_call = if proofs > 1 {
+        crate::integrations::bootstrap::curated_client::session_start_body(&helper, 1000).unwrap()
+    } else if admission {
         assert!(helper.is_file());
         format!(
             "const source = await $.process.run([{}, 'harness-source', JSON.stringify({{ external_session_id: e.session_id, observer_instance: 'source-probe-module-a', session_boundary: e.source }})], {{ timeoutMs: 3000 }}); const publicResult = JSON.parse(source.stdout); if (publicResult.registered !== true || 'launch_token' in publicResult || publicResult.controls.length !== 0) throw new Error('source probe unavailable');",
@@ -282,7 +296,7 @@ async fn qualify_curated_probe(admission: bool, freshness: bool) {
     } else {
         String::new()
     };
-    let schedule = if freshness {
+    let schedule = if proofs == 1 {
         format!(
             "const original = Object.freeze({{ external_session_id: publicResult.external_session_id, generation: publicResult.generation, observer_witness: publicResult.observer_witness }}); $.clock.after(1000, async () => {{ try {{ const proof = await $.process.run([{}, 'harness-source', JSON.stringify({{ operation: 'curated-heartbeat', external_session_id: original.external_session_id, generation: original.generation, observer_witness: original.observer_witness, sequence: 1 }})], {{ timeoutMs: 3000 }}); const receipt = JSON.parse(proof.stdout); if (receipt.observed !== true || 'launch_token' in receipt) throw new Error('observer proof unavailable'); }} catch {{ /* unavailable proof cannot change vendor results */ }} }});",
             serde_json::to_string(helper.to_str().unwrap()).unwrap()
@@ -320,7 +334,7 @@ async fn qualify_curated_probe(admission: bool, freshness: bool) {
         let task = tokio::spawn(actor.run());
         let caller = handle.clone();
         let server = tokio::spawn(async move {
-            for _ in 0..if freshness { 2 } else { 1 } {
+            for _ in 0..1 + proofs {
                 let (mut stream, _) =
                     tokio::time::timeout(Duration::from_secs(15), control_listener.accept())
                         .await
@@ -413,10 +427,10 @@ async fn qualify_curated_probe(admission: bool, freshness: bool) {
         let owner = binding.enrollment.as_ref().unwrap();
         assert!(owner.producer.matches_parent(parent.uid(), parent.identity));
         assert!(owner.observers.is_empty());
-        assert_eq!(owner.has_live_observer(), freshness);
+        assert_eq!(owner.has_live_observer(), proofs > 0);
         assert_eq!(binding.harness, "claude");
-        if freshness {
-            assert_eq!(owner.curated_observer.as_ref().unwrap().sequence, 1);
+        if proofs > 0 {
+            assert_eq!(owner.curated_observer.as_ref().unwrap().sequence, proofs);
             let original_expiry = binding.expires;
             assert_eq!(binding.registration.as_ref().unwrap().presentation, None);
             probe
