@@ -15,7 +15,7 @@ use super::*;
 pub(super) struct HelperPresentation {
     digest: [u8; 32],
     generation: u64,
-    pub(super) producer: Arc<UnixOriginProcess>,
+    pub(super) producer: ProducerEvidence,
     params: SecretString,
 }
 
@@ -134,7 +134,7 @@ impl RuntimeSessionService {
             helper: Some(HelperPresentation {
                 digest,
                 generation,
-                producer: enrollment.origin.clone(),
+                producer: enrollment.producer.clone(),
                 params: SecretString::from(params.to_string()),
             }),
             ancestry: Arc::new(OnceLock::new()),
@@ -200,22 +200,23 @@ impl RuntimeSessionService {
         let producer = binding
             .enrollment
             .as_ref()
-            .filter(|enrollment| Arc::ptr_eq(&enrollment.origin, &helper.producer))
+            .filter(|enrollment| enrollment.producer.same_owner(&helper.producer))
             .ok_or_else(|| MezError::forbidden("external helper producer changed"))?;
         producer
-            .origin
+            .producer
             .reobserve()
             .map_err(|_| MezError::forbidden("external helper producer unavailable"))?;
         let child = work
             .origin
             .reobserve()
             .map_err(|_| MezError::forbidden("external helper unavailable"))?;
-        if child.parent_process_id != producer.origin.identity.process_id
+        if child.parent_process_id != producer.producer.identity().process_id
             || Instant::now() >= work.deadline
             || !producer.provenance_is_live()
             || !work.ancestry.get().is_some_and(|ancestry| {
                 ancestry.is_live()
-                    && ancestry.source_matches(producer.origin.uid(), producer.origin.identity)
+                    && ancestry
+                        .source_matches(producer.producer.uid(), producer.producer.identity())
             })
             || !work.origin.writer_confirmed()
         {

@@ -37,8 +37,10 @@ const ADMISSION_BUDGET: Duration = Duration::from_secs(2);
 const MAX_OBSERVER_INSTANCES: usize = 128;
 
 mod helper;
+mod producer;
 mod rotation;
 mod targets;
+use producer::ProducerEvidence;
 
 /// Actor-owned reservations consumed on every completion, including reply loss.
 #[derive(Debug, Default)]
@@ -57,10 +59,10 @@ pub(super) struct EnrollmentAdmissions {
     settled: Option<Arc<tokio::sync::Notify>>,
 }
 
-/// Persistent process and private handle retained by an ordinary registration.
+/// Typed native producer facts and private handle retained by a registration.
 #[derive(Debug)]
 pub(super) struct EnrollmentBinding {
-    pub(super) origin: Arc<UnixOriginProcess>,
+    producer: ProducerEvidence,
     /// Original qualified ancestry; retirement releases it without dropping
     /// observational retry tombstones or immutable accounting provenance.
     pub(super) ancestry: Option<Arc<UnixAncestryWitness>>,
@@ -137,7 +139,8 @@ impl ExternalEnrollmentWork {
                 .origin
                 .capture_parent()
                 .map_err(|_| MezError::forbidden("external helper parent unavailable"))?;
-            if parent.uid() != helper.producer.uid() || parent.identity != helper.producer.identity
+            if parent.uid() != helper.producer.uid()
+                || parent.identity != helper.producer.identity()
             {
                 return Err(MezError::forbidden(
                     "external helper is not a direct child of its enrolled producer",
@@ -190,7 +193,7 @@ impl EnrollmentBinding {
     /// Whole-chain lifetime fencing uses only bounded nonblocking kernel polls;
     /// a live producer cannot keep an orphaned pane association authoritative.
     pub(super) fn provenance_is_live(&self) -> bool {
-        self.origin.is_live()
+        self.producer.is_live()
             && self
                 .ancestry
                 .as_ref()
@@ -200,6 +203,9 @@ impl EnrollmentBinding {
     /// Records only an already-authorized producer connection, without changing
     /// root/run identity or letting a stale disconnect retire its replacement.
     pub(super) fn observe_connection(&mut self, origin: &Arc<UnixOriginProcess>) {
+        if !self.producer.matches_socket(origin) {
+            return;
+        }
         self.observers.retain(|observer| {
             observer
                 .upgrade()
@@ -221,9 +227,7 @@ impl EnrollmentBinding {
     pub(super) fn idle_renewable(&mut self) -> bool {
         self.observers.retain(|observer| {
             observer.upgrade().is_some_and(|observer| {
-                observer.observer_connected()
-                    && observer.uid() == self.origin.uid()
-                    && observer.identity == self.origin.identity
+                observer.observer_connected() && self.producer.matches_socket(&observer)
             })
         });
         self.provenance_is_live() && !self.observers.is_empty()
@@ -235,9 +239,7 @@ impl EnrollmentBinding {
         self.provenance_is_live()
             && self.observers.iter().any(|observer| {
                 observer.upgrade().is_some_and(|observer| {
-                    observer.observer_connected()
-                        && observer.uid() == self.origin.uid()
-                        && observer.identity == self.origin.identity
+                    observer.observer_connected() && self.producer.matches_socket(&observer)
                 })
             })
     }
@@ -264,21 +266,7 @@ impl EnrollmentBinding {
         let origin = connection
             .unix_origin()
             .ok_or_else(|| MezError::forbidden("external producer evidence unavailable"))?;
-        if !origin.writer_confirmed()
-            || origin.uid() != self.origin.uid()
-            || origin.identity != self.origin.identity
-        {
-            return Err(MezError::forbidden(
-                "external producer differs from enrollment",
-            ));
-        }
-        origin
-            .reobserve()
-            .map_err(|_| MezError::forbidden("external producer unavailable"))?;
-        self.origin
-            .reobserve()
-            .map_err(|_| MezError::forbidden("external enrolled producer unavailable"))?;
-        Ok(())
+        self.producer.authorize_socket(origin)
     }
 }
 
@@ -372,10 +360,10 @@ impl RuntimeSessionService {
                 && binding.pane_id == pane_id
                 && binding.harness == harness
                 && binding.process.same_incarnation(&process)
-                && binding.enrollment.as_ref().is_some_and(|enrollment| {
-                    enrollment.origin.uid() == origin.uid()
-                        && enrollment.origin.identity == origin.identity
-                })
+                && binding
+                    .enrollment
+                    .as_ref()
+                    .is_some_and(|enrollment| enrollment.producer.matches_socket(&origin))
                 && binding
                     .registration
                     .as_ref()
@@ -498,24 +486,24 @@ impl RuntimeSessionService {
             return self.commit_external_helper_presentation(work, helper);
         }
         self.reconcile_external_agent_registrations();
-        let existing = self
-            .control
-            .external_agents()
-            .bindings
-            .iter()
-            .find(|(_, binding)| {
-                !binding.retired
-                    && binding.pane_id == work.pane_id
-                    && binding.process.same_incarnation(&work.process)
-                    && binding.harness == work.harness
-                    && binding.enrollment.as_ref().is_some_and(|enrollment| {
-                        enrollment.origin.identity == work.origin.identity
-                    })
-                    && binding.registration.as_ref().is_some_and(|registration| {
-                        registration.external_session_id == work.session_id
-                    })
-            })
-            .map(|(digest, _)| *digest);
+        let existing =
+            self.control
+                .external_agents()
+                .bindings
+                .iter()
+                .find(|(_, binding)| {
+                    !binding.retired
+                        && binding.pane_id == work.pane_id
+                        && binding.process.same_incarnation(&work.process)
+                        && binding.harness == work.harness
+                        && binding.enrollment.as_ref().is_some_and(|enrollment| {
+                            enrollment.producer.matches_socket(&work.origin)
+                        })
+                        && binding.registration.as_ref().is_some_and(|registration| {
+                            registration.external_session_id == work.session_id
+                        })
+                })
+                .map(|(digest, _)| *digest);
         if let Some(digest) = existing {
             return self.replace_or_retry_external_observer(digest, work, connection);
         }
@@ -571,7 +559,7 @@ impl RuntimeSessionService {
                 accounting_owner: crate::storage::token_usage::new_token_usage_event_id(),
                 accounting_origin,
                 enrollment: Some(EnrollmentBinding {
-                    origin: work.origin.clone(),
+                    producer: ProducerEvidence::Socket(work.origin.clone()),
                     ancestry: Some(ancestry.clone()),
                     run_generation: generation,
                     epoch: 1,

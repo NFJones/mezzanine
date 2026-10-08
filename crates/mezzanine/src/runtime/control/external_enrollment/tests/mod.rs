@@ -1204,6 +1204,7 @@ mod observer_epochs;
 mod parent_ancestry;
 mod persistent_client;
 mod pi_observation;
+mod producer;
 
 /// Programmatic requests still undergo strict selector decoding before native
 /// reservations. Wire parsing is not the only boundary: escaped/duplicate

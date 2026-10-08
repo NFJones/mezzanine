@@ -344,7 +344,8 @@ mod peer_credentials;
 /// Owns kernel lifetime anchors for connection-origin process evidence.
 mod peer_process_lifetime;
 pub(crate) use peer_process_lifetime::{
-    UnixAncestryBudget, UnixAncestryWitness, UnixOriginProcess, capture_unix_origin,
+    UnixAncestryBudget, UnixAncestryWitness, UnixOriginProcess, UnixParentProcess,
+    capture_unix_origin,
 };
 /// Couples Unix reads to native sender evidence without changing UID control.
 mod unix_writer;

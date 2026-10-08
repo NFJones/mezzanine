@@ -308,7 +308,7 @@ async fn qualify_installed_node_entry(
         .unwrap();
     assert_eq!(binding.retired, !helper_callback);
     if helper_callback {
-        assert!(binding.enrollment.as_ref().unwrap().origin.is_live());
+        assert!(binding.enrollment.as_ref().unwrap().producer.is_live());
         assert_eq!(binding.enrollment.as_ref().unwrap().observers.len(), 1);
     }
     if let Some(harness) = harness {

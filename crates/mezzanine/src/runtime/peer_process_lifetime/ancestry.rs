@@ -106,6 +106,17 @@ pub(crate) struct UnixAncestryWitness {
 }
 
 impl UnixAncestryWitness {
+    /// Test-only exact ancestor completion probe. Returns None for an uncaptured
+    /// native record rather than inferring lifetime from a supplied numeric PID;
+    /// fixture reparenting alone is not the retained pidfd completion boundary.
+    #[cfg(test)]
+    pub(crate) fn test_ancestor_is_live(&self, identity: ProcessParentIdentity) -> Option<bool> {
+        self.parents
+            .iter()
+            .find(|parent| parent.identity == identity)
+            .map(UnixParentProcess::is_live)
+    }
+
     /// Verifies a parent-backed witness retains the exact code-owned producer
     /// UID/birth/relationship record, not merely a living root/ancestor chain.
     /// This selector comparison grants no sender or enrollment authority.

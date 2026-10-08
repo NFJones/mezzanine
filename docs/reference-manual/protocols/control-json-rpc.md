@@ -663,6 +663,15 @@ budget; exhaustion rejects without evicting current runs. Capture's cooperative
 retirement release their witness ownership; in-flight clones retain their reserved
 capacity until last drop. Same-run retries/observer rotation keep original ancestry.
 
+Producer ownership is now typed: an original socket lifetime and a verified
+parent lifetime cannot be substituted just because native UID/PID/start metadata
+matches. Helper work retains the exact source owner; ordinary socket capability
+use, observer freshness, idle renewal and retry/rotation lookup remain
+socket-kind-only. A verified parent may provide live native facts but cannot
+authorize even the matching creator's socket or private handle, attach an
+observer, or extend a lease by construction. No parent admission method is added
+by this type separation; its source/policy/session/actor consumer remains work.
+
 Retired tombstones may acknowledge only their existing inert end/shutdown receipts
 with original producer/writer proof; they retain no ancestry authority. Native
 capture and final lifetime polls are not an atomic tree snapshot or atomic with

@@ -31,8 +31,28 @@ fn presentation(response: &serde_json::Value, method: &str) -> JsonRpcRequest {
         "external_session_id":"session-a","sequence":1,"state":"running","title":"ancestry fixture"}}).to_string()).unwrap()
 }
 
+/// Both the native relationship transition and captured lifetime completion are
+/// necessary to declare this fixture's ancestor-exit boundary. Missing captured
+/// evidence cannot be replaced by a guessed PID or a reparent observation alone.
+fn ancestor_exit_observed(reparented: bool, captured_is_live: Option<bool>) -> bool {
+    reparented && captured_is_live == Some(false)
+}
+
+/// A deterministic ordering seam preserves the exclusion assertion while
+/// proving that an early reparent observation must not settle the exit fixture.
+#[test]
+fn external_enrollment_ancestor_exit_boundary_requires_lifetime_completion() {
+    assert!(!ancestor_exit_observed(true, Some(true)));
+    assert!(!ancestor_exit_observed(true, None));
+    assert!(!ancestor_exit_observed(false, Some(false)));
+    assert!(ancestor_exit_observed(true, Some(false)));
+}
+
 /// Terminates only the exact upper fixture ancestor from the native chain, then
-/// waits for its surviving child to be reparented. Neither pane root nor producer
+/// waits for its surviving child to be reparented AND the exact retained native
+/// ancestor lifetime to complete. Reparent observation and pidfd completion are
+/// distinct kernel facts; testing exit denial must not assume their ordering.
+/// Neither pane root nor producer
 /// is terminated, and the producer's immediate native record stays unchanged.
 pub(super) async fn orphan_middle(fixture: &Fixture) {
     let origin = fixture.connection.unix_origin().unwrap();
@@ -44,6 +64,16 @@ pub(super) async fn orphan_middle(fixture: &Fixture) {
     let root = fixture.service.pane_process_identity("%1").unwrap();
     assert_ne!(upper.process_id, root.process_id);
     assert_eq!(upper.parent_process_id, root.process_id);
+    let root_record = mez_mux::process::process_parent_identity_for_pid(root.process_id).unwrap();
+    assert_eq!(root_record.start_token, root.start_token);
+    let capture = origin.clone();
+    let budget = Arc::new(UnixAncestryBudget::default());
+    let exit_fence =
+        tokio::task::spawn_blocking(move || capture.capture_ancestry(root_record, &budget))
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(exit_fence.test_ancestor_is_live(upper), Some(true));
     let pid = libc::pid_t::try_from(upper.process_id).unwrap();
     // SAFETY: native fixture records above identify the deliberately launched
     // test-only upper descendant, not the pane root or an arbitrary caller PID.
@@ -53,7 +83,10 @@ pub(super) async fn orphan_middle(fixture: &Fixture) {
             let current =
                 mez_mux::process::process_parent_identity_for_pid(middle.process_id).unwrap();
             assert_eq!(current.start_token, middle.start_token);
-            if current.parent_process_id != upper.process_id {
+            if ancestor_exit_observed(
+                current.parent_process_id != upper.process_id,
+                exit_fence.test_ancestor_is_live(upper),
+            ) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -61,6 +94,7 @@ pub(super) async fn orphan_middle(fixture: &Fixture) {
     })
     .await
     .unwrap();
+    assert_eq!(exit_fence.test_ancestor_is_live(upper), Some(false));
     assert_eq!(origin.reobserve().unwrap(), origin.identity);
     assert!(
         fixture

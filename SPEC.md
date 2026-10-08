@@ -304,6 +304,14 @@ The producer MUST be a distinct descendant, not the pane-root process itself.
 Identical root/producer PIDs MUST reject before reserving admission and again
 during native observation, including after an executable replacement at the
 same root incarnation. Executable names MUST NOT substitute for this boundary.
+Runtime producer evidence MUST distinguish retained socket origin from a natively
+verified parent lifetime; a helper socket MUST NOT masquerade as the parent source.
+Exact source-owner identity MUST remain kind-specific. Matching UID/PID/birth
+metadata across evidence kinds MUST NOT authorize producer-socket capabilities,
+observer transport, idle renewal or ordinary retry/rotation namespace reuse.
+Parent lifetime facts MAY be polled/reobserved but MUST NOT allocate authority by
+construction. Current ordinary admission remains socket-backed; a source-qualified
+parent policy/session/actor/observer consumer is separately required.
 Missing/foreign/truncated ancillary evidence MUST permanently disable enrollment
 on that connection without changing existing UID-only control. Unexpected passed
 descriptors MUST be closed, never admitted. Frame/metadata limits are 8192/4096

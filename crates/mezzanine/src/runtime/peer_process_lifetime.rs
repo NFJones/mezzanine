@@ -23,6 +23,7 @@ use super::peer_credentials::UnixPeerProcess;
 mod ancestry;
 mod parent;
 pub(crate) use ancestry::{UnixAncestryBudget, UnixAncestryWitness};
+pub(crate) use parent::UnixParentProcess;
 
 /// Owns the exact connection-origin lifetime anchor and its first native record.
 #[derive(Debug)]
