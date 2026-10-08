@@ -45,6 +45,7 @@ pub fn internal_process_exit_code() -> Option<u8> {
         .or_else(|| security::sandbox::seatbelt_child::run_internal_process(&arguments))
         .or_else(|| runtime::run_internal_editor_process(&arguments))
         .or_else(|| cli::run_internal_harness_peer_process(&arguments))
+        .or_else(|| cli::run_internal_harness_source_process(&arguments))
         .or_else(|| cli::run_internal_harness_event_process(&arguments))
 }
 

@@ -197,6 +197,19 @@ pub(super) fn read_input_from(
 
 /// Exchanges one frame with a same-user Unix daemon under a single total deadline.
 async fn exchange(socket: &std::path::Path, body: &str) -> Result<()> {
+    exchange_result(socket, body, "harness-event")
+        .await
+        .map(|_| ())
+}
+
+/// Shared bounded same-user exchange; callers must separately project/validate
+/// fixed typed results before exposure. Raw daemon errors/unknown fields are not
+/// diagnostics. This performs no initialize, retry, process spawn or config I/O.
+pub(super) async fn exchange_result(
+    socket: &std::path::Path,
+    body: &str,
+    expected_id: &str,
+) -> Result<serde_json::Value> {
     tokio::time::timeout(EXCHANGE_DEADLINE, async {
         let mut stream = tokio::net::UnixStream::connect(socket).await?;
         crate::runtime::authenticated_unix_peer_uid(
@@ -225,7 +238,7 @@ async fn exchange(socket: &std::path::Path, body: &str) -> Result<()> {
                 let value = crate::protocol::strict_json::decode(body.as_bytes())
                     .map_err(|_| MezError::invalid_state("event reply unavailable"))?;
                 if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
-                    || value.get("id").and_then(serde_json::Value::as_str) != Some("harness-event")
+                    || value.get("id").and_then(serde_json::Value::as_str) != Some(expected_id)
                     || !value
                         .get("result")
                         .is_some_and(serde_json::Value::is_object)
@@ -233,7 +246,7 @@ async fn exchange(socket: &std::path::Path, body: &str) -> Result<()> {
                 {
                     return Err(MezError::invalid_state("event rejected"));
                 }
-                return Ok(());
+                return Ok(value["result"].clone());
             }
         }
     })

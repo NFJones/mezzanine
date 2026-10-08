@@ -167,6 +167,26 @@ fn external_claude_curated_command_helper_fixture() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY; isolated --init-only source probe"]
 async fn external_claude_curated_command_native_parent_is_local_pane_descendant() {
+    qualify_curated_probe(false).await;
+}
+
+/// Real curated argv API -> built fixed source helper -> current-writer Unix
+/// actor -> native creator registration. Only actual inert SessionStart identity
+/// is read; no Node, stdin authority, provider prompt or user plugin install.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated source transport"]
+async fn external_claude_curated_builtin_source_helper_registers_actual_creator() {
+    qualify_curated_probe(true).await;
+}
+
+/// Shared owned temporary source fixture for provenance-only and real transport
+/// qualification. Actor shutdown returns the owned runtime before source exit
+/// assertions, preserving pane cleanup and exact native creator inspection.
+async fn qualify_curated_probe(admission: bool) {
+    use crate::host::async_runtime::{
+        AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
+        serve_async_runtime_control_connection_loop,
+    };
     let vendor = std::path::PathBuf::from(
         std::env::var_os("MEZ_TEST_CLAUDE_BINARY").expect("explicit installed Claude executable"),
     );
@@ -197,7 +217,18 @@ async fn external_claude_curated_command_native_parent_is_local_pane_descendant(
     let path = directory.join("probe.sock");
     let listener = tokio::net::UnixListener::bind(&path).unwrap();
     crate::runtime::enable_unix_writer_credentials(listener.as_raw_fd()).unwrap();
-    let service = RuntimeServiceFixture::new().control_socket(&path).build();
+    let control_path = directory.join("control.sock");
+    let control_listener = if admission {
+        Some(tokio::net::UnixListener::bind(&control_path).unwrap())
+    } else {
+        None
+    };
+    if let Some(listener) = &control_listener {
+        crate::runtime::enable_unix_writer_credentials(listener.as_raw_fd()).unwrap();
+    }
+    let service = RuntimeServiceFixture::new()
+        .control_socket(if admission { &control_path } else { &path })
+        .build();
     struct Probe {
         service: RuntimeSessionService,
     }
@@ -225,8 +256,24 @@ async fn external_claude_curated_command_native_parent_is_local_pane_descendant(
         "--ignored",
         "--quiet"
     ]);
+    let helper = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("mez");
+    let source_call = if admission {
+        assert!(helper.is_file());
+        format!(
+            "const source = await $.process.run([{}, 'harness-source', JSON.stringify({{ external_session_id: e.session_id, observer_instance: 'source-probe-module-a', session_boundary: e.source }})], {{ timeoutMs: 3000 }}); const publicResult = JSON.parse(source.stdout); if (publicResult.registered !== true || 'launch_token' in publicResult || publicResult.controls.length !== 0) throw new Error('source probe unavailable');",
+            serde_json::to_string(helper.to_str().unwrap()).unwrap()
+        )
+    } else {
+        String::new()
+    };
     let source = format!(
-        "export function register(on) {{ on('classic.SessionStart', async ($, e, next) => {{ const result = await next(e); await $.process.run({argv}, {{ env: {{ MEZ_TEST_CURATED_SOCKET: {} }}, timeoutMs: 10000 }}); return result; }}); }}\n",
+        "export function register(on) {{ on('classic.SessionStart', async ($, e, next) => {{ const result = await next(e); {source_call} await $.process.run({argv}, {{ env: {{ MEZ_TEST_CURATED_SOCKET: {} }}, timeoutMs: 10000 }}); return result; }}); }}\n",
         serde_json::to_string(path.to_str().unwrap()).unwrap()
     );
     std::fs::write(directory.join("plugin/hooks/register.mjs"), source).unwrap();
@@ -236,7 +283,7 @@ async fn external_claude_curated_command_native_parent_is_local_pane_descendant(
             .into_owned()
     };
     let command = format!(
-        "cd {} && /usr/bin/env -i PATH=/usr/bin:/bin HOME={} CLAUDE_CONFIG_DIR={} {} --init-only --setting-sources '' --plugin-dir {}; printf '%s\\n' \"$?\" > {}\n",
+        "cd {} && /usr/bin/env -i PATH=/usr/bin:/bin HOME={} CLAUDE_CONFIG_DIR={} MEZ=\"$MEZ\" MEZ_PANE=\"$MEZ_PANE\" {} --init-only --setting-sources '' --plugin-dir {}; printf '%s\\n' \"$?\" > {}\n",
         quote(&directory.join("work")),
         quote(&directory.join("home")),
         quote(&directory.join("config")),
@@ -248,8 +295,58 @@ async fn external_claude_curated_command_native_parent_is_local_pane_descendant(
         .service
         .write_runtime_pane_input("%1", command.as_bytes())
         .unwrap();
-    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
-        .await
+    let actor = if let Some(control_listener) = control_listener {
+        let service = std::mem::replace(&mut probe.service, RuntimeServiceFixture::new().build());
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let task = tokio::spawn(actor.run());
+        let caller = handle.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) =
+                tokio::time::timeout(Duration::from_secs(15), control_listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            let mut connection = ControlConnectionState::new(true, false);
+            serve_async_runtime_control_connection_loop(
+                &mut stream,
+                &caller,
+                &mut connection,
+                AsyncRuntimeControlConnectionConfig::new(
+                    8192,
+                    crate::runtime::current_effective_uid(),
+                )
+                .unwrap(),
+                |_, _| false,
+            )
+            .await
+            .unwrap();
+            assert!(!connection.initialized());
+            assert!(connection.caller_client_id().is_none());
+        });
+        Some((handle, task, server))
+    } else {
+        None
+    };
+    let accepted = tokio::time::timeout(Duration::from_secs(20), listener.accept()).await;
+    if let Some((handle, task, server)) = actor {
+        // Recover pane ownership even if the SDK/helper fails before the hold
+        // probe connects; assertions below then run under the cleanup guard.
+        let server_result = if accepted.as_ref().is_ok_and(|result| result.is_ok()) {
+            Some(server.await)
+        } else {
+            server.abort();
+            None
+        };
+        let shutdown = handle.shutdown().await;
+        probe.service = task.await.unwrap().service;
+        shutdown.unwrap();
+        if let Some(result) = server_result {
+            result.unwrap();
+        }
+        assert_eq!(probe.service.control.external_agents().bindings.len(), 1);
+    }
+    let (mut socket, _) = accepted
         .expect("isolated init-only mod did not invoke curated process helper")
         .unwrap();
     let uid = crate::runtime::current_effective_uid();
@@ -284,6 +381,21 @@ async fn external_claude_curated_command_native_parent_is_local_pane_descendant(
         std::fs::canonicalize(&vendor).unwrap(),
         "curated helper parent is not the expected local vendor process"
     );
+    if admission {
+        let binding = probe
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap();
+        let owner = binding.enrollment.as_ref().unwrap();
+        assert!(owner.producer.matches_parent(parent.uid(), parent.identity));
+        assert!(owner.observers.is_empty());
+        assert!(!owner.has_live_observer());
+        assert_eq!(binding.harness, "claude");
+    }
     let budget = Arc::new(UnixAncestryBudget::default());
     let worker_budget = budget.clone();
     let (parent, ancestry) = tokio::task::spawn_blocking(move || {
@@ -318,7 +430,29 @@ async fn external_claude_curated_command_native_parent_is_local_pane_descendant(
     .expect("init-only vendor did not publish successful exit");
     drop(ancestry);
     assert_eq!(budget.reserved(), 0);
-    assert!(probe.service.control.external_agents().bindings.is_empty());
+    if admission {
+        probe.service.reconcile_external_agent_registrations();
+        assert!(
+            probe
+                .service
+                .control
+                .external_agents()
+                .bindings
+                .values()
+                .all(|binding| binding.retired)
+        );
+        assert!(
+            probe
+                .service
+                .control
+                .external_agents()
+                .enrollments
+                .curated_namespaces
+                .is_empty()
+        );
+    } else {
+        assert!(probe.service.control.external_agents().bindings.is_empty());
+    }
     assert!(
         probe
             .service

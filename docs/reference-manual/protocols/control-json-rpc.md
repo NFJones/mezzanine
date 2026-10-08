@@ -905,6 +905,20 @@ This is source-contract evidence only—not stable parent producer admission,
 normal bootstrap activation, shared-server association or token accounting—and
 must not become a pinned-release/live-provider certification prerequisite.
 
+An additional opt-in variant invokes the freshly built fixed `harness-source`
+helper through actual curated `$.process.run` argv with closed stdin and only
+standard pane discovery, then traverses the real current-writer Unix actor to
+creator registration. It reads only inert actual SessionStart session/source
+fields, verifies the SDK-captured public receipt has no token/control role, and
+holds an owned native probe only to inspect the admitted actual vendor creator.
+Vendor initialization-only exit0 retires that source and prunes its namespace.
+No Node/DOM transport, supplied PID, stdin credential, primary initialization,
+user configuration change or permanent plugin enablement is involved. This
+qualifies actual SDK-to-fixed-helper admission in a temporary isolated fixture,
+not compiled user adapter deployment, idle/reload/session continuity, shared
+server association, durable usage or macOS support. The internal captured output
+must never become a vendor hook response or alter its middleware result.
+
 ### Typed Pi lifecycle observations
 
 `agent/external/pi-observation` is restricted to ordinary Pi enrollment. It accepts

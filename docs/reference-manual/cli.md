@@ -323,6 +323,23 @@ works with a cleared environment apart from those routing hints. Missing/invalid
 routing remains neutral without guessing a default socket. Explicit `-S`/other
 CLI forms retain normal configuration startup.
 
+Curated one-shot APIs whose stdin is closed can invoke the separate fixed hidden
+`mez harness-source <capsule-json>` mode. Its only public capsule fields are
+`external_session_id`, `observer_instance` (opaque ASCII IDs, max128) and
+`session_boundary` (`startup`, `resume`, `clear`, `fork`); the capsule is bounded
+at4096 bytes, rejects duplicate/extra fields and contains no credential. Source
+profile/harness/method/labels are fixed code; pane/socket come only from standard
+MEZ/MEZ_PANE routing hints and the daemon still requires real native creator proof.
+Exact argv bypasses HOME/config/CPU startup, never reads stdin or starts/retries
+vendor work, and makes one 500ms same-user peer-verified Unix exchange. It returns
+only a strictly projected matching public admission receipt (no `launch_token`)
+or `{"registered":false}` on unavailable/rejected telemetry, with no stderr/error
+content. The curated API must capture that output and preserve its original
+middleware result; it is not a vendor hook response, live observer proof or a
+durable usage acknowledgment. No arbitrary RPC/endpoint/pane/PID/role fields are
+accepted. This supplies transport, not automatic adapter/mod installation,
+idle/reload/session continuity, permission-policy bypass or accounting support.
+
 This is not vendor hook installation or certification. Adapters must privately
 deliver existing run credentials, normalize content-free released payloads, serialize
 presentation sequences, renew leases during idle periods, and verify that `{}` is

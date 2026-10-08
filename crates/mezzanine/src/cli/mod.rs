@@ -112,6 +112,9 @@ mod env;
 /// Owns bounded restricted normalized harness event forwarding.
 mod harness_event;
 pub(crate) use harness_event::run_internal_process as run_internal_harness_event_process;
+/// Owns fixed argv-only public metadata transport for curated command APIs.
+mod harness_source;
+pub(crate) use harness_source::run_internal_process as run_internal_harness_source_process;
 /// Owns fixed read-only native daemon peer verification for persistent clients.
 mod harness_peer;
 pub(crate) use harness_peer::run_internal_process as run_internal_harness_peer_process;

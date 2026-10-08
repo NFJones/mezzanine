@@ -509,6 +509,21 @@ and configured CPU startup, using only a bounded current-thread I/O runtime and
 nonsecret MEZ routing. Missing/invalid routing MUST drain bounded stdin and remain
 neutral; it MUST NOT guess a default daemon route. Other CLI argv keep ordinary
 configuration startup, including explicit socket-selection forms.
+The separate exact `mez harness-source <capsule-json>` argv MAY bridge curated
+one-shot command APIs whose stdin is closed. It MUST execute before HOME/config/
+CPU startup, never read stdin, and accept only a 4096-byte strict public capsule
+with bounded opaque ASCII session/instance IDs and a known initial boundary.
+Credentials, PID/role/pane/endpoint/method selectors, arbitrary vendor data and
+general RPC MUST NOT be accepted. Code MUST fix the declared creator contract,
+method/labels and derive pane/socket ONLY from standard nonsecret routing hints;
+native actor provenance remains authority. A single same-user peer-verified Unix
+exchange MUST use a finite deadline, no initialize/retries/subprocess launch.
+Output MUST be either strictly reprojected matching public registration selectors
+or fixed `{"registered":false}`, with no bearer credential, raw errors/content or
+stderr diagnostics. Public replies MUST use JS-safe integers and original witness
+selectors; they are not durable accounting acknowledgment or observer freshness.
+Adapters MUST capture this internal API output, preserve the original middleware
+result and not forward it as a vendor hook response or implicitly enable a mod.
 The transport-free Claude source projector MUST preserve literal curated-mod
 `on`/`next` call sites without receiving the mods API or middleware capabilities.
 It MAY capture only known inert classic session/event fields for an exact
