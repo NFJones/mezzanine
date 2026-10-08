@@ -17,6 +17,39 @@ fn root() -> std::path::PathBuf {
     path
 }
 
+/// Missing-root reads cannot confuse the held ancestor with the final vendor
+/// directory, even if the ancestor has its own journal or matching filename.
+/// Publication/recovery on a raw read-only holder remains blocked and no
+/// root/state is created by inspection or no-op discovery.
+#[test]
+fn bootstrap_missing_root_inspection_does_not_read_ancestor_state() {
+    let parent = root();
+    fs::write(parent.join(".mez-bootstrap-journal"), b"ancestor journal").unwrap();
+    fs::write(parent.join("owned"), b"ancestor bytes").unwrap();
+    let selected = parent.join("absent/vendor");
+    let publisher = Publisher::inspect(&selected).unwrap();
+    publisher.require_no_pending_journal().unwrap();
+    assert_eq!(publisher.read("owned").unwrap(), None);
+    assert!(publisher.recover().is_err());
+    assert!(
+        publisher
+            .apply(vec![Change {
+                path: "owned".into(),
+                before: None,
+                after: Some(b"new".to_vec())
+            }])
+            .is_err()
+    );
+    assert!(!parent.join("absent").exists());
+    assert_eq!(fs::read(parent.join("owned")).unwrap(), b"ancestor bytes");
+    assert_eq!(
+        fs::read(parent.join(".mez-bootstrap-journal")).unwrap(),
+        b"ancestor journal"
+    );
+    drop(publisher);
+    fs::remove_dir_all(parent).unwrap();
+}
+
 /// A read-only holder cannot publish or recover by accidentally using shared
 /// methods. It neither creates a lock nor unlocks another cooperating holder.
 #[test]

@@ -177,8 +177,7 @@ mod tests {
             ("codex", ".codex", "CODEX_HOME"),
         ] {
             let root = home.join(suffix);
-            std::fs::create_dir_all(&root).unwrap();
-            std::fs::write(root.join("authored"), b"preserved").unwrap();
+            assert!(!root.exists());
             for intent in ["--check", "--apply", "--check"] {
                 let parsed = Fixture::try_parse_from(["fixture", harness, intent]).unwrap();
                 let manifest = crate::integrations::bootstrap::compiled_manifest(harness, None);
@@ -206,6 +205,9 @@ mod tests {
                         root.join(format!("mez-bootstrap-ownership-{harness}.json"))
                             .is_file()
                     );
+                    std::fs::write(root.join("authored"), b"preserved").unwrap();
+                } else if !root.exists() {
+                    assert!(!output["changed_paths"].as_array().unwrap().is_empty());
                 }
             }
             let parsed = Fixture::try_parse_from(["fixture", harness, "--check"]).unwrap();
@@ -441,7 +443,7 @@ mod tests {
             "--check",
         ])
         .unwrap();
-        assert!(run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).is_err());
+        run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).unwrap();
         assert!(!root.join("missing").exists());
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::remove_dir_all(root).unwrap();
@@ -481,11 +483,13 @@ mod tests {
         ])
         .unwrap();
         run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).unwrap();
-        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
         let parsed =
-            Fixture::try_parse_from(["fixture", "pi", "--root", "/missing/pi/root", "--apply"])
+            Fixture::try_parse_from(["fixture", "pi", "--root", root.to_str().unwrap(), "--apply"])
                 .unwrap();
-        assert!(run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).is_err());
+        run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).unwrap();
+        assert!(root.join("extensions/mezzanine/index.mjs").is_file());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Every retired-harness intent fails during argument admission, before

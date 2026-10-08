@@ -391,6 +391,54 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
+    /// Missing selected roots produce a complete read-only install preview,
+    /// retaining a native ancestor/absence witness. Apply may create only that
+    /// destination tree; noop uninstall stays absent and recovery cannot invent
+    /// a new root merely to discover that no accepted journal exists.
+    #[test]
+    fn bootstrap_installer_missing_root_preview_materializes_only_on_install() {
+        let parent = std::env::temp_dir().join(format!(
+            "mez-missing-root-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        fs::create_dir(&parent).unwrap();
+        let root = parent.join("config/vendor");
+        let manifest = Manifest {
+            harness: "fixture".into(),
+            revision: 1,
+            vendor_version: "test-only".into(),
+            entries: vec![Entry {
+                path: "nested/owned".into(),
+                artifact: super::super::reconciliation::Artifact::File {
+                    bytes: b"owned".to_vec(),
+                },
+            }],
+        };
+        let accepted = plan(&root, &manifest, Operation::Install)
+            .expect("missing root must remain inspectable");
+        assert_eq!(
+            accepted.changed_paths(),
+            ["nested/owned", "mez-bootstrap-ownership-fixture.json"]
+        );
+        assert_eq!(fs::read_dir(&parent).unwrap().count(), 0);
+        let removed = plan(&root, &manifest, Operation::Uninstall).unwrap();
+        assert!(removed.changed_paths().is_empty());
+        removed.apply().unwrap();
+        assert!(!parent.join("config").exists());
+        assert!(recover(&root, &manifest).is_err());
+        assert!(!parent.join("config").exists());
+        accepted.apply().unwrap();
+        assert_eq!(fs::read(root.join("nested/owned")).unwrap(), b"owned");
+        assert!(root.join("mez-bootstrap-ownership-fixture.json").is_file());
+        assert!(
+            plan(&root, &manifest, Operation::Install)
+                .unwrap()
+                .changed_paths()
+                .is_empty()
+        );
+        fs::remove_dir_all(parent).unwrap();
+    }
+
     /// Inspection must create no lock, journal, receipt, stage or parent and
     /// must not contend with another cooperating publisher. Publication alone
     /// acquires ownership; rejection leaves every planned artifact untouched.

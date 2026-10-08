@@ -68,7 +68,8 @@ are separate intents. The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
 `--root` is an optional override, not a prerequisite: compiled adapters select
 their documented user root from vendor environment/defaults. Those selected roots
-must currently exist; creation and default-install/`--dry-run` migration remain
+may be absent: inspection stays write-free and accepted installation creates only
+the captured missing suffix. Default-install/`--dry-run` migration remains
 unfinished. Root-policy availability does not imply a compiled adapter exists.
 
 The Gemini external harness is retired, with no replacement. Every Gemini
@@ -271,10 +272,16 @@ parent or stage. They can inspect a normally readable nonwritable root and do
 not contend with a cooperating publisher. Apply/recovery acquire the private
 nonwaiting lock and recheck physical root identity, pending journal and every
 captured preimage, including unchanged artifacts and receipt. A no-op apply also
-rejects changed observations without writing a journal. Missing explicit roots
-still fail with their actual I/O error and no directory creation; root creation,
-default install/`--dry-run` grammar and directory permission-policy migration are
-not completed by this inspection change.
+rejects changed observations without writing a journal. Missing roots retain a
+held closest-existing ancestor and bounded absent suffix; preview reads neither
+its root files nor its journal. Accepted install revalidates original ancestor and
+first-entry absence, creates only that suffix with no-follow handles, then uses
+the normal locked publication boundary. Competing creation/replacement rejects
+before artifact publication. Existing ancestor modes/ownership stay untouched.
+No-op uninstall stays absent; explicit recovery never creates a root. Creation
+is not atomic: an error may leave created directories, with no foreign/nonempty
+cleanup sweep. Default install/`--dry-run` grammar and normal-directory permission
+policy/private-state migration remain unfinished.
 
 For compiled adapters, `--root` is now optional. The selector uses an explicit
 absolute override first, then the vendor directory variable, then its user default:
@@ -297,8 +304,9 @@ Explicit roots need no environment lookup. JSON reports `scope_root` (lossy disp
 for non-UTF8 Unix spellings) and fixed `root_source`; actual filesystem path bytes
 remain exact. No vendor probing or cwd/focus/project ancestor discovery occurs.
 The six root policies do not imply six compiled adapters: absent adapter diagnostics
-still perform no root discovery or mutation. Selected roots must currently exist;
-automatic creation and the new default-install/`--dry-run` grammar remain unfinished.
+still perform no root discovery or mutation. Missing selected roots now support
+read-only preview and installation-only anchored creation; the new default-install/
+`--dry-run` grammar remains unfinished.
 
 ### Normalized observational hook helper
 

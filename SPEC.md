@@ -648,7 +648,17 @@ the held root spelling/object and pending journal, and verify every inspected
 preimage including unchanged artifacts/receipt before publication. No-op apply
 MUST still reject observed drift or newly pending recovery without creating a
 journal. Read-only holders MUST reject mutation methods without writer ownership.
-An absent selected root MAY currently return its actual I/O error without writes;
+An absent selected root MUST remain inspectable without writes using its closest
+existing no-follow ancestor/incarnation and bounded missing suffix. Original
+first-entry absence MUST be revalidated; appeared entries or replaced ancestors
+MUST reject rather than become implicit destination ownership. Root reads MUST
+NOT consult the ancestor's own files/journal. Accepted nonempty install publication
+MAY materialize only the enumerated suffix with exclusive mkdir/no-follow handles,
+revalidate the resulting root and acquire normal publication ownership. Existing
+ancestors MUST NOT be chmod/chown'd or subjected to new eligibility gates. No-op
+uninstall MUST remain absent; explicit recovery MUST NOT create a missing root.
+Creation MUST NOT claim atomic tree effects or external-writer CAS: failed
+materialization may leave created directories, never sweep foreign/nonempty nodes.
 automatic root discovery/creation and normal-directory permission policy remain
 separate from the inspection primitive. Root discovery MUST choose optional
 explicit override, then documented vendor directory environment, then applicable
@@ -660,9 +670,9 @@ Unix platforms; Cursor uses it on Linux/BSD, not macOS. Copilot MUST NOT reuse
 its migrated legacy XDG root. File-only OpenCode config overrides MUST NOT be
 interpreted as plugin directories. Unknown/retired names MUST reject before
 environment/root discovery; absent compiled adapters MUST remain no-mutation
-diagnostics rather than selecting/writing guessed integration roots. Selected
-root creation, default-install/dry-run grammar and directory policy remain
-unfinished UX work, not completed by automatic existing-root selection.
+diagnostics rather than selecting/writing guessed integration roots. The
+default-install/dry-run grammar and directory policy remain unfinished UX work,
+not completed by automatic root selection and anchored materialization.
 Owned-file and exact-JSON-entry receipts MUST protect unrelated settings;
 Exact JSON-array-member ownership MUST preserve unrelated members and order,
 replace at the owned position, and uninstall only that member, not the containing

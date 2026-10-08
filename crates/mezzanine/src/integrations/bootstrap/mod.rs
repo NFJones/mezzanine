@@ -93,6 +93,8 @@ pub(crate) mod pi_transport;
 mod publication;
 #[cfg(test)]
 mod publication_tests;
+/// Holds exact root/ancestor absence witnesses for read-only native planning.
+mod root_directory;
 /// Selects documented vendor user roots without I/O or authority inference.
 pub(crate) mod roots;
 /// Rejects ambiguous shared JSON before exact array-member reconciliation.

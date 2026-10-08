@@ -9,6 +9,7 @@
 //! No symlink or special node is followed, and no executable is launched.
 
 use super::reconciliation::publication_path;
+use super::root_directory::RootDirectory;
 use crate::error::{MezError, Result};
 use rustix::fs::{
     AtFlags, FlockOperation, Mode, OFlags, RenameFlags, flock, mkdirat, openat, renameat,
@@ -18,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 const JOURNAL: &str = ".mez-bootstrap-journal";
 const LOCK: &str = ".mez-bootstrap-lock";
@@ -48,43 +49,11 @@ struct Journal {
 /// Held root, with optional exclusive ownership acquired only for publication.
 pub(super) struct Publisher {
     root: PathBuf,
-    pub(super) directory: File,
+    directory: RootDirectory,
     _lock: Option<File>,
     /// Task-local publication barrier; no shared fault state.
     #[cfg(test)]
     pub(super) stop_after: std::cell::Cell<Option<usize>>,
-}
-
-/// Opens every absolute directory component without following symlinks.
-fn open_directory(path: &Path) -> Result<File> {
-    if !path.is_absolute() {
-        return Err(MezError::invalid_args("bootstrap root must be absolute"));
-    }
-    let mut directory = File::open("/")?;
-    for component in path.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(name) => {
-                directory = File::from(
-                    openat(
-                        &directory,
-                        name,
-                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                        Mode::empty(),
-                    )
-                    .map_err(std::io::Error::from)?,
-                )
-            }
-            _ => return Err(MezError::forbidden("bootstrap root traversal rejected")),
-        }
-    }
-    let metadata = directory.metadata()?;
-    if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0 {
-        return Err(MezError::forbidden(
-            "bootstrap root must be owned and not writable by other users",
-        ));
-    }
-    Ok(directory)
 }
 
 /// Reads a regular single-link owned file promptly, bounded before and during I/O.
@@ -127,31 +96,41 @@ impl Publisher {
     pub(super) fn inspect(root: &Path) -> Result<Self> {
         Ok(Self {
             root: root.into(),
-            directory: open_directory(root)?,
+            directory: RootDirectory::inspect(root)?,
             _lock: None,
             #[cfg(test)]
             stop_after: std::cell::Cell::new(None),
         })
     }
 
-    /// Acquires a private lock without waiting indefinitely or changing vendor files.
+    /// Acquires a private lock for an existing root; recovery never creates an
+    /// absent tree merely to discover that no accepted intent is present.
     pub(super) fn open(root: &Path) -> Result<Self> {
         let mut publisher = Self::inspect(root)?;
+        if publisher.directory.is_missing() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "bootstrap recovery/publication root is absent",
+            )
+            .into());
+        }
         publisher.acquire_lock()?;
         Ok(publisher)
     }
 
     /// Converts an inspected root to one bounded cooperating writer. The held
     /// root must still match its spelling before and after lock acquisition;
+    /// an absent root is materialized only along its captured native suffix.
     /// no destination/journal work is authorized until this returns successfully.
     pub(super) fn acquire_lock(&mut self) -> Result<()> {
         self.validate_root()?;
         if self._lock.is_some() {
             return Ok(());
         }
+        self.directory.materialize(&self.root)?;
         let lock = File::from(
             openat(
-                &self.directory,
+                self.directory.file()?,
                 LOCK,
                 OFlags::RDWR
                     | OFlags::CREATE
@@ -192,21 +171,17 @@ impl Publisher {
 
     /// Revalidates held root spelling before publishing through its descriptors.
     fn validate_root(&self) -> Result<()> {
-        let current = open_directory(&self.root)?.metadata()?;
-        let held = self.directory.metadata()?;
-        if current.dev() != held.dev() || current.ino() != held.ino() {
-            return Err(MezError::conflict(
-                "bootstrap root replaced; recovery required",
-            ));
-        }
-        Ok(())
+        self.directory.validate(&self.root)
     }
 
     /// Resolves a relative parent with no-follow handles, optionally creating it.
     fn parent(&self, path: &str, create: bool) -> Result<Option<(File, String)>> {
         publication_path(path)?;
         self.validate_root()?;
-        let mut directory = self.directory.try_clone()?;
+        if self.directory.is_missing() {
+            return Ok(None);
+        }
+        let mut directory = self.directory.file()?.try_clone()?;
         let parts = path.split('/').collect::<Vec<_>>();
         for part in &parts[..parts.len() - 1] {
             let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
@@ -338,8 +313,9 @@ impl Publisher {
                 ));
             }
         }
-        unlinkat(&self.directory, JOURNAL, AtFlags::empty()).map_err(std::io::Error::from)?;
-        self.directory.sync_all()?;
+        unlinkat(self.directory.file()?, JOURNAL, AtFlags::empty())
+            .map_err(std::io::Error::from)?;
+        self.directory.file()?.sync_all()?;
         Ok(())
     }
 
@@ -349,13 +325,13 @@ impl Publisher {
         authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
     ) -> Result<bool> {
         self.require_lock()?;
-        let Some(bytes) = read_at(&self.directory, JOURNAL, MAX_JOURNAL)? else {
+        let Some(bytes) = read_at(self.directory.file()?, JOURNAL, MAX_JOURNAL)? else {
             return Ok(false);
         };
         let journal: Journal = serde_json::from_slice(&bytes).map_err(|_| {
             MezError::invalid_state("bootstrap journal invalid; manual review required")
         })?;
-        let root = self.directory.metadata()?;
+        let root = self.directory.file()?.metadata()?;
         self.validate_root()?;
         if journal.version != 2
             || journal.root_device != root.dev()
@@ -372,7 +348,11 @@ impl Publisher {
 
     /// Commits an already planned transaction; never silently recovers old intent.
     pub(super) fn require_no_pending_journal(&self) -> Result<()> {
-        if read_at(&self.directory, JOURNAL, MAX_JOURNAL)?.is_some() {
+        self.validate_root()?;
+        if self.directory.is_missing() {
+            return Ok(());
+        }
+        if read_at(self.directory.file()?, JOURNAL, MAX_JOURNAL)?.is_some() {
             return Err(MezError::conflict("bootstrap recovery pending"));
         }
         Ok(())
@@ -387,7 +367,7 @@ impl Publisher {
         self.require_lock()?;
         self.require_no_pending_journal()?;
         self.validate_changes(&changes, false)?;
-        let root = self.directory.metadata()?;
+        let root = self.directory.file()?.metadata()?;
         let bytes = serde_json::to_vec(&Journal {
             version: 2,
             root_device: root.dev(),
@@ -399,7 +379,7 @@ impl Publisher {
         if bytes.len() > MAX_JOURNAL {
             return Err(MezError::invalid_args("bootstrap journal limit"));
         }
-        self.write_at(&self.directory, JOURNAL, &bytes, false)?;
+        self.write_at(self.directory.file()?, JOURNAL, &bytes, false)?;
         self.finish(&changes)
     }
 
