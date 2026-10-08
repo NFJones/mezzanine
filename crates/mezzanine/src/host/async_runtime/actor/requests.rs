@@ -65,7 +65,9 @@ impl AsyncRuntimeSessionActor {
         let request = crate::control::parse_json_rpc_request(&body).ok()?;
         if !matches!(
             request.method.as_str(),
-            "agent/external/enroll" | "agent/external/helper-presentation"
+            "agent/external/enroll"
+                | "agent/external/helper-presentation"
+                | "agent/external/helper-observe"
         ) {
             return None;
         }
@@ -73,7 +75,10 @@ impl AsyncRuntimeSessionActor {
             Err(MezError::invalid_args(
                 "external enrollment requires one bounded control frame",
             ))
-        } else if request.method == "agent/external/helper-presentation" {
+        } else if matches!(
+            request.method.as_str(),
+            "agent/external/helper-presentation" | "agent/external/helper-observe"
+        ) {
             self.service
                 .prepare_external_helper_presentation(&request, connection)
         } else {

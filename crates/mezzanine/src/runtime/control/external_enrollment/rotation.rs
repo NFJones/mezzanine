@@ -117,6 +117,18 @@ impl RuntimeSessionService {
         binding.enrollment = Some(enrollment);
         let pane = binding.pane_id.clone();
         registry.next_generation = generation;
+        registry.enrollments.helper_targets.remove(
+            binding.uid,
+            &work.harness,
+            &work.session_id,
+            digest,
+        );
+        registry.enrollments.helper_targets.insert(
+            binding.uid,
+            &work.harness,
+            &work.session_id,
+            replacement_digest,
+        );
         registry.bindings.insert(replacement_digest, binding);
         self.presentation.set_pane_harness_status(
             &pane,

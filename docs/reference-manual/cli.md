@@ -273,7 +273,8 @@ Final check plus rename is not atomic CAS against arbitrary external writers.
 The token is stdin-only, never an argument or persisted configuration value.
 Existing lifecycle operations use a primary-authorized launch or an independently
 qualified ordinary producer, according to their control contract. The helper
-maps only `register`, `renew`, `end`, `presentation`, `helper-presentation`, and `usage` to their restricted
+maps only `register`, `renew`, `end`, `presentation`, `helper-presentation`,
+`helper-observe`, and `usage` to their restricted
 external-agent operations; `data` uses the documented RPC fields without identity
 overrides, arbitrary methods, paths, prompts, transcripts or nested vendor payloads.
 It authenticates the Unix daemon's same-user peer and does not initialize a client.
@@ -297,6 +298,20 @@ claim, initial parent enrollment, accounting, observer, renewal or retirement is
 granted. Pi lifecycle-owned sequences reject generic helper updates. It shares
 the server's bounded asynchronous native-admission path; helper exit does not
 retire the producer. This does not yet install or activate ordinary hook adapters.
+
+`helper-observe` avoids private credential handoff for the same existing-producer
+case. Its separate strict envelope is:
+
+```json
+{"operation":"helper-observe","harness":"pi","generation":1,"external_session_id":"bound-run","data":{"sequence":1,"state":"running"}}
+```
+
+The original public generation comes from the producer's enrollment response;
+the adapter must bind it to the callback, never fetch the newest generation for
+delayed work. No token is accepted or returned. Missing/ambiguous daemon-owned
+targets fail closed, and native direct-parent, writer and actor fences still run.
+This does not enroll a parent or grant observer, renewal, retirement or usage
+rights. Callback sequence serialization remains the producer adapter's job.
 
 This is not vendor hook installation or certification. Adapters must privately
 deliver existing run credentials, normalize content-free released payloads, serialize

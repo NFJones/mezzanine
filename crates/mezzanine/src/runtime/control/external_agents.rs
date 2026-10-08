@@ -447,7 +447,8 @@ impl RuntimeSessionService {
 
     /// Retires only one exact registration and retains a bounded retry tombstone.
     pub(super) fn retire_external_agent_binding(&mut self, digest: [u8; 32]) {
-        let Some(binding) = self.control.external_agents_mut().bindings.get_mut(&digest) else {
+        let registry = self.control.external_agents_mut();
+        let Some(binding) = registry.bindings.get_mut(&digest) else {
             return;
         };
         if binding.retired {
@@ -464,6 +465,16 @@ impl RuntimeSessionService {
             .registration
             .as_ref()
             .map(|registration| registration.agent_id.clone());
+        if binding.enrollment.is_some()
+            && let Some(registration) = &binding.registration
+        {
+            registry.enrollments.helper_targets.remove(
+                binding.uid,
+                &binding.harness,
+                &registration.external_session_id,
+                digest,
+            );
+        }
         self.presentation
             .set_pane_harness_status(&pane_id, &owner, None);
         if let Some(agent_id) = agent_id {
@@ -490,6 +501,30 @@ impl RuntimeSessionService {
     }
 
     /// Expires missing renewal or replaced pane roots without claiming death.
+    fn external_agent_binding_needs_retirement(&self, binding: &LaunchBinding, now: u64) -> bool {
+        !binding.retired
+            && (!binding.has_current_telemetry(now)
+                || self.find_pane_descriptor(&binding.pane_id).is_none()
+                || !self.pane_process_identity_is_current(&binding.pane_id, &binding.process))
+    }
+
+    /// Reconciles only one captured/indexed target, using the identical global
+    /// maintenance predicate but without sweeping unrelated registrations.
+    pub(super) fn reconcile_external_agent_registration(&mut self, digest: [u8; 32]) {
+        if self
+            .control
+            .external_agents()
+            .bindings
+            .get(&digest)
+            .is_some_and(|binding| {
+                self.external_agent_binding_needs_retirement(binding, current_unix_seconds())
+            })
+        {
+            self.retire_external_agent_binding(digest);
+        }
+    }
+
+    /// Expires missing renewal or replaced pane roots without claiming death.
     pub(crate) fn reconcile_external_agent_registrations(&mut self) -> usize {
         let now = current_unix_seconds();
         let retired = self
@@ -498,12 +533,8 @@ impl RuntimeSessionService {
             .bindings
             .iter()
             .filter_map(|(digest, binding)| {
-                (!binding.retired
-                    && (!binding.has_current_telemetry(now)
-                        || self.find_pane_descriptor(&binding.pane_id).is_none()
-                        || !self
-                            .pane_process_identity_is_current(&binding.pane_id, &binding.process)))
-                .then_some(*digest)
+                self.external_agent_binding_needs_retirement(binding, now)
+                    .then_some(*digest)
             })
             .collect::<Vec<_>>();
         for digest in &retired {
@@ -556,7 +587,9 @@ impl RuntimeSessionService {
             self.presentation
                 .set_pane_harness_status(&pane, &owner, None);
         }
-        self.control.external_agents_mut().bindings.clear();
+        let registry = self.control.external_agents_mut();
+        registry.bindings.clear();
+        registry.enrollments.helper_targets = Default::default();
     }
 
     /// Returns current metadata for one registered external identity.

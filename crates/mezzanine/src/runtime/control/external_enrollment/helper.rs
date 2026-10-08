@@ -1,7 +1,8 @@
 //! Qualified presentation helpers for an independently enrolled producer.
 //!
-//! A private current run handle narrows the target; native direct-parent capture
-//! must also match that run's retained producer anchor. Parent ancestry alone
+//! A private current run handle or bounded daemon-owned selector index narrows
+//! the target. The original public generation fences both paths, and native
+//! direct-parent capture must match that run's retained producer anchor. Parent ancestry alone
 //! never enrolls an owner. Observation stays on the existing bounded worker;
 //! actor settlement rechecks exact authority before the existing presentation
 //! reducer runs. Helpers acquire no role, accounting, lease or observer ownership.
@@ -19,7 +20,7 @@ pub(super) struct HelperPresentation {
 }
 
 impl RuntimeSessionService {
-    /// Reserves bounded observation only for a current ordinary run handle on
+    /// Reserves bounded observation only for a current ordinary run candidate on
     /// uninitialized, same-user, sender-qualified Unix ingress. Supplied process
     /// IDs, pane hints and arbitrary callback methods are not accepted.
     pub(crate) fn prepare_external_helper_presentation(
@@ -28,7 +29,11 @@ impl RuntimeSessionService {
         connection: &ControlConnectionState,
     ) -> Result<ExternalEnrollmentWork> {
         self.require_live()?;
-        if request.method != "agent/external/helper-presentation" || connection.initialized() {
+        if !matches!(
+            request.method.as_str(),
+            "agent/external/helper-presentation" | "agent/external/helper-observe"
+        ) || connection.initialized()
+        {
             return Err(MezError::forbidden(
                 "external helper requires uninitialized Unix ingress",
             ));
@@ -47,19 +52,38 @@ impl RuntimeSessionService {
         }
         let mut params = crate::protocol::strict_json::decode(raw.as_bytes())
             .map_err(|_| MezError::invalid_args("external helper requires unique object fields"))?;
-        let digest = super::super::external_agents::credential(&params)?;
-        let generation = params
-            .get("generation")
-            .and_then(serde_json::Value::as_u64)
-            .filter(|generation| *generation > 0)
-            .ok_or_else(|| MezError::forbidden("external helper handle unavailable"))?;
         let session_id = text(&params, "external_session_id", 128)?;
         let origin = connection
             .unix_origin()
             .filter(|origin| origin.uid() == *uid && origin.writer_confirmed())
             .ok_or_else(|| MezError::forbidden("external helper sender unavailable"))?
             .clone();
-        self.reconcile_external_agent_registrations();
+        let digest = if request.method == "agent/external/helper-observe" {
+            let harness = text(&params, "harness", 64)?;
+            crate::integrations::harness_policy::require_active_external_harness(&harness)?;
+            let candidates = self
+                .control
+                .external_agents()
+                .enrollments
+                .helper_targets
+                .candidates(*uid, &harness, &session_id);
+            for candidate in candidates {
+                self.reconcile_external_agent_registration(candidate);
+            }
+            self.control
+                .external_agents()
+                .enrollments
+                .helper_targets
+                .select(*uid, &harness, &session_id)?
+        } else {
+            super::super::external_agents::credential(&params)?
+        };
+        self.reconcile_external_agent_registration(digest);
+        let generation = params
+            .get("generation")
+            .and_then(serde_json::Value::as_u64)
+            .filter(|generation| *generation > 0)
+            .ok_or_else(|| MezError::forbidden("external helper generation unavailable"))?;
         let binding = self
             .control
             .external_agents()
@@ -82,10 +106,11 @@ impl RuntimeSessionService {
                 "external Pi lifecycle owns presentation sequence",
             ));
         }
-        params
+        let payload = params
             .as_object_mut()
-            .ok_or_else(|| MezError::invalid_args("external helper requires an object"))?
-            .remove("launch_token");
+            .ok_or_else(|| MezError::invalid_args("external helper requires an object"))?;
+        payload.remove("launch_token");
+        payload.remove("harness");
         let mut work = ExternalEnrollmentWork {
             admission: 0,
             request_id: request.id.clone(),
@@ -146,7 +171,7 @@ impl RuntimeSessionService {
         work: &ExternalEnrollmentWork,
         helper: &HelperPresentation,
     ) -> Result<String> {
-        self.reconcile_external_agent_registrations();
+        self.reconcile_external_agent_registration(helper.digest);
         let binding = self
             .control
             .external_agents()

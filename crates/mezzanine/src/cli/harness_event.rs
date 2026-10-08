@@ -27,6 +27,19 @@ struct Event {
     data: serde_json::Value,
 }
 
+/// Token-free selectors for one independently enrolled ordinary producer.
+/// Private credentials are absent; the original public source generation fences
+/// delayed callbacks against observer replacement and is never daemon authority.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelperEvent {
+    operation: String,
+    harness: String,
+    generation: u64,
+    external_session_id: String,
+    data: serde_json::Value,
+}
+
 /// Validates a fixed operation and its allowlisted fields before transport.
 fn request(bytes: &[u8]) -> Result<Zeroizing<String>> {
     if bytes.len() > MAX_EVENT_BYTES {
@@ -39,32 +52,54 @@ fn request(bytes: &[u8]) -> Result<Zeroizing<String>> {
     if !unique.is_object() {
         return Err(MezError::invalid_args("event unavailable"));
     }
-    let event: Event =
-        serde_json::from_value(unique).map_err(|_| MezError::invalid_args("event unavailable"))?;
-    let method = match event.operation.as_str() {
+    let (operation, identity, data) = if unique.get("operation").and_then(serde_json::Value::as_str)
+        == Some("helper-observe")
+    {
+        let event: HelperEvent = serde_json::from_value(unique)
+            .map_err(|_| MezError::invalid_args("event unavailable"))?;
+        (
+            event.operation,
+            serde_json::json!({"harness":event.harness,"generation":event.generation,"external_session_id":event.external_session_id}),
+            event.data,
+        )
+    } else {
+        let event: Event = serde_json::from_value(unique)
+            .map_err(|_| MezError::invalid_args("event unavailable"))?;
+        (
+            event.operation,
+            serde_json::json!({"launch_token":event.launch_token,"generation":event.generation,"external_session_id":event.external_session_id}),
+            event.data,
+        )
+    };
+    let method = match operation.as_str() {
         "register" => "agent/external/register",
         "renew" => "agent/external/renew",
         "end" => "agent/external/deregister",
         "presentation" => "agent/external/presentation",
         "helper-presentation" => "agent/external/helper-presentation",
+        "helper-observe" => "agent/external/helper-observe",
         "usage" => "agent/external/usage",
         _ => return Err(MezError::invalid_args("event unavailable")),
     };
-    let mut params = event
-        .data
+    let mut params = data
         .as_object()
         .cloned()
         .ok_or_else(|| MezError::invalid_args("event unavailable"))?;
-    if ["launch_token", "generation", "external_session_id"]
-        .iter()
-        .any(|key| params.contains_key(*key))
+    if [
+        "launch_token",
+        "generation",
+        "external_session_id",
+        "harness",
+    ]
+    .iter()
+    .any(|key| params.contains_key(*key))
     {
         return Err(MezError::invalid_args("event unavailable"));
     }
     // Top-level field allowlisting alone cannot stop vendor content hidden in
     // a nominal counter or title field. Only counters may be an object.
     for (key, value) in &params {
-        if key == "counters" && event.operation == "usage" {
+        if key == "counters" && operation == "usage" {
             let counters: crate::storage::token_usage::ExternalCounters =
                 serde_json::from_value(value.clone())
                     .map_err(|_| MezError::invalid_args("event unavailable"))?;
@@ -79,11 +114,11 @@ fn request(bytes: &[u8]) -> Result<Zeroizing<String>> {
             return Err(MezError::invalid_args("event unavailable"));
         }
     }
-    params.insert("launch_token".into(), event.launch_token.into());
-    params.insert("generation".into(), event.generation.into());
-    params.insert(
-        "external_session_id".into(),
-        event.external_session_id.into(),
+    params.extend(
+        identity
+            .as_object()
+            .ok_or_else(|| MezError::invalid_args("event unavailable"))?
+            .clone(),
     );
     let body = Zeroizing::new(
         serde_json::json!({"jsonrpc":"2.0", "id":"harness-event", "method":method,"params":params})
@@ -506,5 +541,38 @@ mod tests {
         bad["operation"] = serde_json::json!("terminal/command");
         assert!(request(bad.to_string().as_bytes()).is_err());
         assert!(request(&vec![b'x'; MAX_EVENT_BYTES + 1]).is_err());
+    }
+
+    /// Token-free callback selectors are not a permissive alternate format for
+    /// existing credential operations. Mixed/null identity fields, overrides,
+    /// duplicate keys and arbitrary process/control selectors never forward.
+    #[test]
+    fn harness_event_helper_observe_has_distinct_strict_identity() {
+        let base = serde_json::json!({"operation":"helper-observe","harness":"pi","generation":1,"external_session_id":"run","data":{"sequence":1,"state":"running"}});
+        let body = request(base.to_string().as_bytes()).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(value["method"], "agent/external/helper-observe");
+        assert!(value["params"].get("launch_token").is_none());
+        assert_eq!(value["params"]["generation"], 1);
+        for field in ["launch_token", "generation", "pid", "pane_id"] {
+            let mut bad = base.clone();
+            bad[field] = serde_json::Value::Null;
+            assert!(request(bad.to_string().as_bytes()).is_err());
+            let mut bad = base.clone();
+            bad["data"][field] = serde_json::json!(1);
+            assert!(request(bad.to_string().as_bytes()).is_err());
+        }
+        for field in ["harness", "external_session_id"] {
+            let mut bad = base.clone();
+            bad["data"][field] = serde_json::json!("override");
+            assert!(request(bad.to_string().as_bytes()).is_err());
+        }
+        let mut missing = base.clone();
+        missing.as_object_mut().unwrap().remove("generation");
+        assert!(request(missing.to_string().as_bytes()).is_err());
+        let mut wrong = base;
+        wrong["operation"] = serde_json::json!("renew");
+        assert!(request(wrong.to_string().as_bytes()).is_err());
+        assert!(request(br#"{"operation":"helper-observe","harness":"pi","harness":"opencode","external_session_id":"run","data":{"sequence":1,"state":"running"}}"#).is_err());
     }
 }

@@ -627,6 +627,7 @@ pub(crate) const PRIMARY_CONTROL_METHODS: &[&str] = &[
     "agent/external/usage",
     "agent/external/presentation",
     "agent/external/helper-presentation",
+    "agent/external/helper-observe",
     "agent/external/pi-observation",
     "client/list",
     "client/detach",

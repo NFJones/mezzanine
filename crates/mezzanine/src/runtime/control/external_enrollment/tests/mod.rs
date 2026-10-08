@@ -1197,6 +1197,7 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
 mod ancestry;
 mod harnesses;
 mod health;
+mod helper_discovery;
 mod helper_presentation;
 mod observer_epochs;
 mod persistent_client;

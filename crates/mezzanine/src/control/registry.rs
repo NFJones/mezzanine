@@ -575,6 +575,18 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         ]),
     },
     ControlMethodSpec {
+        method: "agent/external/helper-observe",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "harness",
+            "generation",
+            "external_session_id",
+            "sequence",
+            "state",
+            "title",
+        ]),
+    },
+    ControlMethodSpec {
         method: "agent/external/deregister",
         dispatch: ControlDispatchKind::ExternalAgent,
         params_schema: ControlParamsSchema::Allowed(&[

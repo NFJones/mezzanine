@@ -383,6 +383,20 @@ enroll the parent, acquire observer/client authority, renew or retire a lease.
 Helper exit MUST NOT retire its producer. Stale helper work MUST NOT overwrite a
 replacement observer. This is existing-producer generic presentation only, not
 initial hook enrollment or shared-daemon client/session association.
+`agent/external/helper-observe` MAY instead accept only canonical `harness`, exact
+`external_session_id`, original positive public `generation`, `sequence`, `state`
+and optional `title`, without receiving or returning a private credential.
+An actor-owned UID/harness/session index MUST select exactly one independently
+enrolled live producer. Enrollment, rotation and retirement MUST update only
+their exact index entries, bounded by the existing registration pool. Missing
+or ambiguous targets MUST reject before reservation; focus/PID/pane hints MUST
+NOT disambiguate. Cleanup MUST reconcile only indexed candidates, not sweep the
+global registration pool per callback. Native direct-parent/writer/ancestry and
+actor root/deadline/current-generation fences MUST remain identical. Adapters
+MUST capture the source's returned generation before creating the callback;
+neither helper nor daemon may substitute the newest generation for delayed work.
+This token-free path MUST NOT enroll a parent, renew/retire a lease, acquire an
+observer/client/accounting owner, bypass Pi lifecycle ownership or grant usage.
 `agent/external/presentation` MUST require the same capability, generation and
 external session binding. Positive observation sequences MUST reject stale or
 conflicting updates; identical replay MUST be inert. Bounded title suggestions

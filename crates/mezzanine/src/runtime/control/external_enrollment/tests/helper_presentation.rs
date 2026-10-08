@@ -75,15 +75,30 @@ async fn external_helper_presentation_cli_unix_actor_roundtrip_is_neutral() {
         ("helper-presentation", false, 1, "running"),
         ("presentation", false, 2, "failed"),
         ("helper-presentation", true, 2, "failed"),
+        ("helper-observe", false, 2, "complete"),
+        ("helper-observe", false, 2, "complete"),
+        ("helper-observe", true, 3, "failed"),
     ] {
         let token = if wrong_handle {
             serde_json::json!("x".repeat(43))
         } else {
             response["result"]["launch_token"].clone()
         };
-        let event = zeroize::Zeroizing::new(serde_json::json!({"operation":operation,
-            "launch_token":token,"generation":response["result"]["generation"],"external_session_id":"session-a",
-            "data":{"sequence":sequence,"state":state,"title":"CLI fixture"}}).to_string());
+        let event = if operation == "helper-observe" {
+            let generation = if wrong_handle {
+                serde_json::json!(0)
+            } else {
+                response["result"]["generation"].clone()
+            };
+            let envelope = serde_json::json!({"operation":operation,"harness":"pi","generation":generation,
+                "external_session_id":"session-a","data":{"sequence":sequence,"state":state,"title":"CLI fixture"}});
+            assert!(envelope.get("launch_token").is_none());
+            zeroize::Zeroizing::new(envelope.to_string())
+        } else {
+            zeroize::Zeroizing::new(serde_json::json!({"operation":operation,
+                "launch_token":token,"generation":response["result"]["generation"],"external_session_id":"session-a",
+                "data":{"sequence":sequence,"state":state,"title":"CLI fixture"}}).to_string())
+        };
         let length = u32::try_from(event.len()).unwrap().to_be_bytes();
         fixture.socket.write_all(&[5]).await.unwrap();
         fixture.socket.write_all(&length).await.unwrap();
@@ -164,8 +179,8 @@ async fn external_helper_presentation_cli_unix_actor_roundtrip_is_neutral() {
         .presentation
         .as_ref()
         .unwrap();
-    assert_eq!(presentation.sequence, 1);
-    assert_eq!(presentation.state, "running");
+    assert_eq!(presentation.sequence, 2);
+    assert_eq!(presentation.state, "complete");
     assert!(
         exit.service
             .control
@@ -180,7 +195,7 @@ async fn external_helper_presentation_cli_unix_actor_roundtrip_is_neutral() {
 
 /// Runs genuine off-actor native observation and returns the parsed settlement
 /// without printing private handles or presentation metadata on failure.
-async fn settle(
+pub(super) async fn settle(
     fixture: &mut Fixture,
     work: ExternalEnrollmentWork,
     connection: &ControlConnectionState,
@@ -199,7 +214,7 @@ async fn settle(
 
 /// Admits the actual ordinary producer using native evidence before any helper
 /// exists, retaining only the test-private response for callback construction.
-async fn enroll_producer(fixture: &mut Fixture) -> serde_json::Value {
+pub(super) async fn enroll_producer(fixture: &mut Fixture) -> serde_json::Value {
     let work = fixture
         .service
         .prepare_external_enrollment(&request(), &fixture.connection)

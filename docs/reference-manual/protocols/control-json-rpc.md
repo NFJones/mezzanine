@@ -702,6 +702,20 @@ rejection. The current private handle must belong to an independently enrolled
 ordinary producer; explicit-launch handles and Pi lifecycle-owned presentation
 are not eligible.
 
+`agent/external/helper-observe` is the token-free alternate with only `harness`,
+`external_session_id`, positive original `generation`, `sequence`, `state`, and
+optional `title`. UID/harness/session selectors locate one daemon-owned indexed
+ordinary target, never grant authority. Missing or colliding live targets reject
+before native reservation; there is no pane/focus/PID or first-match fallback.
+Only enrollment/rotation/retirement maintain the bounded index. Callback cleanup
+reconciles the exact indexed candidate group, not all registrations.
+
+The adapter must retain the public generation returned to its independently
+enrolled producer and bind it to the original callback. It is not a credential.
+Old work and old callbacks reject after observer replacement; the helper cannot
+look up a fresh generation to rebind delayed observations. Initial hook-only
+producer admission remains unavailable; parent ancestry alone never creates one.
+
 The helper must be a live native direct child of that retained producer, with its
 own uninitialized same-user Unix connection and matching per-segment sender
 evidence. Native parent capture and pane-root ancestry run off actor using the

@@ -1429,7 +1429,9 @@ impl RuntimeSessionService {
         if !connection.initialized() || request.method == "control/initialize" {
             if matches!(
                 request.method.as_str(),
-                "agent/external/enroll" | "agent/external/helper-presentation"
+                "agent/external/enroll"
+                    | "agent/external/helper-presentation"
+                    | "agent/external/helper-observe"
             ) {
                 return runtime_json_rpc_error(
                     &request.id,

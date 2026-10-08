@@ -38,6 +38,7 @@ const MAX_OBSERVER_INSTANCES: usize = 128;
 
 mod helper;
 mod rotation;
+mod targets;
 
 /// Actor-owned reservations consumed on every completion, including reply loss.
 #[derive(Debug, Default)]
@@ -46,6 +47,8 @@ pub(super) struct EnrollmentAdmissions {
     next: u64,
     /// Aggregate native ancestry descriptors across workers and live runs.
     ancestry_budget: Arc<UnixAncestryBudget>,
+    /// Candidate selectors maintained only by ordinary binding lifecycle owners.
+    pub(in crate::runtime::control) helper_targets: targets::HelperTargets,
     /// Test-owned native worker barrier; production has no global timing hooks.
     #[cfg(test)]
     worker_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
@@ -586,6 +589,11 @@ impl RuntimeSessionService {
             self.retire_external_agent_binding(digest);
             return Err(error);
         }
+        self.control
+            .external_agents_mut()
+            .enrollments
+            .helper_targets
+            .insert(work.origin.uid(), &work.harness, &work.session_id, digest);
         let binding = self
             .control
             .external_agents()
