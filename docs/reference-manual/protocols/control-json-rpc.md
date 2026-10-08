@@ -828,6 +828,24 @@ neither installs/enables a mod or proves runtime delivery/accounting. Actual
 loader/transport association and separately consented unsandboxed execution
 remain unfinished integration work, without a version/certification gate.
 
+An additional Linux opt-in source probe loads only an owned temporary mod in an
+isolated home/config/cwd with an explicit minimal environment cleared before
+the interactive pane shell starts (not just inside a later typed command). A
+harmless hostile ENV/PATH regression covers startup scripts and shadow commands;
+the vendor launch additionally uses absolute `/usr/bin/env`. The documented
+[`--init-only`](https://code.claude.com/docs/en/cli-reference) path runs Setup and
+SessionStart, then exits without a conversation; no prompt or provider
+credentials are supplied. A literal classic.SessionStart wrapper invokes a
+bounded test helper through actual `$.process.run`. The helper's real Unix
+origin/per-segment writer and captured native parent/root chain can thereby be
+measured while the vendor waits, and source/descriptor cleanup checked on exit.
+The native executable comparison is a test assertion, never production
+executable-name authority. The probe requires an explicit installed vendor path,
+does not install a plugin or change user policy, and is ignored by default.
+This is source-contract evidence only—not stable parent producer admission,
+normal bootstrap activation, shared-server association or token accounting—and
+must not become a pinned-release/live-provider certification prerequisite.
+
 ### Typed Pi lifecycle observations
 
 `agent/external/pi-observation` is restricted to ordinary Pi enrollment. It accepts

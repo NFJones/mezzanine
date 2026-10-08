@@ -491,6 +491,12 @@ advertised as directly loadable there. A pure projector or offline source
 validation MUST NOT imply an installed producer/transport or automatically enable
 unsandboxed mod execution. Transport, loader/policy and native provenance remain
 separate integration responsibilities.
+An opt-in isolated vendor initialization-only fixture MAY measure a curated
+command's native creator/root relationship without a provider conversation.
+Test-only executable comparisons and routing fixtures MUST NOT become runtime
+authority, automatic parent admission, vendor billing or release-certification
+gates. Owned temporary code/environment and exact lifetime cleanup MUST remain
+separate from user plugin installation, policy changes or provider credentials.
 The fixed hidden `mez harness-peer` mode MAY verify same-user kernel peer UID on
 the client's borrowed private socket descriptor before config/runtime startup.
 It MUST do no socket I/O, enrollment, credential handling or vendor launch. This
