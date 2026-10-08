@@ -650,7 +650,19 @@ MUST still reject observed drift or newly pending recovery without creating a
 journal. Read-only holders MUST reject mutation methods without writer ownership.
 An absent selected root MAY currently return its actual I/O error without writes;
 automatic root discovery/creation and normal-directory permission policy remain
-separate unfinished bootstrap UX work, not implied by the inspection primitive.
+separate from the inspection primitive. Root discovery MUST choose optional
+explicit override, then documented vendor directory environment, then applicable
+XDG/HOME default, without cwd/focus/Git/executable probing. Invalid selected
+overrides MUST fail without fallback or shell expansion. User defaults are
+Claude `~/.claude`, Codex `~/.codex`, Copilot `~/.copilot`, Pi `~/.pi/agent`,
+OpenCode `~/.config/opencode` and Cursor `~/.cursor`. OpenCode uses XDG on supported
+Unix platforms; Cursor uses it on Linux/BSD, not macOS. Copilot MUST NOT reuse
+its migrated legacy XDG root. File-only OpenCode config overrides MUST NOT be
+interpreted as plugin directories. Unknown/retired names MUST reject before
+environment/root discovery; absent compiled adapters MUST remain no-mutation
+diagnostics rather than selecting/writing guessed integration roots. Selected
+root creation, default-install/dry-run grammar and directory policy remain
+unfinished UX work, not completed by automatic existing-root selection.
 Owned-file and exact-JSON-entry receipts MUST protect unrelated settings;
 Exact JSON-array-member ownership MUST preserve unrelated members and order,
 replace at the owned position, and uninstall only that member, not the containing

@@ -66,6 +66,10 @@ report unavailable installation. The default or `--plan` inspects a plan;
 `--check` checks owned state. Explicit `--apply`, `--uninstall`, and `--recover`
 are separate intents. The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
+`--root` is an optional override, not a prerequisite: compiled adapters select
+their documented user root from vendor environment/defaults. Those selected roots
+must currently exist; creation and default-install/`--dry-run` migration remain
+unfinished. Root-policy availability does not imply a compiled adapter exists.
 
 The Gemini external harness is retired, with no replacement. Every Gemini
 bootstrap intent is rejected before root access. New canonical `gemini` launch
@@ -268,9 +272,33 @@ not contend with a cooperating publisher. Apply/recovery acquire the private
 nonwaiting lock and recheck physical root identity, pending journal and every
 captured preimage, including unchanged artifacts and receipt. A no-op apply also
 rejects changed observations without writing a journal. Missing explicit roots
-still fail with their actual I/O error and no directory creation; automatic roots,
+still fail with their actual I/O error and no directory creation; root creation,
 default install/`--dry-run` grammar and directory permission-policy migration are
 not completed by this inspection change.
+
+For compiled adapters, `--root` is now optional. The selector uses an explicit
+absolute override first, then the vendor directory variable, then its user default:
+
+| Harness | Directory override | Default root |
+| --- | --- | --- |
+| Claude | `CLAUDE_CONFIG_DIR` | `~/.claude` |
+| Codex | `CODEX_HOME` | `~/.codex` |
+| Copilot | `COPILOT_HOME` | `~/.copilot` |
+| Cursor CLI | `CURSOR_CONFIG_DIR` | `~/.cursor` |
+| Pi | `PI_CODING_AGENT_DIR` | `~/.pi/agent` |
+| OpenCode | `OPENCODE_CONFIG_DIR` | `~/.config/opencode` |
+
+OpenCode honors `XDG_CONFIG_HOME/opencode` on supported Unix platforms; Cursor
+honors `XDG_CONFIG_HOME/cursor` on Linux/BSD, not macOS. Copilot's old XDG location
+is not selected. `OPENCODE_CONFIG` and `OPENCODE_TUI_CONFIG` are file overrides,
+not plugin roots. Selection is literal: missing HOME when needed, empty/relative/
+control/traversal/oversized selected values fail without fallback or `~` expansion.
+Explicit roots need no environment lookup. JSON reports `scope_root` (lossy display
+for non-UTF8 Unix spellings) and fixed `root_source`; actual filesystem path bytes
+remain exact. No vendor probing or cwd/focus/project ancestor discovery occurs.
+The six root policies do not imply six compiled adapters: absent adapter diagnostics
+still perform no root discovery or mutation. Selected roots must currently exist;
+automatic creation and the new default-install/`--dry-run` grammar remain unfinished.
 
 ### Normalized observational hook helper
 

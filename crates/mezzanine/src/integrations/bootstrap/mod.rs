@@ -93,6 +93,8 @@ pub(crate) mod pi_transport;
 mod publication;
 #[cfg(test)]
 mod publication_tests;
+/// Selects documented vendor user roots without I/O or authority inference.
+pub(crate) mod roots;
 /// Rejects ambiguous shared JSON before exact array-member reconciliation.
 use crate::protocol::strict_json;
 
