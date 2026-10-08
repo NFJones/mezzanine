@@ -4,9 +4,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createCuratedLifetime } from "../crates/mezzanine/src/integrations/bootstrap/curated_lifetime.mjs";
 
 const template = readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_client.mjs", import.meta.url), "utf8");
-const render = (instance, replacing) => template.replace(/__MEZ_[A-Z]+__/g, marker => ({
+const render = (instance, replacing, owned = false) => template.replace(/__MEZ_[A-Z]+__/g, marker => ({
+  __MEZ_OWNED__: owned ? "true" : "false", __MEZ_LIFETIME__: owned ? "observerLifetime" : "undefined",
   __MEZ_INTERVAL__: "10000", __MEZ_HELPER__: JSON.stringify("/owned/mez"),
   __MEZ_INSTANCE__: JSON.stringify(instance), __MEZ_REPLACING__: replacing ? "true" : "false",
   __MEZ_PREDECESSOR__: replacing ? "previousObserver" : "undefined",
@@ -14,6 +16,7 @@ const render = (instance, replacing) => template.replace(/__MEZ_[A-Z]+__/g, mark
 const source = render("mez-curated-client-1", false);
 const handler = new (Object.getPrototypeOf(async function () {}).constructor)("$", "e", "next", `const result = await next(e); ${source}\nreturn result;`);
 const successorHandler = new (Object.getPrototypeOf(async function () {}).constructor)("$", "e", "next", "previousObserver", `const result = await next(e); ${render("module-b", true)}\nreturn result;`);
+const ownedHandler = new (Object.getPrototypeOf(async function () {}).constructor)("$", "e", "next", "observerLifetime", `const result = await next(e); ${render("mez-curated-client-1", false, true)}\nreturn result;`);
 const event = () => ({ session_id: "session-a", source: "startup", prompt: "private-prompt", transcript_path: "/private/transcript" });
 const registration = () => ({ protocol: "external-agent/1", registered: true, controls: [],
   agent_id: "external-a", generation: 7, observer_witness: "a".repeat(64), run_id: 1,
@@ -37,6 +40,80 @@ function fixture(first = registration(), proof) {
   };
   return { calls, timers, sdk };
 }
+
+/** Owned mode cannot degrade to unowned admission when its scope is missing.
+ * Downstream vendor rejection still propagates unchanged before telemetry. */
+test("owned curated source requires its owner and preserves downstream errors", async () => {
+  const f = fixture();
+  const result = {};
+  assert.equal(await ownedHandler(f.sdk, event(), async () => result, undefined), result);
+  assert.equal(f.calls.length, 0);
+  const error = new Error("vendor error");
+  await assert.rejects(ownedHandler(f.sdk, event(), async () => { throw error; }, createCuratedLifetime()), caught => caught === error);
+  assert.equal(f.calls.length, 0);
+});
+
+/** Caller-retained ownership blocks duplicate admission and guards queued timer
+ * callbacks after stop, preserving each middleware result without extra I/O. */
+test("owned curated source bounds duplicate admission and stopped callbacks", async () => {
+  const owner = createCuratedLifetime();
+  const f = fixture();
+  let cancelled = 0;
+  f.sdk.clock.every = (delay, callback) => { f.timers.push({ delay, callback }); return { cancel() { cancelled++; } }; };
+  const result = {};
+  assert.equal(await ownedHandler(f.sdk, event(), async () => result, owner), result);
+  assert.equal(await ownedHandler(f.sdk, event(), async () => result, owner), result);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.timers.length, 1);
+  owner.stop();
+  await f.timers[0].callback();
+  assert.equal(f.calls.length, 1);
+  assert.equal(cancelled, 1);
+  assert.equal(owner.receipt, undefined);
+});
+
+/** Stopping while helper response is withheld prevents valid late registration
+ * from acquiring a timer or reviving local state; native retirement is separate. */
+test("owned curated source rejects late admission after stop", async () => {
+  const owner = createCuratedLifetime();
+  const f = fixture();
+  const run = f.sdk.process.run;
+  let release;
+  f.sdk.process.run = (argv, options) => new Promise(resolve => { release = () => run(argv, options).then(resolve); });
+  const result = {};
+  const pending = ownedHandler(f.sdk, event(), async () => result, owner);
+  await Promise.resolve();
+  owner.stop();
+  release();
+  assert.equal(await pending, result);
+  assert.equal(f.timers.length, 0);
+  assert.equal(owner.receipt, undefined);
+  await ownedHandler(f.sdk, event(), async () => result, owner);
+  assert.equal(f.calls.length, 1);
+});
+
+/** SDK timer loss/late attachment cannot leave helper-launch authority behind.
+ * A lost handle may be impossible to cancel, but queued callbacks remain inert. */
+test("owned curated source stops after timer creation or attachment failure", async () => {
+  for (const mode of ["throw", "late", "invalid"]) {
+    const owner = createCuratedLifetime();
+    const f = fixture();
+    let callback;
+    let cancelled = 0;
+    f.sdk.clock.every = (_delay, fn) => {
+      callback = fn;
+      if (mode === "throw") throw new Error("unavailable");
+      if (mode === "late") owner.stop();
+      return mode === "invalid" ? {} : { cancel() { cancelled++; } };
+    };
+    const result = {};
+    assert.equal(await ownedHandler(f.sdk, event(), async () => result, owner), result);
+    await callback();
+    assert.equal(f.calls.length, 1);
+    assert.equal(owner.receipt, undefined);
+    assert.equal(cancelled, mode === "late" ? 1 : 0);
+  }
+});
 
 /** Handoff requires the actual prior public identity and a matching same-run
  * successor receipt. Old and new callbacks hold disjoint immutable selectors,

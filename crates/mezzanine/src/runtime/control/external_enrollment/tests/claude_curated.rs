@@ -169,7 +169,7 @@ fn external_claude_curated_command_helper_fixture() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY; isolated --init-only source probe"]
 async fn external_claude_curated_command_native_parent_is_local_pane_descendant() {
-    qualify_curated_probe(false, 0, false, false).await;
+    qualify_curated_probe(false, 0, false, false, false).await;
 }
 
 /// Real curated argv API -> built fixed source helper -> current-writer Unix
@@ -178,7 +178,7 @@ async fn external_claude_curated_command_native_parent_is_local_pane_descendant(
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated source transport"]
 async fn external_claude_curated_builtin_source_helper_registers_actual_creator() {
-    qualify_curated_probe(true, 0, false, false).await;
+    qualify_curated_probe(true, 0, false, false, false).await;
 }
 
 /// The actual curated clock runs outside conversation callbacks and emits only
@@ -188,7 +188,7 @@ async fn external_claude_curated_builtin_source_helper_registers_actual_creator(
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated clock proof"]
 async fn external_claude_curated_clock_helper_proves_original_observer_epoch() {
-    qualify_curated_probe(true, 1, false, false).await;
+    qualify_curated_probe(true, 1, false, false, false).await;
 }
 
 /// Repeated actual SDK timer callbacks must advance the same original observer
@@ -197,7 +197,7 @@ async fn external_claude_curated_clock_helper_proves_original_observer_epoch() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated recurring proof"]
 async fn external_claude_curated_clock_every_advances_original_observer_epoch() {
-    qualify_curated_probe(true, 3, false, false).await;
+    qualify_curated_probe(true, 3, false, false, false).await;
 }
 
 /// An ordinary SDK-like Node producer returns from SessionStart before timers
@@ -207,7 +207,7 @@ async fn external_claude_curated_clock_every_advances_original_observer_epoch() 
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and built mez; ordinary post-return proof"]
 async fn external_curated_ordinary_node_clock_survives_callback_return() {
-    qualify_curated_probe(true, 3, true, false).await;
+    qualify_curated_probe(true, 3, true, false, false).await;
 }
 
 /// Actual SDK argv admission supplies the captured predecessor, not an injected
@@ -217,13 +217,38 @@ async fn external_curated_ordinary_node_clock_survives_callback_return() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and freshly built mez; public handoff"]
 async fn external_claude_curated_fixed_helper_handoff_uses_actual_public_predecessor() {
-    qualify_curated_probe(true, 3, false, true).await;
+    qualify_curated_probe(true, 3, false, true, false).await;
+}
+
+/// The actual SDK imports the pure owner, suppresses a duplicate source call,
+/// and delivers only one original epoch's recurring proofs. The caller stops
+/// its exact timer after the hold helper completes; no provider is started.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; owned SDK timer"]
+async fn external_claude_curated_owned_source_has_one_admission_and_timer() {
+    qualify_curated_probe(true, 3, false, false, true).await;
+}
+
+/// A separately owned successor keeps the actual public predecessor and native
+/// run while duplicate callback work remains inert. This proves SDK import and
+/// local cancellation, not cross-module persistent storage or deployed reload.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; owned SDK successor"]
+async fn external_claude_curated_owned_successor_pins_one_native_epoch() {
+    qualify_curated_probe(true, 3, false, true, true).await;
 }
 
 /// Shared owned temporary source fixture for provenance-only and real transport
 /// qualification. Actor shutdown returns the owned runtime before source exit
 /// assertions, preserving pane cleanup and exact native creator inspection.
-async fn qualify_curated_probe(admission: bool, proofs: u64, node_shim: bool, handoff: bool) {
+async fn qualify_curated_probe(
+    admission: bool,
+    proofs: u64,
+    node_shim: bool,
+    handoff: bool,
+    owned: bool,
+) {
+    assert!(!owned || (admission && proofs > 1 && !node_shim));
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
         serve_async_runtime_control_connection_loop,
@@ -313,17 +338,28 @@ async fn qualify_curated_probe(admission: bool, proofs: u64, node_shim: bool, ha
         assert!(helper.is_file());
     }
     let source_call = if handoff {
-        let successor =
+        let successor = if owned {
+            crate::integrations::bootstrap::curated_client::session_start_owned_successor_body(
+                &helper,
+                1000,
+                "source-probe-module-b",
+            )
+            .unwrap()
+        } else {
             crate::integrations::bootstrap::curated_client::session_start_successor_body(
                 &helper,
                 1000,
                 "source-probe-module-b",
             )
-            .unwrap();
+            .unwrap()
+        };
         let helper = serde_json::to_string(helper.to_str().unwrap()).unwrap();
         format!(
             "const admitted = await $.process.run([{helper}, 'harness-source', JSON.stringify({{ external_session_id: e.session_id, observer_instance: 'source-probe-module-a', session_boundary: e.source }})], {{ timeoutMs: 3000 }}); const previousObserver = Object.freeze(JSON.parse(admitted.stdout)); if (previousObserver.registered !== true || 'launch_token' in previousObserver || previousObserver.controls.length !== 0) throw new Error('original source unavailable'); {successor} const stale = await $.process.run([{helper}, 'harness-source', JSON.stringify({{ operation: 'curated-heartbeat', external_session_id: previousObserver.external_session_id, generation: previousObserver.generation, observer_witness: previousObserver.observer_witness, sequence: 1 }})], {{ timeoutMs: 3000 }}); if (JSON.parse(stale.stdout).observed !== false) throw new Error('stale epoch remained authoritative');"
         )
+    } else if owned {
+        crate::integrations::bootstrap::curated_client::session_start_owned_body(&helper, 1000)
+            .unwrap()
     } else if proofs > 1 {
         crate::integrations::bootstrap::curated_client::session_start_body(&helper, 1000).unwrap()
     } else if admission {
@@ -351,8 +387,37 @@ async fn qualify_curated_probe(admission: bool, proofs: u64, node_shim: bool, ha
             serde_json::to_string(path.to_str().unwrap()).unwrap()
         )
     };
+    let (import, create, duplicate, stop) = if owned {
+        std::fs::write(
+            directory.join("plugin/hooks/curated_lifetime.mjs"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/integrations/bootstrap/curated_lifetime.mjs"
+            )),
+        )
+        .unwrap();
+        let duplicate = if handoff {
+            crate::integrations::bootstrap::curated_client::session_start_owned_successor_body(
+                &helper,
+                1000,
+                "source-probe-module-b",
+            )
+            .unwrap()
+        } else {
+            crate::integrations::bootstrap::curated_client::session_start_owned_body(&helper, 1000)
+                .unwrap()
+        };
+        (
+            "import { createCuratedLifetime } from './curated_lifetime.mjs';",
+            "const observerLifetime = createCuratedLifetime();",
+            duplicate,
+            "observerLifetime.stop(); if (observerLifetime.receipt !== undefined) throw new Error('observer lifetime remained active');",
+        )
+    } else {
+        ("", "", String::new(), "")
+    };
     let source = format!(
-        "export function register(on) {{ on('classic.SessionStart', async ($, e, next) => {{ const result = await next(e); {source_call} {schedule} {hold} return result; }}); }}\n"
+        "{import} export function register(on) {{ on('classic.SessionStart', async ($, e, next) => {{ {create} const result = await next(e); {source_call} {duplicate} {schedule} {hold} {stop} return result; }}); }}\n"
     );
     std::fs::write(directory.join("plugin/hooks/register.mjs"), source).unwrap();
     let quote = |path: &std::path::Path| {

@@ -4,7 +4,13 @@
  * result remains untouched. Timer loss is telemetry loss, not vendor failure.
  * Reload stops SDK timers. Explicit handoff keeps one native run, never revives
  * a retired namespace or falls back to admission when prior evidence is lost. */
+{
+let lifetime;
+let ticket;
 try {
+  const owned = __MEZ_OWNED__;
+  lifetime = __MEZ_LIFETIME__;
+  if (owned && !lifetime) throw new Error("observer lifetime unavailable");
   const identifier = value => typeof value === "string" && value.length > 0
     && value.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(value);
   const positive = value => Number.isSafeInteger(value) && value > 0;
@@ -24,6 +30,10 @@ try {
         && identifier(previous.agent_id)))) {
     const declaration = { external_session_id: session, observer_instance: instance, session_boundary: boundary };
     if (replacing) declaration.predecessor_generation = previous.generation;
+    if (owned) {
+      ticket = lifetime.begin(session);
+      if (!ticket) throw new Error("observer lifetime unavailable");
+    }
     const response = await $.process.run([__MEZ_HELPER__, "harness-source", JSON.stringify(declaration)], { timeoutMs: 3000 });
     if (response.exitCode === 0 && typeof response.stdout === "string" && response.stdout.length <= 4096) {
       const receipt = JSON.parse(response.stdout);
@@ -46,12 +56,16 @@ try {
           && (!replacing || (receipt.generation > previous.generation
             && receipt.observer_witness !== previous.observer_witness
             && receipt.run_id === previous.run_id && receipt.agent_id === previous.agent_id
-            && receipt.observer_epoch === previous.observer_epoch + 1))) {
+            && receipt.observer_epoch === previous.observer_epoch + 1))
+          && (!owned || lifetime.publish(ticket, { external_session_id: receipt.external_session_id,
+            generation: receipt.generation, observer_witness: receipt.observer_witness,
+            run_id: receipt.run_id, observer_epoch: receipt.observer_epoch, agent_id: receipt.agent_id }))) {
         const original = Object.freeze({ external_session_id: receipt.external_session_id,
           generation: receipt.generation, observer_witness: receipt.observer_witness });
         let sequence = 0;
         let busy = false;
-        $.clock.every(__MEZ_INTERVAL__, async () => {
+        const timer = $.clock.every(__MEZ_INTERVAL__, async () => {
+          if (owned && !lifetime.current(ticket)) return;
           if (busy || !Number.isSafeInteger(sequence + 1)) return;
           busy = true;
           try {
@@ -70,7 +84,14 @@ try {
           } catch { /* unavailable telemetry cannot change vendor behavior */ }
           finally { busy = false; }
         });
+        if (owned && !lifetime.attachTimer(ticket, timer)) lifetime.stop();
       }
     }
   }
-} catch { /* loading/policy/transport failures remain observationally neutral */ }
+} catch {
+  // Failure after publication may have created a timer whose handle was lost.
+  // Stop before any queued callback can launch another helper, not re-admit.
+  try { if (ticket && lifetime.current(ticket)) lifetime.stop(); } catch { /* telemetry loss */ }
+}
+finally { try { if (ticket) lifetime.release(ticket); } catch { /* telemetry loss */ } }
+}

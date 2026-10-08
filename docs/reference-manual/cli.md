@@ -369,6 +369,15 @@ Missing/incompatible prior evidence never falls back to initial admission. New
 timer closures pin only the successor selectors and start their own sequence;
 old callbacks cannot adopt them. The caller still owns module/timer teardown and
 handoff persistence; this does not install an automatic reload mechanism.
+Explicit owned variants also require a retained `observerLifetime` from the pure
+one-slot owner. It holds one pending exact ticket and one active immutable public
+receipt/timer, with no queue. Duplicate calls cannot admit or schedule twice;
+stop is permanent, clears public state before cancelling the exact timer, and
+queued callbacks check their original ticket before launching a helper. Late
+admission/attachment, reentrant teardown and cancellation errors remain neutral.
+Already-started helpers may still settle under native daemon fences; local stop
+does not retire a namespace or declare the vendor dead. The owner does not persist
+state or install an automatic module/session teardown policy.
 Separate ordinary Node SDK-shim/native-actor coverage does test proofs after the
 callback returns, bounded simulated freshness loss with a live producer, and
 native producer death despite a surviving pane shell. It does not promote that

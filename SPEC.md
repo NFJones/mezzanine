@@ -384,6 +384,21 @@ Missing prior identity or incompatible receipt MUST NOT fall back to initial
 admission or newest lookup. Successor callbacks MUST pin only their own immutable
 selectors and sequence; old callbacks MUST NOT acquire successor scope. Module
 teardown/persistence and installed reload/session policy remain adapter work.
+Explicit owned source variants MUST require the caller-retained lifetime owner,
+not silently fall back to unowned scheduling. The owner MUST bound one pending
+admission and one active immutable public identity/timer without a queue, fence
+completion by exact ticket identity, and recheck ownership after metadata or
+resource inspection. Copied/foreign/released timer tickets MUST reject before
+inspecting a resource or invoking its cancellation. Only the exact stopped ticket may clean up its own
+late creation result; closed-ticket/handle cleanup evidence MUST remain one-slot.
+Permanent stop MUST close ownership before cancellation, reject late publication
+and attachment, and guard queued callbacks before helper launch.
+Cancellation failure MUST remain neutral and MUST NOT restore the owner. Timer
+creation/attachment failure after publication MUST stop future local scheduling.
+Only the owned timer cancellation method may be invoked; no SDK/control/credentials
+are retained in public metadata. Stop MUST NOT claim daemon retirement, vendor
+process death, durable accounting or cancellation of already-started helper work.
+Any such work remains subject to existing native/epoch/deadline/lease fences.
 Actual SDK/helper deployment, observer/session continuity, vendor policy/disabled
 conditions, shared-server mapping, durable accounting and macOS remain separate
 unfinished integration work, not completion implied by this admission primitive.

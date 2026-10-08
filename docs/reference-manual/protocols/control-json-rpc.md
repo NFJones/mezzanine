@@ -718,6 +718,17 @@ recurring successor proofs on one native run at epoch2. No predecessor generatio
 PID, bearer token or client initialization is injected. It still holds SessionStart
 open: this is literal SDK/helper handoff qualification, not actual module reload
 or installed/post-start vendor lifetime qualification.
+Two additional actual SDK fixtures import the one-slot lifetime owner and use
+owned initial/successor source variants. Repeating the source call produces no
+second admission/timer; three proofs still belong to one native run/epoch, then
+the caller stops its exact SDK timer and clears its public owner receipt. These
+qualify SDK import and local ownership/cancellation, not an installed reload or
+persistent module policy. The owner keeps one exact pending ticket and one active
+public receipt/timer, rechecks after projection/inspection, and closes before
+cancellation so late/queued work cannot reopen it or schedule more helpers.
+Throws/rejected cancellation and missing owner scope stay neutral. Stop is not
+daemon retirement or a process-death declaration; already-started helper work can
+still settle, subject to native generation/writer/deadline/lease fences.
 The init-only fixture deliberately holds SessionStart open while timers run:
 this proves the actual recurring API and daemon renewal, not timers surviving
 SessionStart return, a deployed adapter, module reload/new/resume handoff, full60s

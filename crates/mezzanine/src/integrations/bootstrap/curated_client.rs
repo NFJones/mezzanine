@@ -16,7 +16,7 @@ use crate::error::{MezError, Result};
 /// 30s proof window. The caller must invoke `next(e)` before this body and return
 /// its unchanged result; helper failures are caught inside the rendered source.
 pub(crate) fn session_start_body(helper: &std::path::Path, interval_ms: u64) -> Result<String> {
-    render_body(helper, interval_ms, "mez-curated-client-1", false)
+    render_body(helper, interval_ms, "mez-curated-client-1", false, false)
 }
 
 /// Renders an explicit same-run handoff in a scope containing `previousObserver`,
@@ -28,7 +28,27 @@ pub(crate) fn session_start_successor_body(
     interval_ms: u64,
     instance: &str,
 ) -> Result<String> {
-    render_body(helper, interval_ms, instance, true)
+    render_body(helper, interval_ms, instance, true, false)
+}
+
+/// Renders initial source bound to the caller-retained `observerLifetime` pure
+/// owner. Duplicate/late admissions cannot publish or schedule another timer;
+/// queued callbacks require the original ticket to remain active.
+pub(crate) fn session_start_owned_body(
+    helper: &std::path::Path,
+    interval_ms: u64,
+) -> Result<String> {
+    render_body(helper, interval_ms, "mez-curated-client-1", false, true)
+}
+
+/// Renders successor source using both fixed `previousObserver` and fresh
+/// `observerLifetime` scopes. Old owners must be stopped, never rebound.
+pub(crate) fn session_start_owned_successor_body(
+    helper: &std::path::Path,
+    interval_ms: u64,
+    instance: &str,
+) -> Result<String> {
+    render_body(helper, interval_ms, instance, true, true)
 }
 
 /// Projects fixed literals exactly once so marker-like filenames or instance
@@ -38,6 +58,7 @@ fn render_body(
     interval_ms: u64,
     instance: &str,
     replacing: bool,
+    owned: bool,
 ) -> Result<String> {
     let path = helper
         .to_str()
@@ -64,6 +85,15 @@ fn render_body(
     let instance = serde_json::to_string(instance)
         .map_err(|_| MezError::invalid_args("curated observer instance unavailable"))?;
     let literals = [
+        ("__MEZ_OWNED__", if owned { "true" } else { "false" }),
+        (
+            "__MEZ_LIFETIME__",
+            if owned {
+                "observerLifetime"
+            } else {
+                "undefined"
+            },
+        ),
         ("__MEZ_INTERVAL__", period.as_str()),
         ("__MEZ_HELPER__", quoted.as_str()),
         ("__MEZ_INSTANCE__", instance.as_str()),
@@ -129,6 +159,23 @@ mod tests {
         assert!(source.contains("const replacing = true;"));
         for instance in ["", "content with spaces", "a\n", "\"source"] {
             assert!(session_start_successor_body(helper, 1000, instance).is_err());
+        }
+    }
+
+    /// Explicit owned variants bind only their fixed caller owner scope; missing
+    /// scope cannot silently fall back to unowned scheduling or code injection.
+    #[test]
+    fn curated_owned_source_rendering_keeps_lifetime_scope_explicit() {
+        let helper = std::path::Path::new("/owned/mez");
+        for source in [
+            session_start_owned_body(helper, 1000).unwrap(),
+            session_start_owned_successor_body(helper, 1000, "module-b").unwrap(),
+        ] {
+            assert!(source.contains("const owned = true;"));
+            assert!(source.contains("lifetime = observerLifetime;"));
+            assert!(source.contains("lifetime.begin(session)"));
+            assert!(source.contains("lifetime.current(ticket)"));
+            assert!(!source.contains("__MEZ_"));
         }
     }
 }
