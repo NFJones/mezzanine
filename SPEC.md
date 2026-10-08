@@ -399,6 +399,21 @@ Only the owned timer cancellation method may be invoked; no SDK/control/credenti
 are retained in public metadata. Stop MUST NOT claim daemon retirement, vendor
 process death, durable accounting or cancellation of already-started helper work.
 Any such work remains subject to existing native/epoch/deadline/lease fences.
+The literal module entry MUST register only main-session classic start/end
+observation, using metadata-only projection and unchanged literal `next(e)`.
+It MUST retain owner state across callbacks, capture start acceptance order before
+downstream waits, and skip stale completed starts. Changed vendor session IDs MAY
+replace local owners only after downstream success; old owners MUST stop locally.
+Matching end MUST capture the exact active or provisional owner before waiting,
+so delayed end cannot stop a newer session and end-before-start completion cannot
+admit late. Child/foreign/unknown and compact-only start events MUST be inert.
+Same-ID duplicate starts MUST coalesce, and a stopped same-ID owner MUST NOT
+implicitly restart. Session-ID declarations are not native authority or durable
+usage identity. Ended-ID fences MUST retain up to128 local identities without
+eviction; exhaustion MUST withhold new admission rather than forget a stopped
+identity. Pending same-ID starts MUST coalesce by exact owner, and stale/failing
+callback cleanup MUST preserve a newer callback sharing that pending owner.
+Reload/persistence and same-ID transition policy remain unfinished.
 Actual SDK/helper deployment, observer/session continuity, vendor policy/disabled
 conditions, shared-server mapping, durable accounting and macOS remain separate
 unfinished integration work, not completion implied by this admission primitive.

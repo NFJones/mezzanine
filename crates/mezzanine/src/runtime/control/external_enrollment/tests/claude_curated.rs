@@ -238,6 +238,24 @@ async fn external_claude_curated_owned_successor_pins_one_native_epoch() {
     qualify_curated_probe(true, 3, false, true, true).await;
 }
 
+/// Separate actual classic.Setup and classic.SessionStart callbacks share the
+/// exact pure owner/ticket across SDK frames. Setup reserves only inert local
+/// metadata; genuine SessionStart alone admits the native producer and proofs.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; module-scoped owner"]
+async fn external_claude_curated_module_owner_survives_separate_sdk_callbacks() {
+    qualify_curated_probe(true, 4, false, false, true).await;
+}
+
+/// The production literal module imports both owned siblings and admits only
+/// an actual main SessionStart. Its module-retained owner drives native proofs;
+/// the injected test gate only keeps init-only alive, not enrollment authority.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; literal module entry"]
+async fn external_claude_curated_literal_module_owns_actual_main_session() {
+    qualify_curated_probe(true, 5, false, false, true).await;
+}
+
 /// Shared owned temporary source fixture for provenance-only and real transport
 /// qualification. Actor shutdown returns the owned runtime before source exit
 /// assertions, preserving pane cleanup and exact native creator inspection.
@@ -416,9 +434,32 @@ async fn qualify_curated_probe(
     } else {
         ("", "", String::new(), "")
     };
-    let source = format!(
-        "{import} export function register(on) {{ on('classic.SessionStart', async ($, e, next) => {{ {create} const result = await next(e); {source_call} {duplicate} {schedule} {hold} {stop} return result; }}); }}\n"
-    );
+    let source = if owned && proofs == 5 {
+        std::fs::write(
+            directory.join("plugin/hooks/claude_observer.mjs"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/integrations/bootstrap/claude_observer.mjs"
+            )),
+        )
+        .unwrap();
+        let module =
+            crate::integrations::bootstrap::curated_client::module_source(&helper, 1000).unwrap();
+        let marker = "    return result;\n  });\n\n  on('classic.SessionEnd'";
+        assert_eq!(module.matches(marker).count(), 1);
+        module.replace(
+            marker,
+            &format!("    {hold}\n    return result;\n  }});\n\n  on('classic.SessionEnd'"),
+        )
+    } else if owned && proofs == 4 {
+        format!(
+            "{import} export function register(on) {{ {create} let setupTicket; on('classic.Setup', async ($, e, next) => {{ const result = await next(e); setupTicket = observerLifetime.begin('module-scope-probe'); if (!setupTicket) throw new Error('module scope unavailable'); return result; }}); on('classic.SessionStart', async ($, e, next) => {{ const result = await next(e); if (observerLifetime.begin('module-scope-probe') !== undefined || !observerLifetime.release(setupTicket)) throw new Error('module scope lost across callbacks'); {source_call} {duplicate} {schedule} {hold} {stop} return result; }}); }}\n"
+        )
+    } else {
+        format!(
+            "{import} export function register(on) {{ on('classic.SessionStart', async ($, e, next) => {{ {create} const result = await next(e); {source_call} {duplicate} {schedule} {hold} {stop} return result; }}); }}\n"
+        )
+    };
     std::fs::write(directory.join("plugin/hooks/register.mjs"), source).unwrap();
     let quote = |path: &std::path::Path| {
         shlex::try_quote(path.to_str().unwrap())
@@ -573,6 +614,10 @@ async fn qualify_curated_probe(
         assert!(owner.observers.is_empty());
         assert_eq!(owner.has_live_observer(), proofs > 0);
         assert_eq!(binding.harness, "claude");
+        if owned && proofs == 5 {
+            assert_eq!(owner.epoch, 1);
+            assert_eq!(owner.instance, "mez-curated-client-1");
+        }
         if handoff {
             assert_eq!(owner.epoch, 2);
             assert_eq!(owner.instances.len(), 2);

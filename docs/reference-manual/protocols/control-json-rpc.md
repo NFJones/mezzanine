@@ -729,6 +729,17 @@ cancellation so late/queued work cannot reopen it or schedule more helpers.
 Throws/rejected cancellation and missing owner scope stay neutral. Stop is not
 daemon retirement or a process-death declaration; already-started helper work can
 still settle, subject to native generation/writer/deadline/lease fences.
+The literal module entry adds only metadata-projected main classic start/end
+wrappers. A real SDK cross-callback probe reserves/releases one exact pure ticket
+between Setup and SessionStart without allocating authority during Setup; a second
+fixture loads the production rendered entry/siblings and delivers five actual
+native helper proofs. A test-only hold keeps init-only alive and supplies no
+session/PID/token/enrollment bypass. Module lifecycle regressions cover changed-ID
+replacement, delayed old starts/ends, matching end before start or helper completion,
+child/foreign/unknown filtering and exact results/errors. Native session identity
+and billing still require their independent contracts; same-ID reset/reload and
+persistence are not inferred. These fixtures do not certify installed, post-start
+vendor lifetime or actual clear/resume/fork operation across supported releases.
 The init-only fixture deliberately holds SessionStart open while timers run:
 this proves the actual recurring API and daemon renewal, not timers surviving
 SessionStart return, a deployed adapter, module reload/new/resume handoff, full60s

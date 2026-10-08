@@ -31,6 +31,14 @@ pub(crate) fn session_start_successor_body(
     render_body(helper, interval_ms, instance, true, false)
 }
 
+/// Builds the literal module entry using fixed sibling imports and owned source.
+/// It installs/enables nothing, retains no credentials, and neither persists nor
+/// fabricates a predecessor across module reload or same-ID session restart.
+pub(crate) fn module_source(helper: &std::path::Path, interval_ms: u64) -> Result<String> {
+    let body = session_start_owned_body(helper, interval_ms)?;
+    Ok(include_str!("curated_module.mjs").replace("__MEZ_SOURCE_BODY__", &body))
+}
+
 /// Renders initial source bound to the caller-retained `observerLifetime` pure
 /// owner. Duplicate/late admissions cannot publish or schedule another timer;
 /// queued callbacks require the original ticket to remain active.
@@ -177,5 +185,19 @@ mod tests {
             assert!(source.contains("lifetime.current(ticket)"));
             assert!(!source.contains("__MEZ_"));
         }
+    }
+
+    /// Module source composes only fixed literal wrappers/imports with the
+    /// validated helper body; marker-like helper data is not substituted again.
+    #[test]
+    fn curated_module_rendering_keeps_fixed_callbacks_and_helper_data() {
+        let source =
+            module_source(std::path::Path::new("/owned/__MEZ_SOURCE_BODY__"), 1000).unwrap();
+        assert_eq!(source.matches("on('classic.SessionStart'").count(), 1);
+        assert_eq!(source.matches("on('classic.SessionEnd'").count(), 1);
+        assert!(!source.contains("on('session.start'"));
+        assert!(source.contains("lifetime = observerLifetime;"));
+        assert_eq!(source.matches("\"/owned/__MEZ_SOURCE_BODY__\"").count(), 2);
+        assert!(!source.contains("store.get"));
     }
 }

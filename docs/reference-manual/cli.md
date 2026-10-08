@@ -378,6 +378,19 @@ admission/attachment, reentrant teardown and cancellation errors remain neutral.
 Already-started helpers may still settle under native daemon fences; local stop
 does not retire a namespace or declare the vendor dead. The owner does not persist
 state or install an automatic module/session teardown policy.
+The separately rendered literal module retains that owner across main classic
+SessionStart/SessionEnd callbacks, projects only known inert metadata, filters
+child/foreign events and preserves exact middleware results/errors. Start order
+is captured before downstream waits; matching end captures its exact active or
+provisional owner rather than finding a newest observer afterward. Different
+vendor session IDs stop old local work and use a fresh owner after successful
+downstream start. Same-ID duplicates coalesce, and same-ID end/restart stays
+unavailable rather than reviving an owner. This is source/SDK qualification, not
+bootstrap installation, reload persistence or durable usage identity.
+Ended main IDs remain fenced in a runtime-only set capped at128; exhaustion
+withholds new admission without eviction. Pending same-ID callbacks share the
+exact owner, including after end-before-bind, and stale/failing cleanup cannot
+stop that owner while a newer pending callback still retains it.
 Separate ordinary Node SDK-shim/native-actor coverage does test proofs after the
 callback returns, bounded simulated freshness loss with a live producer, and
 native producer death despite a surviving pane shell. It does not promote that
