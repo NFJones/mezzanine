@@ -93,9 +93,13 @@ impl Drop for AncestryReservation {
     }
 }
 
-/// Exact parent lifetimes through the pane root; the socket owns origin lifetime.
+/// Exact retained lifetimes through the pane root. Socket-backed witnesses rely
+/// on their original origin owner; parent-backed witnesses own the source too.
 #[derive(Debug)]
 pub(crate) struct UnixAncestryWitness {
+    /// Parent-backed capture owns an exact duplicate of the verified source;
+    /// socket-backed capture keeps source lifetime in its original origin owner.
+    source: Option<UnixParentProcess>,
     parents: Vec<UnixParentProcess>,
     // Keep this last so descriptor destruction precedes budget release.
     _reservation: AncestryReservation,
@@ -105,7 +109,9 @@ impl UnixAncestryWitness {
     /// Nonblocking kernel polls only. Any retained ancestor exit invalidates the
     /// whole relationship even if root, producer and immediate parent survive.
     pub(crate) fn is_live(&self) -> bool {
-        !self.parents.is_empty() && self.parents.iter().all(UnixParentProcess::is_live)
+        self.source.as_ref().is_none_or(UnixParentProcess::is_live)
+            && !self.parents.is_empty()
+            && self.parents.iter().all(UnixParentProcess::is_live)
     }
 }
 
@@ -121,62 +127,7 @@ impl UnixOriginProcess {
     ) -> io::Result<UnixAncestryWitness> {
         #[cfg(target_os = "linux")]
         {
-            let started = Instant::now();
-            let origin = self.reobserve()?;
-            if origin.process_id == root.process_id {
-                return Err(unavailable());
-            }
-            let chain =
-                mez_mux::process::process_ancestry(origin, root).map_err(|_| unavailable())?;
-            if started.elapsed() >= CAPTURE_BUDGET {
-                return Err(unavailable());
-            }
-            let reservation =
-                budget.reserve(chain.chain.len().checked_sub(1).ok_or_else(unavailable)?)?;
-            let mut parents: Vec<UnixParentProcess> = Vec::new();
-            for expected in chain.chain.iter().skip(1) {
-                let (identity, lifetime) = parent::capture_parent_with(
-                    self.uid(),
-                    || {
-                        parents
-                            .last()
-                            .map_or_else(|| self.reobserve(), UnixParentProcess::reobserve)
-                    },
-                    |pid| {
-                        mez_mux::process::process_parent_identity_for_pid(pid)
-                            .ok_or_else(unavailable)
-                    },
-                    parent::parent_uid,
-                    parent::open_parent,
-                    super::require_live_origin,
-                    || started.elapsed() >= CAPTURE_BUDGET,
-                )?;
-                if identity != *expected {
-                    return Err(unavailable());
-                }
-                parents.push(UnixParentProcess {
-                    uid: self.uid(),
-                    identity,
-                    lifetime,
-                });
-            }
-            // Root-first native reobservation brackets all retained descriptors,
-            // then the original socket fence checks the producer once more.
-            for retained in parents.iter().rev() {
-                retained.reobserve()?;
-                if started.elapsed() >= CAPTURE_BUDGET {
-                    return Err(unavailable());
-                }
-            }
-            self.reobserve()?;
-            let witness = UnixAncestryWitness {
-                parents,
-                _reservation: reservation,
-            };
-            if !witness.is_live() || started.elapsed() >= CAPTURE_BUDGET {
-                return Err(unavailable());
-            }
-            Ok(witness)
+            capture_retained_ancestry(self.uid(), || self.reobserve(), None, root, budget)
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -189,9 +140,191 @@ impl UnixOriginProcess {
     }
 }
 
+impl UnixParentProcess {
+    /// Captures this already-native-qualified parent's source/root chain off
+    /// actor, independent of helper survival. The original descriptor is never
+    /// reopened numerically; a CLOEXEC duplicate and every ancestor share the
+    /// finite budget. No sender/vendor/client/session or enrollment authority is
+    /// inferred. Source-as-root, changed/unreadable evidence or unsupported OS fail.
+    #[allow(
+        dead_code,
+        reason = "source-qualified parent-backed consumer is unfinished"
+    )]
+    pub(crate) fn capture_ancestry(
+        &self,
+        root: ProcessParentIdentity,
+        budget: &Arc<UnixAncestryBudget>,
+    ) -> io::Result<UnixAncestryWitness> {
+        #[cfg(target_os = "linux")]
+        {
+            capture_retained_ancestry(self.uid(), || self.reobserve(), Some(self), root, budget)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (root, budget);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Unix parent ancestry capture unsupported",
+            ))
+        }
+    }
+}
+
+/// Shares one bracketed native walk between two already-retained evidence owners.
+/// UID/reobservation closures are code-owned, not payload claims. Source duplication
+/// is charged before opening and preserves the exact original kernel process.
+#[cfg(target_os = "linux")]
+fn capture_retained_ancestry(
+    uid: u32,
+    observe: impl Fn() -> io::Result<ProcessParentIdentity>,
+    retained_source: Option<&UnixParentProcess>,
+    root: ProcessParentIdentity,
+    budget: &Arc<UnixAncestryBudget>,
+) -> io::Result<UnixAncestryWitness> {
+    let started = Instant::now();
+    let origin = observe()?;
+    if origin.process_id == root.process_id {
+        return Err(unavailable());
+    }
+    let chain = mez_mux::process::process_ancestry(origin, root).map_err(|_| unavailable())?;
+    if started.elapsed() >= CAPTURE_BUDGET {
+        return Err(unavailable());
+    }
+    let count = chain
+        .chain
+        .len()
+        .checked_sub(1)
+        .and_then(|count| count.checked_add(usize::from(retained_source.is_some())))
+        .ok_or_else(unavailable)?;
+    let reservation = budget.reserve(count)?;
+    let source = if let Some(retained) = retained_source {
+        if retained.identity != origin || retained.uid() != uid {
+            return Err(unavailable());
+        }
+        let duplicate = UnixParentProcess {
+            uid,
+            identity: origin,
+            lifetime: retained.lifetime.try_clone()?,
+        };
+        if started.elapsed() >= CAPTURE_BUDGET {
+            return Err(unavailable());
+        }
+        duplicate.reobserve()?;
+        if started.elapsed() >= CAPTURE_BUDGET {
+            return Err(unavailable());
+        }
+        if observe()? != origin || started.elapsed() >= CAPTURE_BUDGET {
+            return Err(unavailable());
+        }
+        Some(duplicate)
+    } else {
+        None
+    };
+    let mut parents: Vec<UnixParentProcess> = Vec::new();
+    for expected in chain.chain.iter().skip(1) {
+        let (identity, lifetime) = parent::capture_parent_with(
+            uid,
+            || {
+                parents
+                    .last()
+                    .map_or_else(&observe, UnixParentProcess::reobserve)
+            },
+            |pid| mez_mux::process::process_parent_identity_for_pid(pid).ok_or_else(unavailable),
+            parent::parent_uid,
+            parent::open_parent,
+            super::require_live_origin,
+            || started.elapsed() >= CAPTURE_BUDGET,
+        )?;
+        if identity != *expected {
+            return Err(unavailable());
+        }
+        parents.push(UnixParentProcess {
+            uid,
+            identity,
+            lifetime,
+        });
+    }
+    // Root-first native reobservation brackets all retained descriptors,
+    // then the original socket fence checks the producer once more.
+    for retained in parents.iter().rev() {
+        retained.reobserve()?;
+        if started.elapsed() >= CAPTURE_BUDGET {
+            return Err(unavailable());
+        }
+    }
+    if observe()? != origin || started.elapsed() >= CAPTURE_BUDGET {
+        return Err(unavailable());
+    }
+    if let Some(retained) = &source {
+        retained.reobserve()?;
+    }
+    let witness = UnixAncestryWitness {
+        source,
+        parents,
+        _reservation: reservation,
+    };
+    if !witness.is_live() || started.elapsed() >= CAPTURE_BUDGET {
+        return Err(unavailable());
+    }
+    Ok(witness)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A code-owned current-process fence permits deterministic read failures
+    /// after duplication and midway through bracketing without racing a fixture.
+    /// This test-only numeric open is not a production origin fallback. Every
+    /// failed capture releases its exact charge; success duplicates CLOEXEC and
+    /// survives dropping the caller's original descriptor until last witness drop.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn unix_parent_ancestry_failure_after_duplication_reclaims_budget() {
+        use std::os::fd::AsFd;
+        let identity =
+            mez_mux::process::process_parent_identity_for_pid(std::process::id()).unwrap();
+        let root =
+            mez_mux::process::process_parent_identity_for_pid(identity.parent_process_id).unwrap();
+        let uid = parent::parent_uid(identity.process_id).unwrap();
+        let source = UnixParentProcess {
+            uid,
+            identity,
+            lifetime: parent::open_parent(identity.process_id).unwrap(),
+        };
+        let budget = Arc::new(UnixAncestryBudget::default());
+        for fail_at in [2, 3, 4] {
+            let reads = std::cell::Cell::new(0);
+            let result = capture_retained_ancestry(
+                uid,
+                || {
+                    reads.set(reads.get() + 1);
+                    if reads.get() == fail_at {
+                        return Err(unavailable());
+                    }
+                    source.reobserve()
+                },
+                Some(&source),
+                root,
+                &budget,
+            );
+            assert!(result.is_err());
+            assert_eq!(budget.reserved(), 0);
+        }
+        let witness = source.capture_ancestry(root, &budget).unwrap();
+        assert_eq!(budget.reserved(), 2);
+        let duplicate = witness.source.as_ref().unwrap();
+        assert!(
+            rustix::io::fcntl_getfd(duplicate.lifetime.as_fd())
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        assert_eq!(duplicate.identity, source.identity);
+        drop(source);
+        assert!(witness.is_live());
+        drop(witness);
+        assert_eq!(budget.reserved(), 0);
+    }
 
     /// The budget is aggregate, nonblocking and checked for overflow. Dropping
     /// one reservation restores only its own capacity; no current grant is evicted.

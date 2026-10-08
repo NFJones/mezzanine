@@ -34,7 +34,7 @@ fn presentation(response: &serde_json::Value, method: &str) -> JsonRpcRequest {
 /// Terminates only the exact upper fixture ancestor from the native chain, then
 /// waits for its surviving child to be reparented. Neither pane root nor producer
 /// is terminated, and the producer's immediate native record stays unchanged.
-async fn orphan_middle(fixture: &Fixture) {
+pub(super) async fn orphan_middle(fixture: &Fixture) {
     let origin = fixture.connection.unix_origin().unwrap();
     let middle =
         mez_mux::process::process_parent_identity_for_pid(origin.identity.parent_process_id)

@@ -330,6 +330,17 @@ Lifetime capture/polls are not an atomic process-tree snapshot or atomic with ac
 publication; concurrent exit after the final check remains possible, and later
 projections/authorization MUST reject invalidated evidence. No executable/vendor
 attestation, cross-user parent fallback or macOS admission is established here.
+A natively verified retained parent MAY capture its own source/root ancestry
+off actor after the original short-lived helper exits. Capture MUST duplicate
+only that exact retained source descriptor with CLOEXEC, never reopen its numeric
+PID as an origin substitute. The source duplicate and all ancestor descriptors
+MUST be reserved together against the same finite budget; partial failure and
+last-drop cleanup MUST release their exact ownership. Nonblocking witness polls
+MUST include source death as well as intermediate/root death. Source-as-root,
+unrelated/stale roots, changed/unreadable birth/UID/relationships or unsupported
+platforms MUST reject. This remains provenance evidence only: no helper-parent
+inference may allocate vendor/client/session/observer/accounting authority without
+the separate source-qualified producer, policy and actor commit contract.
 Identical same-instance retry MUST retain one private producer-bound handle and
 observational identity, including its original predecessor witness. A verified
 replacement instance MUST name the current predecessor generation, receive fresh

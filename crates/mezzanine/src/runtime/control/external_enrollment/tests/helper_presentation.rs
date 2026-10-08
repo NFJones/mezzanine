@@ -272,7 +272,10 @@ pub(super) async fn child(
 
 /// A fixture process must actually exit before late-work assertions; polling
 /// the retained kernel lifetime avoids treating socket closure as process death.
-async fn release(socket: &mut tokio::net::UnixStream, connection: &ControlConnectionState) {
+pub(super) async fn release(
+    socket: &mut tokio::net::UnixStream,
+    connection: &ControlConnectionState,
+) {
     socket.write_all(&[2]).await.unwrap();
     tokio::time::timeout(Duration::from_secs(10), async {
         while connection.unix_origin().unwrap().is_live() {

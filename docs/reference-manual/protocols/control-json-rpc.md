@@ -604,6 +604,19 @@ attestation, actual client/session association or pane authority. Consumers must
 reject a surviving pane shell as producer and require separate writer/ancestry/
 actor commit fences; two observations do not form an atomic process-tree snapshot.
 
+The retained parent can additionally capture its own root chain off actor after
+helper exit. This reuses the socket-backed bracketed walker and aggregate budget,
+but includes a CLOEXEC duplicate of the exact original source lifetime (never a
+fresh numeric source open). Source plus ancestors are charged before duplication/
+capture; failed work and last witness drop release their ownership. Polling fails
+if the verified source dies even with a surviving pane root, or if an intermediate
+ancestor dies while source/root survive. The original parent descriptor may be
+dropped independently without replacing the witness. Source-as-root, unrelated
+or stale roots and exhausted capacity reject. Capturing this chain still grants
+no producer registration or observer/client/usage rights: actual source, session,
+observer freshness and policy/actor consumers are unfinished work, not implicitly
+derived from ancestry. Unsupported platforms stay fail-closed.
+
 #### Ordinary persistent-producer enrollment (implemented slice)
 
 `agent/external/enroll` accepts `pane_id`, `harness` (`claude`, `codex`, `copilot`,

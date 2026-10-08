@@ -1200,6 +1200,7 @@ mod health;
 mod helper_discovery;
 mod helper_presentation;
 mod observer_epochs;
+mod parent_ancestry;
 mod persistent_client;
 mod pi_observation;
 
