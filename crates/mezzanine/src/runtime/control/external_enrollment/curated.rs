@@ -9,6 +9,38 @@
 
 use super::*;
 
+/// Recent original-epoch observer proof, not creator life or caller lease renewal.
+/// Equal sequence is an inert retry and cannot refresh a lost observer forever.
+#[derive(Debug, Default)]
+pub(super) struct CuratedObserver {
+    /// Greatest authorized original-epoch proof sequence; replay is time-inert.
+    pub(super) sequence: u64,
+    /// Local monotonic observation time, never a supplied timestamp or lease.
+    pub(super) observed_at: Option<Instant>,
+}
+
+impl CuratedObserver {
+    /// Records only a new positive sequence under native actor authorization;
+    /// stale/invalid sequences reject, and identical replay leaves time unchanged.
+    pub(super) fn observe(&mut self, sequence: u64) -> Result<String> {
+        if sequence == 0 || sequence > 9_007_199_254_740_991 || sequence < self.sequence {
+            return Err(MezError::conflict("curated observer sequence unavailable"));
+        }
+        let changed = sequence > self.sequence;
+        if changed {
+            self.sequence = sequence;
+            self.observed_at = Some(Instant::now());
+        }
+        Ok(serde_json::json!({"observed":true,"sequence":sequence,"changed":changed}).to_string())
+    }
+    /// A finite monotonic proof window, separate from the daemon's 60s lease.
+    /// Kernel source/root liveness is checked independently by the binding owner.
+    pub(super) fn is_recent(&self) -> bool {
+        self.observed_at
+            .is_some_and(|observed| observed.elapsed() < Duration::from_secs(30))
+    }
+}
+
 /// Bounded runtime-only creator/session ownership, independent of capability GC.
 /// An entry shares the original source anchor (no duplicate FD/capability) and
 /// grants no live registration or observer rights. Exhaustion rejects, never
@@ -302,6 +334,7 @@ impl RuntimeSessionService {
                     predecessor_generation: None,
                     instances: BTreeSet::from([work.observer_instance.clone()]),
                     observers: Vec::new(),
+                    curated_observer: Some(CuratedObserver::default()),
                     token: SecretString::from(token),
                 }),
                 pi_lifecycle: None,

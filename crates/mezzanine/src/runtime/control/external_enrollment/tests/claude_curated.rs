@@ -167,7 +167,7 @@ fn external_claude_curated_command_helper_fixture() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY; isolated --init-only source probe"]
 async fn external_claude_curated_command_native_parent_is_local_pane_descendant() {
-    qualify_curated_probe(false).await;
+    qualify_curated_probe(false, false).await;
 }
 
 /// Real curated argv API -> built fixed source helper -> current-writer Unix
@@ -176,13 +176,23 @@ async fn external_claude_curated_command_native_parent_is_local_pane_descendant(
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated source transport"]
 async fn external_claude_curated_builtin_source_helper_registers_actual_creator() {
-    qualify_curated_probe(true).await;
+    qualify_curated_probe(true, false).await;
+}
+
+/// The actual curated clock runs outside conversation callbacks and emits only
+/// original frozen public epoch proof through the built helper. Daemon maintenance
+/// may then renew a live creator's lease; neither the timer nor parent PID supplies
+/// socket/control/usage authority or launches a provider conversation.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated clock proof"]
+async fn external_claude_curated_clock_helper_proves_original_observer_epoch() {
+    qualify_curated_probe(true, true).await;
 }
 
 /// Shared owned temporary source fixture for provenance-only and real transport
 /// qualification. Actor shutdown returns the owned runtime before source exit
 /// assertions, preserving pane cleanup and exact native creator inspection.
-async fn qualify_curated_probe(admission: bool) {
+async fn qualify_curated_probe(admission: bool, freshness: bool) {
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
         serve_async_runtime_control_connection_loop,
@@ -272,8 +282,16 @@ async fn qualify_curated_probe(admission: bool) {
     } else {
         String::new()
     };
+    let schedule = if freshness {
+        format!(
+            "const original = Object.freeze({{ external_session_id: publicResult.external_session_id, generation: publicResult.generation, observer_witness: publicResult.observer_witness }}); $.clock.after(1000, async () => {{ try {{ const proof = await $.process.run([{}, 'harness-source', JSON.stringify({{ operation: 'curated-heartbeat', external_session_id: original.external_session_id, generation: original.generation, observer_witness: original.observer_witness, sequence: 1 }})], {{ timeoutMs: 3000 }}); const receipt = JSON.parse(proof.stdout); if (receipt.observed !== true || 'launch_token' in receipt) throw new Error('observer proof unavailable'); }} catch {{ /* unavailable proof cannot change vendor results */ }} }});",
+            serde_json::to_string(helper.to_str().unwrap()).unwrap()
+        )
+    } else {
+        String::new()
+    };
     let source = format!(
-        "export function register(on) {{ on('classic.SessionStart', async ($, e, next) => {{ const result = await next(e); {source_call} await $.process.run({argv}, {{ env: {{ MEZ_TEST_CURATED_SOCKET: {} }}, timeoutMs: 10000 }}); return result; }}); }}\n",
+        "export function register(on) {{ on('classic.SessionStart', async ($, e, next) => {{ const result = await next(e); {source_call} {schedule} await $.process.run({argv}, {{ env: {{ MEZ_TEST_CURATED_SOCKET: {} }}, timeoutMs: 10000 }}); return result; }}); }}\n",
         serde_json::to_string(path.to_str().unwrap()).unwrap()
     );
     std::fs::write(directory.join("plugin/hooks/register.mjs"), source).unwrap();
@@ -302,27 +320,29 @@ async fn qualify_curated_probe(admission: bool) {
         let task = tokio::spawn(actor.run());
         let caller = handle.clone();
         let server = tokio::spawn(async move {
-            let (mut stream, _) =
-                tokio::time::timeout(Duration::from_secs(15), control_listener.accept())
-                    .await
-                    .unwrap()
-                    .unwrap();
-            let mut connection = ControlConnectionState::new(true, false);
-            serve_async_runtime_control_connection_loop(
-                &mut stream,
-                &caller,
-                &mut connection,
-                AsyncRuntimeControlConnectionConfig::new(
-                    8192,
-                    crate::runtime::current_effective_uid(),
+            for _ in 0..if freshness { 2 } else { 1 } {
+                let (mut stream, _) =
+                    tokio::time::timeout(Duration::from_secs(15), control_listener.accept())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                let mut connection = ControlConnectionState::new(true, false);
+                serve_async_runtime_control_connection_loop(
+                    &mut stream,
+                    &caller,
+                    &mut connection,
+                    AsyncRuntimeControlConnectionConfig::new(
+                        8192,
+                        crate::runtime::current_effective_uid(),
+                    )
+                    .unwrap(),
+                    |_, _| false,
                 )
-                .unwrap(),
-                |_, _| false,
-            )
-            .await
-            .unwrap();
-            assert!(!connection.initialized());
-            assert!(connection.caller_client_id().is_none());
+                .await
+                .unwrap();
+                assert!(!connection.initialized());
+                assert!(connection.caller_client_id().is_none());
+            }
         });
         Some((handle, task, server))
     } else {
@@ -393,8 +413,35 @@ async fn qualify_curated_probe(admission: bool) {
         let owner = binding.enrollment.as_ref().unwrap();
         assert!(owner.producer.matches_parent(parent.uid(), parent.identity));
         assert!(owner.observers.is_empty());
-        assert!(!owner.has_live_observer());
+        assert_eq!(owner.has_live_observer(), freshness);
         assert_eq!(binding.harness, "claude");
+        if freshness {
+            assert_eq!(owner.curated_observer.as_ref().unwrap().sequence, 1);
+            let original_expiry = binding.expires;
+            assert_eq!(binding.registration.as_ref().unwrap().presentation, None);
+            probe
+                .service
+                .control
+                .external_agents_mut()
+                .bindings
+                .values_mut()
+                .next()
+                .unwrap()
+                .expires = current_unix_seconds() - 1;
+            probe.service.renew_connected_external_observers();
+            assert!(
+                probe
+                    .service
+                    .control
+                    .external_agents()
+                    .bindings
+                    .values()
+                    .next()
+                    .unwrap()
+                    .expires
+                    >= original_expiry
+            );
+        }
     }
     let budget = Arc::new(UnixAncestryBudget::default());
     let worker_budget = budget.clone();

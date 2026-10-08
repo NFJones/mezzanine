@@ -324,7 +324,8 @@ This path MUST share existing native/frame/metadata/deadline/descriptor limits,
 allocate only observational registration, retain credentials service-side and
 return ONLY public generation/witness/run/epoch/session selectors with no bearer
 token or client/socket/usage authority. Identical creator/session/instance retry
-MUST keep the original run/accounting namespace/source/expiry; changed instance
+MUST keep the original run/accounting namespace/source and MUST NOT itself renew
+expiry (independent daemon maintenance may advance a healthy lease); changed instance
 MUST fail closed until explicit replacement policy exists. Retired creator/session
 ownership MUST remain fenced for the exact native creator lifetime after lease
 expiry, capability tombstone GC or binding-only snapshot cleanup; neither exact
@@ -333,9 +334,22 @@ runtime-only fence MUST be bounded at 256 original source/session anchors, share
 the original source descriptor without duplicating credentials/lifetimes, reject
 exhaustion without evicting live entries, and release on actual creator death.
 Fence retention MUST grant no ancestry, observer, socket or billing authority.
-Parent survival MUST
-NOT imply a healthy observer or renew its lease. Reply MUST expose unavailable
-curated freshness and usage continuity; finite expiry is not process death.
+Parent survival MUST NOT imply a healthy observer or renew its lease. Admission
+alone MUST expose unobserved curated freshness and unavailable usage continuity;
+finite expiry is not process death. Separate `agent/external/curated-heartbeat`
+MAY record only a positive JS-safe monotonic proof sequence for the original public
+generation/witness/harness/session under existing exact native helper/creator/
+root/writer/deadline fences. Only a declared parent observer may record this proof.
+Higher sequence MUST stamp monotonic time; equal latest replay MUST return an
+inert receipt without refreshing time; older/invalid/foreign/retired work MUST
+reject. Receipt MUST contain only observed/sequence/changed, not a lease effect.
+Daemon maintenance MAY renew the 60s lease only while exact creator/root ancestry
+is live AND qualified original-epoch proof is less than 30s old. Generic helper
+presentation, parent PID survival, repeated stale proof or lost observer MUST NOT
+keep telemetry alive forever. Loss leaves a finite grace bounded by the 30s proof
+window plus 60s lease; source death overrides even a recent proof. Retired namespaces
+MUST NOT revive through late heartbeat. This does not grant producer sockets,
+primary/client roles, input/approval/task rights or billing/usage commitment.
 Public callbacks MUST retain original selectors and existing native helper fences.
 Actual SDK/helper deployment, observer/session continuity, vendor policy/disabled
 conditions, shared-server mapping, durable accounting and macOS remain separate

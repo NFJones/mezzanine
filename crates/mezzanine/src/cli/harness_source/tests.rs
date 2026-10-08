@@ -1,6 +1,31 @@
 //! Fixed capsule privacy and public receipt validation without vendor execution.
 use super::*;
 
+/// Public epoch proof capsule and receipt cannot choose TTL/role/method or leak
+/// raw responses. Exact sequence equality is required before exposure, including
+/// an inert duplicate receipt which must never be mistaken for lease renewal.
+#[test]
+fn harness_source_heartbeat_capsule_and_receipt_are_fixed_public_proof() {
+    let capsule = serde_json::json!({"operation":"curated-heartbeat","external_session_id":"session-a","generation":1,"observer_witness":"a".repeat(64),"sequence":1});
+    let proof = heartbeat::Heartbeat::parse(capsule.to_string().as_bytes()).unwrap();
+    assert!(proof.request().contains("agent/external/curated-heartbeat"));
+    let valid = serde_json::json!({"observed":true,"sequence":1,"changed":false});
+    assert_eq!(proof.receipt(&valid), Some(valid.clone()));
+    let mut extra = valid;
+    extra["launch_token"] = "private".into();
+    assert!(proof.receipt(&extra).is_none());
+    for (key, value) in [
+        ("sequence", serde_json::json!(0)),
+        ("observer_witness", serde_json::json!("bad")),
+        ("ttl", serde_json::json!(999)),
+        ("method", serde_json::json!("control/initialize")),
+    ] {
+        let mut changed = capsule.clone();
+        changed[key] = value;
+        assert!(heartbeat::Heartbeat::parse(changed.to_string().as_bytes()).is_err());
+    }
+}
+
 /// Raw ambiguity, extra selectors/credentials, content-shaped IDs, unsupported
 /// boundaries and oversized capsules cannot become a fixed source request.
 #[test]

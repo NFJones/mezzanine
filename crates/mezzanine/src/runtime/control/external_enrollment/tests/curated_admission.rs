@@ -10,7 +10,7 @@ use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionAct
 
 /// Fixed explicit no-shell creator contract; supplied process IDs/roles/caps
 /// cannot enter this strict metadata namespace.
-fn curated_request() -> JsonRpcRequest {
+pub(super) fn curated_request() -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"curated","method":"agent/external/curated-enroll","params":{
         "pane_id":"%1","harness":"claude","version":"fixture","external_session_id":"session-a","display_name":"curated fixture",
         "observer_kind":"curated-command","observer_instance":"module-a","source_contract":"claude-curated-command/1","session_boundary":"startup"}}).to_string()).unwrap()
@@ -18,7 +18,10 @@ fn curated_request() -> JsonRpcRequest {
 
 /// Runs actual native observation off actor and consumes one reservation through
 /// the same common settlement owner used by ordinary persistent enrollment.
-async fn enroll(fixture: &mut Fixture, connection: &ControlConnectionState) -> serde_json::Value {
+pub(super) async fn enroll(
+    fixture: &mut Fixture,
+    connection: &ControlConnectionState,
+) -> serde_json::Value {
     let work = fixture
         .service
         .prepare_external_enrollment(&curated_request(), connection)

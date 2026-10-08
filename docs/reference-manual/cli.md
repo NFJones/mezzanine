@@ -339,6 +339,14 @@ middleware result; it is not a vendor hook response, live observer proof or a
 durable usage acknowledgment. No arbitrary RPC/endpoint/pane/PID/role fields are
 accepted. This supplies transport, not automatic adapter/mod installation,
 idle/reload/session continuity, permission-policy bypass or accounting support.
+The same fixed helper has a distinct public proof capsule
+`operation:"curated-heartbeat"` plus original `external_session_id`, positive
+JS-safe `generation`, 64-lowercase-hex `observer_witness`, and positive JS-safe
+`sequence`. No TTL/state/role/credential/endpoint fields are accepted. It returns
+only matching observed/sequence/changed data or `{"observed":false}`. This is
+native-qualified original-epoch observer freshness, not direct lease renewal or
+billing; equal sequence replay cannot refresh freshness. A source adapter must pin
+its captured scope, serialize/bound timer work and keep SDK timer output private.
 
 This is not vendor hook installation or certification. Adapters must privately
 deliver existing run credentials, normalize content-free released payloads, serialize

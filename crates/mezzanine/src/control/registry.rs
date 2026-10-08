@@ -581,6 +581,17 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         ]),
     },
     ControlMethodSpec {
+        method: "agent/external/curated-heartbeat",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "harness",
+            "observer_witness",
+            "generation",
+            "external_session_id",
+            "sequence",
+        ]),
+    },
+    ControlMethodSpec {
         method: "agent/external/renew",
         dispatch: ControlDispatchKind::ExternalAgent,
         params_schema: ControlParamsSchema::Allowed(&[

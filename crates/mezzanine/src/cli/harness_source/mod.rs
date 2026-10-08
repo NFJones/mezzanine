@@ -9,6 +9,7 @@
 //! The local test submodule exercises capsule and receipt boundaries independently.
 
 use super::{MezError, Result, Write};
+mod heartbeat;
 
 /// Minimal public session declaration; everything identifying the transport and
 /// source profile is fixed code, not a user-provided RPC or daemon capability.
@@ -137,12 +138,31 @@ pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u
     if arguments.len() != 3 || arguments[1] != "harness-source" {
         return None;
     }
+    let heartbeat_mode = arguments[2]
+        .to_str()
+        .filter(|text| text.len() <= 4096)
+        .and_then(|text| crate::protocol::strict_json::decode(text.as_bytes()).ok())
+        .is_some_and(|value| value["operation"] == "curated-heartbeat");
     let result = (|| -> Option<serde_json::Value> {
-        let capsule = Capsule::parse(arguments[2].to_str()?.as_bytes()).ok()?;
+        let bytes = arguments[2].to_str()?.as_bytes();
+        let capsule = if heartbeat_mode {
+            None
+        } else {
+            Some(Capsule::parse(bytes).ok()?)
+        };
+        let heartbeat = if heartbeat_mode {
+            Some(heartbeat::Heartbeat::parse(bytes).ok()?)
+        } else {
+            None
+        };
         let discovery = std::env::var_os("MEZ");
         let socket = super::env::socket_selection_from_mez(discovery.as_ref()).ok()??;
         let pane = std::env::var("MEZ_PANE").ok()?;
-        let body = capsule.request(&pane).ok()?;
+        let body = if let Some(heartbeat) = &heartbeat {
+            heartbeat.request()
+        } else {
+            capsule.as_ref()?.request(&pane).ok()?
+        };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -154,9 +174,19 @@ pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u
                 "harness-source",
             ))
             .ok()?;
-        capsule.receipt(&response)
+        if let Some(heartbeat) = &heartbeat {
+            heartbeat.receipt(&response)
+        } else {
+            capsule.as_ref()?.receipt(&response)
+        }
     })()
-    .unwrap_or_else(|| serde_json::json!({"registered":false}));
+    .unwrap_or_else(|| {
+        if heartbeat_mode {
+            serde_json::json!({"observed":false})
+        } else {
+            serde_json::json!({"registered":false})
+        }
+    });
     Some(u8::from(writeln!(std::io::stdout(), "{result}").is_err()))
 }
 

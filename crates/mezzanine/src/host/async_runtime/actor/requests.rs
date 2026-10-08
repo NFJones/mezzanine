@@ -67,6 +67,7 @@ impl AsyncRuntimeSessionActor {
             request.method.as_str(),
             "agent/external/enroll"
                 | "agent/external/curated-enroll"
+                | "agent/external/curated-heartbeat"
                 | "agent/external/helper-presentation"
                 | "agent/external/helper-observe"
         ) {
@@ -78,7 +79,9 @@ impl AsyncRuntimeSessionActor {
             ))
         } else if matches!(
             request.method.as_str(),
-            "agent/external/helper-presentation" | "agent/external/helper-observe"
+            "agent/external/helper-presentation"
+                | "agent/external/helper-observe"
+                | "agent/external/curated-heartbeat"
         ) {
             self.service
                 .prepare_external_helper_presentation(&request, connection)

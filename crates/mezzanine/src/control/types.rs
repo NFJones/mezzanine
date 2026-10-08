@@ -622,6 +622,7 @@ pub(crate) const PRIMARY_CONTROL_METHODS: &[&str] = &[
     "agent/external/launch",
     "agent/external/enroll",
     "agent/external/curated-enroll",
+    "agent/external/curated-heartbeat",
     "agent/external/register",
     "agent/external/renew",
     "agent/external/deregister",

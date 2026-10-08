@@ -643,8 +643,9 @@ stay service-owned: the reply includes registered/agent/run/epoch/public
 generation/observer-witness/session/expiry metadata, empty controls, no
 `launch_token`, `usage: "unavailable-source-continuity"` and
 `observer_transport: "unavailable-curated-freshness"`. Exact creator/session/
-instance retry keeps original source/accounting identity and expiry, not renewal.
-Different instances fail closed; replacement/heartbeat/session policy is unfinished.
+instance retry keeps original source/accounting identity and does not itself renew
+expiry; daemon maintenance can independently extend a healthy lease. Different
+instances fail closed; replacement/session policy and deployed scheduling remain unfinished.
 After expiry, both same-instance retry and changed-instance replacement fail
 closed for that native creator/root/session even if the private capability
 tombstone is GC'd or snapshot cleanup clears its binding. A separate runtime-only
@@ -659,6 +660,32 @@ fresh. The finite 60s lease may expire under a living creator; this is telemetry
 expiry, not a process-death declaration. Public helper-observe callbacks still
 need the original generation/witness and native creator relationship; they add no
 socket, client, observer, renewal, retirement or usage rights.
+
+`agent/external/curated-heartbeat` is a separate freshness observation, not generic
+presentation or caller lease renewal. Its only fields are fixed harness `claude`,
+original positive public generation/witness, `external_session_id`, and positive
+JS-safe `sequence`. Existing bounded native helper admission verifies the actual
+direct creator, exact retained source/root, current sender and original epoch.
+Only declared parent bindings accept it; sockets/legacy launch, foreign/stale/
+retired work and arbitrary fields reject. The reply is only
+`{"observed":true,"sequence":N,"changed":true|false}`. Higher sequences stamp
+monotonic time; equal latest replay returns `changed:false` without refreshing
+time, and older/invalid sequences reject. It changes no presentation, accounting
+owner, client/socket role or lease itself. Daemon idle maintenance can renew the
+60s lease while native creator/ancestry are live and the proof is under30s old;
+parent survival without recent proof cannot renew, and source death overrides
+fresh proof. Loss eventually expires telemetry within proof-window+lease grace,
+not a vendor process-death declaration. Late proof cannot revive a retired fence.
+
+The fixed `harness-source` argv helper also accepts a strict public proof capsule
+with `operation:"curated-heartbeat"`, session/generation/witness/sequence. It fixes
+the heartbeat RPC/harness, never accepts TTL/role/credential/method selectors, and
+strictly projects a matching observed/sequence/change receipt or
+`{"observed":false}` on unavailable delivery. An isolated real SDK `$.clock.after`
+fixture pins original public fields directly after actual conversation admission,
+runs outside callback cadence and drives the built helper/native actor freshness
+path. It proves the actual timer API and daemon renewal, not a deployed recurrent
+adapter, module reload/new/resume handoff, full60s wall-clock wait, or accounting.
 
 This is a core admission primitive, not bare bootstrap or installed real SDK
 transport. Actual adapter deployment/consent/disabled policy, idle/reload/session

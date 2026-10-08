@@ -83,6 +83,9 @@ pub(super) struct EnrollmentBinding {
     /// Bounded authorized observer sockets; stale closure cannot clear a healthy
     /// reconnect. Weak links hold no extra socket or process descriptor.
     observers: Vec<std::sync::Weak<UnixOriginProcess>>,
+    /// Explicit recent original-epoch proof for a declared parent observer;
+    /// native creator survival alone never supplies this proof.
+    curated_observer: Option<curated::CuratedObserver>,
     /// Redacted in Debug and never persisted or placed in generic replay caches.
     token: SecretString,
 }
@@ -234,9 +237,14 @@ impl EnrollmentBinding {
         }
     }
 
-    /// Allows daemon idle renewal only while both the producer and an authorized
-    /// qualified observer transport remain live; no callback cadence is needed.
+    /// Allows daemon renewal for live socket observers or live original creators
+    /// with explicit recent epoch proof; parent survival alone is never enough.
     pub(super) fn idle_renewable(&mut self) -> bool {
+        if let Some(observer) = &self.curated_observer {
+            return matches!(self.producer, ProducerEvidence::VerifiedParent(_))
+                && self.provenance_is_live()
+                && observer.is_recent();
+        }
         self.observers.retain(|observer| {
             observer.upgrade().is_some_and(|observer| {
                 observer.observer_connected() && self.producer.matches_socket(&observer)
@@ -248,6 +256,11 @@ impl EnrollmentBinding {
     /// Checks an overdue lease without a new registry sweep; immutable endpoint
     /// polls let a delayed maintenance tick avoid retiring a connected observer.
     pub(super) fn has_live_observer(&self) -> bool {
+        if let Some(observer) = &self.curated_observer {
+            return matches!(self.producer, ProducerEvidence::VerifiedParent(_))
+                && self.provenance_is_live()
+                && observer.is_recent();
+        }
         self.provenance_is_live()
             && self.observers.iter().any(|observer| {
                 observer.upgrade().is_some_and(|observer| {
@@ -597,6 +610,7 @@ impl RuntimeSessionService {
                     predecessor_generation: None,
                     instances: BTreeSet::from([work.observer_instance.clone()]),
                     observers: vec![Arc::downgrade(&work.origin)],
+                    curated_observer: None,
                     token: SecretString::from(token),
                 }),
                 pi_lifecycle: None,

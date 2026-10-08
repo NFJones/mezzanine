@@ -17,6 +17,8 @@ pub(super) struct HelperPresentation {
     generation: u64,
     pub(super) producer: ProducerEvidence,
     params: SecretString,
+    /// Explicit freshness proof is separate from generic presentation mutation.
+    heartbeat: bool,
 }
 
 impl RuntimeSessionService {
@@ -31,7 +33,9 @@ impl RuntimeSessionService {
         self.require_live()?;
         if !matches!(
             request.method.as_str(),
-            "agent/external/helper-presentation" | "agent/external/helper-observe"
+            "agent/external/helper-presentation"
+                | "agent/external/helper-observe"
+                | "agent/external/curated-heartbeat"
         ) || connection.initialized()
         {
             return Err(MezError::forbidden(
@@ -58,7 +62,18 @@ impl RuntimeSessionService {
             .filter(|origin| origin.uid() == *uid && origin.writer_confirmed())
             .ok_or_else(|| MezError::forbidden("external helper sender unavailable"))?
             .clone();
-        let digest = if request.method == "agent/external/helper-observe" {
+        let heartbeat = request.method == "agent/external/curated-heartbeat";
+        if heartbeat
+            && !params
+                .get("sequence")
+                .and_then(serde_json::Value::as_u64)
+                .is_some_and(|sequence| sequence > 0 && sequence <= 9_007_199_254_740_991)
+        {
+            return Err(MezError::invalid_args(
+                "curated observer sequence unavailable",
+            ));
+        }
+        let digest = if request.method == "agent/external/helper-observe" || heartbeat {
             let harness = text(&params, "harness", 64)?;
             crate::integrations::harness_policy::require_active_external_harness(&harness)?;
             let candidates = self
@@ -79,7 +94,7 @@ impl RuntimeSessionService {
             super::super::external_agents::credential(&params)?
         };
         self.reconcile_external_agent_registration(digest);
-        if request.method == "agent/external/helper-observe"
+        if (request.method == "agent/external/helper-observe" || heartbeat)
             && text(&params, "observer_witness", 64)? != observer_witness(digest)
         {
             return Err(MezError::forbidden(
@@ -108,6 +123,15 @@ impl RuntimeSessionService {
             .as_ref()
             .filter(|registration| registration.external_session_id == session_id)
             .ok_or_else(|| MezError::forbidden("external helper session unavailable"))?;
+        if heartbeat
+            && (binding.harness != "claude"
+                || enrollment.curated_observer.is_none()
+                || !matches!(enrollment.producer, ProducerEvidence::VerifiedParent(_)))
+        {
+            return Err(MezError::forbidden(
+                "curated observer proof requires its declared parent source",
+            ));
+        }
         if binding.pi_lifecycle.is_some() {
             return Err(MezError::conflict(
                 "external Pi lifecycle owns presentation sequence",
@@ -137,6 +161,7 @@ impl RuntimeSessionService {
                 generation,
                 producer: enrollment.producer.clone(),
                 params: SecretString::from(params.to_string()),
+                heartbeat,
             }),
             ancestry: Arc::new(OnceLock::new()),
             ancestry_budget: self
@@ -225,8 +250,23 @@ impl RuntimeSessionService {
                 "external helper relationship or deadline changed",
             ));
         }
-        let params = serde_json::from_str(helper.params.expose_secret())
+        let params: serde_json::Value = serde_json::from_str(helper.params.expose_secret())
             .map_err(|_| MezError::invalid_state("external helper payload unavailable"))?;
+        if helper.heartbeat {
+            let sequence = params
+                .get("sequence")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| MezError::invalid_args("curated observer sequence unavailable"))?;
+            let observer = self
+                .control
+                .external_agents_mut()
+                .bindings
+                .get_mut(&helper.digest)
+                .and_then(|binding| binding.enrollment.as_mut())
+                .and_then(|source| source.curated_observer.as_mut())
+                .ok_or_else(|| MezError::forbidden("curated observer owner unavailable"))?;
+            return observer.observe(sequence);
+        }
         self.update_external_presentation(helper.digest, &params)
     }
 }
