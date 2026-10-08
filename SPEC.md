@@ -326,7 +326,20 @@ return ONLY public generation/witness/run/epoch/session selectors with no bearer
 token or client/socket/usage authority. Identical creator/session/instance retry
 MUST keep the original run/accounting namespace/source and MUST NOT itself renew
 expiry (independent daemon maintenance may advance a healthy lease); changed instance
-MUST fail closed until explicit replacement policy exists. Retired creator/session
+MUST fail closed unless it supplies the exact current positive JS-safe
+`predecessor_generation`. Explicit same-creator/session replacement MUST revalidate
+the original retained native source/root and current helper/writer/deadline, use
+the shared actor rotation owner, preserve agent/run/accounting provenance and
+rotate only generation/witness/observer epoch. It MUST reset presentation and
+curated proof sequence/time; parent survival or predecessor knowledge alone MUST
+NOT carry freshness into the replacement. The original source/session namespace
+anchor MUST remain the same; only its private binding selector changes. Identical
+transition retry MUST include its original predecessor and MUST NOT rotate or
+refresh proof/expiry. Concurrent/stale predecessors and retired instances MUST
+reject; the 128-instance run fence MUST fail closed without eviction. Curated
+public generation/epoch overflow beyond JS-safe integers MUST fail before effects.
+This active-only primitive MUST NOT revive a retired namespace or supply socket,
+client, task or usage authority. Retired creator/session
 ownership MUST remain fenced for the exact native creator lifetime after lease
 expiry, capability tombstone GC or binding-only snapshot cleanup; neither exact
 retry nor changed instance may silently allocate a fresh namespace then. The

@@ -1198,6 +1198,7 @@ mod ancestry;
 mod claude_curated;
 mod curated_admission;
 mod curated_heartbeat;
+mod curated_rotation;
 mod harnesses;
 mod health;
 mod helper_discovery;

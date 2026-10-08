@@ -1,4 +1,4 @@
-//! Serialized observer-instance replacement within one qualified persistent run.
+//! Serialized observer-instance replacement within one qualified native run.
 //!
 //! Instance and predecessor values are selectors, never process authority. The
 //! parent admission already fenced native origin/ancestry/root, and this owner
@@ -7,6 +7,9 @@
 //! credentials, generation and presentation sequence owner. Retired instance IDs
 //! are retained with a finite fail-closed bound; no old instance is evicted to
 //! permit stale takeover. No provider or expense work is replayed.
+//! Socket sources retain socket-native authorization and private replies; curated
+//! sources revalidate their original declared native creator, retain its namespace
+//! lifetime anchor, return only public selectors and reset observer freshness.
 
 use super::*;
 
@@ -37,7 +40,12 @@ impl RuntimeSessionService {
             .enrollment
             .as_mut()
             .ok_or_else(|| MezError::invalid_state("external enrollment owner disappeared"))?;
-        enrollment.authorize(connection)?;
+        let curated = work.curated.as_ref();
+        if let Some(curated) = curated {
+            curated.authorize_existing(work, enrollment)?;
+        } else {
+            enrollment.authorize(connection)?;
+        }
         if Instant::now() >= work.deadline {
             return Err(MezError::conflict("external observer evidence expired"));
         }
@@ -52,7 +60,11 @@ impl RuntimeSessionService {
                 .enrollment
                 .as_ref()
                 .ok_or_else(|| MezError::invalid_state("external enrollment owner disappeared"))?;
-            return Ok(enrollment_response(binding, enrollment, &work.session_id));
+            return Ok(if curated.is_some() {
+                curated::public_response(binding, enrollment, &work.session_id)
+            } else {
+                enrollment_response(binding, enrollment, &work.session_id)
+            });
         }
         if enrollment.instances.contains(&work.observer_instance) {
             return Err(MezError::conflict("external observer instance has retired"));
@@ -74,6 +86,18 @@ impl RuntimeSessionService {
             .next_generation
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("external observer generation exhausted"))?;
+        if curated.is_some()
+            && (generation > 9_007_199_254_740_991 || epoch > 9_007_199_254_740_991)
+        {
+            return Err(MezError::invalid_state(
+                "curated public observer identity exhausted",
+            ));
+        }
+        let namespace_digest = if curated.is_some() {
+            Some(registry.enrollments.curated_namespaces.digest_mut(digest)?)
+        } else {
+            None
+        };
         let mut bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut bytes);
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
@@ -106,6 +130,9 @@ impl RuntimeSessionService {
         enrollment.instances.insert(work.observer_instance.clone());
         enrollment.token = SecretString::from(token);
         enrollment.observers.clear();
+        if curated.is_some() {
+            enrollment.curated_observer = Some(curated::CuratedObserver::default());
+        }
         enrollment.observe_connection(&work.origin);
         if let Some(registration) = &mut binding.registration {
             registration.presentation = None;
@@ -113,10 +140,17 @@ impl RuntimeSessionService {
         binding.pi_lifecycle = None;
         binding.generation = generation;
         binding.expires = current_unix_seconds().saturating_add(60);
-        let response = enrollment_response(&binding, &enrollment, &work.session_id);
+        let response = if curated.is_some() {
+            curated::public_response(&binding, &enrollment, &work.session_id)
+        } else {
+            enrollment_response(&binding, &enrollment, &work.session_id)
+        };
         binding.enrollment = Some(enrollment);
         let pane = binding.pane_id.clone();
         registry.next_generation = generation;
+        if let Some(namespace_digest) = namespace_digest {
+            *namespace_digest = replacement_digest;
+        }
         registry.enrollments.helper_targets.remove(
             binding.uid,
             &work.harness,

@@ -645,7 +645,20 @@ generation/observer-witness/session/expiry metadata, empty controls, no
 `observer_transport: "unavailable-curated-freshness"`. Exact creator/session/
 instance retry keeps original source/accounting identity and does not itself renew
 expiry; daemon maintenance can independently extend a healthy lease. Different
-instances fail closed; replacement/session policy and deployed scheduling remain unfinished.
+instances fail closed unless they supply the exact current positive JS-safe
+`predecessor_generation` for an active same-native-creator/session binding.
+Explicit rotation revalidates original creator/root/current helper evidence,
+preserves agent/run/accounting/native-anchor identity and replaces the public
+generation/witness/observer epoch using the shared actor-owned rotation path.
+It clears presentation and proof sequence/time; the new observer starts unobserved
+and gains no socket, client or usage rights. An identical transition retry must
+include its original predecessor, and does not itself refresh proof or expiry.
+Stale/concurrent predecessors, retired instances, public JS-safe overflow and
+exhaustion of the 128-instance run fence reject without changing the current
+owner. The original bounded namespace anchor changes only its binding selector;
+retirement cannot be undone by a replacement request. Client/module handoff,
+new/resume/fork policy and deployed scheduling remain unfinished: the fixed
+`harness-source` capsule and reusable SDK source do not yet request replacements.
 After expiry, both same-instance retry and changed-instance replacement fail
 closed for that native creator/root/session even if the private capability
 tombstone is GC'd or snapshot cleanup clears its binding. A separate runtime-only

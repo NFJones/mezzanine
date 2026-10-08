@@ -339,6 +339,10 @@ middleware result; it is not a vendor hook response, live observer proof or a
 durable usage acknowledgment. No arbitrary RPC/endpoint/pane/PID/role fields are
 accepted. This supplies transport, not automatic adapter/mod installation,
 idle/reload/session continuity, permission-policy bypass or accounting support.
+The daemon control protocol separately supports explicit predecessor-fenced
+same-native-creator/session observer rotation. This fixed argv capsule does not
+yet expose that handoff, and cannot infer a current observer or revive a retired
+namespace. A transport primitive is not an installed reload/session policy.
 The same fixed helper has a distinct public proof capsule
 `operation:"curated-heartbeat"` plus original `external_session_id`, positive
 JS-safe `generation`, 64-lowercase-hex `observer_witness`, and positive JS-safe

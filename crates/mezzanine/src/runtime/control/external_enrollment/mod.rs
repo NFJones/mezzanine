@@ -359,7 +359,10 @@ impl RuntimeSessionService {
             Some(value) => Some(
                 value
                     .as_u64()
-                    .filter(|generation| *generation > 0)
+                    .filter(|generation| {
+                        *generation > 0
+                            && (curated.is_none() || *generation <= 9_007_199_254_740_991)
+                    })
                     .ok_or_else(|| {
                         MezError::invalid_args("external observer predecessor must be positive")
                     })?,
@@ -523,7 +526,7 @@ impl RuntimeSessionService {
             if work.helper.is_some() {
                 return Err(MezError::forbidden("mixed source work unavailable"));
             }
-            return self.commit_curated_enrollment(work, curated, ancestry);
+            return self.commit_curated_enrollment(work, curated, ancestry, connection);
         }
         if let Some(helper) = &work.helper {
             return self.commit_external_helper_presentation(work, helper);

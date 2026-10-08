@@ -71,6 +71,25 @@ impl CuratedNamespaces {
     pub(in crate::runtime::control) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+    /// Borrows the unique active namespace selector before rotation publication.
+    /// Absence/ambiguity fails before effects; changing this selector grants no
+    /// new source authority and does not discard the original lifetime anchor.
+    pub(super) fn digest_mut(&mut self, digest: [u8; 32]) -> Result<&mut [u8; 32]> {
+        if self
+            .entries
+            .iter()
+            .filter(|entry| entry.digest == digest)
+            .count()
+            != 1
+        {
+            return Err(MezError::conflict("curated namespace selector unavailable"));
+        }
+        self.entries
+            .iter_mut()
+            .find(|entry| entry.digest == digest)
+            .map(|entry| &mut entry.digest)
+            .ok_or_else(|| MezError::conflict("curated namespace selector unavailable"))
+    }
     /// Selects only the original physically qualified creator/root/session;
     /// candidate metadata equality still requires original binding/live checks.
     fn find(
@@ -126,6 +145,46 @@ pub(super) struct CuratedAdmission {
 }
 
 impl CuratedAdmission {
+    /// Revalidates the original retained parent kind and current native helper
+    /// against the off-actor captured creator. This grants no socket authority;
+    /// the caller already checked exact namespace/root and actor ingress fences.
+    pub(super) fn authorize_existing(
+        &self,
+        work: &ExternalEnrollmentWork,
+        source: &EnrollmentBinding,
+    ) -> Result<()> {
+        let producer = self
+            .producer
+            .get()
+            .ok_or_else(|| MezError::forbidden("curated creator evidence missing"))?;
+        producer
+            .reobserve()
+            .map_err(|_| MezError::forbidden("curated creator unavailable"))?;
+        source
+            .producer
+            .reobserve()
+            .map_err(|_| MezError::forbidden("original curated creator unavailable"))?;
+        let child = work
+            .origin
+            .reobserve()
+            .map_err(|_| MezError::forbidden("curated helper unavailable"))?;
+        if !source
+            .producer
+            .matches_parent(producer.uid(), producer.identity())
+            || work.origin.uid() != producer.uid()
+            || child.parent_process_id != producer.identity().process_id
+            || !work.origin.writer_confirmed()
+            || !source.provenance_is_live()
+            || !work.ancestry.get().is_some_and(|ancestry| {
+                ancestry.is_live() && ancestry.source_matches(producer.uid(), producer.identity())
+            })
+        {
+            return Err(MezError::forbidden(
+                "curated original creator relationship changed",
+            ));
+        }
+        Ok(())
+    }
     /// Accepts only the known declared no-shell creator contract and a normalized
     /// initial main-session boundary. Unknown/helper/server/compact declarations
     /// fail before reservation; metadata does not attest executable identity.
@@ -208,12 +267,14 @@ impl CuratedAdmission {
 impl RuntimeSessionService {
     /// Commits only after common reservation/ingress/root fencing and exact native
     /// creator publication. Identical same-source/session/instance retry keeps the
-    /// original run; replacement and observer health are not inferred from a parent.
+    /// original run; explicit predecessor-fenced handoff shares the rotation
+    /// owner without inferring observer health or reviving retired namespaces.
     pub(super) fn commit_curated_enrollment(
         &mut self,
         work: &ExternalEnrollmentWork,
         curated: &CuratedAdmission,
         ancestry: &Arc<UnixAncestryWitness>,
+        connection: &ControlConnectionState,
     ) -> Result<String> {
         let producer = curated
             .producer
@@ -255,7 +316,6 @@ impl RuntimeSessionService {
             if binding.retired
                 || !source.producer.same_owner(&original_source)
                 || !source.provenance_is_live()
-                || source.instance != work.observer_instance
                 || binding.version != work.version
                 || binding
                     .registration
@@ -268,7 +328,7 @@ impl RuntimeSessionService {
                     "curated observer source or instance changed",
                 ));
             }
-            return Ok(public_response(binding, source, &work.session_id));
+            return self.replace_or_retry_external_observer(digest, work, connection);
         }
         if work.predecessor_generation.is_some() {
             return Err(MezError::conflict("curated predecessor unavailable"));
@@ -305,6 +365,11 @@ impl RuntimeSessionService {
             .next_generation
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("curated generation exhausted"))?;
+        if generation > 9_007_199_254_740_991 {
+            return Err(MezError::invalid_state(
+                "curated public observer identity exhausted",
+            ));
+        }
         let mut bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut bytes);
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
@@ -374,7 +439,11 @@ impl RuntimeSessionService {
 
 /// Public immutable selectors only. Neutral callback success is not this receipt;
 /// no bearer credential, socket authority or verified billing identity is exposed.
-fn public_response(binding: &LaunchBinding, source: &EnrollmentBinding, session: &str) -> String {
+pub(super) fn public_response(
+    binding: &LaunchBinding,
+    source: &EnrollmentBinding,
+    session: &str,
+) -> String {
     serde_json::json!({"protocol":"external-agent/1","registered":true,"controls":[],
         "agent_id":binding.registration.as_ref().map(|registration| registration.agent_id.as_str()),
         "generation":binding.generation,"observer_witness":observer_witness(Sha256::digest(source.token.expose_secret().as_bytes()).into()),
