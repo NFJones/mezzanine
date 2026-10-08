@@ -36,13 +36,16 @@ pub use error::{MezError, MezErrorKind, Result};
 ///
 /// Internal modes accept only exact code-owned bounded arguments. The hidden
 /// read-only harness peer checker also uses this path so it needs no HOME/config
-/// or asynchronous runtime. `None` means ordinary CLI startup should continue.
+/// or asynchronous runtime. The exact observational event helper builds only
+/// its own bounded current-thread I/O runtime, without configured CPU discovery.
+/// `None` means ordinary CLI startup should continue.
 pub fn internal_process_exit_code() -> Option<u8> {
     let arguments = std::env::args_os().collect::<Vec<_>>();
     security::sandbox::seatbelt_probe::run_internal_process(&arguments)
         .or_else(|| security::sandbox::seatbelt_child::run_internal_process(&arguments))
         .or_else(|| runtime::run_internal_editor_process(&arguments))
         .or_else(|| cli::run_internal_harness_peer_process(&arguments))
+        .or_else(|| cli::run_internal_harness_event_process(&arguments))
 }
 
 /// Reads the configured Tokio worker count before constructing the runtime.

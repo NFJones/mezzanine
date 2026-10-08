@@ -1,7 +1,7 @@
 //! Fixed normalized observational hook bridge, not a vendor payload interpreter.
 //!
 //! Credentials arrive only on bounded stdin, never argv or emitted diagnostics.
-//! The helper makes one capability-only same-user Unix exchange without initialize,
+//! The helper makes one restricted same-user Unix exchange without initialize,
 //! retries, subprocesses or general RPC passthrough. Errors lose telemetry and
 //! return neutral output. Vendor adapters own normalization and neutral-response
 //! compatibility; this helper does not certify a vendor or read its transcripts.
@@ -16,6 +16,29 @@ const MAX_EVENT_BYTES: usize = 64 * 1024;
 const INPUT_DEADLINE: Duration = Duration::from_millis(250);
 const EXCHANGE_DEADLINE: Duration = Duration::from_millis(500);
 
+/// Runs only the exact installed-helper argv before ordinary HOME/config/CPU
+/// runtime discovery. Other CLI invocations keep their existing startup path.
+/// Missing/invalid MEZ discovery or runtime failure drains bounded stdin and
+/// emits neutral output; this mode cannot create a client role or default route.
+pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u8> {
+    if arguments.len() != 2 || arguments[1] != "harness-event" {
+        return None;
+    }
+    let mut stdout = std::io::stdout();
+    let discovery = std::env::var_os("MEZ");
+    if let Ok(Some(socket)) = super::env::socket_selection_from_mez(discovery.as_ref())
+        && let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    {
+        return Some(u8::from(
+            runtime.block_on(run(&socket, &mut stdout)).is_err(),
+        ));
+    }
+    let _ = read_input();
+    Some(u8::from(writeln!(stdout, "{{}}").is_err()))
+}
+
 /// Bounded normalized envelope. Arbitrary upstream payloads are never forwarded.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,14 +51,15 @@ struct Event {
 }
 
 /// Token-free selectors for one independently enrolled ordinary producer.
-/// Private credentials are absent; the original public source generation fences
-/// delayed callbacks against observer replacement and is never daemon authority.
+/// Private credentials are absent; original generation and observer witness
+/// fence delayed callbacks/restarts and are never daemon authority.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HelperEvent {
     operation: String,
     harness: String,
     generation: u64,
+    observer_witness: String,
     external_session_id: String,
     data: serde_json::Value,
 }
@@ -59,7 +83,7 @@ fn request(bytes: &[u8]) -> Result<Zeroizing<String>> {
             .map_err(|_| MezError::invalid_args("event unavailable"))?;
         (
             event.operation,
-            serde_json::json!({"harness":event.harness,"generation":event.generation,"external_session_id":event.external_session_id}),
+            serde_json::json!({"harness":event.harness,"generation":event.generation,"observer_witness":event.observer_witness,"external_session_id":event.external_session_id}),
             event.data,
         )
     } else {
@@ -90,6 +114,7 @@ fn request(bytes: &[u8]) -> Result<Zeroizing<String>> {
         "generation",
         "external_session_id",
         "harness",
+        "observer_witness",
     ]
     .iter()
     .any(|key| params.contains_key(*key))
@@ -548,7 +573,7 @@ mod tests {
     /// duplicate keys and arbitrary process/control selectors never forward.
     #[test]
     fn harness_event_helper_observe_has_distinct_strict_identity() {
-        let base = serde_json::json!({"operation":"helper-observe","harness":"pi","generation":1,"external_session_id":"run","data":{"sequence":1,"state":"running"}});
+        let base = serde_json::json!({"operation":"helper-observe","harness":"pi","generation":1,"observer_witness":"b".repeat(64),"external_session_id":"run","data":{"sequence":1,"state":"running"}});
         let body = request(base.to_string().as_bytes()).unwrap();
         let value: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(value["method"], "agent/external/helper-observe");
@@ -562,7 +587,7 @@ mod tests {
             bad["data"][field] = serde_json::json!(1);
             assert!(request(bad.to_string().as_bytes()).is_err());
         }
-        for field in ["harness", "external_session_id"] {
+        for field in ["harness", "external_session_id", "observer_witness"] {
             let mut bad = base.clone();
             bad["data"][field] = serde_json::json!("override");
             assert!(request(bad.to_string().as_bytes()).is_err());

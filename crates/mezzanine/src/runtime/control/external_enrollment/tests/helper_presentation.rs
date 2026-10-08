@@ -91,6 +91,7 @@ async fn external_helper_presentation_cli_unix_actor_roundtrip_is_neutral() {
                 response["result"]["generation"].clone()
             };
             let envelope = serde_json::json!({"operation":operation,"harness":"pi","generation":generation,
+                "observer_witness":response["result"]["observer_witness"],
                 "external_session_id":"session-a","data":{"sequence":sequence,"state":state,"title":"CLI fixture"}});
             assert!(envelope.get("launch_token").is_none());
             zeroize::Zeroizing::new(envelope.to_string())

@@ -384,7 +384,8 @@ Helper exit MUST NOT retire its producer. Stale helper work MUST NOT overwrite a
 replacement observer. This is existing-producer generic presentation only, not
 initial hook enrollment or shared-daemon client/session association.
 `agent/external/helper-observe` MAY instead accept only canonical `harness`, exact
-`external_session_id`, original positive public `generation`, `sequence`, `state`
+`external_session_id`, original positive public `generation`, original
+`observer_witness`, `sequence`, `state`
 and optional `title`, without receiving or returning a private credential.
 An actor-owned UID/harness/session index MUST select exactly one independently
 enrolled live producer. Enrollment, rotation and retirement MUST update only
@@ -395,6 +396,11 @@ global registration pool per callback. Native direct-parent/writer/ancestry and
 actor root/deadline/current-generation fences MUST remain identical. Adapters
 MUST capture the source's returned generation before creating the callback;
 neither helper nor daemon may substitute the newest generation for delayed work.
+The 64-character lowercase hex `observer_witness` MUST bind the original observer
+instance as well: numeric generations can repeat after daemon restart. Its
+one-way credential digest representation MUST NOT be accepted as a private
+capability or durable accounting identity. Missing/foreign witnesses MUST reject
+before reservation, even with matching generation and native parent evidence.
 This token-free path MUST NOT enroll a parent, renew/retire a lease, acquire an
 observer/client/accounting owner, bypass Pi lifecycle ownership or grant usage.
 `agent/external/presentation` MUST require the same capability, generation and
@@ -435,6 +441,20 @@ forward arbitrary RPC or vendor content, transmit fabricated usage, or keep the
 vendor alive with referenced telemetry sockets/timers. Queue/write/reply bounds
 MUST remain finite; malformed/duplicate-key replies and untyped acknowledgments
 MUST lose telemetry neutrally, never replay vendor work or expose private handles.
+`captureHelperObservation(state)` MAY reserve one generic sequence and return a
+deeply frozen public helper envelope only for an already-enrolled client. It
+MUST bind call-time handle/attempt, generation and observer witness, expose no
+private token, reject Pi-owned projection and avoid implicit enrollment or helper
+spawn. Queue loss/pressure MAY cancel existing telemetry as usual. Capturing
+metadata is not delivery or a ledger receipt: the adapter MUST serialize capture
+and child dispatch against direct generic observations and preserve loss/stale
+outcomes rather than rebinding old snapshots. Changed installed bytes MUST keep
+exact independently frozen predecessors under new manifest revisions.
+The exact fixed `mez harness-event` argv MUST execute before ordinary HOME/config
+and configured CPU startup, using only a bounded current-thread I/O runtime and
+nonsecret MEZ routing. Missing/invalid routing MUST drain bounded stdin and remain
+neutral; it MUST NOT guess a default daemon route. Other CLI argv keep ordinary
+configuration startup, including explicit socket-selection forms.
 The fixed hidden `mez harness-peer` mode MAY verify same-user kernel peer UID on
 the client's borrowed private socket descriptor before config/runtime startup.
 It MUST do no socket I/O, enrollment, credential handling or vendor launch. This

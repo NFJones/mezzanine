@@ -79,6 +79,13 @@ impl RuntimeSessionService {
             super::super::external_agents::credential(&params)?
         };
         self.reconcile_external_agent_registration(digest);
+        if request.method == "agent/external/helper-observe"
+            && text(&params, "observer_witness", 64)? != observer_witness(digest)
+        {
+            return Err(MezError::forbidden(
+                "external helper observer instance unavailable",
+            ));
+        }
         let generation = params
             .get("generation")
             .and_then(serde_json::Value::as_u64)

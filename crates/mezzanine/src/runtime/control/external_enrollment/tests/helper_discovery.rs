@@ -10,10 +10,78 @@ use super::*;
 /// Emits only nonsecret candidate selectors and inert generic presentation.
 /// No private handle, PID, pane claim or client role is supplied. The captured
 /// public source generation only narrows the current indexed candidate.
-fn observation(generation: u64, sequence: u64) -> JsonRpcRequest {
+fn observation(enrolled: &serde_json::Value, sequence: u64) -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"observe",
-        "method":"agent/external/helper-observe","params":{"harness":"pi","generation":generation,"external_session_id":"session-a",
+        "method":"agent/external/helper-observe","params":{"harness":"pi","generation":enrolled["result"]["generation"],
+        "observer_witness":enrolled["result"]["observer_witness"],"external_session_id":"session-a",
         "sequence":sequence,"state":"running"}}).to_string()).unwrap()
+}
+
+/// Numeric generations can repeat in separate daemon instances. The original
+/// observer witness must reject missing/foreign instance data even when every
+/// other selector matches and a real child has valid native parent evidence.
+#[tokio::test(flavor = "current_thread")]
+async fn external_helper_discovery_observer_witness_fences_reused_generations() {
+    let Some(mut first) = fixture("hold").await else {
+        return;
+    };
+    let old = enroll_producer(&mut first).await;
+    let Some(mut second) = fixture("hold").await else {
+        return;
+    };
+    let current = enroll_producer(&mut second).await;
+    assert_eq!(generation(&old), generation(&current));
+    assert!(old["result"]["observer_witness"] != current["result"]["observer_witness"]);
+    let (_socket, connection) = child(&mut second).await;
+    let event = observation(&current, 1);
+    for witness in [
+        None,
+        Some(old["result"]["observer_witness"].clone()),
+        Some(serde_json::json!("x".repeat(64))),
+    ] {
+        let mut stale = event.clone();
+        let mut params: serde_json::Value =
+            serde_json::from_str(stale.params.as_deref().unwrap()).unwrap();
+        if let Some(witness) = witness {
+            params["observer_witness"] = witness;
+        } else {
+            params.as_object_mut().unwrap().remove("observer_witness");
+        }
+        stale.params = Some(params.to_string());
+        assert!(
+            second
+                .service
+                .prepare_external_helper_presentation(&stale, &connection)
+                .is_err()
+        );
+    }
+    let work = second
+        .service
+        .prepare_external_helper_presentation(&event, &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut second, work, &connection).await["result"]["changed"],
+        true
+    );
+    assert!(
+        second
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
+    let witness = current["result"]["observer_witness"].as_str().unwrap();
+    assert_eq!(witness.len(), 64);
+    // A public witness is not shaped as the private 43-byte capability and
+    // cannot authorize producer-only lifecycle operations on its own.
+    assert!(
+        super::super::super::external_agents::credential(
+            &serde_json::json!({"launch_token":witness})
+        )
+        .is_err()
+    );
 }
 
 /// Captures only the nonsecret server generation from the producer's reply.
@@ -43,7 +111,7 @@ async fn external_helper_discovery_six_labels_retain_native_parent_authority() {
         let enrolled = settle(&mut fixture, work, &own_connection).await;
         assert!(enrolled.get("error").is_none());
         let (_socket, connection) = child(&mut fixture).await;
-        let mut event = observation(generation(&enrolled), 1);
+        let mut event = observation(&enrolled, 1);
         let mut params: serde_json::Value =
             serde_json::from_str(event.params.as_deref().unwrap()).unwrap();
         params["harness"] = serde_json::json!(harness);
@@ -96,7 +164,7 @@ async fn external_helper_discovery_cleanup_is_targeted_and_ownership_is_preserve
         .get_mut(&legacy_digest)
         .unwrap()
         .expires = current_unix_seconds() - 1;
-    let event = observation(generation(&enrolled), 1);
+    let event = observation(&enrolled, 1);
     let work = fixture
         .service
         .prepare_external_helper_presentation(&event, &connection)
@@ -106,7 +174,7 @@ async fn external_helper_discovery_cleanup_is_targeted_and_ownership_is_preserve
         true
     );
     assert!(!fixture.service.control.external_agents().bindings[&legacy_digest].retired);
-    let mut legacy_event = observation(generation(&legacy), 2);
+    let mut legacy_event = observation(&legacy, 2);
     let mut params: serde_json::Value =
         serde_json::from_str(legacy_event.params.as_deref().unwrap()).unwrap();
     params["harness"] = serde_json::json!("opencode");
@@ -148,10 +216,7 @@ async fn external_helper_discovery_cleanup_is_targeted_and_ownership_is_preserve
     assert!(
         fixture
             .service
-            .prepare_external_helper_presentation(
-                &observation(generation(&updated), 2),
-                &connection
-            )
+            .prepare_external_helper_presentation(&observation(&updated, 2), &connection)
             .unwrap_err()
             .message()
             .contains("Pi lifecycle")
@@ -176,10 +241,7 @@ async fn external_helper_discovery_cleanup_is_targeted_and_ownership_is_preserve
     assert!(
         fixture
             .service
-            .prepare_external_helper_presentation(
-                &observation(generation(&updated), 2),
-                &connection
-            )
+            .prepare_external_helper_presentation(&observation(&updated, 2), &connection)
             .is_err()
     );
     assert!(
@@ -213,7 +275,7 @@ async fn external_helper_discovery_bulk_retirement_clears_index_and_old_work() {
     };
     let enrolled = enroll_producer(&mut fixture).await;
     let (_socket, connection) = child(&mut fixture).await;
-    let event = observation(generation(&enrolled), 1);
+    let event = observation(&enrolled, 1);
     let work = fixture
         .service
         .prepare_external_helper_presentation(&event, &connection)
@@ -254,7 +316,7 @@ async fn external_helper_discovery_bulk_retirement_clears_index_and_old_work() {
     );
     let work = fixture
         .service
-        .prepare_external_helper_presentation(&observation(generation(&fresh), 1), &connection)
+        .prepare_external_helper_presentation(&observation(&fresh, 1), &connection)
         .unwrap();
     assert_eq!(
         settle(&mut fixture, work, &connection).await["result"]["changed"],
@@ -283,7 +345,10 @@ async fn external_helper_discovery_selectors_never_substitute_for_native_parent(
     assert!(
         fixture
             .service
-            .prepare_external_helper_presentation(&observation(1, 1), &connection)
+            .prepare_external_helper_presentation(
+                &observation(&serde_json::json!({"result":{"generation":1}}), 1),
+                &connection
+            )
             .is_err()
     );
     assert!(
@@ -295,7 +360,7 @@ async fn external_helper_discovery_selectors_never_substitute_for_native_parent(
             .is_empty()
     );
     let enrolled = enroll_producer(&mut fixture).await;
-    let event = observation(generation(&enrolled), 1);
+    let event = observation(&enrolled, 1);
     let own_connection = fixture.connection.clone();
     let work = fixture
         .service
@@ -380,7 +445,7 @@ async fn external_helper_discovery_rotation_and_retirement_fence_old_sources() {
     };
     let enrolled = enroll_producer(&mut fixture).await;
     let (_socket, connection) = child(&mut fixture).await;
-    let old_event = observation(generation(&enrolled), 1);
+    let old_event = observation(&enrolled, 1);
     let old_work = fixture
         .service
         .prepare_external_helper_presentation(&old_event, &connection)
@@ -428,7 +493,7 @@ async fn external_helper_discovery_rotation_and_retirement_fence_old_sources() {
         .select(uid, "pi", "session-a")
         .unwrap();
     assert_ne!(digest, original_digest);
-    let fresh = observation(generation(&updated), 1);
+    let fresh = observation(&updated, 1);
     let work = fixture
         .service
         .prepare_external_helper_presentation(&fresh, &connection)
@@ -494,7 +559,7 @@ async fn external_helper_discovery_ambiguous_producers_fail_closed_without_scans
             .kind(),
         crate::error::MezErrorKind::Conflict
     );
-    let event = observation(generation(&enrolled), 1);
+    let event = observation(&enrolled, 1);
     assert!(
         fixture
             .service
@@ -552,10 +617,7 @@ async fn external_helper_discovery_native_child_uses_daemon_owned_target_only() 
     for changed in [true, false] {
         let work = fixture
             .service
-            .prepare_external_helper_presentation(
-                &observation(enrolled["result"]["generation"].as_u64().unwrap(), 1),
-                &connection,
-            )
+            .prepare_external_helper_presentation(&observation(&enrolled, 1), &connection)
             .unwrap();
         let result = settle(&mut fixture, work, &connection).await;
         assert_eq!(result["result"]["changed"], changed);

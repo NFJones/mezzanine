@@ -74,6 +74,25 @@ async fn external_enrollment_installed_shared_client_supports_six_canonical_labe
     }
 }
 
+/// An installed producer captures a public packet and spawns the built fixed
+/// helper itself. Only helper-observe can create presentation; the actor checks
+/// it while the producer survives helper EOF and a disconnected observer.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built mez helper required"]
+async fn external_enrollment_installed_public_snapshots_reach_native_child_helper() {
+    for harness in ["claude", "codex", "copilot", "opencode", "cursor", "pi"] {
+        qualify_installed_node_entry(
+            "persistent-helper-ordinary-fixture.mjs",
+            "persistent_client.mjs",
+            2,
+            1,
+            false,
+            Some(harness),
+        )
+        .await;
+    }
+}
+
 /// Qualifies actual installed shared bytes, native process ownership and exact
 /// observer replacement, without impersonating six vendor loader integrations.
 async fn qualify_installed_node_entry(
@@ -123,6 +142,7 @@ async fn qualify_installed_node_entry(
     std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
     crate::runtime::enable_unix_writer_credentials(listener.as_raw_fd()).unwrap();
     let opencode = entry_name == "opencode_tui.mjs";
+    let helper_callback = script_name == "persistent-helper-ordinary-fixture.mjs";
     let root = directory.join(if opencode {
         "opencode-config"
     } else {
@@ -201,7 +221,7 @@ async fn qualify_installed_node_entry(
     let server = async {
         let mut tasks = tokio::task::JoinSet::new();
         let mut producer = None;
-        for _ in 0..connections {
+        for ordinal in 0..connections {
             let (mut stream, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
                 .await
                 .unwrap()
@@ -217,13 +237,23 @@ async fn qualify_installed_node_entry(
                     .unwrap();
             assert_eq!(
                 identity.executable_path,
-                node.canonicalize().unwrap(),
+                if helper_callback && ordinal == 1 {
+                    helper.canonicalize().unwrap()
+                } else {
+                    node.canonicalize().unwrap()
+                },
                 "peer helper supplied sender identity instead of Node"
             );
             if let Some(pid) = producer {
-                assert_eq!(origin.identity.process_id, pid);
+                if helper_callback && ordinal == 1 {
+                    assert_ne!(origin.identity.process_id, pid);
+                    assert_eq!(origin.identity.parent_process_id, pid);
+                } else {
+                    assert_eq!(origin.identity.process_id, pid);
+                }
+            } else {
+                producer = Some(origin.identity.process_id);
             }
-            producer = Some(origin.identity.process_id);
             let handle = handle.clone();
             tasks.spawn(async move {
                 let mut connection = ControlConnectionState::new(true, false);
@@ -266,7 +296,7 @@ async fn qualify_installed_node_entry(
             .external_agents()
             .bindings
             .values()
-            .all(|binding| binding.retired)
+            .all(|binding| binding.retired != helper_callback)
     );
     let binding = exit
         .service
@@ -276,13 +306,21 @@ async fn qualify_installed_node_entry(
         .values()
         .max_by_key(|binding| binding.generation)
         .unwrap();
-    assert!(binding.retired);
+    assert_eq!(binding.retired, !helper_callback);
+    if helper_callback {
+        assert!(binding.enrollment.as_ref().unwrap().origin.is_live());
+        assert_eq!(binding.enrollment.as_ref().unwrap().observers.len(), 1);
+    }
     if let Some(harness) = harness {
         assert_eq!(binding.harness, harness);
     }
     assert_eq!(
         binding.enrollment.as_ref().unwrap().epoch,
-        if typed_pi || opencode { 1 } else { 2 }
+        if typed_pi || opencode || helper_callback {
+            1
+        } else {
+            2
+        }
     );
     if typed_pi {
         assert!(
@@ -311,7 +349,11 @@ async fn qualify_installed_node_entry(
             .as_ref()
             .unwrap()
             .state,
-        if opencode { "running" } else { "complete" }
+        if opencode || helper_callback {
+            "running"
+        } else {
+            "complete"
+        }
     );
     assert!(
         exit.service

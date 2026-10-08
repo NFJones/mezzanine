@@ -580,6 +580,7 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         params_schema: ControlParamsSchema::Allowed(&[
             "harness",
             "generation",
+            "observer_witness",
             "external_session_id",
             "sequence",
             "state",

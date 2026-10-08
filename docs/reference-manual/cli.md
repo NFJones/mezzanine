@@ -303,15 +303,25 @@ retire the producer. This does not yet install or activate ordinary hook adapter
 case. Its separate strict envelope is:
 
 ```json
-{"operation":"helper-observe","harness":"pi","generation":1,"external_session_id":"bound-run","data":{"sequence":1,"state":"running"}}
+{"operation":"helper-observe","harness":"pi","generation":1,"observer_witness":"<64 lowercase hex characters from enrollment>","external_session_id":"bound-run","data":{"sequence":1,"state":"running"}}
 ```
 
-The original public generation comes from the producer's enrollment response;
-the adapter must bind it to the callback, never fetch the newest generation for
+The original public generation and observer-instance witness come from the
+producer's enrollment response; the adapter must bind them to the callback,
+never fetch the newest generation or witness for
 delayed work. No token is accepted or returned. Missing/ambiguous daemon-owned
 targets fail closed, and native direct-parent, writer and actor fences still run.
 This does not enroll a parent or grant observer, renewal, retirement or usage
 rights. Callback sequence serialization remains the producer adapter's job.
+An already-enrolled shared client can capture the frozen envelope with
+`captureHelperObservation(state)`, sharing its generic sequence owner. Capture
+does no implicit enrollment, delivery or helper spawn and is not a receipt. The
+adapter must keep capture and child dispatch ordered; it cannot refresh the
+generation/witness after loss or replacement. The exact `mez harness-event` mode
+uses MEZ discovery before ordinary HOME/config/runtime CPU initialization, so it
+works with a cleared environment apart from those routing hints. Missing/invalid
+routing remains neutral without guessing a default socket. Explicit `-S`/other
+CLI forms retain normal configuration startup.
 
 This is not vendor hook installation or certification. Adapters must privately
 deliver existing run credentials, normalize content-free released payloads, serialize

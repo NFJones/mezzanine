@@ -657,7 +657,7 @@ actor publication. Exit immediately after a final check remains possible; later
 projection/authorization rejects dead witnesses. This is not executable/vendor
 attestation, cross-user ancestry admission or macOS qualification.
 
-Success returns one private `launch_token`, `generation`, stable `run_id`,
+Success returns one private `launch_token`, `generation`, public `observer_witness`, stable `run_id`,
 `observer_epoch`, `observer_instance`, `agent_id`, exact
 external session, `registered: true`, `controls: []`, and the existing 60s lease.
 Identical live same-instance retry returns the same handle/identity with the same
@@ -703,7 +703,7 @@ ordinary producer; explicit-launch handles and Pi lifecycle-owned presentation
 are not eligible.
 
 `agent/external/helper-observe` is the token-free alternate with only `harness`,
-`external_session_id`, positive original `generation`, `sequence`, `state`, and
+`external_session_id`, positive original `generation`, original `observer_witness`, `sequence`, `state`, and
 optional `title`. UID/harness/session selectors locate one daemon-owned indexed
 ordinary target, never grant authority. Missing or colliding live targets reject
 before native reservation; there is no pane/focus/PID or first-match fallback.
@@ -712,6 +712,11 @@ reconciles the exact indexed candidate group, not all registrations.
 
 The adapter must retain the public generation returned to its independently
 enrolled producer and bind it to the original callback. It is not a credential.
+The original observer witness is also required because numeric generations may
+repeat after daemon restart. This 64-character lowercase hex digest cannot be
+used as the private 43-character capability; it is an instance selector, not
+authority, vendor attestation or durable usage-source identity. Missing/foreign
+witnesses reject before reservation. Do not refresh witnesses on delayed work.
 Old work and old callbacks reject after observer replacement; the helper cannot
 look up a fresh generation to rebind delayed observations. Initial hook-only
 producer admission remains unavailable; parent ancestry alone never creates one.
@@ -746,13 +751,22 @@ The client is bounded, unreferenced, allowlisted and neutral on loss. It exposes
 typed lifecycle delivery, not ledger commitment or fabricated usage.
 
 Private installation pins the installing binary, not a PATH/launcher helper
-variable. Pi revision6 and OpenCode revision5 align the shared persistent factory
-with the six canonical daemon labels; this does not install missing vendor adapters.
+variable. Pi revision7 and OpenCode revision6 add immutable public helper capture
+and observer-instance witnesses; this does not install missing vendor adapters.
 The OpenCode TUI-only default `{id,tui}` entry and owned `tui.json` `/plugin` array
-member are unchanged. Exact Pi2/Pi3/Pi4/Pi5 and
-OpenCode1/OpenCode2/OpenCode3/OpenCode4 receipts use independently frozen
+member are unchanged. Exact Pi2/Pi3/Pi4/Pi5/Pi6 and
+OpenCode1/OpenCode2/OpenCode3/OpenCode4/OpenCode5 receipts use independently frozen
 old client bytes; unknown historical helper references remain non-destructive errors.
 Other historical variants, recovery/default-root/dry-run UX remain installer work.
+An enrolled shared client may call `captureHelperObservation(state)` to reserve
+its next generic sequence and obtain a deeply frozen `helper-observe` envelope
+without a private token. It neither enrolls nor sends/spawns anything by itself.
+Captures are fenced to the call-time handle/attempt, reject lost/Pi-owned clients,
+and cannot obtain a replacement's generation/witness. The adapter must serialize
+capture plus child dispatch against direct presentation; gaps or late delivery
+remain explicit, never silently rebound. Capture and neutral child exit are not
+delivery acknowledgment or accounting receipts. The fixed helper's own sender
+and native direct parent remain the authorization boundary.
 Ordinary installed Pi entry callbacks now use this verified transport, with a
 bounded process lease/queue and genuine sessionManager selection. Same-session
 reload rotates observer credentials; new/resume/fork retire the exact prior

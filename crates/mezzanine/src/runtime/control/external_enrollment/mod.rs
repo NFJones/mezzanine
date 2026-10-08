@@ -615,6 +615,7 @@ fn enrollment_response(
     session: &str,
 ) -> String {
     serde_json::json!({"protocol":"external-agent/1","launch_token":enrollment.token.expose_secret(),
+        "observer_witness":observer_witness(Sha256::digest(enrollment.token.expose_secret().as_bytes()).into()),
         "agent_id":binding.registration.as_ref().map(|registration| registration.agent_id.as_str()),
         "run_id":enrollment.run_generation,"observer_epoch":enrollment.epoch,"observer_instance":enrollment.instance,
         "generation":binding.generation,"external_session_id":session,"registered":true,"controls":[],
@@ -623,3 +624,10 @@ fn enrollment_response(
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
+
+/// Public instance selector derived from the one-way credential digest. Its
+/// 64-character hex form cannot be used as the 43-character private capability.
+/// It fences numeric generation reuse across restart, never grants authority.
+fn observer_witness(digest: [u8; 32]) -> String {
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}

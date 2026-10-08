@@ -138,15 +138,15 @@ mod tests {
     /// A shared-client byte revision must preserve every compiled historical
     /// upgrade, not just the oldest or immediate predecessor. Historical client
     /// data stays independent of active source and upgrade touches no authored
-    /// sibling configuration. The immediate shipped bytes remain exact v3.
+    /// sibling configuration. The immediate shipped bytes remain exact v4.
     #[test]
     fn persistent_client_artifact_upgrade_retains_all_frozen_predecessors() {
         use super::super::installer::{Operation, plan};
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, if harness == "pi" { 6 } else { 5 });
+            assert_eq!(current.revision, if harness == "pi" { 7 } else { 6 });
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), 4);
+            assert_eq!(history.len(), 5);
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
             let frozen = immediate
@@ -157,7 +157,7 @@ mod tests {
             assert_eq!(
                 frozen.artifact,
                 Artifact::File {
-                    bytes: super::super::history::persistent_client_v3()
+                    bytes: super::super::history::persistent_client_v4()
                 }
             );
             for previous in history {

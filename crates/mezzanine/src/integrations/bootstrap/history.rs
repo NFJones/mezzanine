@@ -409,6 +409,15 @@ pub(super) fn persistent_client_v3() -> Vec<u8> {
         .into_bytes()
 }
 
+/// Reconstructs exact Pi6/OpenCode5 client bytes independently of active source.
+pub(super) fn persistent_client_v4() -> Vec<u8> {
+    let previous = persistent_client_v3();
+    String::from_utf8_lossy(&previous).replace(
+        "[\"pi\", \"opencode\"].includes(metadata.harness)",
+        "[\"claude\", \"codex\", \"copilot\", \"opencode\", \"cursor\", \"pi\"].includes(metadata.harness)",
+    ).into_bytes()
+}
+
 /// Exact inert projection addition shipped in the second shared client.
 const PI_FACT_V2: &str = r#"/** Reprojects only inert known Pi fields; arbitrary callback objects/content are
  * discarded before transport. Daemon Event validation remains authoritative. */
@@ -463,6 +472,14 @@ mod tests {
     /// sources, independently of later active entry/client implementation edits.
     #[test]
     fn bootstrap_history_source_snapshots_are_immutable() {
+        let v4 = persistent_client_v4();
+        assert_eq!(
+            Sha256::digest(&v4)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            "0fffc4fd2e626b82ba958c63b3ec579fea4e51baf9f3247f8d623497d171ea12"
+        );
         let v3 = persistent_client_v3();
         assert_eq!(
             Sha256::digest(&v3)

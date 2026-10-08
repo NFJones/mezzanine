@@ -273,8 +273,9 @@ export function createPersistentTelemetryClient(options) {
           || !positive(result.generation) || !positive(result.run_id) || !positive(result.observer_epoch)
           || result.observer_instance !== metadata.observer_instance || result.external_session_id !== metadata.external_session_id
           || typeof result.launch_token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(result.launch_token)
+          || typeof result.observer_witness !== "string" || !/^[a-f0-9]{64}$/.test(result.observer_witness)
           || result.usage !== "unavailable-source-continuity") { lose(current); return false; }
-      handle = { token: result.launch_token, generation: result.generation, run: result.run_id, epoch: result.observer_epoch };
+      handle = { token: result.launch_token, generation: result.generation, witness: result.observer_witness, run: result.run_id, epoch: result.observer_epoch };
       phase = "enrolled";
       return true;
     })().catch(() => { lose(current); return false; });
@@ -286,6 +287,22 @@ export function createPersistentTelemetryClient(options) {
   return Object.freeze({ start,
     status() { return Object.freeze({ phase, usage: "unavailable-source-continuity",
       run: handle?.run, epoch: handle?.epoch }); },
+    // Reserves a generic sequence without I/O or implicit enrollment. This is
+    // metadata capture, not delivery: the adapter owns serialized child dispatch.
+    captureHelperObservation(state) {
+      if (phase !== "enrolled" || !states.has(state) || projectionMode === "pi") return Promise.resolve(undefined);
+      const capturedHandle = handle;
+      const capturedAttempt = attempt;
+      projectionMode = "generic";
+      return enqueue(async () => {
+        if (phase !== "enrolled" || !capturedHandle || handle !== capturedHandle || attempt !== capturedAttempt
+            || !Number.isSafeInteger(sequence + 1)) return unavailable();
+        return Object.freeze({ operation: "helper-observe", harness: metadata.harness,
+          generation: capturedHandle.generation, observer_witness: capturedHandle.witness,
+          external_session_id: metadata.external_session_id,
+          data: Object.freeze({ sequence: ++sequence, state }) });
+      }).then(snapshot => snapshot?.operation === "helper-observe" ? snapshot : undefined);
+    },
     presentation(state, connectedOnly = false) {
       if (!states.has(state) || projectionMode === "pi") return Promise.resolve(unavailable());
       projectionMode = "generic";

@@ -109,8 +109,9 @@ mod dispatch;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod env;
-/// Owns bounded capability-only normalized harness event forwarding.
+/// Owns bounded restricted normalized harness event forwarding.
 mod harness_event;
+pub(crate) use harness_event::run_internal_process as run_internal_harness_event_process;
 /// Owns fixed read-only native daemon peer verification for persistent clients.
 mod harness_peer;
 pub(crate) use harness_peer::run_internal_process as run_internal_harness_peer_process;

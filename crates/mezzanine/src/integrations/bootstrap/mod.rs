@@ -139,6 +139,15 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     if *manifest != current {
         return Vec::new();
     }
+    let mut latest_client = current.clone();
+    latest_client.revision = if manifest.harness == "pi" { 6 } else { 5 };
+    for entry in &mut latest_client.entries {
+        if entry.path.ends_with("/persistent_client.mjs") {
+            entry.artifact = reconciliation::Artifact::File {
+                bytes: history::persistent_client_v4(),
+            };
+        }
+    }
     let mut shipped_client = current.clone();
     shipped_client.revision = if manifest.harness == "pi" { 5 } else { 4 };
     for entry in &mut shipped_client.entries {
@@ -190,7 +199,13 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         .entries
         .retain(|entry| !paths.contains(&entry.path.as_str()));
     if compiled_predecessor_matches(&previous) {
-        vec![shipped_client, last_shipped, immediate, previous]
+        vec![
+            latest_client,
+            shipped_client,
+            last_shipped,
+            immediate,
+            previous,
+        ]
     } else {
         Vec::new()
     }

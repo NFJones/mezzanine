@@ -62,6 +62,7 @@ function enrollment(request, generation = 1, epoch = 1) {
   return { protocol: "external-agent/1", registered: true, controls: [], generation,
     run_id: 1, observer_epoch: epoch, observer_instance: request.params.observer_instance,
     external_session_id: request.params.external_session_id, launch_token: "a".repeat(43),
+    observer_witness: (generation === 7 ? "b" : "c").repeat(64),
     usage: "unavailable-source-continuity" };
 }
 
@@ -145,6 +146,94 @@ test("successor sends exact predecessor and has its own sequence/private state",
     old.detach();
     assert.equal(successor.status().phase, "enrolled");
   } finally { old.detach(); successor?.detach(); await f.close(); }
+});
+
+test("helper snapshots are immutable original-epoch metadata with one generic sequence owner", async () => {
+  const f = await fixture(request => request.method === "agent/external/enroll"
+    ? enrollment(request, request.params.observer_instance === "instance-a" ? 7 : 9,
+      request.params.observer_instance === "instance-a" ? 1 : 2)
+    : { changed: true, sequence: request.params.sequence, accepted: true, retired: false });
+  const client = createPersistentTelemetryClient(f.options);
+  let successor;
+  try {
+    assert.equal(await client.captureHelperObservation("running"), undefined);
+    assert.equal(f.sockets.size, 0);
+    assert.equal(f.requests.length, 0);
+    assert.equal(await client.start(), true);
+    const snapshot = await client.captureHelperObservation("running");
+    assert.deepEqual(snapshot, { operation: "helper-observe", harness: "pi", generation: 7,
+      observer_witness: "b".repeat(64),
+      external_session_id: "session-a", data: { sequence: 1, state: "running" } });
+    assert(Object.isFrozen(snapshot) && Object.isFrozen(snapshot.data));
+    assert.throws(() => { snapshot.generation = 9; }, TypeError);
+    assert.throws(() => { snapshot.data.state = "failed"; }, TypeError);
+    assert(!JSON.stringify(snapshot).includes("launch_token"));
+    assert.equal(f.requests.length, 1, "capture performed a transport operation");
+    assert.equal((await client.presentation("complete")).delivered, true);
+    assert.equal(f.requests.at(-1).params.sequence, 2);
+    assert.equal(await client.captureHelperObservation({ prompt: "PRIVATE" }), undefined);
+    successor = client.successor("instance-b");
+    assert.equal(await successor.start(), true);
+    client.detach();
+    assert.equal(await client.captureHelperObservation("failed"), undefined);
+    const fresh = await successor.captureHelperObservation("ready");
+    assert.equal(fresh.generation, 9);
+    assert.equal(fresh.data.sequence, 1);
+    assert.equal(snapshot.generation, 7, "replacement rebound a captured callback");
+    successor.disconnect();
+    const requests = f.requests.length;
+    assert.equal(await successor.captureHelperObservation("running"), undefined);
+    assert.equal(f.requests.length, requests, "lost transport auto-enrolled during capture");
+  } finally { client.detach(); successor?.detach(); await f.close(); }
+  const pi = await fixture(request => request.method === "agent/external/enroll" ? enrollment(request)
+    : { accepted: true, sequence: request.params.sequence, retired: false });
+  const typed = createPersistentTelemetryClient(pi.options);
+  try {
+    assert.equal((await typed.piObservation({ type: "session_start", reason: "startup" })).delivered, true);
+    assert.equal(await typed.captureHelperObservation("running"), undefined);
+    assert.equal(pi.requests.length, 2);
+  } finally { typed.detach(); await pi.close(); }
+});
+
+test("queued helper capture cannot cross transport loss or implicit reenrollment", async () => {
+  let enrollments = 0;
+  const f = await fixture(request => {
+    if (request.method !== "agent/external/enroll") return undefined;
+    const result = enrollment(request, 7);
+    result.observer_witness = (++enrollments === 1 ? "b" : "d").repeat(64);
+    return result;
+  });
+  const client = createPersistentTelemetryClient(f.options);
+  try {
+    assert.equal(await client.start(), true);
+    const pending = client.presentation("running");
+    for (let attempt = 0; f.requests.length < 2 && attempt < 100; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(f.requests.length, 2);
+    const queued = client.captureHelperObservation("complete");
+    client.disconnect();
+    assert.equal((await pending).delivered, false);
+    assert.equal(await queued, undefined);
+    assert.equal(f.requests.length, 2, "capture implicitly re-enrolled");
+    assert.equal(await client.start(), true);
+    const fresh = await client.captureHelperObservation("ready");
+    assert.equal(fresh.generation, 7);
+    assert.equal(fresh.observer_witness, "d".repeat(64));
+    assert.equal(fresh.data.sequence, 2, "cancelled capture consumed a sequence");
+  } finally { client.detach(); await f.close(); }
+});
+
+test("missing or malformed observer-instance witnesses cannot enroll", async () => {
+  for (const witness of [undefined, null, "", "B".repeat(64), "b".repeat(63), "b".repeat(65), {}]) {
+    const f = await fixture(request => ({ ...enrollment(request), observer_witness: witness }));
+    const client = createPersistentTelemetryClient(f.options);
+    try {
+      assert.equal(await client.start(), false);
+      assert.equal(await client.captureHelperObservation("running"), undefined);
+      assert.equal(f.requests.length, 1);
+    } finally { client.detach(); await f.close(); }
+  }
 });
 
 test("malformed or unavailable peer/helper remains neutral and does not enroll", async () => {
