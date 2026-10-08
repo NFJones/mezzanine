@@ -776,6 +776,39 @@ No vendor observer descriptor, launcher helper environment or forced session fla
 is required for this lifecycle path. Vendor trust/disabled-extension policy is
 not bypassed; supported Pi callback shapes remain best-effort observations.
 
+### Claude source projection (not an installed integration)
+
+`claude_observer.mjs` contains pure `projectClaudeEvent(boundSession, name, event)`
+and a generic host middleware adapter. It grants no transport or enrollment
+authority and is not in the compiled installer registry. A real curated mod must
+keep literal `on('classic.Event', async ($, e, next) => ...)` bindings and
+`next(e)` calls visible to the vendor validator; capture the pure fact, await the
+unchanged downstream result, enqueue the fact without changing that result.
+Do not pass `$` or `next` through factory-generated hook references.
+
+Only known classic SessionStart/UserPromptSubmit/Notification/Stop/StopFailure/
+SessionEnd facts are captured, with exact bound-session and child-ID filtering.
+`agent_type` alone can identify a main `--agent` session. Stop is a boundary with
+its boolean active flag, not proof of completion; SessionStart `compact` must not
+allocate a new producer merely because compaction happened. Unknown reasons are
+unavailable. Facts contain no prompt, response, error, transcript/cwd, model,
+counter or directive data. Downstream results/errors are preserved and telemetry
+failure cannot turn into an approval, refusal or continuation.
+
+The current [mod reference](https://code.claude.com/docs/en/plugins/mods/reference)
+and [public declarations](https://github.com/anthropics/claude-code/blob/main/mods/types/claude-code.d.ts)
+describe a curated no-Node/no-DOM environment. `$.process.run` is one-shot argv
+execution with stdin closed, not a persistent producer IPC API. Mod-load
+`session.start` fires per load/reload, not after clear/resume/branch. Importing the
+Node shared client directly or inferring a stable producer from a short-lived
+helper therefore is not a supported solution. The projection contract has
+offline Node fixtures and an explicit temporary-plugin vendor validation check;
+neither installs/enables a mod or proves runtime delivery/accounting. Actual
+loader/transport association and separately consented unsandboxed execution
+remain unfinished integration work, without a version/certification gate.
+
+### Typed Pi lifecycle observations
+
 `agent/external/pi-observation` is restricted to ordinary Pi enrollment. It accepts
 the private token/generation/session, contiguous positive `sequence`, and one
 existing typed Pi `event` (maximum metadata4096/event1024 bytes). The original

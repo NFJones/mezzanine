@@ -455,6 +455,24 @@ and configured CPU startup, using only a bounded current-thread I/O runtime and
 nonsecret MEZ routing. Missing/invalid routing MUST drain bounded stdin and remain
 neutral; it MUST NOT guess a default daemon route. Other CLI argv keep ordinary
 configuration startup, including explicit socket-selection forms.
+The transport-free Claude source projector MUST preserve literal curated-mod
+`on`/`next` call sites without receiving the mods API or middleware capabilities.
+It MAY capture only known inert classic session/event fields for an exact
+immutable session selector; child identifiers MUST exclude borrowed parent IDs,
+while a main-thread `agent_type` alone MUST NOT imply a child. Raw prompts,
+transcript/cwd paths, tools, answers, errors, model/counter data and directives
+MUST NOT be read or forwarded. Resolved downstream results may still contain
+blocking/continuation decisions: projected facts MUST NOT claim execution,
+completion, process death, authorization or accounting commitment.
+Generic host middleware wrappers MUST call `next(original)` once, preserve its
+result/error and not await telemetry publication. Publishers MUST be bounded and
+nonblocking. Unknown/prototype event names and malformed selectors MUST be inert.
+Claude mod-load `session.start` MUST NOT substitute for conversation transitions.
+Current curated mods have no Node APIs; the shared Node client MUST NOT be
+advertised as directly loadable there. A pure projector or offline source
+validation MUST NOT imply an installed producer/transport or automatically enable
+unsandboxed mod execution. Transport, loader/policy and native provenance remain
+separate integration responsibilities.
 The fixed hidden `mez harness-peer` mode MAY verify same-user kernel peer UID on
 the client's borrowed private socket descriptor before config/runtime startup.
 It MUST do no socket I/O, enrollment, credential handling or vendor launch. This
