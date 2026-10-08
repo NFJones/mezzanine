@@ -2,7 +2,8 @@
 //!
 //! A native verified parent is not a socket-origin substitute. Constructing facts
 //! grants no registration, observer, lease, client or usage rights. Initial parent
-//! admission still needs a source-qualified policy/session/actor consumer.
+//! admission is confined to the separate declared curated-command actor owner;
+//! source/session/observer/adapter policy is not inferred from these facts.
 
 use super::*;
 use crate::runtime::UnixParentProcess;
@@ -15,10 +16,6 @@ pub(super) enum ProducerEvidence {
     /// Original kernel-qualified socket process, not a payload-selected PID.
     Socket(Arc<UnixOriginProcess>),
     /// Previously verified direct parent whose owned lifetime survives its helper.
-    #[allow(
-        dead_code,
-        reason = "source-qualified initial parent admission is unfinished"
-    )]
     VerifiedParent(Arc<UnixParentProcess>),
 }
 
@@ -64,6 +61,11 @@ impl ProducerEvidence {
     /// an observer transport; a parent's matching UID/PID/start is not authority.
     pub(super) fn matches_socket(&self, origin: &UnixOriginProcess) -> bool {
         matches!(self, Self::Socket(source) if source.uid() == origin.uid() && source.identity == origin.identity)
+    }
+    /// Candidate selection only within native parent kind. The actor still must
+    /// revalidate original retained lifetime/root and the new helper relationship.
+    pub(super) fn matches_parent(&self, uid: u32, identity: ProcessParentIdentity) -> bool {
+        matches!(self, Self::VerifiedParent(source) if source.uid() == uid && source.identity == identity)
     }
     /// Authorizes only a current sender-confirmed socket of the same socket source
     /// kind/UID/native record. Parent facts and unavailable native observations

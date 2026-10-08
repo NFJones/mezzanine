@@ -1196,6 +1196,7 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
 
 mod ancestry;
 mod claude_curated;
+mod curated_admission;
 mod harnesses;
 mod health;
 mod helper_discovery;

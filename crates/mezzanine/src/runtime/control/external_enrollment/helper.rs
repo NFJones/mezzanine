@@ -131,6 +131,7 @@ impl RuntimeSessionService {
             observer_instance: enrollment.instance.clone(),
             predecessor_generation: None,
             deadline: Instant::now() + ADMISSION_BUDGET,
+            curated: None,
             helper: Some(HelperPresentation {
                 digest,
                 generation,

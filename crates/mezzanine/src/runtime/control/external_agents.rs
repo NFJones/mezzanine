@@ -542,14 +542,26 @@ impl RuntimeSessionService {
         }
         self.control
             .external_agents_mut()
+            .enrollments
+            .curated_namespaces
+            .prune();
+        self.control
+            .external_agents_mut()
             .bindings
             .retain(|_, binding| !binding.retired || binding.expires > now);
         retired.len()
     }
 
-    /// Keeps ordinary bounded idle cleanup active while a live lease can expire.
+    /// Keeps bounded lease and non-authorizing creator-fence cleanup active;
+    /// tombstone GC cannot strand a retired creator FD after its actual exit.
     pub(crate) fn external_agent_cleanup_needed(&self) -> bool {
         !self.control.external_agents().bindings.is_empty()
+            || !self
+                .control
+                .external_agents()
+                .enrollments
+                .curated_namespaces
+                .is_empty()
     }
 
     /// Retires runtime-only external identities after snapshot replacement.

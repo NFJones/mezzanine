@@ -310,8 +310,36 @@ Exact source-owner identity MUST remain kind-specific. Matching UID/PID/birth
 metadata across evidence kinds MUST NOT authorize producer-socket capabilities,
 observer transport, idle renewal or ordinary retry/rotation namespace reuse.
 Parent lifetime facts MAY be polled/reobserved but MUST NOT allocate authority by
-construction. Current ordinary admission remains socket-backed; a source-qualified
-parent policy/session/actor/observer consumer is separately required.
+construction. Persistent admission remains socket-backed. A separate declared
+`agent/external/curated-enroll` slice MAY admit only `harness: claude`,
+`observer_kind: curated-command`, exact `source_contract: claude-curated-command/1`
+and normalized SessionStart boundary startup/resume/clear/fork; compact-only
+initial allocation, generic helpers and other profiles MUST reject. Declaration
+labels/session IDs remain self-reported, not evidence that a vendor executable
+or approved mod ran. Kernel-qualified current helper origin/writer MUST select
+its actual native same-user direct creator, a distinct descendant of the exact
+selected pane root. Off-actor parent/source/root lifetimes and actor rechecks MUST
+precede registration; payload PID/name/cwd/focus and labels MUST NOT authorize it.
+This path MUST share existing native/frame/metadata/deadline/descriptor limits,
+allocate only observational registration, retain credentials service-side and
+return ONLY public generation/witness/run/epoch/session selectors with no bearer
+token or client/socket/usage authority. Identical creator/session/instance retry
+MUST keep the original run/accounting namespace/source/expiry; changed instance
+MUST fail closed until explicit replacement policy exists. Retired creator/session
+ownership MUST remain fenced for the exact native creator lifetime after lease
+expiry, capability tombstone GC or binding-only snapshot cleanup; neither exact
+retry nor changed instance may silently allocate a fresh namespace then. The
+runtime-only fence MUST be bounded at 256 original source/session anchors, share
+the original source descriptor without duplicating credentials/lifetimes, reject
+exhaustion without evicting live entries, and release on actual creator death.
+Fence retention MUST grant no ancestry, observer, socket or billing authority.
+Parent survival MUST
+NOT imply a healthy observer or renew its lease. Reply MUST expose unavailable
+curated freshness and usage continuity; finite expiry is not process death.
+Public callbacks MUST retain original selectors and existing native helper fences.
+Actual SDK/helper deployment, observer/session continuity, vendor policy/disabled
+conditions, shared-server mapping, durable accounting and macOS remain separate
+unfinished integration work, not completion implied by this admission primitive.
 Missing/foreign/truncated ancillary evidence MUST permanently disable enrollment
 on that connection without changing existing UID-only control. Unexpected passed
 descriptors MUST be closed, never admitted. Frame/metadata limits are 8192/4096

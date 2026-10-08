@@ -36,6 +36,7 @@ const ADMISSION_BUDGET: Duration = Duration::from_secs(2);
 /// Retired instance identities remain fenced for the live run; no silent eviction.
 const MAX_OBSERVER_INSTANCES: usize = 128;
 
+mod curated;
 mod helper;
 mod producer;
 mod rotation;
@@ -51,6 +52,9 @@ pub(super) struct EnrollmentAdmissions {
     ancestry_budget: Arc<UnixAncestryBudget>,
     /// Candidate selectors maintained only by ordinary binding lifecycle owners.
     pub(in crate::runtime::control) helper_targets: targets::HelperTargets,
+    /// Original declared creator/session fences outlive expiring capabilities,
+    /// but confer no ancestry/observer authority and end on actual source death.
+    pub(in crate::runtime::control) curated_namespaces: curated::CuratedNamespaces,
     /// Test-owned native worker barrier; production has no global timing hooks.
     #[cfg(test)]
     worker_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
@@ -100,6 +104,8 @@ pub(crate) struct ExternalEnrollmentWork {
     deadline: Instant,
     /// Existing run only; no helper observation may allocate a producer owner.
     helper: Option<helper::HelperPresentation>,
+    /// Narrow declared creator contract; native parent is published only off actor.
+    curated: Option<curated::CuratedAdmission>,
     /// Worker clones publish the original immutable evidence once. A caller's
     /// successful Result alone cannot fabricate or replace native ancestry.
     ancestry: Arc<OnceLock<Arc<UnixAncestryWitness>>>,
@@ -129,6 +135,12 @@ impl ExternalEnrollmentWork {
             return Err(MezError::forbidden(
                 "external producer must be a distinct pane descendant",
             ));
+        }
+        if let Some(curated) = &self.curated {
+            if self.helper.is_some() {
+                return Err(MezError::forbidden("mixed source work unavailable"));
+            }
+            return curated.observe(self);
         }
         let parent = if let Some(helper) = &self.helper {
             helper
@@ -279,7 +291,11 @@ impl RuntimeSessionService {
         connection: &ControlConnectionState,
     ) -> Result<ExternalEnrollmentWork> {
         self.require_live()?;
-        if request.method != "agent/external/enroll" || connection.initialized() {
+        if !matches!(
+            request.method.as_str(),
+            "agent/external/enroll" | "agent/external/curated-enroll"
+        ) || connection.initialized()
+        {
             return Err(MezError::forbidden(
                 "external enrollment requires uninitialized Unix ingress",
             ));
@@ -301,13 +317,19 @@ impl RuntimeSessionService {
         })?;
         let harness = text(&params, "harness", 64)?;
         crate::integrations::harness_policy::require_active_external_harness(&harness)?;
-        if !matches!(
-            harness.as_str(),
-            "claude" | "codex" | "copilot" | "opencode" | "cursor" | "pi"
-        ) || params
-            .get("observer_kind")
-            .and_then(serde_json::Value::as_str)
-            != Some("persistent")
+        let curated = if request.method == "agent/external/curated-enroll" {
+            Some(curated::CuratedAdmission::from_params(&params)?)
+        } else {
+            None
+        };
+        if curated.is_none()
+            && (!matches!(
+                harness.as_str(),
+                "claude" | "codex" | "copilot" | "opencode" | "cursor" | "pi"
+            ) || params
+                .get("observer_kind")
+                .and_then(serde_json::Value::as_str)
+                != Some("persistent"))
         {
             return Err(MezError::new(
                 crate::error::MezErrorKind::NotImplemented,
@@ -370,7 +392,8 @@ impl RuntimeSessionService {
                     .is_some_and(|registration| registration.external_session_id == session_id)
         });
         if registry.enrollments.pending.len() >= MAX_PENDING
-            || (!existing_run
+            || (curated.is_none()
+                && !existing_run
                 && registry.bindings.len() + registry.enrollments.pending.len()
                     >= super::external_agents::MAX_BINDINGS)
         {
@@ -399,6 +422,7 @@ impl RuntimeSessionService {
             predecessor_generation,
             deadline: Instant::now() + ADMISSION_BUDGET,
             helper: None,
+            curated,
             ancestry: Arc::new(OnceLock::new()),
             ancestry_budget: registry.enrollments.ancestry_budget.clone(),
             #[cfg(test)]
@@ -482,6 +506,12 @@ impl RuntimeSessionService {
             .get()
             .filter(|ancestry| ancestry.is_live())
             .ok_or_else(|| MezError::forbidden("external producer ancestry changed"))?;
+        if let Some(curated) = &work.curated {
+            if work.helper.is_some() {
+                return Err(MezError::forbidden("mixed source work unavailable"));
+            }
+            return self.commit_curated_enrollment(work, curated, ancestry);
+        }
         if let Some(helper) = &work.helper {
             return self.commit_external_helper_presentation(work, helper);
         }

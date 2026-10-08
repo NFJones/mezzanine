@@ -396,7 +396,7 @@ fn primary_control_method_fixture_request(
         "agent/task/list" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"agent/task/list","params":{}}"#.to_string()
         }
-        "agent/external/launch" | "agent/external/enroll" | "agent/external/register" | "agent/external/renew" | "agent/external/deregister" | "agent/external/usage" | "agent/external/presentation" | "agent/external/helper-presentation" | "agent/external/helper-observe" | "agent/external/pi-observation" => {
+        "agent/external/launch" | "agent/external/enroll" | "agent/external/curated-enroll" | "agent/external/register" | "agent/external/renew" | "agent/external/deregister" | "agent/external/usage" | "agent/external/presentation" | "agent/external/helper-presentation" | "agent/external/helper-observe" | "agent/external/pi-observation" => {
             serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}).to_string()
         }
         "agent/spawn" => {

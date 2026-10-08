@@ -529,6 +529,21 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         ]),
     },
     ControlMethodSpec {
+        method: "agent/external/curated-enroll",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "pane_id",
+            "harness",
+            "version",
+            "external_session_id",
+            "display_name",
+            "observer_kind",
+            "observer_instance",
+            "source_contract",
+            "session_boundary",
+        ]),
+    },
+    ControlMethodSpec {
         method: "agent/external/enroll",
         dispatch: ControlDispatchKind::ExternalAgent,
         params_schema: ControlParamsSchema::Allowed(&[

@@ -617,6 +617,55 @@ no producer registration or observer/client/usage rights: actual source, session
 observer freshness and policy/actor consumers are unfinished work, not implicitly
 derived from ancestry. Unsupported platforms stay fail-closed.
 
+#### Declared curated-command creator admission (implemented slice)
+
+`agent/external/curated-enroll` accepts only the fixed declaration
+`harness: "claude"`, `observer_kind: "curated-command"`,
+`source_contract: "claude-curated-command/1"`, `session_boundary` one of
+`startup`, `resume`, `clear`, or `fork`, plus bounded `pane_id`, `version`,
+`external_session_id`, `display_name`, and `observer_instance`. Unknown extra
+fields, generic helper/server kinds, other profiles and compact-only initial
+boundaries reject. These labels are self-reported selectors/declarations—not
+vendor executable attestation, proof a mod is approved/loaded, or session billing.
+The documented curated argv API identifies its direct creator contract; only
+the helper's real same-user Unix origin/current writer, native captured parent
+and exact creator/source/root lifetimes authorize that physical association.
+The creator cannot be the pane root or an unrelated process. Native ancestry
+does not certify client/session mapping for a related shared/preexisting server;
+adapters must not use this declared local creator profile as that mapping. No
+payload PID/name/cwd/focus/routing environment supplies authority.
+
+The shared bounded native worker runs off actor and actor settlement consumes
+its reservation and rechecks exact helper/creator/root/deadline before existing
+observational registration. Limits remain 32 pending, frame8192/metadata4096,
+2s total admission and the shared 512-descriptor/100ms capture budget. Credentials
+stay service-owned: the reply includes registered/agent/run/epoch/public
+generation/observer-witness/session/expiry metadata, empty controls, no
+`launch_token`, `usage: "unavailable-source-continuity"` and
+`observer_transport: "unavailable-curated-freshness"`. Exact creator/session/
+instance retry keeps original source/accounting identity and expiry, not renewal.
+Different instances fail closed; replacement/heartbeat/session policy is unfinished.
+After expiry, both same-instance retry and changed-instance replacement fail
+closed for that native creator/root/session even if the private capability
+tombstone is GC'd or snapshot cleanup clears its binding. A separate runtime-only
+non-authorizing fence shares the original creator lifetime and retains only the
+original source/root/session/binding selector. It is capped at 256 namespaces,
+rejects exhaustion without evicting live entries, and maintenance releases it
+only after actual native creator death (or whole runtime destruction). This is
+not durable usage identity/restart replay, and no capability is persisted or
+observer freshness inferred from retained ownership.
+Helper EOF is not creator death, but creator survival alone cannot keep an observer
+fresh. The finite 60s lease may expire under a living creator; this is telemetry
+expiry, not a process-death declaration. Public helper-observe callbacks still
+need the original generation/witness and native creator relationship; they add no
+socket, client, observer, renewal, retirement or usage rights.
+
+This is a core admission primitive, not bare bootstrap or installed real SDK
+transport. Actual adapter deployment/consent/disabled policy, idle/reload/session
+continuity, shared-daemon association, durable accounting and macOS qualification
+remain unfinished. Ordinary persistent and primary-only legacy launch paths keep
+their separate authorization; no generic parent-enrollment or launcher fallback.
+
 #### Ordinary persistent-producer enrollment (implemented slice)
 
 `agent/external/enroll` accepts `pane_id`, `harness` (`claude`, `codex`, `copilot`,
@@ -669,8 +718,9 @@ matches. Helper work retains the exact source owner; ordinary socket capability
 use, observer freshness, idle renewal and retry/rotation lookup remain
 socket-kind-only. A verified parent may provide live native facts but cannot
 authorize even the matching creator's socket or private handle, attach an
-observer, or extend a lease by construction. No parent admission method is added
-by this type separation; its source/policy/session/actor consumer remains work.
+observer, or extend a lease by construction. Type separation itself grants no
+registration; the separate declared creator admission above is the only parent
+constructor path in this slice and is not SDK/deployment/continuity completion.
 
 Retired tombstones may acknowledge only their existing inert end/shutdown receipts
 with original producer/writer proof; they retain no ancestry authority. Native

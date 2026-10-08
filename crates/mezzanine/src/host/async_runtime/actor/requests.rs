@@ -66,6 +66,7 @@ impl AsyncRuntimeSessionActor {
         if !matches!(
             request.method.as_str(),
             "agent/external/enroll"
+                | "agent/external/curated-enroll"
                 | "agent/external/helper-presentation"
                 | "agent/external/helper-observe"
         ) {
