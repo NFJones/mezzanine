@@ -169,7 +169,7 @@ fn external_claude_curated_command_helper_fixture() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY; isolated --init-only source probe"]
 async fn external_claude_curated_command_native_parent_is_local_pane_descendant() {
-    qualify_curated_probe(false, 0, false).await;
+    qualify_curated_probe(false, 0, false, false).await;
 }
 
 /// Real curated argv API -> built fixed source helper -> current-writer Unix
@@ -178,7 +178,7 @@ async fn external_claude_curated_command_native_parent_is_local_pane_descendant(
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated source transport"]
 async fn external_claude_curated_builtin_source_helper_registers_actual_creator() {
-    qualify_curated_probe(true, 0, false).await;
+    qualify_curated_probe(true, 0, false, false).await;
 }
 
 /// The actual curated clock runs outside conversation callbacks and emits only
@@ -188,7 +188,7 @@ async fn external_claude_curated_builtin_source_helper_registers_actual_creator(
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated clock proof"]
 async fn external_claude_curated_clock_helper_proves_original_observer_epoch() {
-    qualify_curated_probe(true, 1, false).await;
+    qualify_curated_probe(true, 1, false, false).await;
 }
 
 /// Repeated actual SDK timer callbacks must advance the same original observer
@@ -197,7 +197,7 @@ async fn external_claude_curated_clock_helper_proves_original_observer_epoch() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated recurring proof"]
 async fn external_claude_curated_clock_every_advances_original_observer_epoch() {
-    qualify_curated_probe(true, 3, false).await;
+    qualify_curated_probe(true, 3, false, false).await;
 }
 
 /// An ordinary SDK-like Node producer returns from SessionStart before timers
@@ -207,13 +207,23 @@ async fn external_claude_curated_clock_every_advances_original_observer_epoch() 
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and built mez; ordinary post-return proof"]
 async fn external_curated_ordinary_node_clock_survives_callback_return() {
-    qualify_curated_probe(true, 3, true).await;
+    qualify_curated_probe(true, 3, true, false).await;
+}
+
+/// Actual SDK argv admission supplies the captured predecessor, not an injected
+/// generation. The shared successor body must keep one native creator/run,
+/// reject an original-epoch proof and deliver sequences 1–3 on observer epoch2.
+/// Init-only still holds SessionStart open; this is not deployed module reload.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and freshly built mez; public handoff"]
+async fn external_claude_curated_fixed_helper_handoff_uses_actual_public_predecessor() {
+    qualify_curated_probe(true, 3, false, true).await;
 }
 
 /// Shared owned temporary source fixture for provenance-only and real transport
 /// qualification. Actor shutdown returns the owned runtime before source exit
 /// assertions, preserving pane cleanup and exact native creator inspection.
-async fn qualify_curated_probe(admission: bool, proofs: u64, node_shim: bool) {
+async fn qualify_curated_probe(admission: bool, proofs: u64, node_shim: bool, handoff: bool) {
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
         serve_async_runtime_control_connection_loop,
@@ -302,7 +312,19 @@ async fn qualify_curated_probe(admission: bool, proofs: u64, node_shim: bool) {
     if admission {
         assert!(helper.is_file());
     }
-    let source_call = if proofs > 1 {
+    let source_call = if handoff {
+        let successor =
+            crate::integrations::bootstrap::curated_client::session_start_successor_body(
+                &helper,
+                1000,
+                "source-probe-module-b",
+            )
+            .unwrap();
+        let helper = serde_json::to_string(helper.to_str().unwrap()).unwrap();
+        format!(
+            "const admitted = await $.process.run([{helper}, 'harness-source', JSON.stringify({{ external_session_id: e.session_id, observer_instance: 'source-probe-module-a', session_boundary: e.source }})], {{ timeoutMs: 3000 }}); const previousObserver = Object.freeze(JSON.parse(admitted.stdout)); if (previousObserver.registered !== true || 'launch_token' in previousObserver || previousObserver.controls.length !== 0) throw new Error('original source unavailable'); {successor} const stale = await $.process.run([{helper}, 'harness-source', JSON.stringify({{ operation: 'curated-heartbeat', external_session_id: previousObserver.external_session_id, generation: previousObserver.generation, observer_witness: previousObserver.observer_witness, sequence: 1 }})], {{ timeoutMs: 3000 }}); if (JSON.parse(stale.stdout).observed !== false) throw new Error('stale epoch remained authoritative');"
+        )
+    } else if proofs > 1 {
         crate::integrations::bootstrap::curated_client::session_start_body(&helper, 1000).unwrap()
     } else if admission {
         assert!(helper.is_file());
@@ -378,7 +400,7 @@ async fn qualify_curated_probe(admission: bool, proofs: u64, node_shim: bool) {
         let caller = handle.clone();
         let callback_report = directory.join("callback-returned");
         let server = tokio::spawn(async move {
-            for ordinal in 0..1 + proofs {
+            for ordinal in 0..1 + proofs + if handoff { 2 } else { 0 } {
                 let (mut stream, _) =
                     tokio::time::timeout(Duration::from_secs(15), control_listener.accept())
                         .await
@@ -486,6 +508,12 @@ async fn qualify_curated_probe(admission: bool, proofs: u64, node_shim: bool) {
         assert!(owner.observers.is_empty());
         assert_eq!(owner.has_live_observer(), proofs > 0);
         assert_eq!(binding.harness, "claude");
+        if handoff {
+            assert_eq!(owner.epoch, 2);
+            assert_eq!(owner.instances.len(), 2);
+            assert_eq!(owner.instance, "source-probe-module-b");
+            assert_ne!(binding.generation, owner.run_generation);
+        }
         if proofs > 0 {
             assert_eq!(owner.curated_observer.as_ref().unwrap().sequence, proofs);
             let original_expiry = binding.expires;

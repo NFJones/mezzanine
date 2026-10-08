@@ -2,18 +2,31 @@
  * Only original public selectors cross the fixed helper; no Node APIs, vendor
  * content, credentials or configurable RPC. next(e) has already completed and
  * result remains untouched. Timer loss is telemetry loss, not vendor failure.
- * Reload stops SDK timers; this source never claims a replacement namespace. */
+ * Reload stops SDK timers. Explicit handoff keeps one native run, never revives
+ * a retired namespace or falls back to admission when prior evidence is lost. */
 try {
   const identifier = value => typeof value === "string" && value.length > 0
     && value.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(value);
-  if (identifier(e.session_id) && ["startup", "resume", "clear", "fork"].includes(e.source)) {
-    const response = await $.process.run([__MEZ_HELPER__, "harness-source", JSON.stringify({
-      external_session_id: e.session_id, observer_instance: "mez-curated-client-1",
-      session_boundary: e.source,
-    })], { timeoutMs: 3000 });
+  const positive = value => Number.isSafeInteger(value) && value > 0;
+  const witness = value => typeof value === "string" && value.length === 64 && /^[a-f0-9]{64}$/.test(value);
+  const instance = __MEZ_INSTANCE__;
+  const replacing = __MEZ_REPLACING__;
+  const prior = __MEZ_PREDECESSOR__;
+  const previous = replacing && prior ? Object.freeze({ external_session_id: prior.external_session_id,
+    generation: prior.generation, observer_witness: prior.observer_witness, run_id: prior.run_id,
+    observer_epoch: prior.observer_epoch, agent_id: prior.agent_id }) : undefined;
+  const session = e.session_id;
+  const boundary = e.source;
+  if (identifier(session) && ["startup", "resume", "clear", "fork"].includes(boundary)
+      && (!replacing || (previous && previous.external_session_id === session
+        && positive(previous.generation) && positive(previous.run_id) && positive(previous.observer_epoch)
+        && Number.isSafeInteger(previous.observer_epoch + 1) && witness(previous.observer_witness)
+        && identifier(previous.agent_id)))) {
+    const declaration = { external_session_id: session, observer_instance: instance, session_boundary: boundary };
+    if (replacing) declaration.predecessor_generation = previous.generation;
+    const response = await $.process.run([__MEZ_HELPER__, "harness-source", JSON.stringify(declaration)], { timeoutMs: 3000 });
     if (response.exitCode === 0 && typeof response.stdout === "string" && response.stdout.length <= 4096) {
       const receipt = JSON.parse(response.stdout);
-      const positive = value => Number.isSafeInteger(value) && value > 0;
       const fields = ["protocol", "registered", "controls", "agent_id", "generation",
         "observer_witness", "run_id", "observer_epoch", "observer_instance",
         "external_session_id", "usage", "observer_transport", "expires_at_unix_seconds", "lease_seconds"];
@@ -25,12 +38,15 @@ try {
           && identifier(receipt.agent_id) && positive(receipt.generation)
           && positive(receipt.run_id) && positive(receipt.observer_epoch)
           && positive(receipt.expires_at_unix_seconds) && receipt.lease_seconds === 60
-          && receipt.external_session_id === e.session_id
-          && receipt.observer_instance === "mez-curated-client-1"
+          && receipt.external_session_id === session
+          && receipt.observer_instance === instance
           && receipt.usage === "unavailable-source-continuity"
           && receipt.observer_transport === "unavailable-curated-freshness"
-          && typeof receipt.observer_witness === "string"
-          && /^[a-f0-9]{64}$/.test(receipt.observer_witness)) {
+          && witness(receipt.observer_witness)
+          && (!replacing || (receipt.generation > previous.generation
+            && receipt.observer_witness !== previous.observer_witness
+            && receipt.run_id === previous.run_id && receipt.agent_id === previous.agent_id
+            && receipt.observer_epoch === previous.observer_epoch + 1))) {
         const original = Object.freeze({ external_session_id: receipt.external_session_id,
           generation: receipt.generation, observer_witness: receipt.observer_witness });
         let sequence = 0;

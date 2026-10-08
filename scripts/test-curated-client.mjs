@@ -6,8 +6,14 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const template = readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_client.mjs", import.meta.url), "utf8");
-const source = template.replaceAll("__MEZ_INTERVAL__", "10000").replaceAll("__MEZ_HELPER__", JSON.stringify("/owned/mez"));
+const render = (instance, replacing) => template.replace(/__MEZ_[A-Z]+__/g, marker => ({
+  __MEZ_INTERVAL__: "10000", __MEZ_HELPER__: JSON.stringify("/owned/mez"),
+  __MEZ_INSTANCE__: JSON.stringify(instance), __MEZ_REPLACING__: replacing ? "true" : "false",
+  __MEZ_PREDECESSOR__: replacing ? "previousObserver" : "undefined",
+})[marker]);
+const source = render("mez-curated-client-1", false);
 const handler = new (Object.getPrototypeOf(async function () {}).constructor)("$", "e", "next", `const result = await next(e); ${source}\nreturn result;`);
+const successorHandler = new (Object.getPrototypeOf(async function () {}).constructor)("$", "e", "next", "previousObserver", `const result = await next(e); ${render("module-b", true)}\nreturn result;`);
 const event = () => ({ session_id: "session-a", source: "startup", prompt: "private-prompt", transcript_path: "/private/transcript" });
 const registration = () => ({ protocol: "external-agent/1", registered: true, controls: [],
   agent_id: "external-a", generation: 7, observer_witness: "a".repeat(64), run_id: 1,
@@ -31,6 +37,79 @@ function fixture(first = registration(), proof) {
   };
   return { calls, timers, sdk };
 }
+
+/** Handoff requires the actual prior public identity and a matching same-run
+ * successor receipt. Old and new callbacks hold disjoint immutable selectors,
+ * independent sequence owners, and preserve the exact vendor middleware result. */
+test("curated successor pins its new epoch without adopting mutable prior state", async () => {
+  const prior = registration();
+  const old = fixture(prior);
+  const result = {};
+  await handler(old.sdk, event(), async () => result);
+  await old.timers[0].callback();
+  const receipt = { ...registration(), generation: 11, observer_witness: "b".repeat(64), observer_epoch: 2, observer_instance: "module-b" };
+  const fresh = fixture(receipt);
+  assert.equal(await successorHandler(fresh.sdk, event(), async () => result, prior), result);
+  assert.deepEqual(fresh.calls[0].capsule, { external_session_id: "session-a", observer_instance: "module-b", session_boundary: "startup", predecessor_generation: 7 });
+  prior.generation = 99;
+  receipt.generation = 100;
+  await old.timers[0].callback();
+  await fresh.timers[0].callback();
+  assert.equal(old.calls.at(-1).capsule.generation, 7);
+  assert.equal(old.calls.at(-1).capsule.sequence, 2);
+  assert.deepEqual(fresh.calls.at(-1).capsule, { operation: "curated-heartbeat", external_session_id: "session-a", generation: 11, observer_witness: "b".repeat(64), sequence: 1 });
+});
+
+/** A suspended helper cannot let mutable caller metadata change the predecessor
+ * or matching receipt checks after capture. This exercises the exact before-
+ * await snapshot rather than only mutations after successful initialization. */
+test("curated successor freezes prior and event metadata before awaiting transport", async () => {
+  const prior = registration();
+  const e = event();
+  const receipt = { ...registration(), generation: 11, observer_witness: "b".repeat(64), observer_epoch: 2, observer_instance: "module-b" };
+  const f = fixture(receipt);
+  const run = f.sdk.process.run;
+  let release;
+  f.sdk.process.run = (argv, options) => JSON.parse(argv[2]).operation ? run(argv, options)
+    : new Promise(resolve => { release = () => run(argv, options).then(resolve); });
+  const result = {};
+  const pending = successorHandler(f.sdk, e, async () => result, prior);
+  await Promise.resolve();
+  assert.equal(typeof release, "function");
+  Object.assign(prior, { generation: 99, run_id: 99, observer_epoch: 99, agent_id: "foreign",
+    external_session_id: "foreign", observer_witness: "c".repeat(64) });
+  Object.assign(e, { session_id: "foreign", source: "compact" });
+  release();
+  assert.equal(await pending, result);
+  assert.equal(f.calls[0].capsule.predecessor_generation, 7);
+  assert.equal(f.calls[0].capsule.external_session_id, "session-a");
+  assert.equal(f.timers.length, 1);
+  await f.timers[0].callback();
+  assert.equal(f.calls.at(-1).capsule.generation, 11);
+});
+
+/** Lost or malformed prior evidence cannot silently become an initial capsule.
+ * A returned incompatible run/agent/epoch or stale witness cannot start a proof
+ * timer, even if transport/neutral callback execution itself reports success. */
+test("curated successor rejects unavailable prior or incompatible handoff receipts", async () => {
+  const invalid = [undefined, null, {}, { ...registration(), external_session_id: "foreign" },
+    { ...registration(), generation: 0 }, { ...registration(), generation: 9007199254740992 },
+    { ...registration(), observer_epoch: Number.MAX_SAFE_INTEGER }, { ...registration(), observer_witness: "bad" }];
+  for (const prior of invalid) {
+    const f = fixture();
+    const result = {};
+    assert.equal(await successorHandler(f.sdk, event(), async () => result, prior), result);
+    assert.equal(f.calls.length, 0);
+  }
+  const receipt = { ...registration(), generation: 11, observer_witness: "b".repeat(64), observer_epoch: 2, observer_instance: "module-b" };
+  for (const [key, value] of [["generation", 7], ["observer_witness", "a".repeat(64)],
+    ["run_id", 2], ["agent_id", "foreign-agent"], ["observer_epoch", 3]]) {
+    const f = fixture({ ...receipt, [key]: value });
+    await successorHandler(f.sdk, event(), async () => undefined, registration());
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.timers.length, 0);
+  }
+});
 
 /** Successful callback and repeated timers preserve the vendor object exactly,
  * project no prompt/path/error fields, and keep immutable original selectors. */

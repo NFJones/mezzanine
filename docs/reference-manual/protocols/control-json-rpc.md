@@ -656,9 +656,16 @@ include its original predecessor, and does not itself refresh proof or expiry.
 Stale/concurrent predecessors, retired instances, public JS-safe overflow and
 exhaustion of the 128-instance run fence reject without changing the current
 owner. The original bounded namespace anchor changes only its binding selector;
-retirement cannot be undone by a replacement request. Client/module handoff,
-new/resume/fork policy and deployed scheduling remain unfinished: the fixed
-`harness-source` capsule and reusable SDK source do not yet request replacements.
+retirement cannot be undone by a replacement request. The fixed `harness-source`
+capsule can project an explicit positive JS-safe predecessor, rejecting null or
+ambiguous input, and accepts only a newer-generation/epoch-above1 public receipt.
+The separately rendered SDK successor body freezes an actual captured prior
+session/run/agent/generation/witness/epoch, supplies only that predecessor and
+requires a matching stable run/agent, fresh generation/witness and epoch+1 reply.
+Missing/mismatched prior evidence is unavailable, never initial-admission fallback;
+new timer closures pin only their successor selectors with their own sequence.
+Automatic module handoff/persistence/teardown, new/resume/fork policy and installed
+scheduling remain unfinished; these primitives do not discover a newest observer.
 After expiry, both same-instance retry and changed-instance replacement fail
 closed for that native creator/root/session even if the private capability
 tombstone is GC'd or snapshot cleanup clears its binding. A separate runtime-only
@@ -705,6 +712,12 @@ The shared source uses a fixed absolute helper, projected session metadata,
 It pins original public selectors, validates bounded public receipts, keeps
 results/output private and never re-enrolls after unavailable telemetry. Tests
 preserve exact middleware results/errors and cover overlap and transport failure.
+An additional actual SDK fixture uses its original built-helper admission receipt
+as the successor's predecessor, rejects an old-epoch proof and delivers three
+recurring successor proofs on one native run at epoch2. No predecessor generation,
+PID, bearer token or client initialization is injected. It still holds SessionStart
+open: this is literal SDK/helper handoff qualification, not actual module reload
+or installed/post-start vendor lifetime qualification.
 The init-only fixture deliberately holds SessionStart open while timers run:
 this proves the actual recurring API and daemon renewal, not timers surviving
 SessionStart return, a deployed adapter, module reload/new/resume handoff, full60s

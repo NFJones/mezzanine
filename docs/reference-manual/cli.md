@@ -326,7 +326,10 @@ CLI forms retain normal configuration startup.
 Curated one-shot APIs whose stdin is closed can invoke the separate fixed hidden
 `mez harness-source <capsule-json>` mode. Its only public capsule fields are
 `external_session_id`, `observer_instance` (opaque ASCII IDs, max128) and
-`session_boundary` (`startup`, `resume`, `clear`, `fork`); the capsule is bounded
+`session_boundary` (`startup`, `resume`, `clear`, `fork`), plus optional positive
+JS-safe `predecessor_generation` for explicit same-run observer handoff. Missing
+predecessor means initial admission; explicit null/zero/unsafe/ambiguous selectors
+reject. The capsule is bounded
 at4096 bytes, rejects duplicate/extra fields and contains no credential. Source
 profile/harness/method/labels are fixed code; pane/socket come only from standard
 MEZ/MEZ_PANE routing hints and the daemon still requires real native creator proof.
@@ -339,10 +342,10 @@ middleware result; it is not a vendor hook response, live observer proof or a
 durable usage acknowledgment. No arbitrary RPC/endpoint/pane/PID/role fields are
 accepted. This supplies transport, not automatic adapter/mod installation,
 idle/reload/session continuity, permission-policy bypass or accounting support.
-The daemon control protocol separately supports explicit predecessor-fenced
-same-native-creator/session observer rotation. This fixed argv capsule does not
-yet expose that handoff, and cannot infer a current observer or revive a retired
-namespace. A transport primitive is not an installed reload/session policy.
+The fixed argv capsule projects only that explicit predecessor into the existing
+curated-enroll method; it cannot infer a current observer or revive a retired
+namespace. Handoff receipts must carry a generation greater than the predecessor
+and observer epoch above1. A transport primitive is not installed reload policy.
 The same fixed helper has a distinct public proof capsule
 `operation:"curated-heartbeat"` plus original `external_session_id`, positive
 JS-safe `generation`, 64-lowercase-hex `observer_witness`, and positive JS-safe
@@ -358,6 +361,14 @@ re-enrolls on failure. Its real init-only SDK fixture qualifies three recurring
 callbacks while SessionStart is held open, not a deployed adapter, post-start
 idle lifetime, reload/session replacement or accounting. Bootstrap does not yet
 install or enable this source.
+Its separate successor body requires a captured prior public receipt in the
+fixed `previousObserver` caller scope and a fixed new opaque instance. It freezes
+prior session/run/agent/epoch/witness, sends only its explicit predecessor, and
+accepts only a matching same-run reply with fresh generation/witness and epoch+1.
+Missing/incompatible prior evidence never falls back to initial admission. New
+timer closures pin only the successor selectors and start their own sequence;
+old callbacks cannot adopt them. The caller still owns module/timer teardown and
+handoff persistence; this does not install an automatic reload mechanism.
 Separate ordinary Node SDK-shim/native-actor coverage does test proofs after the
 callback returns, bounded simulated freshness loss with a live producer, and
 native producer death despite a surviving pane shell. It does not promote that

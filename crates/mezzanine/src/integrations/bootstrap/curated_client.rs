@@ -4,7 +4,9 @@
 //! no vendor callback content, credentials, PID, endpoint or RPC selector becomes
 //! source code. The body runs after `next(e)` and cannot change its result. SDK
 //! timers keep original public selectors, serialize helpers and never re-enroll.
-//! This module alone installs/enables nothing and grants no replacement, usage or
+//! Explicit successor bodies require the caller's captured prior public receipt,
+//! not a newest lookup, and pin only the newly admitted original-epoch selectors.
+//! This module alone installs/enables nothing and grants no usage or
 //! daemon authority. The installer must separately establish trusted helper bytes.
 
 use crate::error::{MezError, Result};
@@ -14,6 +16,29 @@ use crate::error::{MezError, Result};
 /// 30s proof window. The caller must invoke `next(e)` before this body and return
 /// its unchanged result; helper failures are caught inside the rendered source.
 pub(crate) fn session_start_body(helper: &std::path::Path, interval_ms: u64) -> Result<String> {
+    render_body(helper, interval_ms, "mez-curated-client-1", false)
+}
+
+/// Renders an explicit same-run handoff in a scope containing `previousObserver`,
+/// the caller's actual captured public receipt. Invalid/missing prior identity
+/// disables delivery without falling back to initial admission. The instance is
+/// a fixed opaque adapter selector, not executable source or native authority.
+pub(crate) fn session_start_successor_body(
+    helper: &std::path::Path,
+    interval_ms: u64,
+    instance: &str,
+) -> Result<String> {
+    render_body(helper, interval_ms, instance, true)
+}
+
+/// Projects fixed literals exactly once so marker-like filenames or instance
+/// identifiers remain data, never trigger subsequent template substitution.
+fn render_body(
+    helper: &std::path::Path,
+    interval_ms: u64,
+    instance: &str,
+    replacing: bool,
+) -> Result<String> {
     let path = helper
         .to_str()
         .filter(|path| helper.is_absolute() && path.len() <= 4096 && !path.contains('\0'))
@@ -23,13 +48,52 @@ pub(crate) fn session_start_body(helper: &std::path::Path, interval_ms: u64) -> 
     if !(1000..=10_000).contains(&interval_ms) {
         return Err(MezError::invalid_args("curated proof interval unavailable"));
     }
+    if instance.is_empty()
+        || instance.len() > 128
+        || !instance
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+    {
+        return Err(MezError::invalid_args(
+            "curated observer instance unavailable",
+        ));
+    }
     let quoted = serde_json::to_string(path)
         .map_err(|_| MezError::invalid_args("curated helper path unavailable"))?;
-    // Replace the interval first: a valid helper filename can contain the marker
-    // spelling, and must never be interpreted as another template substitution.
-    Ok(include_str!("curated_client.mjs")
-        .replace("__MEZ_INTERVAL__", &interval_ms.to_string())
-        .replace("__MEZ_HELPER__", &quoted))
+    let period = interval_ms.to_string();
+    let instance = serde_json::to_string(instance)
+        .map_err(|_| MezError::invalid_args("curated observer instance unavailable"))?;
+    let literals = [
+        ("__MEZ_INTERVAL__", period.as_str()),
+        ("__MEZ_HELPER__", quoted.as_str()),
+        ("__MEZ_INSTANCE__", instance.as_str()),
+        (
+            "__MEZ_REPLACING__",
+            if replacing { "true" } else { "false" },
+        ),
+        (
+            "__MEZ_PREDECESSOR__",
+            if replacing {
+                "previousObserver"
+            } else {
+                "undefined"
+            },
+        ),
+    ];
+    let template = include_str!("curated_client.mjs");
+    let mut result = String::with_capacity(template.len() + quoted.len());
+    let mut end = 0;
+    for (offset, _) in template.match_indices("__MEZ_") {
+        let (marker, literal) = literals
+            .iter()
+            .find(|(marker, _)| template[offset..].starts_with(marker))
+            .ok_or_else(|| MezError::invalid_state("curated source marker unavailable"))?;
+        result.push_str(&template[end..offset]);
+        result.push_str(literal);
+        end = offset + marker.len();
+    }
+    result.push_str(&template[end..]);
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -51,5 +115,20 @@ mod tests {
         assert_eq!(source.matches(&quoted).count(), 2);
         assert!(source.contains("$.clock.every(10000,"));
         assert!(!source.contains("__MEZ_HELPER__"));
+    }
+
+    /// Public predecessor scope is fixed code, not caller-supplied JavaScript;
+    /// marker-like instance/helper bytes survive one-pass rendering exactly.
+    #[test]
+    fn curated_successor_rendering_keeps_instance_data_and_fixed_scope() {
+        let helper = std::path::Path::new("/owned/__MEZ_INSTANCE__");
+        let source = session_start_successor_body(helper, 1000, "__MEZ_HELPER__").unwrap();
+        assert_eq!(source.matches("\"/owned/__MEZ_INSTANCE__\"").count(), 2);
+        assert!(source.contains("const instance = \"__MEZ_HELPER__\";"));
+        assert!(source.contains("const prior = previousObserver;"));
+        assert!(source.contains("const replacing = true;"));
+        for instance in ["", "content with spaces", "a\n", "\"source"] {
+            assert!(session_start_successor_body(helper, 1000, instance).is_err());
+        }
     }
 }

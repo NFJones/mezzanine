@@ -374,6 +374,16 @@ helper exit MUST NOT be presented as a lease or usage acknowledgment. This sourc
 is not automatically installed/enabled, and its original epoch MUST NOT be reused
 as a replacement/reload/new-session policy. SDK timer cancellation on reload is
 not a daemon retirement acknowledgment.
+The fixed public helper MAY carry only an explicitly supplied positive JS-safe
+predecessor; null/ambiguous selectors MUST reject, and typed handoff receipts MUST
+advance generation and have observer epoch above1. A separately rendered successor
+source MUST require the caller's captured prior public identity, freeze its
+session/run/agent/generation/witness/epoch before transport, and require stable
+run/agent, fresh generation/witness and exact epoch+1 before scheduling proofs.
+Missing prior identity or incompatible receipt MUST NOT fall back to initial
+admission or newest lookup. Successor callbacks MUST pin only their own immutable
+selectors and sequence; old callbacks MUST NOT acquire successor scope. Module
+teardown/persistence and installed reload/session policy remain adapter work.
 Actual SDK/helper deployment, observer/session continuity, vendor policy/disabled
 conditions, shared-server mapping, durable accounting and macOS remain separate
 unfinished integration work, not completion implied by this admission primitive.

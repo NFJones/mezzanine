@@ -19,6 +19,8 @@ struct Capsule {
     external_session_id: String,
     observer_instance: String,
     session_boundary: String,
+    #[serde(default)]
+    predecessor_generation: Option<u64>,
 }
 
 /// Accepts bounded opaque ASCII identifiers, never prompt/path/control content.
@@ -38,6 +40,14 @@ impl Capsule {
         }
         let value = crate::protocol::strict_json::decode(bytes)
             .map_err(|_| MezError::invalid_args("source unavailable"))?;
+        // Missing means initial admission; explicit null is not a selector.
+        if value.get("predecessor_generation").is_some_and(|value| {
+            !value
+                .as_u64()
+                .is_some_and(|n| n > 0 && n <= 9_007_199_254_740_991)
+        }) {
+            return Err(MezError::invalid_args("source unavailable"));
+        }
         let capsule: Self = serde_json::from_value(value)
             .map_err(|_| MezError::invalid_args("source unavailable"))?;
         if !identifier(&capsule.external_session_id, 128)
@@ -62,10 +72,14 @@ impl Capsule {
         {
             return Err(MezError::invalid_args("source unavailable"));
         }
-        Ok(serde_json::json!({"jsonrpc":"2.0","id":"harness-source","method":"agent/external/curated-enroll","params":{
+        let mut request = serde_json::json!({"jsonrpc":"2.0","id":"harness-source","method":"agent/external/curated-enroll","params":{
             "pane_id":pane,"harness":"claude","version":"best-effort","display_name":"Claude Code",
             "external_session_id":self.external_session_id,"observer_instance":self.observer_instance,
-            "observer_kind":"curated-command","source_contract":"claude-curated-command/1","session_boundary":self.session_boundary}}).to_string())
+            "observer_kind":"curated-command","source_contract":"claude-curated-command/1","session_boundary":self.session_boundary}});
+        if let Some(predecessor) = self.predecessor_generation {
+            request["params"]["predecessor_generation"] = predecessor.into();
+        }
+        Ok(request.to_string())
     }
     /// Validates and rebuilds public selectors only. Protocol mismatch, private
     /// fields, counters/content, wrong source/instance and unsupported receipts
@@ -109,6 +123,12 @@ impl Capsule {
         let run = positive("run_id")?;
         let epoch = positive("observer_epoch")?;
         let expires = positive("expires_at_unix_seconds")?;
+        if self
+            .predecessor_generation
+            .is_some_and(|previous| generation <= previous || epoch <= 1)
+        {
+            return None;
+        }
         let witness = value["observer_witness"].as_str()?;
         if witness.len() != 64
             || !witness
