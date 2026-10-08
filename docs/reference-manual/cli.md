@@ -354,6 +354,10 @@ re-enrolls on failure. Its real init-only SDK fixture qualifies three recurring
 callbacks while SessionStart is held open, not a deployed adapter, post-start
 idle lifetime, reload/session replacement or accounting. Bootstrap does not yet
 install or enable this source.
+Separate ordinary Node SDK-shim/native-actor coverage does test proofs after the
+callback returns, bounded simulated freshness loss with a live producer, and
+native producer death despite a surviving pane shell. It does not promote that
+fixture to actual Claude idle/deployment or a wall-clock longevity guarantee.
 
 This is not vendor hook installation or certification. Adapters must privately
 deliver existing run credentials, normalize content-free released payloads, serialize

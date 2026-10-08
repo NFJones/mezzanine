@@ -698,6 +698,17 @@ SessionStart return, a deployed adapter, module reload/new/resume handoff, full6
 wall-clock idle lifetime, or accounting. SDK timers stop on module reload; that
 is not daemon retirement or replacement authority.
 
+An additional ordinary Node SDK-shaped fixture loads the same rendered module,
+accepts the exact unchanged middleware result and records callback return before
+any of three native proof connections. It runs normally in a pane with only
+standard routing discovery, no fd3/launcher credentials or admission bypass.
+The actual built helper and Unix actor bind one exact native producer/epoch.
+After simulated 31s proof aging and lease expiry, daemon policy retires telemetry
+while the real producer is still alive and retains the fenced namespace. Actual
+producer exit then prunes it even though the pane shell remains alive. The clock
+aging is deterministic, not a full wall-clock idle test; this SDK shim is not
+qualification of actual Claude timers after SessionStart return or deployment.
+
 This is a core admission primitive, not bare bootstrap or installed real SDK
 transport. Actual adapter deployment/consent/disabled policy, idle/reload/session
 continuity, shared-daemon association, durable accounting and macOS qualification

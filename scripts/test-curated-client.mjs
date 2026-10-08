@@ -128,3 +128,19 @@ test("curated client filters initial metadata and releases failed helpers", asyn
   await f.timers[0].callback();
   assert.deepEqual(f.calls.slice(1).map(call => call.capsule.sequence), [1, 2]);
 });
+
+/** Only this lexical test seam seeds the otherwise private counter near its
+ * exact JS-safe bound. The final valid proof is sent once; further cadence
+ * allocates no helper, queue, replacement owner or unsafe rounded sequence. */
+test("curated client stops allocating proofs at JS-safe sequence exhaustion", async () => {
+  assert.equal(source.split("let sequence = 0;").length, 2);
+  const bounded = source.replace("let sequence = 0;", "let sequence = 9007199254740990;");
+  const exhausted = new (Object.getPrototypeOf(async function () {}).constructor)("$", "e", "next", `const result = await next(e); ${bounded}\nreturn result;`);
+  const f = fixture();
+  await exhausted(f.sdk, event(), async () => undefined);
+  await f.timers[0].callback();
+  assert.equal(f.calls.at(-1).capsule.sequence, Number.MAX_SAFE_INTEGER);
+  await f.timers[0].callback();
+  await f.timers[0].callback();
+  assert.equal(f.calls.length, 2);
+});

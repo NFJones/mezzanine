@@ -4,7 +4,9 @@
 //! calls. --init-only runs Setup/SessionStart then exits. HOME/config/cwd/env are
 //! isolated and no credentials/prompt, installation, policy bypass, supplied PID
 //! or enrollment capability exists. This qualifies only a source relationship,
-//! not a long-lived producer, enabled integration or authorization contract.
+//! not a deployed idle producer, enabled integration or authorization contract.
+//! A separate ordinary Node SDK shim qualifies the shared source after callback
+//! return through real native ingress; it is not real vendor idle qualification.
 
 use super::*;
 use tokio::io::AsyncWriteExt;
@@ -167,7 +169,7 @@ fn external_claude_curated_command_helper_fixture() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY; isolated --init-only source probe"]
 async fn external_claude_curated_command_native_parent_is_local_pane_descendant() {
-    qualify_curated_probe(false, 0).await;
+    qualify_curated_probe(false, 0, false).await;
 }
 
 /// Real curated argv API -> built fixed source helper -> current-writer Unix
@@ -176,7 +178,7 @@ async fn external_claude_curated_command_native_parent_is_local_pane_descendant(
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated source transport"]
 async fn external_claude_curated_builtin_source_helper_registers_actual_creator() {
-    qualify_curated_probe(true, 0).await;
+    qualify_curated_probe(true, 0, false).await;
 }
 
 /// The actual curated clock runs outside conversation callbacks and emits only
@@ -186,7 +188,7 @@ async fn external_claude_curated_builtin_source_helper_registers_actual_creator(
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated clock proof"]
 async fn external_claude_curated_clock_helper_proves_original_observer_epoch() {
-    qualify_curated_probe(true, 1).await;
+    qualify_curated_probe(true, 1, false).await;
 }
 
 /// Repeated actual SDK timer callbacks must advance the same original observer
@@ -195,19 +197,34 @@ async fn external_claude_curated_clock_helper_proves_original_observer_epoch() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated recurring proof"]
 async fn external_claude_curated_clock_every_advances_original_observer_epoch() {
-    qualify_curated_probe(true, 3).await;
+    qualify_curated_probe(true, 3, false).await;
+}
+
+/// An ordinary SDK-like Node producer returns from SessionStart before timers
+/// run. The same rendered source must deliver three real native helper proofs
+/// under the original creator, then lose its observer without inventing process
+/// death or a new namespace. This is a documented SDK shim, not real Claude idle.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and built mez; ordinary post-return proof"]
+async fn external_curated_ordinary_node_clock_survives_callback_return() {
+    qualify_curated_probe(true, 3, true).await;
 }
 
 /// Shared owned temporary source fixture for provenance-only and real transport
 /// qualification. Actor shutdown returns the owned runtime before source exit
 /// assertions, preserving pane cleanup and exact native creator inspection.
-async fn qualify_curated_probe(admission: bool, proofs: u64) {
+async fn qualify_curated_probe(admission: bool, proofs: u64, node_shim: bool) {
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
         serve_async_runtime_control_connection_loop,
     };
     let vendor = std::path::PathBuf::from(
-        std::env::var_os("MEZ_TEST_CLAUDE_BINARY").expect("explicit installed Claude executable"),
+        std::env::var_os(if node_shim {
+            "MEZ_TEST_NODE_BINARY"
+        } else {
+            "MEZ_TEST_CLAUDE_BINARY"
+        })
+        .expect("explicit installed offline producer executable"),
     );
     assert!(vendor.is_absolute() && vendor.is_file());
     let directory = std::path::Path::new("/tmp").join(format!(
@@ -304,9 +321,16 @@ async fn qualify_curated_probe(admission: bool, proofs: u64) {
     } else {
         String::new()
     };
+    let hold = if node_shim {
+        String::new()
+    } else {
+        format!(
+            "await $.process.run({argv}, {{ env: {{ MEZ_TEST_CURATED_SOCKET: {} }}, timeoutMs: 10000 }});",
+            serde_json::to_string(path.to_str().unwrap()).unwrap()
+        )
+    };
     let source = format!(
-        "export function register(on) {{ on('classic.SessionStart', async ($, e, next) => {{ const result = await next(e); {source_call} {schedule} await $.process.run({argv}, {{ env: {{ MEZ_TEST_CURATED_SOCKET: {} }}, timeoutMs: 10000 }}); return result; }}); }}\n",
-        serde_json::to_string(path.to_str().unwrap()).unwrap()
+        "export function register(on) {{ on('classic.SessionStart', async ($, e, next) => {{ const result = await next(e); {source_call} {schedule} {hold} return result; }}); }}\n"
     );
     std::fs::write(directory.join("plugin/hooks/register.mjs"), source).unwrap();
     let quote = |path: &std::path::Path| {
@@ -314,13 +338,32 @@ async fn qualify_curated_probe(admission: bool, proofs: u64) {
             .unwrap()
             .into_owned()
     };
+    let invocation = if node_shim {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/curated-client-ordinary-fixture.mjs")
+            .canonicalize()
+            .unwrap();
+        format!(
+            "{} {} {} {} {} {}",
+            quote(&vendor),
+            quote(&script),
+            quote(&directory.join("plugin/hooks/register.mjs")),
+            quote(&std::env::current_exe().unwrap()),
+            quote(&path),
+            quote(&directory.join("callback-returned"))
+        )
+    } else {
+        format!(
+            "{} --init-only --setting-sources '' --plugin-dir {}",
+            quote(&vendor),
+            quote(&directory.join("plugin"))
+        )
+    };
     let command = format!(
-        "cd {} && /usr/bin/env -i PATH=/usr/bin:/bin HOME={} CLAUDE_CONFIG_DIR={} MEZ=\"$MEZ\" MEZ_PANE=\"$MEZ_PANE\" {} --init-only --setting-sources '' --plugin-dir {}; printf '%s\\n' \"$?\" > {}\n",
+        "cd {} && /usr/bin/env -i PATH=/usr/bin:/bin HOME={} CLAUDE_CONFIG_DIR={} MEZ=\"$MEZ\" MEZ_PANE=\"$MEZ_PANE\" {invocation}; printf '%s\\n' \"$?\" > {}\n",
         quote(&directory.join("work")),
         quote(&directory.join("home")),
         quote(&directory.join("config")),
-        quote(&vendor),
-        quote(&directory.join("plugin")),
         quote(&directory.join("vendor-exit"))
     );
     probe
@@ -333,13 +376,21 @@ async fn qualify_curated_probe(admission: bool, proofs: u64) {
             AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
         let task = tokio::spawn(actor.run());
         let caller = handle.clone();
+        let callback_report = directory.join("callback-returned");
         let server = tokio::spawn(async move {
-            for _ in 0..1 + proofs {
+            for ordinal in 0..1 + proofs {
                 let (mut stream, _) =
                     tokio::time::timeout(Duration::from_secs(15), control_listener.accept())
                         .await
                         .unwrap()
                         .unwrap();
+                if node_shim && ordinal > 0 {
+                    assert_eq!(
+                        std::fs::read(&callback_report).unwrap(),
+                        b"returned",
+                        "proof arrived before callback return"
+                    );
+                }
                 let mut connection = ControlConnectionState::new(true, false);
                 serve_async_runtime_control_connection_loop(
                     &mut stream,
@@ -398,6 +449,12 @@ async fn qualify_curated_probe(admission: bool, proofs: u64) {
     assert_eq!(ready, [1]);
     assert!(origin.writer_confirmed());
     drop(qualified);
+    if node_shim {
+        assert_eq!(
+            std::fs::read(directory.join("callback-returned")).unwrap(),
+            b"returned"
+        );
+    }
     let root = probe.service.pane_process_identity("%1").unwrap();
     let root_record = mez_mux::process::process_parent_identity_for_pid(root.process_id).unwrap();
     assert_eq!(root_record.start_token, root.start_token);
@@ -455,6 +512,37 @@ async fn qualify_curated_probe(admission: bool, proofs: u64) {
                     .expires
                     >= original_expiry
             );
+            if node_shim {
+                let registry = probe.service.control.external_agents_mut();
+                let binding = registry.bindings.values_mut().next().unwrap();
+                let owner = binding.enrollment.as_mut().unwrap();
+                owner.curated_observer.as_mut().unwrap().observed_at =
+                    Some(Instant::now() - Duration::from_secs(31));
+                binding.expires = current_unix_seconds() - 1;
+                // Simulated proof loss exercises daemon policy without a long
+                // wall-clock test; the real native creator remains alive.
+                probe.service.renew_connected_external_observers();
+                probe.service.reconcile_external_agent_registrations();
+                let binding = probe
+                    .service
+                    .control
+                    .external_agents()
+                    .bindings
+                    .values()
+                    .next()
+                    .unwrap();
+                assert!(binding.retired);
+                assert!(binding.enrollment.as_ref().unwrap().producer.is_live());
+                assert!(
+                    !probe
+                        .service
+                        .control
+                        .external_agents()
+                        .enrollments
+                        .curated_namespaces
+                        .is_empty()
+                );
+            }
         }
     }
     let budget = Arc::new(UnixAncestryBudget::default());
@@ -476,9 +564,16 @@ async fn qualify_curated_probe(admission: bool, proofs: u64) {
         }
     })
     .await
-    .expect("init-only vendor did not exit after helper completion");
+    .expect("offline producer did not exit after helper completion");
     assert!(!origin.is_live());
     assert!(!ancestry.is_live());
+    assert_eq!(
+        mez_mux::process::process_parent_identity_for_pid(root.process_id)
+            .unwrap()
+            .start_token,
+        root.start_token,
+        "surviving pane shell must not keep dead producer telemetry alive"
+    );
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if std::fs::read(directory.join("vendor-exit")).is_ok_and(|bytes| bytes == b"0\n") {
@@ -488,7 +583,7 @@ async fn qualify_curated_probe(admission: bool, proofs: u64) {
         }
     })
     .await
-    .expect("init-only vendor did not publish successful exit");
+    .expect("offline producer did not publish successful exit");
     drop(ancestry);
     assert_eq!(budget.reserved(), 0);
     if admission {
