@@ -1,6 +1,8 @@
 //! Runtime tests for session sockets behavior.
 
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt};
 
 use super::*;
 
@@ -336,20 +338,29 @@ fn unix_peer_uid_reports_effective_uid_for_connected_stream() {
 /// This regression scenario protects startup cleanup from deleting live Mez
 /// endpoints while still removing refused socket files left behind by crashed
 /// processes.
+/// The stale endpoint is created only in a bounded single-test child and observed
+/// after its exit, so unrelated parent forks cannot inherit its listener. A second
+/// live endpoint retains a duplicate after dropping its original descriptor.
 #[test]
 fn prune_stale_socket_files_removes_refused_socket_and_preserves_live_socket() {
-    let root = std::env::temp_dir().join(format!(
-        "mez-runtime-test-stale-sockets-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&root);
+    let root = select_socket_fixture_root(
+        &fs::canonicalize(std::env::temp_dir()).unwrap(),
+        &fs::canonicalize("/tmp").unwrap(),
+        std::process::id(),
+        rand::random::<u64>(),
+    )
+    .unwrap();
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
     ensure_private_socket_directory(&root, effective_uid()).unwrap();
     let stale = root.join("stale.sock");
     let live = root.join("live.sock");
+    let duplicated = root.join("duplicate.sock");
     let non_socket = root.join("not-a-socket.sock");
 
-    let stale_listener = std::os::unix::net::UnixListener::bind(&stale).unwrap();
-    drop(stale_listener);
+    create_stale_socket_in_exited_fixture(&stale);
+    let original = std::os::unix::net::UnixListener::bind(&duplicated).unwrap();
+    let inherited_listener = original.try_clone().unwrap();
+    drop(original);
     let _live_listener = bind_control_socket(&live, effective_uid()).unwrap();
     fs::write(&non_socket, "leave this alone").unwrap();
 
@@ -358,9 +369,124 @@ fn prune_stale_socket_files_removes_refused_socket_and_preserves_live_socket() {
     assert_eq!(removed, 1);
     assert!(!stale.exists());
     assert!(live.exists());
+    assert!(duplicated.exists());
     assert!(non_socket.exists());
+    drop(inherited_listener);
 
     let _ = fs::remove_dir_all(&root);
+}
+
+/// Chooses a root whose longest socket fits Linux and macOS, counting exact Unix
+/// path bytes. Inputs are already physical directories; fallback does not expand
+/// permission or reuse an existing fixture. No filesystem effects occur here.
+fn select_socket_fixture_root(
+    preferred: &Path,
+    fallback: &Path,
+    pid: u32,
+    nonce: u64,
+) -> Result<PathBuf> {
+    let name = format!("mez-stale-{pid}-{nonce:016x}");
+    for base in [preferred, fallback] {
+        let root = base.join(&name);
+        if root.join("duplicate.sock").as_os_str().as_bytes().len() <= 103 {
+            return Ok(root);
+        }
+    }
+    Err(MezError::invalid_args(
+        "socket fixture root exceeds portable Unix path limit",
+    ))
+}
+
+/// macOS's canonical /private/var/folders TMPDIR can exceed sun_path even when
+/// the shorter stale.sock fits. The selector must evaluate the longest pathname,
+/// preserve short preferred roots, use a bounded physical fallback for long or
+/// multibyte bases, and reject when neither base fits, without creating any files.
+#[test]
+fn stale_socket_fixture_root_bounds_include_long_mac_os_temp_paths() {
+    let long = PathBuf::from(format!("/private/var/folders/{}/T", "a".repeat(33)));
+    let name = "mez-stale-12345-0123456789abcdef";
+    assert!(
+        long.join(name)
+            .join("duplicate.sock")
+            .as_os_str()
+            .as_bytes()
+            .len()
+            > 103
+    );
+    let fallback = Path::new("/private/tmp");
+    let chosen = select_socket_fixture_root(&long, fallback, 12345, 0x0123456789abcdef).unwrap();
+    assert_eq!(chosen, fallback.join(name));
+    assert!(chosen.join("duplicate.sock").as_os_str().as_bytes().len() <= 103);
+    assert_eq!(
+        select_socket_fixture_root(Path::new("/tmp"), fallback, 12345, 0x0123456789abcdef).unwrap(),
+        Path::new("/tmp").join(name)
+    );
+    let multibyte = PathBuf::from(format!("/{}", "é".repeat(45)));
+    assert!(
+        select_socket_fixture_root(&multibyte, fallback, u32::MAX, u64::MAX)
+            .unwrap()
+            .starts_with(fallback)
+    );
+    assert!(select_socket_fixture_root(&long, &long, u32::MAX, u64::MAX).is_err());
+}
+
+/// Creates a socket inode only inside an isolated exact-test child. Parent-side
+/// fork/exec activity cannot inherit the child's subsequently created descriptor.
+/// A finite wait kills/reaps only this fixture-owned child on failure; success
+/// requires process exit before returning, not pathname existence or a sleep.
+fn create_stale_socket_in_exited_fixture(path: &Path) {
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "runtime::tests::session::sockets::stale_socket_fixture_child",
+            "--quiet",
+        ])
+        .env_clear()
+        .env("MEZ_TEST_STALE_SOCKET_PATH", path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(
+                status.success(),
+                "stale socket fixture child failed: {status}"
+            );
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("stale socket fixture child exceeded deadline");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(fs::symlink_metadata(path).unwrap().file_type().is_socket());
+}
+
+/// Guarded single-test child binds/drops only the supplied fixture-owned stale
+/// socket. No child fork, daemon/provider, inherited listener or cleanup retry is
+/// involved. Without the private test environment marker this test is inert.
+#[test]
+fn stale_socket_fixture_child() {
+    let Some(path) = std::env::var_os("MEZ_TEST_STALE_SOCKET_PATH").map(PathBuf::from) else {
+        return;
+    };
+    assert_eq!(path.file_name().unwrap(), "stale.sock");
+    assert!(
+        path.parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("mez-stale-")
+    );
+    let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
+    drop(listener);
 }
 
 /// Verifies pane environment places socket path first.
