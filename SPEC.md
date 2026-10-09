@@ -731,7 +731,22 @@ effects, not silently discard a replaced journal. This is not whole-workflow CAS
 Explicit recovery MUST freeze pending bytes/location before writer acquisition and
 reauthorize the identical snapshot under retained ownership. No pending intent,
 including absent roots, MUST return a truthful no-op without root/state/lock writes.
-Public private-journal activation MUST NOT imply receipt/archive migration,
+New private journal transactions MUST use version 3 and explicit Private receipt
+placement with separately qualified prior private/vendor receipt identities.
+Version-2 journals MUST retain original vendor receipt destinations and MUST NOT
+authorize private receipt targets or new receipt-source fields. Unknown versions,
+placement/version mismatches, cross-harness sources and uncompiled identities MUST
+reject non-destructively. Ownership payload schema remains independently versioned.
+Private receipts MUST publish as `ownership-<harness>.json` in the held protected
+root namespace; logical effect/changed_paths label `@mez-bootstrap-receipt/<harness>`
+MUST NOT be treated as a vendor-relative filesystem path or adapter artifact.
+Planning MUST inspect both receipt copies without writes, qualify exact compiled
+identity and refuse disagreements. Artifacts MUST precede private receipt settlement,
+which MUST precede exact legacy-marker removal in the same bounded journal/owner.
+Migration interruption and omitted required receipt/removal effects MUST remain
+recoverable or truthful non-destructive conflicts. The namespace is coordination,
+not authority to invent artifacts or proof against durable inode reuse.
+Private receipt migration MUST NOT imply archive migration,
 ordinary-directory permission support or ACL attestation.
 Those integration and platform qualification phases remain unfinished.
 Explicit recovery/preview MUST admit only exact same-harness current or known

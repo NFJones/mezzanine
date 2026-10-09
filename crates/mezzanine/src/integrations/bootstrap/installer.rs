@@ -2,10 +2,12 @@
 //!
 //! The adapter registry supplies immutable manifests; process input never supplies
 //! executable templates. Receipts record only owned payloads, not surrounding
-//! vendor configuration. Receipt publication is last in the same recovery journal.
+//! vendor configuration. Artifacts precede private receipt publication and exact
+//! legacy-marker removal in one recovery journal. Version 2 keeps original vendor
+//! receipt targets; version 3 freezes explicit private placement/source identity.
 //! Shared documents may be reformatted on change, but unrelated values survive.
 
-use super::publication::{Change, PendingRecovery, Publisher};
+use super::publication::{Change, PendingRecovery, Publisher, private_receipt_path};
 use super::reconciliation::{Entry, reconcile, validate};
 use crate::error::{MezError, Result};
 use serde::{Deserialize, Serialize};
@@ -37,6 +39,15 @@ pub(crate) enum Operation {
     Uninstall,
 }
 
+/// Original receipt destination is frozen by the journal version and intent.
+/// Missing fields belong only to recognized version-2 vendor-root journals.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum ReceiptLocation {
+    #[default]
+    Vendor,
+    Private,
+}
+
 /// Journal intent is evidence only; recovery checks both manifests against
 /// compiled authority and recomputes every artifact edit from its preimage.
 #[derive(Serialize, Deserialize)]
@@ -45,6 +56,12 @@ struct Intent {
     manifest: Manifest,
     previous: Option<Manifest>,
     operation: Operation,
+    #[serde(default)]
+    receipt_location: ReceiptLocation,
+    #[serde(default)]
+    previous_private: Option<Manifest>,
+    #[serde(default)]
+    previous_vendor: Option<Manifest>,
 }
 
 /// One read-only inspected plan; publication acquires ownership and revalidates
@@ -78,7 +95,10 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
     let mut paths = BTreeSet::new();
     for entry in &manifest.entries {
         validate(entry)?;
-        if entry.path.starts_with("mez-bootstrap-ownership-") || !paths.insert(&entry.path) {
+        if entry.path.starts_with("mez-bootstrap-ownership-")
+            || entry.path.starts_with("@mez-bootstrap")
+            || !paths.insert(&entry.path)
+        {
             return Err(MezError::invalid_args(
                 "bootstrap duplicate or reserved destination",
             ));
@@ -101,6 +121,17 @@ fn receipt_bytes(manifest: &Manifest) -> Result<Vec<u8>> {
         ));
     }
     Ok(bytes)
+}
+
+/// Reads a protected marker through actual captured root evidence for CLI tests.
+/// Production inspection stays behind planning/recovery and exposes no fixture API.
+#[cfg(test)]
+pub(crate) fn fixture_private_receipt(
+    root: &Path,
+    home: &Path,
+    harness: &str,
+) -> Result<Option<Vec<u8>>> {
+    Publisher::inspect_private(root, home)?.read(&private_receipt_path(harness)?)
 }
 
 /// Captures a deterministic ownership-checked plan without changing destinations.
@@ -153,8 +184,8 @@ fn plan_with_publisher(
     operation: Operation,
     history: &[Manifest],
 ) -> Result<Plan> {
-    let pending = publisher.inspect_pending_authorized(|value, changes| {
-        authorize_recovery(&publisher, manifest, history, value, changes)
+    let pending = publisher.inspect_pending_authorized(|version, value, changes| {
+        authorize_recovery(&publisher, manifest, history, version, value, changes)
     })?;
     let read = |path: &str| -> Result<Option<Vec<u8>>> {
         if let Some(change) = pending
@@ -166,16 +197,38 @@ fn plan_with_publisher(
             publisher.read(path)
         }
     };
-    let receipt_path = format!("mez-bootstrap-ownership-{}.json", manifest.harness);
+    let vendor_receipt_path = format!("mez-bootstrap-ownership-{}.json", manifest.harness);
+    let receipt_location = if publisher.uses_private_state() {
+        ReceiptLocation::Private
+    } else {
+        ReceiptLocation::Vendor
+    };
+    let receipt_path = if receipt_location == ReceiptLocation::Private {
+        private_receipt_path(&manifest.harness)?
+    } else {
+        vendor_receipt_path.clone()
+    };
     let receipt_bytes = read(&receipt_path)?;
-    let previous: Option<Receipt> = receipt_bytes
+    let vendor_bytes = if receipt_location == ReceiptLocation::Private {
+        read(&vendor_receipt_path)?
+    } else {
+        None
+    };
+    let primary: Option<Receipt> = receipt_bytes
         .as_ref()
         .map(|bytes| {
             serde_json::from_slice(bytes)
                 .map_err(|_| MezError::conflict("bootstrap receipt invalid; no mutation"))
         })
         .transpose()?;
-    if let Some(receipt) = &previous {
+    let vendor: Option<Receipt> = vendor_bytes
+        .as_ref()
+        .map(|bytes| {
+            serde_json::from_slice(bytes)
+                .map_err(|_| MezError::conflict("bootstrap legacy receipt invalid; no mutation"))
+        })
+        .transpose()?;
+    for receipt in primary.iter().chain(&vendor) {
         if receipt.schema != 1 || receipt.manifest.harness != manifest.harness {
             return Err(MezError::conflict(
                 "bootstrap receipt identity/version mismatch",
@@ -188,6 +241,24 @@ fn plan_with_publisher(
             ));
         }
     }
+    if let (Some(primary), Some(vendor)) = (&primary, &vendor)
+        && primary.manifest != vendor.manifest
+    {
+        return Err(MezError::conflict(
+            "bootstrap ownership receipt copies disagree; no mutation",
+        ));
+    }
+    let previous_private = if receipt_location == ReceiptLocation::Private {
+        primary.as_ref().map(|receipt| receipt.manifest.clone())
+    } else {
+        None
+    };
+    let previous_vendor = if receipt_location == ReceiptLocation::Private {
+        vendor.as_ref().map(|receipt| receipt.manifest.clone())
+    } else {
+        None
+    };
+    let previous = primary.or(vendor);
     let old = previous
         .as_ref()
         .map(|receipt| {
@@ -220,6 +291,9 @@ fn plan_with_publisher(
     }
     let mut changes = Vec::new();
     let mut observed = vec![(receipt_path.clone(), receipt_bytes.clone())];
+    if receipt_location == ReceiptLocation::Private {
+        observed.push((vendor_receipt_path.clone(), vendor_bytes.clone()));
+    }
     for path in paths {
         let before = read(&path)?;
         observed.push((path.clone(), before.clone()));
@@ -264,6 +338,13 @@ fn plan_with_publisher(
             after,
         });
     }
+    if let Some(before) = vendor_bytes {
+        changes.push(Change {
+            path: vendor_receipt_path,
+            before: Some(before),
+            after: None,
+        });
+    }
     Ok(Plan {
         publisher,
         changes,
@@ -272,6 +353,9 @@ fn plan_with_publisher(
             manifest: manifest.clone(),
             previous: previous.map(|receipt| receipt.manifest),
             operation,
+            receipt_location,
+            previous_private,
+            previous_vendor,
         },
         pending,
         history: history.to_vec(),
@@ -310,17 +394,18 @@ impl Plan {
             self.publisher.acquire_lock()?;
         }
         if let Some(pending) = &self.pending {
-            let current = self
-                .publisher
-                .inspect_pending_authorized(|value, changes| {
-                    authorize_recovery(
-                        &self.publisher,
-                        &self.intent.manifest,
-                        &self.history,
-                        value,
-                        changes,
-                    )
-                })?;
+            let current =
+                self.publisher
+                    .inspect_pending_authorized(|version, value, changes| {
+                        authorize_recovery(
+                            &self.publisher,
+                            &self.intent.manifest,
+                            &self.history,
+                            version,
+                            value,
+                            changes,
+                        )
+                    })?;
             if current.as_ref() != Some(pending) {
                 return Err(MezError::conflict(
                     "bootstrap inspected recovery changed; no publication",
@@ -341,11 +426,12 @@ impl Plan {
                 }
             }
             self.publisher
-                .recover_pending_authorized(pending, |value, changes| {
+                .recover_pending_authorized(pending, |version, value, changes| {
                     authorize_recovery(
                         &self.publisher,
                         &self.intent.manifest,
                         &self.history,
+                        version,
                         value,
                         changes,
                     )
@@ -415,20 +501,20 @@ fn recover_private_owner(
 ) -> Result<Option<Vec<String>>> {
     if preview {
         return Ok(publisher
-            .inspect_recovery_authorized(|value, changes| {
-                authorize_recovery(&publisher, manifest, history, value, changes)
+            .inspect_recovery_authorized(|version, value, changes| {
+                authorize_recovery(&publisher, manifest, history, version, value, changes)
             })?
             .map(|changes| changes.into_iter().map(|change| change.path).collect()));
     }
-    let Some(pending) = publisher.inspect_pending_authorized(|value, changes| {
-        authorize_recovery(&publisher, manifest, history, value, changes)
+    let Some(pending) = publisher.inspect_pending_authorized(|version, value, changes| {
+        authorize_recovery(&publisher, manifest, history, version, value, changes)
     })?
     else {
         return Ok(None);
     };
     publisher.acquire_lock()?;
-    publisher.recover_pending_authorized(&pending, |value, changes| {
-        authorize_recovery(&publisher, manifest, history, value, changes)
+    publisher.recover_pending_authorized(&pending, |version, value, changes| {
+        authorize_recovery(&publisher, manifest, history, version, value, changes)
     })?;
     Ok(Some(Vec::new()))
 }
@@ -468,8 +554,8 @@ fn recover_with_history_mode(
     } else {
         Publisher::open(root)?
     };
-    let authorize = |value: &serde_json::Value, changes: &[Change]| {
-        authorize_recovery(&publisher, manifest, history, value, changes)
+    let authorize = |version: u32, value: &serde_json::Value, changes: &[Change]| {
+        authorize_recovery(&publisher, manifest, history, version, value, changes)
     };
     if preview {
         Ok(publisher
@@ -487,11 +573,22 @@ fn authorize_recovery(
     publisher: &Publisher,
     manifest: &Manifest,
     history: &[Manifest],
+    version: u32,
     value: &serde_json::Value,
     changes: &[Change],
 ) -> Result<()> {
     let intent: Intent = serde_json::from_value(value.clone())
         .map_err(|_| MezError::conflict("bootstrap journal intent invalid"))?;
+    if (version == 2
+        && (intent.receipt_location != ReceiptLocation::Vendor
+            || intent.previous_private.is_some()
+            || intent.previous_vendor.is_some()))
+        || (version == 3 && intent.receipt_location != ReceiptLocation::Private)
+    {
+        return Err(MezError::forbidden(
+            "bootstrap journal receipt placement/version mismatch",
+        ));
+    }
     if intent.manifest.harness != manifest.harness
         || (intent.manifest != *manifest && !history.contains(&intent.manifest))
         || intent.previous.as_ref().is_some_and(|old| {
@@ -508,6 +605,30 @@ fn authorize_recovery(
     validate_manifest(target)?;
     if let Some(old) = &intent.previous {
         validate_manifest(old)?;
+    }
+    for source in intent
+        .previous_private
+        .iter()
+        .chain(&intent.previous_vendor)
+    {
+        if source.harness != manifest.harness || (source != manifest && !history.contains(source)) {
+            return Err(MezError::forbidden(
+                "bootstrap recovery receipt source outside compiled history",
+            ));
+        }
+        validate_manifest(source)?;
+    }
+    if intent.receipt_location == ReceiptLocation::Private
+        && (intent
+            .previous_private
+            .as_ref()
+            .or(intent.previous_vendor.as_ref())
+            != intent.previous.as_ref()
+            || matches!((&intent.previous_private, &intent.previous_vendor), (Some(left), Some(right)) if left != right))
+    {
+        return Err(MezError::forbidden(
+            "bootstrap recovery receipt sources disagree",
+        ));
     }
     let old = intent
         .previous
@@ -528,13 +649,26 @@ fn authorize_recovery(
     } else {
         BTreeMap::new()
     };
-    let receipt_path = format!("mez-bootstrap-ownership-{}.json", manifest.harness);
+    let vendor_receipt_path = format!("mez-bootstrap-ownership-{}.json", manifest.harness);
+    let receipt_path = if intent.receipt_location == ReceiptLocation::Private {
+        private_receipt_path(&manifest.harness)?
+    } else {
+        vendor_receipt_path.clone()
+    };
     let mut paths = BTreeSet::new();
+    let mut receipt_phase = false;
+    let mut vendor_receipt_seen = false;
     for change in changes {
         if !paths.insert(change.path.as_str()) {
             return Err(MezError::conflict("duplicate recovery destination"));
         }
         if change.path == receipt_path {
+            if intent.receipt_location == ReceiptLocation::Private && vendor_receipt_seen {
+                return Err(MezError::forbidden(
+                    "recovery private receipt must precede legacy removal",
+                ));
+            }
+            receipt_phase = true;
             let previous: Option<Receipt> = change
                 .before
                 .as_ref()
@@ -542,7 +676,12 @@ fn authorize_recovery(
                 .transpose()
                 .map_err(|_| MezError::conflict("recovery receipt invalid"))?;
             if previous.as_ref().is_some_and(|receipt| receipt.schema != 1)
-                || previous.map(|receipt| receipt.manifest) != intent.previous
+                || previous.map(|receipt| receipt.manifest)
+                    != if intent.receipt_location == ReceiptLocation::Private {
+                        intent.previous_private.clone()
+                    } else {
+                        intent.previous.clone()
+                    }
             {
                 return Err(MezError::forbidden("recovery prior receipt mismatch"));
             }
@@ -554,7 +693,30 @@ fn authorize_recovery(
             if change.after != expected {
                 return Err(MezError::forbidden("recovery receipt payload mismatch"));
             }
+        } else if intent.receipt_location == ReceiptLocation::Private
+            && change.path == vendor_receipt_path
+        {
+            receipt_phase = true;
+            vendor_receipt_seen = true;
+            let previous: Receipt =
+                serde_json::from_slice(change.before.as_deref().ok_or_else(|| {
+                    MezError::forbidden("recovery legacy receipt removal lacks preimage")
+                })?)
+                .map_err(|_| MezError::conflict("recovery legacy receipt invalid"))?;
+            if previous.schema != 1
+                || Some(previous.manifest) != intent.previous_vendor
+                || change.after.is_some()
+            {
+                return Err(MezError::forbidden(
+                    "recovery legacy receipt migration mismatch",
+                ));
+            }
         } else {
+            if intent.receipt_location == ReceiptLocation::Private && receipt_phase {
+                return Err(MezError::forbidden(
+                    "recovery artifacts must precede receipt settlement",
+                ));
+            }
             let prior = old.get(change.path.as_str()).copied();
             let next = desired.get(change.path.as_str()).copied();
             if prior.is_none() && next.is_none() {
@@ -595,6 +757,14 @@ fn authorize_recovery(
         if current != expected {
             return Err(MezError::conflict("recovery omitted ownership receipt"));
         }
+    }
+    if intent.receipt_location == ReceiptLocation::Private
+        && !paths.contains(vendor_receipt_path.as_str())
+        && publisher.read(&vendor_receipt_path)?.is_some()
+    {
+        return Err(MezError::conflict(
+            "recovery omitted legacy ownership receipt removal",
+        ));
     }
     Ok(())
 }

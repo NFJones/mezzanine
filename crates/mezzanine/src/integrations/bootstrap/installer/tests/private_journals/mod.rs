@@ -5,6 +5,8 @@ use crate::integrations::bootstrap::state_directory::StateDirectory;
 use std::fs::File;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 
+mod receipts;
+
 /// Explicit recovery freezes its exact pre-lock bytes/location, not merely an
 /// admissible decoded operation. Changes made during acquisition must preserve
 /// journal evidence and the previously committed first file without finishing
@@ -93,10 +95,8 @@ fn bootstrap_private_publisher_final_removal_fences_post_effect_journal_drift() 
             .apply()
             .expect_err("post-effect journal drift must reject settlement");
         assert!(error.to_string().contains("accepted journal changed"));
-        let receipt: Receipt = serde_json::from_slice(
-            &fs::read(fixture.root.join("mez-bootstrap-ownership-pi.json")).unwrap(),
-        )
-        .unwrap();
+        let receipt: Receipt =
+            serde_json::from_slice(&fs::read(fixture.receipt("pi")).unwrap()).unwrap();
         assert_eq!(receipt.manifest, current);
         for entry in &current.entries {
             if let crate::integrations::bootstrap::reconciliation::Artifact::File { bytes } =
@@ -175,6 +175,14 @@ impl Fixture {
             .join("journal.json")
     }
 
+    /// Resolves the protected fixture ownership marker from actual root evidence.
+    fn receipt(&self, harness: &str) -> std::path::PathBuf {
+        StateDirectory::inspect(&self.home, &File::open(&self.root).unwrap())
+            .unwrap()
+            .fixture_path()
+            .join(format!("ownership-{harness}.json"))
+    }
+
     /// Captures production deterministic private-journal reconciliation.
     fn plan(&self, manifest: &Manifest, operation: Operation) -> Result<Plan> {
         plan_private(&self.root, &self.home, manifest, operation)
@@ -225,11 +233,15 @@ fn bootstrap_private_publisher_new_journal_and_retry_are_isolated() {
     assert_eq!(tree_snapshot(&fixture.workspace), before);
     retry.apply().unwrap();
     assert!(!journal.exists());
-    let receipt: Receipt = serde_json::from_slice(
-        &fs::read(fixture.root.join("mez-bootstrap-ownership-pi.json")).unwrap(),
-    )
-    .unwrap();
+    let receipt: Receipt =
+        serde_json::from_slice(&fs::read(fixture.receipt("pi")).unwrap()).unwrap();
     assert_eq!(receipt.manifest, current);
+    assert!(
+        !fixture
+            .root
+            .join("mez-bootstrap-ownership-pi.json")
+            .exists()
+    );
     assert_eq!(
         fs::read(fixture.root.join("authored")).unwrap(),
         b"preserved"
@@ -285,9 +297,13 @@ fn bootstrap_private_publisher_migrates_legacy_and_recovers_copy_interruption() 
                     assert_eq!(tree_snapshot(&fixture.workspace), before);
                     retry.apply().unwrap();
                     assert!(!private.exists() && !legacy.exists());
-                    let receipt = fixture
-                        .root
-                        .join(format!("mez-bootstrap-ownership-{harness}.json"));
+                    let receipt = fixture.receipt(harness);
+                    assert!(
+                        !fixture
+                            .root
+                            .join(format!("mez-bootstrap-ownership-{harness}.json"))
+                            .exists()
+                    );
                     if matches!(requested, Operation::Install) {
                         let receipt: Receipt =
                             serde_json::from_slice(&fs::read(receipt).unwrap()).unwrap();
@@ -482,7 +498,14 @@ fn bootstrap_private_publisher_fresh_opencode_home_installs_on_first_apply() {
     install
         .apply()
         .expect("own shared .config creation must not invalidate private binding");
-    assert!(root.join("mez-bootstrap-ownership-opencode.json").is_file());
+    let state = StateDirectory::inspect(&fixture.home, &File::open(&root).unwrap()).unwrap();
+    assert!(
+        state
+            .fixture_path()
+            .join("ownership-opencode.json")
+            .is_file()
+    );
+    assert!(!root.join("mez-bootstrap-ownership-opencode.json").exists());
     assert!(
         plan_private(&root, &fixture.home, &current, Operation::Install)
             .unwrap()

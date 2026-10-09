@@ -356,9 +356,14 @@ mod tests {
             assert_eq!(output["recovery_pending"], false);
             assert!(!private_fixture_journal(&home.0).exists());
             assert_eq!(
-                root.join("mez-bootstrap-ownership-pi.json").exists(),
+                crate::integrations::bootstrap::installer::fixture_private_receipt(
+                    &root, &home.0, "pi"
+                )
+                .unwrap()
+                .is_some(),
                 intent != "uninstall"
             );
+            assert!(!root.join("mez-bootstrap-ownership-pi.json").exists());
             assert_eq!(std::fs::read(root.join("authored")).unwrap(), b"preserved");
             let repeated = invoke_private_fixture(&home.0, &root, flags).unwrap();
             assert_eq!(repeated["recovered"], false);
@@ -614,7 +619,7 @@ mod tests {
             let preview = invoke(&[intent]);
             assert_eq!(preview["recovery_pending"], true);
             assert_eq!(preview["recovered"], false);
-            assert_eq!(preview["changed_paths"].as_array().unwrap().len(), 2);
+            assert_eq!(preview["changed_paths"].as_array().unwrap().len(), 3);
             assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
             assert_eq!(
                 std::fs::read(root.join(".mez-bootstrap-journal")).unwrap(),
@@ -693,8 +698,16 @@ mod tests {
                 assert_eq!(output["root_source"], "vendor-default");
                 if intent.is_empty() {
                     assert!(
-                        root.join(format!("mez-bootstrap-ownership-{harness}.json"))
-                            .is_file()
+                        crate::integrations::bootstrap::installer::fixture_private_receipt(
+                            &root, &home, harness
+                        )
+                        .unwrap()
+                        .is_some()
+                    );
+                    assert!(
+                        !root
+                            .join(format!("mez-bootstrap-ownership-{harness}.json"))
+                            .exists()
                     );
                     std::fs::write(root.join("authored"), b"preserved").unwrap();
                 } else if !root.exists() {
@@ -855,8 +868,16 @@ mod tests {
             }
             child("install");
             assert!(
-                root.join(format!("mez-bootstrap-ownership-{harness}.json"))
-                    .is_file()
+                crate::integrations::bootstrap::installer::fixture_private_receipt(
+                    &root, &home.0, harness
+                )
+                .unwrap()
+                .is_some()
+            );
+            assert!(
+                !root
+                    .join(format!("mez-bootstrap-ownership-{harness}.json"))
+                    .exists()
             );
             assert!(!root.join(".mez-bootstrap-journal").exists());
             assert!(!private_fixture_journal(&home.0).exists());
@@ -866,6 +887,13 @@ mod tests {
                 assert_eq!(tree_snapshot(&home.0), before);
             }
             child("uninstall");
+            assert!(
+                crate::integrations::bootstrap::installer::fixture_private_receipt(
+                    &root, &home.0, harness
+                )
+                .unwrap()
+                .is_none()
+            );
             assert!(
                 !root
                     .join(format!("mez-bootstrap-ownership-{harness}.json"))

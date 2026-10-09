@@ -11,7 +11,8 @@
 //! and migrates only compiled-authorized exact legacy intent. Identical copies
 //! qualify interrupted migration; disagreements/location drift fence planning.
 //! Every compiled public CLI intent uses the private owner; vendor eligibility
-//! and private receipt/archive migration remain independent follow-up work.
+//! and archive migration remain independent follow-up work. Version 3 qualifies
+//! fixed logical private receipt effects; version 2 retains vendor destinations.
 
 use super::reconciliation::publication_path;
 use super::root_directory::RootDirectory;
@@ -30,8 +31,36 @@ use std::path::{Path, PathBuf};
 const JOURNAL: &str = ".mez-bootstrap-journal";
 const LOCK: &str = ".mez-bootstrap-lock";
 const PRIVATE_JOURNAL: &str = "journal.json";
+const PRIVATE_RECEIPT_PREFIX: &str = "@mez-bootstrap-receipt/";
 const MAX_BYTES: usize = 1024 * 1024;
 const MAX_JOURNAL: usize = 32 * 1024 * 1024;
+
+/// Builds a fixed logical private receipt target, never a vendor-relative path.
+/// The harness is bounded inert compiled identity, not an arbitrary filename.
+pub(super) fn private_receipt_path(harness: &str) -> Result<String> {
+    let path = format!("{PRIVATE_RECEIPT_PREFIX}{harness}");
+    private_receipt_name(&path)?;
+    Ok(path)
+}
+
+/// Resolves only the reserved private receipt namespace to a flat state name.
+/// Unknown suffixes cannot traverse or collide with lock/journal/staging files.
+fn private_receipt_name(path: &str) -> Result<Option<String>> {
+    let Some(harness) = path.strip_prefix(PRIVATE_RECEIPT_PREFIX) else {
+        return Ok(None);
+    };
+    if harness.is_empty()
+        || harness.len() > 32
+        || !harness
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+    {
+        return Err(MezError::invalid_args(
+            "bootstrap private receipt target unavailable",
+        ));
+    }
+    Ok(Some(format!("ownership-{harness}.json")))
+}
 
 /// One exact replacement, retained in the journal before publication.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +155,12 @@ fn read_at(directory: &File, name: &str, limit: usize) -> Result<Option<Vec<u8>>
 }
 
 impl Publisher {
+    /// Reports private publication routing; unbound HOME still means private
+    /// authority, never permission to fall through to a vendor-state target.
+    pub(super) fn uses_private_state(&self) -> bool {
+        self.state.is_some() || self.unbound_home.is_some()
+    }
+
     /// Holds a no-follow root for read-only inspection. No lock, journal,
     /// artifact parent or other filesystem state is created or acquired.
     pub(super) fn inspect(root: &Path) -> Result<Self> {
@@ -386,6 +421,18 @@ impl Publisher {
 
     /// Reads one safe destination without creating missing parents.
     pub(super) fn read(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        if let Some(name) = private_receipt_name(path)? {
+            self.validate_root()?;
+            if let Some(state) = &self.state {
+                return state.read(&name, MAX_BYTES);
+            }
+            if self.unbound_home.is_some() {
+                return Ok(None);
+            }
+            return Err(MezError::invalid_state(
+                "bootstrap private receipt requires private owner",
+            ));
+        }
         let Some((parent, name)) = self.parent(path, false)? else {
             return Ok(None);
         };
@@ -425,7 +472,7 @@ impl Publisher {
 
     /// Verifies all destinations before journal publication or recovery progress.
     fn validate_changes(&self, changes: &[Change], recovering: bool) -> Result<()> {
-        if changes.is_empty() || changes.len() > 16 {
+        if changes.is_empty() || changes.len() > 17 {
             return Err(MezError::invalid_args("bootstrap transaction entry limit"));
         }
         let mut paths = std::collections::BTreeSet::new();
@@ -463,23 +510,37 @@ impl Publisher {
                     "bootstrap preimage changed during publication",
                 ));
             }
-            let Some((parent, name)) = self.parent(&change.path, change.after.is_some())? else {
-                return Err(MezError::conflict(
-                    "bootstrap destination parent unavailable",
-                ));
-            };
-            if read_at(&parent, &name, MAX_BYTES)? != change.before {
-                return Err(MezError::conflict(
-                    "bootstrap preimage changed before commit",
-                ));
-            }
-            self.require_lock()?;
-            match &change.after {
-                Some(bytes) => self.write_at(&parent, &name, bytes, change.before.is_some())?,
-                None => {
-                    unlinkat(&parent, name.as_str(), AtFlags::empty())
-                        .map_err(std::io::Error::from)?;
-                    parent.sync_all()?;
+            if let Some(name) = private_receipt_name(&change.path)? {
+                self.require_lock()?;
+                let state = self.state.as_ref().ok_or_else(|| {
+                    MezError::invalid_state("bootstrap private receipt owner unavailable")
+                })?;
+                state.publish(
+                    &name,
+                    change.before.as_deref(),
+                    change.after.as_deref(),
+                    MAX_BYTES,
+                )?;
+            } else {
+                let Some((parent, name)) = self.parent(&change.path, change.after.is_some())?
+                else {
+                    return Err(MezError::conflict(
+                        "bootstrap destination parent unavailable",
+                    ));
+                };
+                if read_at(&parent, &name, MAX_BYTES)? != change.before {
+                    return Err(MezError::conflict(
+                        "bootstrap preimage changed before commit",
+                    ));
+                }
+                self.require_lock()?;
+                match &change.after {
+                    Some(bytes) => self.write_at(&parent, &name, bytes, change.before.is_some())?,
+                    None => {
+                        unlinkat(&parent, name.as_str(), AtFlags::empty())
+                            .map_err(std::io::Error::from)?;
+                        parent.sync_all()?;
+                    }
                 }
             }
             #[cfg(test)]
@@ -509,7 +570,7 @@ impl Publisher {
     /// Recovers only an explicitly accepted durable journal, without new planning.
     pub(super) fn recover_authorized(
         &self,
-        authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
+        authorize: impl FnOnce(u32, &serde_json::Value, &[Change]) -> Result<()>,
     ) -> Result<bool> {
         self.require_lock()?;
         let Some(pending) = self.inspect_pending_authorized(authorize)? else {
@@ -525,7 +586,7 @@ impl Publisher {
     /// creates a missing root nor acquires a writer lock or finishes effects.
     pub(super) fn inspect_recovery_authorized(
         &self,
-        authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
+        authorize: impl FnOnce(u32, &serde_json::Value, &[Change]) -> Result<()>,
     ) -> Result<Option<Vec<Change>>> {
         Ok(self
             .inspect_pending_authorized(authorize)?
@@ -536,7 +597,7 @@ impl Publisher {
     /// before/after validation. No filesystem writes or lock acquisition occur.
     pub(super) fn inspect_pending_authorized(
         &self,
-        authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
+        authorize: impl FnOnce(u32, &serde_json::Value, &[Change]) -> Result<()>,
     ) -> Result<Option<PendingRecovery>> {
         self.validate_root()?;
         if self.directory.is_missing() {
@@ -550,7 +611,7 @@ impl Publisher {
         })?;
         let root = self.directory.file()?.metadata()?;
         self.validate_root()?;
-        if journal.version != 2
+        if !matches!(journal.version, 2 | 3)
             || journal.root_device != root.dev()
             || journal.root_inode != root.ino()
         {
@@ -558,7 +619,23 @@ impl Publisher {
                 "bootstrap journal version/root mismatch",
             ));
         }
-        authorize(&journal.intent, &journal.changes)?;
+        if journal.version == 2
+            && (journal.changes.len() > 16
+                || journal
+                    .changes
+                    .iter()
+                    .any(|change| change.path.starts_with(PRIVATE_RECEIPT_PREFIX)))
+        {
+            return Err(MezError::forbidden(
+                "bootstrap version-2 journal cannot authorize private receipt targets",
+            ));
+        }
+        if journal.version == 3 && !self.uses_private_state() {
+            return Err(MezError::forbidden(
+                "bootstrap version-3 journal requires private owner",
+            ));
+        }
+        authorize(journal.version, &journal.intent, &journal.changes)?;
         self.validate_changes(&journal.changes, true)?;
         Ok(Some(PendingRecovery {
             bytes,
@@ -572,7 +649,7 @@ impl Publisher {
     pub(super) fn recover_pending_authorized(
         &self,
         pending: &PendingRecovery,
-        authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
+        authorize: impl FnOnce(u32, &serde_json::Value, &[Change]) -> Result<()>,
     ) -> Result<()> {
         self.require_lock()?;
         if self.inspect_pending_authorized(authorize)?.as_ref() != Some(pending) {
@@ -607,7 +684,7 @@ impl Publisher {
         self.validate_changes(&changes, false)?;
         let root = self.directory.file()?.metadata()?;
         let bytes = serde_json::to_vec(&Journal {
-            version: 2,
+            version: if self.uses_private_state() { 3 } else { 2 },
             root_device: root.dev(),
             root_inode: root.ino(),
             intent,
@@ -636,7 +713,7 @@ impl Publisher {
     /// Test-only publication recovery isolates filesystem behavior from manifest admission.
     #[cfg(test)]
     pub(super) fn recover(&self) -> Result<bool> {
-        self.recover_authorized(|intent, _| {
+        self.recover_authorized(|_, intent, _| {
             if intent.is_null() {
                 Ok(())
             } else {

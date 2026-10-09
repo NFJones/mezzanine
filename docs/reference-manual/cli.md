@@ -370,12 +370,21 @@ new transactions journal privately, and compiled-authorized legacy recovery copi
 exact original bytes durably before removing the old journal. Identical dual copies
 after a copy-boundary interruption can resume; conflicting copies and changed
 inspected source locations reject without choosing a winner. Final journal removal
-checks exact accepted bytes/location. The serialized journal remains version 2;
-location is inspected evidence, not new artifact authority.
+checks exact accepted bytes/location. New private transactions use journal version 3,
+with explicit Private receipt placement and qualified prior receipt sources.
+Recognized version-2 intent still finishes its original vendor destinations; it cannot
+authorize private receipt targets. Unknown or altered version/placement/root/effects
+remain non-destructive errors, not new artifact authority.
 Explicit recovery freezes the accepted bytes/location before acquiring ownership
 and revalidates that exact snapshot; absent roots or no pending journal are no-ops
 without creating locks, directories or state. Both lock domains remain retained
-for recognized legacy cooperation. Private receipts/archives,
+for recognized legacy cooperation. New ownership receipts live privately as
+`ownership-<harness>.json` under the held root namespace. The stable logical
+`changed_paths` label `@mez-bootstrap-receipt/<harness>` identifies this internal
+effect, not a vendor-relative path. Receipt payload schema remains 1; both copies
+are inspected/compiled-qualified, disagreement refuses mutation, and private
+publication follows artifacts before exact legacy marker removal. Interrupted
+migration can resume with the same original intent. Private archives,
 ordinary-directory eligibility and edited-file preservation remain unfinished.
 No additional enable command, private-root override, or configuration option is
 required for this private-journal routing.
