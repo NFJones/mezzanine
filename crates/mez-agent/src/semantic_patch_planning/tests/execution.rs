@@ -323,6 +323,44 @@ fn semantic_apply_patch_native_resolver_rejects_symlink_loops() {
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("native path resolution exceeded symbolic-link limit")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A failed native readlink must remain fail-closed and emit a fixed diagnostic
+/// even when the external reader fails silently. A fixture-owned shell function
+/// injects failure without retries, global environment edits or replacing host
+/// binaries. Neither the target path nor partial resolution reaches output.
+#[test]
+#[cfg(unix)]
+fn semantic_apply_patch_native_resolver_reports_silent_readlink_failure() {
+    let root = test_temp_dir("semantic-patch-native-silent-readlink");
+    std::os::unix::fs::symlink("private-target", root.join("private-link")).unwrap();
+    let path = path_with_failing_realpath(&root);
+    let mut lines = vec!["MEZ_APPLY_CWD=$(pwd -P) || exit 1".to_string()];
+    lines.extend(apply_patch_path_resolution_lines());
+    lines.push("mez_test_failed_readlink() { return 1; }".to_string());
+    lines.push("MEZ_APPLY_READLINK=mez_test_failed_readlink".to_string());
+    lines.push("mez_apply_patch_resolve private-link/new.txt".to_string());
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(lines.join("\n"))
+        .current_dir(&root)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("native path resolution could not read symbolic link"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("private-link"));
+    assert!(!stderr.contains("private-target"));
     std::fs::remove_dir_all(root).unwrap();
 }
 

@@ -10,7 +10,9 @@
 //! Both transaction phases embed the same resolver. The write phase can thus
 //! compare a fresh canonical path with the read-phase snapshot before every
 //! mutation. The resolver deliberately fails on unreadable links and bounded
-//! symlink expansion rather than weakening filesystem boundary checks.
+//! symlink expansion rather than weakening filesystem boundary checks. Those
+//! native failures emit fixed reason classes without target path content; they
+//! neither retry an external reader nor authorize a weaker resolution fallback.
 
 /// Maximum symbolic-link expansions accepted by the native shell resolver.
 ///
@@ -71,9 +73,9 @@ pub(super) fn apply_patch_path_resolution_lines() -> Vec<String> {
             .to_string(),
         "    if [ -L \"$MEZ_APPLY_RESOLVE_CANDIDATE\" ]; then".to_string(),
         format!(
-            "      MEZ_APPLY_RESOLVE_LINKS=$((MEZ_APPLY_RESOLVE_LINKS + 1)); if [ \"$MEZ_APPLY_RESOLVE_LINKS\" -gt {MAX_SYMLINK_EXPANSIONS} ]; then return 1; fi"
+            "      MEZ_APPLY_RESOLVE_LINKS=$((MEZ_APPLY_RESOLVE_LINKS + 1)); if [ \"$MEZ_APPLY_RESOLVE_LINKS\" -gt {MAX_SYMLINK_EXPANSIONS} ]; then printf '%s\\n' 'apply_patch: native path resolution exceeded symbolic-link limit' >&2; return 1; fi"
         ),
-        "      MEZ_APPLY_RESOLVE_TARGET=$(\"$MEZ_APPLY_READLINK\" -n \"$MEZ_APPLY_RESOLVE_CANDIDATE\" && printf X) || return 1"
+        "      MEZ_APPLY_RESOLVE_TARGET=$(\"$MEZ_APPLY_READLINK\" -n \"$MEZ_APPLY_RESOLVE_CANDIDATE\" && printf X) || { printf '%s\\n' 'apply_patch: native path resolution could not read symbolic link' >&2; return 1; }"
             .to_string(),
         "      MEZ_APPLY_RESOLVE_TARGET=${MEZ_APPLY_RESOLVE_TARGET%?}".to_string(),
         "      case \"$MEZ_APPLY_RESOLVE_TARGET\" in /*) MEZ_APPLY_RESOLVE_CURRENT=/; MEZ_APPLY_RESOLVE_TARGET=${MEZ_APPLY_RESOLVE_TARGET#/} ;; esac"
