@@ -811,6 +811,8 @@ impl RuntimeSessionService {
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             task_generation: 0,
             compaction_epoch: prepared_epoch,
+            transport_retry_attempts: 0,
+            transport_retry_delay_ms: None,
             pane_id: pane_id.to_string(),
             accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
             conversation_id: conversation_id.clone(),
@@ -972,6 +974,8 @@ impl RuntimeSessionService {
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             task_generation: 0,
             compaction_epoch: 0,
+            transport_retry_attempts: 0,
+            transport_retry_delay_ms: None,
             pane_id: turn.pane_id.clone(),
             accounting_origin: self.capture_accounting_origin_for_pane(&turn.pane_id),
             conversation_id,
@@ -1073,6 +1077,12 @@ impl RuntimeSessionService {
         if self.pending_agent_compaction_task_generation(pane_id) != Some(task_generation) {
             return Ok(None);
         }
+        if self
+            .agent_compaction_retry_delay(pane_id, task_generation)
+            .is_some()
+        {
+            return Ok(None);
+        }
         self.require_auxiliary_accounting_capacity()?;
         let Some(mut task) = self.take_pending_agent_compaction_task(pane_id) else {
             return Ok(None);
@@ -1093,8 +1103,10 @@ impl RuntimeSessionService {
                     task.model_profile.provider
                 ))
             })?;
-        let provider_api =
-            resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        let provider_api = match task.compaction_request_shape.as_ref() {
+            Some((api, _, _)) => *api,
+            None => resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?,
+        };
         self.append_credential_access_audit(
             &task.model_profile.provider,
             &provider_config.auth_profile,
@@ -1117,8 +1129,13 @@ impl RuntimeSessionService {
             .base_url
             .as_deref()
             .filter(|endpoint| !endpoint.is_empty());
-        let provider_options =
-            runtime_effective_provider_options(&provider_config, &task.model_profile);
+        let provider_options = task
+            .compaction_request_shape
+            .as_ref()
+            .map(|(_, options, _)| options.clone())
+            .unwrap_or_else(|| {
+                runtime_effective_provider_options(&provider_config, &task.model_profile)
+            });
         let credential_source =
             AuthProfileCredentialSource::new(auth_store, &provider_config.auth_profile);
         let provider = match provider_api {
@@ -1270,6 +1287,29 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Retires a pending backoff owner when its mandatory timer cannot be admitted.
+    pub(crate) fn fail_agent_compaction_retry_admission(
+        &mut self,
+        pane_id: &str,
+        task_generation: u64,
+    ) -> Result<bool> {
+        if self
+            .agent_compaction_retry_delay(pane_id, task_generation)
+            .is_none()
+        {
+            return Ok(false);
+        }
+        let mut failed = self.fail_agent_compaction_task(pane_id, task_generation);
+        let diagnostic =
+            "compaction transport retry timer admission failed; retry request was not dispatched";
+        if let Some((turn_id, source)) = failed.take_resume_turn_and_source() {
+            self.fail_running_turn_after_compaction_failure(&turn_id, &source, diagnostic)?;
+        }
+        self.append_agent_status_text_to_terminal_buffer(pane_id, &format!("agent: {diagnostic}"))?;
+        self.resume_agent_compaction_steering(pane_id)?;
+        Ok(true)
+    }
+
     /// Applies one model-backed compaction result through the transport-neutral transition contract.
     pub(crate) fn apply_agent_compaction_transition(
         &mut self,
@@ -1313,11 +1353,27 @@ impl RuntimeSessionService {
         if applied && !self.agent_is_compacting(&pane_id) {
             self.resume_agent_compaction_steering(&pane_id)?;
         }
-        Ok(self.runtime_pane_transition_with_render(
+        let mut transition = self.runtime_pane_transition_with_render(
             &pane_id,
             applied,
             Some(RenderInvalidationReason::FullRedraw),
-        ))
+        );
+        if applied
+            && let Some(generation) = self.pending_agent_compaction_task_generation(&pane_id)
+            && let Some(delay_ms) = self.agent_compaction_retry_delay(&pane_id, generation)
+        {
+            transition
+                .side_effects
+                .push(crate::runtime::RuntimeSideEffect::ScheduleTimer {
+                    key: crate::runtime::RuntimeTimerKey::new(
+                        crate::runtime::RuntimeTimerKind::CompactionRetry,
+                        &pane_id,
+                        generation,
+                    ),
+                    delay_ms,
+                });
+        }
+        Ok(transition)
     }
 
     /// Applies a completed model-backed compaction response.
@@ -2751,6 +2807,9 @@ impl RuntimeSessionService {
         message: &str,
         provider_failure_json: Option<&str>,
     ) -> Result<bool> {
+        if !self.agent_compaction_task_is_claimed(pane_id, task_generation) {
+            return Ok(false);
+        }
         if !self.agent_compaction_task_is_current(pane_id, task_generation) {
             let _ = self.finish_agent_compaction_task(pane_id, task_generation);
             return Ok(false);
@@ -2779,6 +2838,28 @@ impl RuntimeSessionService {
         if let Some(mut task) = self.finish_agent_compaction_task(pane_id, task_generation) {
             let retry_class =
                 provider_error_retry_class_from_parts(parsed_kind, message, provider_failure_json);
+            let policy = self.provider_retry_policy();
+            if retry_class == ProviderErrorRetryClass::RetryableTransport
+                && policy.should_retry(task.transport_retry_attempts, retry_class)
+            {
+                task.transport_retry_attempts = task.transport_retry_attempts.saturating_add(1);
+                task.transport_retry_delay_ms = Some(
+                    policy
+                        .delay_ms(
+                            task.transport_retry_attempts,
+                            mez_agent::provider_retry_after_delay_ms(
+                                provider_failure_json,
+                                crate::runtime::current_unix_millis(),
+                            ),
+                            Some(rand::random()),
+                        )
+                        .max(1),
+                );
+                // Preserve the entire frozen selection and staged position. Only
+                // the dispatch generation changes; failed text is never applied.
+                self.queue_agent_compaction_task(task);
+                return Ok(true);
+            }
             if retry_class == ProviderErrorRetryClass::ContextLimit
                 && matches!(task.target, RuntimeAgentCompactionTarget::Conversation)
             {

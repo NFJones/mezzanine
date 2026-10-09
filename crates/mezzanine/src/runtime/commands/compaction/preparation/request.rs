@@ -110,6 +110,8 @@ impl RuntimeManualCompactionRequestWork {
         Ok(RuntimeAgentCompactionTask {
             task_generation: 0,
             compaction_epoch: self.owner.compaction_epoch,
+            transport_retry_attempts: 0,
+            transport_retry_delay_ms: None,
             pane_id: self.owner.pane_id.clone(),
             accounting_origin: self.origin.clone(),
             conversation_id: self.owner.conversation_id.clone(),

@@ -516,6 +516,7 @@ pub(super) struct RuntimeTimerTracker {
     pub(super) provider_claim: HashMap<String, RuntimeTimerKey>,
     pub(super) next_provider_claim_generation: u64,
     pub(super) compaction_claim: HashSet<RuntimeTimerKey>,
+    pub(super) compaction_retry: HashSet<RuntimeTimerKey>,
     pub(super) provider_persistence: HashMap<String, RuntimeTimerKey>,
     pub(super) pane_pipe_health: HashMap<String, RuntimeTimerKey>,
     pub(super) synchronized_output: HashMap<String, RuntimeTimerKey>,

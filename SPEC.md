@@ -10241,7 +10241,20 @@ request using the complete serialized provider request shape when available.
 The original selected execution groups MUST remain unchanged until validated
 chunk summaries are synthesized and atomically applied as one summary epoch;
 rejected source MUST NOT be moved into a verbatim final-request tail merely to
-shrink compactor input. Non-context failures MUST remain terminal. Before a
+shrink compactor input. Retryable auxiliary transport failures, including an
+interrupted HTTP 200 response body or incomplete SSE response, MUST use the
+effective provider retry limit/unlimited policy and bounded jittered backoff.
+The actor MUST retire the failed dispatch's exact lease and retain the frozen
+request, selected source, staged position, logical epoch and waiting turn under
+a fresh generation with supervised timer admission. Backoff MUST NOT dispatch
+the ordinary rejected request, replay settled actions, publish partial output
+or alter authoritative source context. Known incurred usage MUST be accounted
+exactly once per dispatch; absent usage remains unknown. Stale results and
+timers MUST be inert, and Stop, replacement, teardown and human pause MUST
+remain effective. Exhaustion, nonretryable failures, worker loss and failed
+timer admission MUST settle exact ownership without stranding compaction.
+This policy applies to manual and observed-input compaction as well as
+provider-limit recovery. Before a
 normal OpenAI Responses retry is queued, its complete serialized request body,
 including instructions, input, tools, wrappers, request controls, and dynamic
 suffixes, MUST be strictly smaller than the rejected request. An unchanged or

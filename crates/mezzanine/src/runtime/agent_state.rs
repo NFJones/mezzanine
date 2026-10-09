@@ -621,6 +621,10 @@ pub enum RuntimeAgentLoopSettlement {
 pub struct RuntimeAgentCompactionTask {
     /// Unique queued/claimed task generation used to reject stale worker outcomes.
     pub task_generation: u64,
+    /// Transport retries consumed by this logical auxiliary operation.
+    pub transport_retry_attempts: u64,
+    /// Pending supervised backoff; a held task cannot be dispatched or claimed.
+    pub transport_retry_delay_ms: Option<u64>,
     /// Frozen project provenance of this model request, retained across retries.
     pub(crate) accounting_origin: crate::storage::token_usage::AccountingOrigin,
     /// Logical compaction epoch retained across recursive and retry generations.

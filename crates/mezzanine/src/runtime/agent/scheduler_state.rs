@@ -84,6 +84,11 @@ impl RuntimeSessionService {
         self.agent.provider_retry_scheduler.set_policy(policy);
     }
 
+    /// Returns the effective provider policy for auxiliary failure observations.
+    pub(crate) fn provider_retry_policy(&self) -> ProviderRetryPolicy {
+        self.agent.provider_retry_scheduler.policy()
+    }
+
     /// Enqueues one validated unit of agent work.
     ///
     /// One accepted inbound prompt turn is exactly one enqueue, so this is also

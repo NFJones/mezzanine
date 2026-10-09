@@ -450,6 +450,27 @@ impl AsyncRuntimeSessionActor {
                 let mut transition = self
                     .service
                     .apply_agent_compaction_transition(compaction_event)?;
+                // Admit backoff before returning other effects. A full queue
+                // settles the exact undispatched task instead of orphaning it.
+                if let Some(index) = transition.side_effects.iter().position(|effect| {
+                    matches!(
+                        effect, RuntimeSideEffect::ScheduleTimer { key, .. }
+                        if key.kind == RuntimeTimerKind::CompactionRetry
+                    )
+                }) {
+                    let effect = transition.side_effects.remove(index);
+                    if let RuntimeSideEffect::ScheduleTimer { key, .. } = &effect {
+                        let owner_pane = key.owner_id.clone();
+                        let retry_generation = key.generation;
+                        self.admit_worker_claim_lease(
+                            super::claim_admission::WorkerClaimLease::CompactionRetry {
+                                pane_id: &owner_pane,
+                                generation: retry_generation,
+                            },
+                            vec![effect],
+                        )?;
+                    }
+                }
                 if !self
                     .service
                     .agent_compaction_task_is_claimed(&pane_id, generation)
@@ -776,6 +797,23 @@ impl AsyncRuntimeSessionActor {
                 Ok(RuntimeTransition {
                     applied,
                     side_effects,
+                })
+            }
+            RuntimeTimerKind::CompactionRetry => {
+                if !self.timers.compaction_retry.remove(&timer.key) {
+                    self.record_ignored_timer_event();
+                    return Ok(RuntimeTransition::default());
+                }
+                let applied = self
+                    .service
+                    .release_agent_compaction_retry(&timer.key.owner_id, timer.key.generation);
+                Ok(RuntimeTransition {
+                    applied,
+                    side_effects: if applied {
+                        self.pending_provider_dispatch_side_effects()?
+                    } else {
+                        Vec::new()
+                    },
                 })
             }
             RuntimeTimerKind::ProviderPersistence => {

@@ -3058,9 +3058,38 @@ impl RuntimeSessionService {
     pub(crate) fn pending_agent_compaction_task_ids(&self) -> Vec<String> {
         self.agent
             .pending_agent_compaction_tasks
-            .keys()
-            .cloned()
+            .iter()
+            .filter(|(_, task)| task.transport_retry_delay_ms.is_none())
+            .map(|(pane, _)| pane.clone())
             .collect()
+    }
+
+    /// Returns backoff only for an exact current pending auxiliary owner.
+    pub(crate) fn agent_compaction_retry_delay(&self, pane: &str, generation: u64) -> Option<u64> {
+        if !self.agent_compaction_task_is_current(pane, generation) {
+            return None;
+        }
+        self.agent
+            .pending_agent_compaction_tasks
+            .get(pane)
+            .filter(|task| task.task_generation == generation)
+            .and_then(|task| task.transport_retry_delay_ms)
+    }
+
+    /// Releases one exact backoff owner. Duplicate, stopped and replaced timers
+    /// cannot admit work; human pause remains enforced at worker claim time.
+    pub(crate) fn release_agent_compaction_retry(&mut self, pane: &str, generation: u64) -> bool {
+        if self
+            .agent_compaction_retry_delay(pane, generation)
+            .is_none()
+        {
+            return false;
+        }
+        if let Some(task) = self.agent.pending_agent_compaction_tasks.get_mut(pane) {
+            task.transport_retry_delay_ms = None;
+            return true;
+        }
+        false
     }
 
     /// Returns turns waiting for output-limit recovery compaction.

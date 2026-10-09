@@ -94,6 +94,12 @@ a model request or summary commit.
 
 If compaction fails, the error does not mean the source history was discarded.
 Mez does not publish a partial replacement as a completed durable compaction.
+Interrupted compactor responses (including HTTP 200 with an incomplete body)
+retry the same frozen auxiliary work with the configured provider retry budget
+and jittered backoff. The ordinary turn waits; settled actions are not replayed.
+Manual and observed-input compaction use the same policy. Stop and human pause
+remain effective during backoff. Exhausted or nonretryable failures are terminal,
+and incomplete summaries never replace authoritative history.
 Missing or corrupt required history is reported rather than silently omitted.
 Check the error and model limits, or start `/new` with a concise, verified
 handoff. After a successful compaction, ask the agent to recheck important file

@@ -858,6 +858,8 @@ pub enum RuntimeTimerKind {
     ProviderClaim,
     /// Timeout for a compaction task claimed by an async worker.
     CompactionClaim,
+    /// Supervised backoff for an exact frozen auxiliary compaction task.
+    CompactionRetry,
     /// Timeout for actor-validated memory or issue persistence settlement.
     ProviderPersistence,
     /// Short one-shot check for command-backed pane pipe completion or failure.

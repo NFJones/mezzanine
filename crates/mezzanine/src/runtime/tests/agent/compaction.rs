@@ -5,6 +5,7 @@ use crate::runtime::{current_unix_seconds, execute_runtime_agent_prompt_history_
 use mez_agent::messaging::{Envelope, MessageScope};
 
 mod preparation;
+mod transport_retries;
 
 /// Valid legacy history after a durable range must continue as private
 /// turn-local recovery, preserving raw history and both model summaries.

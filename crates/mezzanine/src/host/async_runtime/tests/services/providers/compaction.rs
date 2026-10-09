@@ -7,6 +7,8 @@
 
 use super::*;
 
+mod transport_retries;
+
 /// Under-budget eligible history still runs actual model compaction. Both direct
 /// and attached input routes must remain visibly compacting while the provider
 /// response is withheld, publish its summary, preserve the append-only archive,

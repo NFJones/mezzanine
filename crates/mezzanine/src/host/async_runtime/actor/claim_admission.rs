@@ -20,6 +20,8 @@ pub(super) enum WorkerClaimLease<'a> {
     },
     /// Compaction task whose pane may retain independently leased generations.
     Compaction { pane_id: &'a str, generation: u64 },
+    /// Frozen pending task whose next dispatch requires supervised backoff.
+    CompactionRetry { pane_id: &'a str, generation: u64 },
 }
 
 impl WorkerClaimLease<'_> {
@@ -35,6 +37,10 @@ impl WorkerClaimLease<'_> {
                 pane_id,
                 generation,
             } => RuntimeTimerKey::new(RuntimeTimerKind::CompactionClaim, *pane_id, *generation),
+            Self::CompactionRetry {
+                pane_id,
+                generation,
+            } => RuntimeTimerKey::new(RuntimeTimerKind::CompactionRetry, *pane_id, *generation),
         }
     }
 
@@ -54,6 +60,13 @@ impl WorkerClaimLease<'_> {
             } => actor
                 .service
                 .agent_compaction_task_is_claimed(pane_id, *generation),
+            Self::CompactionRetry {
+                pane_id,
+                generation,
+            } => actor
+                .service
+                .agent_compaction_retry_delay(pane_id, *generation)
+                .is_some(),
         }
     }
 }
@@ -100,6 +113,13 @@ impl AsyncRuntimeSessionActor {
                             "compaction claim timer admission failed: {}; settlement failed: {}", error.message(), settlement_error.message()
                         )))?;
                 }
+                WorkerClaimLease::CompactionRetry {
+                    pane_id,
+                    generation,
+                } => {
+                    self.service
+                        .fail_agent_compaction_retry_admission(pane_id, generation)?;
+                }
             }
         }
         Ok(false)
@@ -112,6 +132,123 @@ mod tests {
     use crate::host::async_runtime::AsyncRuntimeActorConfig;
     use crate::test_support::runtime::RuntimeServiceFixture;
     use mez_mux::layout::Size;
+
+    /// A full non-droppable side-effect queue rejects the mandatory auxiliary
+    /// retry timer before dispatch and settles its exact pending owner. It must
+    /// not leave a compacting marker or a waiting ordinary turn behind.
+    #[tokio::test]
+    async fn compaction_transport_retry_admission_settles_on_queue_pressure() {
+        let mut actor = claimed_provider_actor();
+        let profile = actor
+            .service
+            .agent_turn_model_profile("turn-1")
+            .unwrap()
+            .clone();
+        let request = mez_agent::session_title::session_title_request(
+            &profile,
+            "agent-%1",
+            &mez_agent::session_title::SessionTitleGenerationInputs {
+                objective: Some("frozen source"),
+                ..Default::default()
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        );
+        actor
+            .service
+            .queue_agent_compaction_task(crate::runtime::RuntimeAgentCompactionTask {
+                task_generation: 0,
+                compaction_epoch: 0,
+                transport_retry_attempts: 0,
+                transport_retry_delay_ms: None,
+                pane_id: "%1".into(),
+                conversation_id: actor
+                    .service
+                    .agent_shell_store()
+                    .get("%1")
+                    .unwrap()
+                    .session_id
+                    .clone(),
+                accounting_origin: crate::storage::token_usage::AccountingOrigin::Unattributed,
+                source: "provider-context-limit".into(),
+                transcript_entries: 0,
+                compacted_through_sequence: None,
+                frozen_compaction_rows: Vec::new(),
+                retained_transcript_entries: 0,
+                summarized_entries: 1,
+                model_profile_name: "default".into(),
+                model_profile: profile,
+                request,
+                preserve_summary_output_budget: true,
+                manual_retry_source: None,
+                manual_final_retry: None,
+                candidate_context: None,
+                resume_turn_id: Some("turn-1".into()),
+                target: crate::runtime::RuntimeAgentCompactionTarget::Conversation,
+                conversation_chunks: None,
+                compaction_request_shape: None,
+            });
+        let task = actor
+            .service
+            .take_pending_agent_compaction_task("%1")
+            .unwrap();
+        let generation = task.task_generation;
+        actor.service.claim_agent_compaction_task_state("%1", task);
+        let transition = actor
+            .service
+            .apply_agent_compaction_transition(crate::runtime::AgentCompactionEvent::Failed {
+                pane_id: "%1".into(),
+                task_generation: generation,
+                kind: "io".into(),
+                message: "provider HTTP response read failed: unexpected EOF".into(),
+                usage: Default::default(),
+                provider_failure_json: None,
+                provider_raw_text: None,
+            })
+            .unwrap();
+        let timer = transition.side_effects.into_iter().find(|effect| matches!(effect,
+            RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::CompactionRetry
+        )).unwrap();
+        let retry = actor
+            .service
+            .pending_agent_compaction_task_generation("%1")
+            .unwrap();
+        // A one-entry queue occupied by an unrelated non-droppable timer.
+        actor.side_effect_buffer = 1;
+        actor
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(RuntimeTimerKind::ProviderRetry, "unrelated", 1),
+                delay_ms: 10,
+            }])
+            .unwrap();
+        assert!(
+            !actor
+                .admit_worker_claim_lease(
+                    WorkerClaimLease::CompactionRetry {
+                        pane_id: "%1",
+                        generation: retry,
+                    },
+                    vec![timer]
+                )
+                .unwrap()
+        );
+        assert!(!actor.service.agent_is_compacting("%1"));
+        assert!(
+            actor
+                .service
+                .pending_agent_compaction_task_generation("%1")
+                .is_none()
+        );
+        assert_eq!(
+            actor
+                .service
+                .agent_turn_ledger()
+                .turn("turn-1")
+                .unwrap()
+                .state,
+            mez_agent::AgentTurnState::Failed
+        );
+        assert!(actor.timers.compaction_retry.is_empty());
+    }
 
     /// A stale owner cannot enqueue a timer or settle a replacement claim. The
     /// replacement can still admit its exact positive lease afterward.

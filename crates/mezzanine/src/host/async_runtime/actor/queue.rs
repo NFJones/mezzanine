@@ -130,6 +130,13 @@ impl AsyncRuntimeSessionActor {
                     self.timers.compaction_claim.remove(key);
                 }
             }
+            RuntimeTimerKind::CompactionRetry => {
+                if scheduled {
+                    self.timers.compaction_retry.insert(key.clone());
+                } else {
+                    self.timers.compaction_retry.remove(key);
+                }
+            }
             RuntimeTimerKind::ProviderPersistence => {
                 Self::track_owned_timer_key(&mut self.timers.provider_persistence, key, scheduled);
             }
