@@ -114,6 +114,8 @@ pub(super) struct PendingRecovery {
     bytes: Vec<u8>,
     location: JournalLocation,
     pub(super) changes: Vec<Change>,
+    /// Content-free destinations from compiled-authorized archive dependencies.
+    pub(super) preserved_paths: Vec<String>,
 }
 
 /// Held root, with optional exclusive ownership acquired only for publication.
@@ -717,6 +719,16 @@ impl Publisher {
             bytes,
             location,
             changes: journal.changes,
+            preserved_paths: serde_json::from_value::<std::collections::BTreeMap<String, String>>(
+                journal
+                    .intent
+                    .get("archives")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({})),
+            )
+            .map_err(|_| MezError::invalid_state("bootstrap archive report metadata unavailable"))?
+            .into_keys()
+            .collect(),
         }))
     }
 

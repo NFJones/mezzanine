@@ -100,24 +100,31 @@ fn run_with_root_selector<W: Write>(
         let selected = select_root(&args.harness, args.root.as_deref())?;
         let home = select_home()?;
         let root = &selected.path;
+        use crate::integrations::bootstrap::installer::BootstrapOutcome;
         let mut recovered = false;
         let mut recovery_pending = false;
         let mut changed_paths = Vec::new();
+        let mut planned_preserved_paths = Vec::new();
+        let outcome;
         let operation = if args.recover {
-            if args.dry_run {
-                if let Some(paths) =
-                    crate::integrations::bootstrap::installer::preview_recovery_private(
-                        root, &home, &manifest,
-                    )?
-                {
-                    recovery_pending = true;
-                    changed_paths = paths;
-                }
-            } else {
-                recovered = crate::integrations::bootstrap::installer::recover_private(
+            let report = if args.dry_run {
+                crate::integrations::bootstrap::installer::preview_recovery_private(
                     root, &home, &manifest,
-                )?;
-            }
+                )?
+            } else {
+                crate::integrations::bootstrap::installer::recover_private_report(
+                    root, &home, &manifest,
+                )?
+            };
+            outcome = if let Some(report) = report {
+                changed_paths = report.changed_paths;
+                planned_preserved_paths = report.preserved_paths;
+                recovery_pending = args.dry_run;
+                recovered = !args.dry_run;
+                BootstrapOutcome::Recovered
+            } else {
+                BootstrapOutcome::Unchanged
+            };
             "recover"
         } else {
             use crate::integrations::bootstrap::installer::{Operation, plan_private};
@@ -136,6 +143,12 @@ fn run_with_root_selector<W: Write>(
                 .into_iter()
                 .map(str::to_string)
                 .collect();
+            outcome = plan.outcome();
+            planned_preserved_paths = plan
+                .preserved_paths()
+                .into_iter()
+                .map(str::to_string)
+                .collect();
             recovery_pending = plan.recovery_pending();
             if !args.dry_run && !args.check {
                 plan.apply()?;
@@ -150,14 +163,33 @@ fn run_with_root_selector<W: Write>(
                 "install"
             }
         };
-        return super::write_json_or_plain(stdout, format, &serde_json::json!({
-            "harness":args.harness,"vendor_version":args.vendor_version,"operation":operation,
-            "scope_root":root.to_string_lossy(),"root_source":selected.source,
-            "supported":true,"manifest_revision":manifest.revision,"changed_paths":changed_paths,"recovered":recovered,
-            "dry_run":args.dry_run,"recovery_pending":recovery_pending,
-            "support":"best-effort",
-            "guidance":"Installation is observational only. Use ordinary vendor commands and preserve vendor review/disabled policy. Automatic enrollment and accounting capabilities may still be unavailable; no Mez vendor-launch wrappers exist",
-        }).to_string());
+        let result = if args.dry_run {
+            "preview"
+        } else if args.check {
+            "checked"
+        } else {
+            outcome.as_str()
+        };
+        let preserved_paths = if args.dry_run || args.check {
+            Vec::new()
+        } else {
+            planned_preserved_paths.clone()
+        };
+        return write_report(
+            stdout,
+            format,
+            &serde_json::json!({
+                "harness":args.harness,"vendor_version":args.vendor_version,"operation":operation,
+                "scope_root":root.to_string_lossy(),"root_source":selected.source,
+                "supported":true,"manifest_revision":manifest.revision,"changed_paths":changed_paths,"recovered":recovered,
+                "dry_run":args.dry_run,"recovery_pending":recovery_pending,
+                "result":result,"planned_outcome":outcome.as_str(),
+                "planned_preserved_paths":planned_preserved_paths,"preserved_paths":preserved_paths,
+                "runtime_verification":"not-performed",
+                "support":"best-effort",
+                "guidance":"Installation is observational only. Use ordinary vendor commands and preserve vendor review/disabled policy. Automatic enrollment and accounting capabilities may still be unavailable; no Mez vendor-launch wrappers exist",
+            }),
+        );
     }
     if !args.dry_run && !args.check {
         return Err(MezError::invalid_state(format!(
@@ -169,10 +201,65 @@ fn run_with_root_selector<W: Write>(
         "harness":args.harness, "vendor_version":args.vendor_version,
         "scope_root":args.root, "operation":if args.recover {"recover"} else if args.uninstall {"uninstall"} else if args.check {"check"} else {"install"},"dry_run":args.dry_run,
         "supported":false, "certification":"unavailable", "changed_paths":[],
+        "result":"unavailable","planned_outcome":null,"planned_preserved_paths":[],"preserved_paths":[],"runtime_verification":"not-performed",
         "lifecycle":"unavailable", "usage":"unavailable",
         "reason":"No compiled adapter manifest; no vendor configuration, credentials or hook trust changed",
-    }).to_string();
-    super::write_json_or_plain(stdout, format, &output)
+    });
+    write_report(stdout, format, &output)
+}
+
+/// Renders compact operator diagnostics or the exact machine-readable report.
+/// Paths use escaped debug spelling in plain text; no artifact/archive bytes or
+/// vendor probing are involved. Missing adapter reports never imply activation.
+fn write_report<W: Write>(
+    stdout: &mut W,
+    format: CliOutputFormat,
+    report: &serde_json::Value,
+) -> Result<()> {
+    if format == CliOutputFormat::Json {
+        writeln!(stdout, "{report}")?;
+        return Ok(());
+    }
+    let result = report["result"].as_str().unwrap_or("unavailable");
+    writeln!(
+        stdout,
+        "bootstrap {}: {result}",
+        report["harness"].as_str().unwrap_or("unknown")
+    )?;
+    if let Some(planned) = report["planned_outcome"].as_str() {
+        if matches!(result, "preview" | "checked") {
+            writeln!(stdout, "Planned outcome: {planned} (no writes)")?;
+        }
+        writeln!(
+            stdout,
+            "Root: {:?} ({})",
+            report["scope_root"].as_str().unwrap_or("not selected"),
+            report["root_source"].as_str().unwrap_or("unknown")
+        )?;
+        writeln!(
+            stdout,
+            "Changes: {}; preservation: {} planned, {} confirmed; recovery: {}",
+            report["changed_paths"].as_array().map_or(0, Vec::len),
+            report["planned_preserved_paths"]
+                .as_array()
+                .map_or(0, Vec::len),
+            report["preserved_paths"].as_array().map_or(0, Vec::len),
+            if report["recovered"] == true {
+                "completed"
+            } else if report["recovery_pending"] == true {
+                "pending"
+            } else {
+                "none"
+            },
+        )?;
+        writeln!(
+            stdout,
+            "Runtime enrollment/accounting not verified; vendor review and disabled policy remain unchanged."
+        )?;
+    } else {
+        writeln!(stdout, "No compiled adapter; no files changed.")?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -295,6 +382,173 @@ mod tests {
         Ok(serde_json::from_slice(&output).unwrap())
     }
 
+    /// CLI result labels derive from accepted ownership and actual publication,
+    /// not exit success or runtime activation. Read-only previews/checks preserve
+    /// both trees; repairs report archived destinations without exposing bytes.
+    /// Historical upgrade and pending recovery use the same production owners.
+    #[test]
+    fn bootstrap_cli_outcomes_distinguish_publication_preview_and_preservation() {
+        use crate::integrations::bootstrap::installer::{Operation, plan_private};
+        let home = PrivateHome::new();
+        let root = home.0.join("vendor");
+        let before = tree_snapshot(&home.0);
+        for (flag, result) in [("--dry-run", "preview"), ("--check", "checked")] {
+            let output = invoke_private_fixture(&home.0, &root, &[flag]).unwrap();
+            assert_eq!(output["result"], result);
+            assert_eq!(output["planned_outcome"], "installed");
+            assert_eq!(output["runtime_verification"], "not-performed");
+            assert_eq!(tree_snapshot(&home.0), before);
+        }
+        assert_eq!(
+            invoke_private_fixture(&home.0, &root, &[]).unwrap()["result"],
+            "installed"
+        );
+        assert_eq!(
+            invoke_private_fixture(&home.0, &root, &[]).unwrap()["result"],
+            "unchanged"
+        );
+        let file = root.join("extensions/mezzanine/package.json");
+        std::fs::remove_file(&file).unwrap();
+        let output = invoke_private_fixture(&home.0, &root, &["--check"]).unwrap();
+        assert_eq!(output["result"], "checked");
+        assert_eq!(output["planned_outcome"], "repaired");
+        assert_eq!(
+            invoke_private_fixture(&home.0, &root, &[]).unwrap()["result"],
+            "repaired"
+        );
+        std::fs::write(&file, b"private edit never emitted").unwrap();
+        let before = tree_snapshot(&home.0);
+        let output = invoke_private_fixture(&home.0, &root, &["--dry-run"]).unwrap();
+        assert_eq!(
+            output["planned_preserved_paths"],
+            serde_json::json!(["extensions/mezzanine/package.json"])
+        );
+        assert_eq!(output["preserved_paths"], serde_json::json!([]));
+        assert!(!output.to_string().contains("private edit never emitted"));
+        assert_eq!(tree_snapshot(&home.0), before);
+        let current = crate::integrations::bootstrap::compiled_manifest("pi", None).unwrap();
+        let plan = plan_private(&root, &home.0, &current, Operation::Install).unwrap();
+        plan.fixture_interrupt_after(1);
+        assert!(plan.apply().is_err());
+        for flags in [vec!["--dry-run"], vec!["--recover", "--dry-run"]] {
+            let before = tree_snapshot(&home.0);
+            let output = invoke_private_fixture(&home.0, &root, &flags).unwrap();
+            assert_eq!(output["result"], "preview");
+            assert_eq!(output["recovery_pending"], true);
+            assert_eq!(
+                output["planned_preserved_paths"],
+                serde_json::json!(["extensions/mezzanine/package.json"])
+            );
+            assert_eq!(output["preserved_paths"], serde_json::json!([]));
+            assert_eq!(tree_snapshot(&home.0), before);
+        }
+        let output = invoke_private_fixture(&home.0, &root, &["--recover"]).unwrap();
+        assert_eq!(output["result"], "recovered");
+        assert_eq!(
+            output["preserved_paths"],
+            serde_json::json!(["extensions/mezzanine/package.json"])
+        );
+        assert_eq!(
+            invoke_private_fixture(&home.0, &root, &["--recover"]).unwrap()["result"],
+            "unchanged"
+        );
+        assert_eq!(
+            invoke_private_fixture(&home.0, &root, &["--uninstall"]).unwrap()["result"],
+            "uninstalled"
+        );
+        assert_eq!(
+            invoke_private_fixture(&home.0, &root, &["--uninstall"]).unwrap()["result"],
+            "unchanged"
+        );
+
+        let home = PrivateHome::new();
+        let root = home.0.join("vendor");
+        std::fs::create_dir(&root).unwrap();
+        let old = crate::integrations::bootstrap::compiled_history(&current).remove(0);
+        plan_private(&root, &home.0, &old, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        let before = tree_snapshot(&home.0);
+        assert_eq!(
+            invoke_private_fixture(&home.0, &root, &["--dry-run"]).unwrap()["planned_outcome"],
+            "upgraded"
+        );
+        assert_eq!(tree_snapshot(&home.0), before);
+        assert_eq!(
+            invoke_private_fixture(&home.0, &root, &[]).unwrap()["result"],
+            "upgraded"
+        );
+    }
+
+    /// Plain reports summarize the same captured operation without dumping JSON
+    /// or claiming vendor activation. Rendering escapes control-bearing display
+    /// paths; invalid ownership returns no success text or archived payload bytes.
+    #[test]
+    fn bootstrap_cli_plain_reports_are_concise_escaped_and_failure_safe() {
+        let home = PrivateHome::new();
+        let root = home.0.join("vendor");
+        let args = BootstrapCliArgs {
+            harness: "pi".into(),
+            vendor_version: None,
+            root: Some(root.clone()),
+            dry_run: true,
+            check: false,
+            uninstall: false,
+            recover: false,
+        };
+        let mut output = Vec::new();
+        let before = tree_snapshot(&home.0);
+        run_at_home(args.clone(), CliOutputFormat::Plain, &mut output, &home.0).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.starts_with("bootstrap pi: preview\n"));
+        assert!(text.contains("Planned outcome: installed (no writes)"));
+        assert!(text.contains("(explicit)"));
+        assert!(text.contains("not verified"));
+        assert!(text.lines().count() <= 5);
+        assert_eq!(tree_snapshot(&home.0), before);
+        let mut actual = args.clone();
+        actual.dry_run = false;
+        let mut output = Vec::new();
+        run_at_home(actual.clone(), CliOutputFormat::Plain, &mut output, &home.0).unwrap();
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .starts_with("bootstrap pi: installed\n")
+        );
+
+        let mut report = invoke_private_fixture(&home.0, &root, &["--dry-run"]).unwrap();
+        report["scope_root"] = "\u{1b}[2J\ncontrol-bearing path".into();
+        let mut output = Vec::new();
+        write_report(&mut output, CliOutputFormat::Plain, &report).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(!text.contains('\u{1b}'));
+        assert!(text.contains("\\ncontrol-bearing path"));
+        assert_eq!(text.lines().count(), 5);
+
+        actual.harness = "codex".into();
+        std::fs::write(
+            root.join("hooks.json"),
+            b"authored callback must never leak",
+        )
+        .unwrap();
+        for format in [CliOutputFormat::Plain, CliOutputFormat::Json] {
+            let mut output = Vec::new();
+            let before = tree_snapshot(&home.0);
+            assert!(run_at_home(actual.clone(), format, &mut output, &home.0).is_err());
+            assert!(output.is_empty());
+            assert_eq!(tree_snapshot(&home.0), before);
+        }
+        let mut absent = args;
+        absent.harness = "claude".into();
+        let mut output = Vec::new();
+        run_at_home(absent, CliOutputFormat::Plain, &mut output, &home.0).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "bootstrap claude: unavailable\nNo compiled adapter; no files changed.\n"
+        );
+    }
+
     /// Observes the sole test-owned namespace after real engine publication.
     /// The pathname is fixture evidence only; production never discovers journal
     /// authority by enumerating HOME or choosing an arbitrary namespace.
@@ -354,6 +608,14 @@ mod tests {
             let output = invoke_private_fixture(&home.0, &root, flags).unwrap();
             assert_eq!(output["recovered"], true);
             assert_eq!(output["recovery_pending"], false);
+            assert_eq!(
+                output["result"],
+                match intent {
+                    "install" => "unchanged",
+                    "uninstall" => "uninstalled",
+                    _ => "recovered",
+                }
+            );
             assert!(!private_fixture_journal(&home.0).exists());
             assert_eq!(
                 crate::integrations::bootstrap::installer::fixture_private_receipt(

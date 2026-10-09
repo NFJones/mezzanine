@@ -649,6 +649,19 @@ Recovery preview MUST share version/root/compiled-intent/preimage authorization
 with recovery, without writer lock or publication. JSON MUST distinguish operation,
 dry_run, changed_paths, recovered and accepted recovery_pending. Check success
 MUST mean inspection succeeded, not necessarily unchanged/installed state.
+Bootstrap JSON `result` MUST distinguish completed installed/upgraded/repaired/
+uninstalled/recovered/unchanged outcomes from read-only preview/checked and absent
+adapter unavailable. `planned_outcome` MUST describe requested reconciliation after
+any original recovery, not assert preview publication. `planned_preserved_paths`
+MUST include required archives from both original pending and requested intent;
+`preserved_paths` MUST remain empty for read-only work and require successful
+publication/settlement otherwise. Reused exact archives count as preservation.
+Explicit recovery `changed_paths` MUST describe original journal effects, including
+already confirmed ones, not an assertion every path was newly written. Receipt
+placement-only migration counts as repair. Reports MUST expose no artifact/archive
+payloads, claim no verified runtime capability, and perform no vendor/daemon probes.
+Plain output MUST be concise and escape root-path controls; scope_root/root_source
+describe the selected destination, not inferred project trust or loader scope.
 Inspection MUST be read-only: no lock acquisition/creation, journal, receipt,
 artifact parent, stage or vendor-root creation. Holding an inspection descriptor
 MUST NOT block a cooperating writer or release its lock. Mutating publication

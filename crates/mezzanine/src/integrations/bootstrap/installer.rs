@@ -6,6 +6,9 @@
 //! legacy-marker removal in one recovery journal. Version 2 keeps original vendor
 //! receipt targets; version 3 freezes explicit private placement/source identity.
 //! Shared documents may be reformatted on change, but unrelated values survive.
+//! Content-free outcomes derive only from the captured authorized plan; requested
+//! reconciliation is classified after original pending recovery. Preview facts
+//! are not publication proof or evidence of vendor load/enrollment/accounting.
 
 use super::preservation::reconcile_preserving;
 use super::publication::{Change, PendingRecovery, Publisher, private_receipt_path};
@@ -38,6 +41,47 @@ struct Receipt {
 pub(crate) enum Operation {
     Install,
     Uninstall,
+}
+
+/// Installation effects only, never a vendor-load/enrollment/accounting claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BootstrapOutcome {
+    /// First requested install with no previously accepted ownership.
+    Installed,
+    /// Replacement of an exact recognized predecessor manifest.
+    Upgraded,
+    /// Current-owned state repair, including receipt placement migration.
+    Repaired,
+    /// Requested removal of accepted ownership/artifacts.
+    Uninstalled,
+    /// Original accepted journal settlement, not a new install intention.
+    Recovered,
+    /// No requested reconciliation effects after any original recovery.
+    Unchanged,
+}
+
+impl BootstrapOutcome {
+    /// Stable content-free labels shared by plain and JSON CLI reports.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Installed => "installed",
+            Self::Upgraded => "upgraded",
+            Self::Repaired => "repaired",
+            Self::Uninstalled => "uninstalled",
+            Self::Recovered => "recovered",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
+/// Authorized original recovery facts; actual callers receive this only after
+/// settlement, while preview callers receive the same planned facts without writes.
+#[derive(Debug)]
+pub(crate) struct RecoveryReport {
+    /// Original journal effects, including already-confirmed publication paths.
+    pub(crate) changed_paths: Vec<String>,
+    /// Exact preserved destinations, never archived configuration payloads.
+    pub(crate) preserved_paths: Vec<String>,
 }
 
 /// Original receipt destination is frozen by the journal version and intent.
@@ -401,6 +445,41 @@ impl Plan {
         self.pending.is_some()
     }
 
+    /// Classifies requested reconciliation after any original pending recovery.
+    /// Receipt migration counts as repair; runtime behavior is not inspected.
+    pub(crate) fn outcome(&self) -> BootstrapOutcome {
+        if self.changes.is_empty() {
+            BootstrapOutcome::Unchanged
+        } else if matches!(self.intent.operation, Operation::Uninstall) {
+            BootstrapOutcome::Uninstalled
+        } else if let Some(previous) = &self.intent.previous {
+            if previous == &self.intent.manifest {
+                BootstrapOutcome::Repaired
+            } else {
+                BootstrapOutcome::Upgraded
+            }
+        } else {
+            BootstrapOutcome::Installed
+        }
+    }
+
+    /// Reports required preservation for requested and original pending intent.
+    /// Reused exact archives count; this is not evidence publication has occurred.
+    pub(crate) fn preserved_paths(&self) -> Vec<&str> {
+        self.intent
+            .archives
+            .keys()
+            .map(String::as_str)
+            .chain(
+                self.pending
+                    .iter()
+                    .flat_map(|pending| pending.preserved_paths.iter().map(String::as_str)),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     /// Reports planned changes without exposing any configuration payload.
     pub(crate) fn changed_paths(&self) -> Vec<&str> {
         let mut seen = BTreeSet::new();
@@ -493,8 +572,18 @@ pub(crate) fn preview_recovery_private(
     root: &Path,
     home: &Path,
     manifest: &Manifest,
-) -> Result<Option<Vec<String>>> {
+) -> Result<Option<RecoveryReport>> {
     recover_private_mode(root, home, manifest, true)
+}
+
+/// Returns actual settlement facts through the same single captured owner used
+/// by boolean recovery. Failures emit no success report and never reapply effects.
+pub(crate) fn recover_private_report(
+    root: &Path,
+    home: &Path,
+    manifest: &Manifest,
+) -> Result<Option<RecoveryReport>> {
+    recover_private_mode(root, home, manifest, false)
 }
 
 /// Uses the same captured private publication owner for inspection and explicit
@@ -504,7 +593,7 @@ fn recover_private_mode(
     home: &Path,
     manifest: &Manifest,
     preview: bool,
-) -> Result<Option<Vec<String>>> {
+) -> Result<Option<RecoveryReport>> {
     validate_manifest(manifest)?;
     let history = super::compiled_history(manifest);
     recover_private_owner(
@@ -523,25 +612,29 @@ fn recover_private_owner(
     manifest: &Manifest,
     history: &[Manifest],
     preview: bool,
-) -> Result<Option<Vec<String>>> {
-    if preview {
-        return Ok(publisher
-            .inspect_recovery_authorized(|version, value, changes| {
-                authorize_recovery(&publisher, manifest, history, version, value, changes)
-            })?
-            .map(|changes| changes.into_iter().map(|change| change.path).collect()));
-    }
+) -> Result<Option<RecoveryReport>> {
     let Some(pending) = publisher.inspect_pending_authorized(|version, value, changes| {
         authorize_recovery(&publisher, manifest, history, version, value, changes)
     })?
     else {
         return Ok(None);
     };
+    let report = RecoveryReport {
+        changed_paths: pending
+            .changes
+            .iter()
+            .map(|change| change.path.clone())
+            .collect(),
+        preserved_paths: pending.preserved_paths.clone(),
+    };
+    if preview {
+        return Ok(Some(report));
+    }
     publisher.acquire_lock()?;
     publisher.recover_pending_authorized(&pending, |version, value, changes| {
         authorize_recovery(&publisher, manifest, history, version, value, changes)
     })?;
-    Ok(Some(Vec::new()))
+    Ok(Some(report))
 }
 
 /// Explicitly settles previously accepted intent; conflicts preserve the journal.

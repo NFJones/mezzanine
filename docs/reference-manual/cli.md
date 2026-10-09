@@ -296,6 +296,24 @@ effects. JSON `operation` is install/check/uninstall/recover; `dry_run` is expli
 currently returns success when inspection succeeds, even if changes are needed;
 scripts should inspect `changed_paths`, not infer installed/active state from exit0.
 
+Plain bootstrap output now summarizes the result, selected root/source, planned
+change/preservation counts, confirmed preservation and pending/completed recovery.
+JSON `result` is `installed`, `upgraded`, `repaired`, `uninstalled`, `recovered`, or
+`unchanged` only after successful actual work; read-only intents report `preview`
+or `checked`, and absent adapters report `unavailable`. `planned_outcome` classifies
+the requested reconciliation after original pending intent has been accounted for;
+`unchanged` with `recovered:true` therefore means the original journal was settled
+but the requested current reconciliation needed no further effects. Receipt-only
+migration counts as repair. `planned_preserved_paths` includes requested and pending
+recovery requirements, even for reused archives; `preserved_paths` stays empty for
+check/dry-run and reports those paths only after successful actual settlement.
+No archived bytes are printed. Explicit recovery now returns its original journal
+`changed_paths`, including already committed effects, rather than an empty path list.
+`runtime_verification:"not-performed"` makes clear installation is not proof of
+loading, enrollment, token coverage or vendor compatibility. No vendor/daemon probe
+or extra enable command is run for this report. `scope_root` and `root_source` are
+destination diagnostics, not inferred project scope/trust or loader discovery.
+
 For compiled adapters, `--root` is now optional. The selector uses an explicit
 absolute override first, then the vendor directory variable, then its user default:
 
