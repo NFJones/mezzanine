@@ -46,6 +46,14 @@ struct Journal {
     changes: Vec<Change>,
 }
 
+/// Exact accepted pending intent, including its serialized identity. Decoded
+/// changes support virtual inspection; bytes fence replacement before recovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PendingRecovery {
+    bytes: Vec<u8>,
+    pub(super) changes: Vec<Change>,
+}
+
 /// Held root, with optional exclusive ownership acquired only for publication.
 pub(super) struct Publisher {
     root: PathBuf,
@@ -339,6 +347,17 @@ impl Publisher {
         &self,
         authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
     ) -> Result<Option<Vec<Change>>> {
+        Ok(self
+            .inspect_pending_authorized(authorize)?
+            .map(|pending| pending.changes))
+    }
+
+    /// Captures exact journal bytes only after compiled intent and physical
+    /// before/after validation. No filesystem writes or lock acquisition occur.
+    pub(super) fn inspect_pending_authorized(
+        &self,
+        authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
+    ) -> Result<Option<PendingRecovery>> {
         self.validate_root()?;
         if self.directory.is_missing() {
             return Ok(None);
@@ -361,7 +380,26 @@ impl Publisher {
         }
         authorize(&journal.intent, &journal.changes)?;
         self.validate_changes(&journal.changes, true)?;
-        Ok(Some(journal.changes))
+        Ok(Some(PendingRecovery {
+            bytes,
+            changes: journal.changes,
+        }))
+    }
+
+    /// Reauthorizes the identical inspected journal under writer ownership,
+    /// then finishes its original operation without releasing the lock.
+    pub(super) fn recover_pending_authorized(
+        &self,
+        pending: &PendingRecovery,
+        authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
+    ) -> Result<()> {
+        self.require_lock()?;
+        if self.inspect_pending_authorized(authorize)?.as_ref() != Some(pending) {
+            return Err(MezError::conflict(
+                "bootstrap inspected recovery changed; no publication",
+            ));
+        }
+        self.finish(&pending.changes)
     }
 
     /// Commits an already planned transaction; never silently recovers old intent.

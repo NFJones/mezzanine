@@ -121,10 +121,10 @@ pub(crate) fn compiled_manifest(
 }
 
 /// Recognizes exact shipped predecessors using independent frozen source bytes.
-/// Receipts cannot supply authority; explicit recovery may finish these exact
-/// historical targets, while unknown fixed-helper references fail closed.
-/// Automatic recovery/refresh and additional byte-variant recognition remain
-/// installer work, separate from this immutable authority directory.
+/// Receipts cannot supply authority; explicit or automatic recovery may finish
+/// these exact historical targets, while unknown fixed-helper references fail
+/// closed. The installer owns read-only overlays and locked reconciliation;
+/// this directory supplies immutable artifact authority only.
 pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer::Manifest> {
     let (current, revision, paths) = match manifest.harness.as_str() {
         "pi" => (

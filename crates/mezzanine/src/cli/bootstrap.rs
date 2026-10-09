@@ -120,8 +120,11 @@ fn run_with_root_selector<W: Write>(
                 .into_iter()
                 .map(str::to_string)
                 .collect();
+            recovery_pending = plan.recovery_pending();
             if !args.dry_run && !args.check {
                 plan.apply()?;
+                recovered = recovery_pending;
+                recovery_pending = false;
             }
             if args.uninstall {
                 "uninstall"
@@ -296,17 +299,9 @@ mod tests {
         .unwrap();
         let journal = serde_json::to_vec(&serde_json::json!({"version":2,"root_device":metadata.dev(),"root_inode":metadata.ino(),"intent":{"manifest":manifest,"previous":null,"operation":"Install"},"changes":[{"path":"owned","before":null,"after":b"owned".to_vec()},{"path":"mez-bootstrap-ownership-codex.json","before":null,"after":receipt}]})).unwrap();
         std::fs::write(root.join(".mez-bootstrap-journal"), &journal).unwrap();
-        let invoke = |preview: bool| {
-            let mut arguments = vec![
-                "fixture",
-                "codex",
-                "--root",
-                root.to_str().unwrap(),
-                "--recover",
-            ];
-            if preview {
-                arguments.push("--dry-run");
-            }
+        let invoke = |flags: &[&str]| {
+            let mut arguments = vec!["fixture", "codex", "--root", root.to_str().unwrap()];
+            arguments.extend_from_slice(flags);
             let parsed = Fixture::try_parse_from(arguments).unwrap();
             let mut output = Vec::new();
             run_with_manifest(
@@ -318,7 +313,7 @@ mod tests {
             .unwrap();
             serde_json::from_slice::<serde_json::Value>(&output).unwrap()
         };
-        let preview = invoke(true);
+        let preview = invoke(&["--recover", "--dry-run"]);
         assert_eq!(preview["operation"], "recover");
         assert_eq!(preview["dry_run"], true);
         assert_eq!(preview["recovery_pending"], true);
@@ -329,9 +324,34 @@ mod tests {
             std::fs::read(root.join(".mez-bootstrap-journal")).unwrap(),
             journal
         );
-        assert_eq!(invoke(false)["recovered"], true);
+        for intent in ["--dry-run", "--check"] {
+            let preview = invoke(&[intent]);
+            assert_eq!(preview["recovery_pending"], true);
+            assert_eq!(preview["recovered"], false);
+            assert_eq!(preview["changed_paths"].as_array().unwrap().len(), 2);
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+            assert_eq!(
+                std::fs::read(root.join(".mez-bootstrap-journal")).unwrap(),
+                journal
+            );
+        }
+        assert_eq!(invoke(&["--recover"])["recovered"], true);
         assert_eq!(std::fs::read(root.join("owned")).unwrap(), b"owned");
-        assert_eq!(invoke(true)["recovery_pending"], false);
+        assert_eq!(
+            invoke(&["--recover", "--dry-run"])["recovery_pending"],
+            false
+        );
+        // All effects already equal their after state, but the original journal
+        // still requires settlement even when requested reconciliation is noop.
+        std::fs::write(root.join(".mez-bootstrap-journal"), &journal).unwrap();
+        let installed = invoke(&[]);
+        assert_eq!(installed["recovered"], true);
+        assert_eq!(installed["recovery_pending"], false);
+        assert_eq!(installed["operation"], "install");
+        let repeated = invoke(&[]);
+        assert_eq!(repeated["recovered"], false);
+        assert_eq!(repeated["recovery_pending"], false);
+        assert!(repeated["changed_paths"].as_array().unwrap().is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 

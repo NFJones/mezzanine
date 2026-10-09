@@ -318,15 +318,23 @@ remain exact. No vendor probing or cwd/focus/project ancestor discovery occurs.
 The six root policies do not imply six compiled adapters: absent adapter diagnostics
 still perform no root discovery or mutation. Missing selected roots now support
 read-only preview and installation-only anchored creation. Bare install and
-`--dry-run` now use these owners; historical pending-target automatic recovery,
-missing/edited owned repair/preservation and broader adapter activation remain work.
+`--dry-run` now use these owners; missing/edited owned repair/preservation and
+broader adapter activation remain work.
 Explicit `--recover` (and `--recover --dry-run`) now recognizes exact same-harness
 historical targets from compiled artifact history. Recovery finishes the original
 install/uninstall target's immutable bytes and receipt, never substitutes the
 latest adapter while interpreting an old journal. Unknown/altered targets, forged
-artifact/receipt payloads, changed root or foreign preimages still reject. Current
-refresh is a separate reconciliation after recovery; ordinary bootstrap does not
-yet perform that combined workflow automatically.
+artifact/receipt payloads, changed root or foreign preimages still reject. Normal
+install/uninstall now previews the requested reconciliation against a read-only
+virtual post-recovery tree. Check/dry-run reports `recovery_pending=true` and the
+ordered deduplicated union of recovery and requested `changed_paths`, without
+creating a lock or changing any journal/artifact. Apply retains one publication
+lock across exact journal reauthorization, original-operation completion and
+requested reconciliation. Changed/disappeared inspected intent is not adopted.
+Successful automatic settlement reports `recovered=true` and
+`recovery_pending=false`; a repeat reports neither pending recovery nor changes.
+The two operations retain separate journals, not whole-workflow atomicity: an
+interruption can leave original or requested intent pending for the next command.
 
 ### Normalized observational hook helper
 

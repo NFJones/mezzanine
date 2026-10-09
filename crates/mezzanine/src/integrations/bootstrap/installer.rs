@@ -5,7 +5,7 @@
 //! vendor configuration. Receipt publication is last in the same recovery journal.
 //! Shared documents may be reformatted on change, but unrelated values survive.
 
-use super::publication::{Change, Publisher};
+use super::publication::{Change, PendingRecovery, Publisher};
 use super::reconciliation::{Entry, reconcile, validate};
 use crate::error::{MezError, Result};
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,8 @@ pub(crate) struct Plan {
     changes: Vec<Change>,
     observed: Vec<(String, Option<Vec<u8>>)>,
     intent: Intent,
+    pending: Option<PendingRecovery>,
+    history: Vec<Manifest>,
 }
 
 /// Validates bounded registry metadata and one artifact per destination.
@@ -102,7 +104,7 @@ fn receipt_bytes(manifest: &Manifest) -> Result<Vec<u8>> {
 }
 
 /// Captures a deterministic ownership-checked plan without changing destinations.
-/// An existing journal requires explicit recovery rather than silent replay.
+/// Recognized pending intent is virtually completed before requested reconciliation.
 pub(crate) fn plan(root: &Path, manifest: &Manifest, operation: Operation) -> Result<Plan> {
     plan_with_history(
         root,
@@ -122,9 +124,21 @@ pub(crate) fn plan_with_history(
 ) -> Result<Plan> {
     validate_manifest(manifest)?;
     let publisher = Publisher::inspect(root)?;
-    publisher.require_no_pending_journal()?;
+    let pending = publisher.inspect_pending_authorized(|value, changes| {
+        authorize_recovery(&publisher, manifest, history, value, changes)
+    })?;
+    let read = |path: &str| -> Result<Option<Vec<u8>>> {
+        if let Some(change) = pending
+            .as_ref()
+            .and_then(|pending| pending.changes.iter().find(|change| change.path == path))
+        {
+            Ok(change.after.clone())
+        } else {
+            publisher.read(path)
+        }
+    };
     let receipt_path = format!("mez-bootstrap-ownership-{}.json", manifest.harness);
-    let receipt_bytes = publisher.read(&receipt_path)?;
+    let receipt_bytes = read(&receipt_path)?;
     let previous: Option<Receipt> = receipt_bytes
         .as_ref()
         .map(|bytes| {
@@ -178,7 +192,7 @@ pub(crate) fn plan_with_history(
     let mut changes = Vec::new();
     let mut observed = vec![(receipt_path.clone(), receipt_bytes.clone())];
     for path in paths {
-        let before = publisher.read(&path)?;
+        let before = read(&path)?;
         observed.push((path.clone(), before.clone()));
         let after = reconcile(
             before.as_deref(),
@@ -230,22 +244,75 @@ pub(crate) fn plan_with_history(
             previous: previous.map(|receipt| receipt.manifest),
             operation,
         },
+        pending,
+        history: history.to_vec(),
     })
 }
 
 impl Plan {
+    /// Whether publication must first finish an accepted original operation.
+    pub(crate) fn recovery_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
     /// Reports planned changes without exposing any configuration payload.
     pub(crate) fn changed_paths(&self) -> Vec<&str> {
-        self.changes
+        let mut seen = BTreeSet::new();
+        self.pending
             .iter()
+            .flat_map(|pending| &pending.changes)
+            .chain(&self.changes)
             .map(|change| change.path.as_str())
+            .filter(|path| seen.insert(*path))
             .collect()
     }
 
     /// Publishes the accepted plan once; no-op plans do not write any journal.
     pub(crate) fn apply(mut self) -> Result<()> {
-        if !self.changes.is_empty() {
+        if !self.changes.is_empty() || self.pending.is_some() {
             self.publisher.acquire_lock()?;
+        }
+        if let Some(pending) = &self.pending {
+            let current = self
+                .publisher
+                .inspect_pending_authorized(|value, changes| {
+                    authorize_recovery(
+                        &self.publisher,
+                        &self.intent.manifest,
+                        &self.history,
+                        value,
+                        changes,
+                    )
+                })?;
+            if current.as_ref() != Some(pending) {
+                return Err(MezError::conflict(
+                    "bootstrap inspected recovery changed; no publication",
+                ));
+            }
+            // Unchanged requested-plan paths must remain exact before recovery
+            // too; otherwise a stale preview could settle prior intent first.
+            for (path, before) in &self.observed {
+                let virtual_bytes = match pending.changes.iter().find(|change| change.path == *path)
+                {
+                    Some(change) => change.after.clone(),
+                    None => self.publisher.read(path)?,
+                };
+                if virtual_bytes != *before {
+                    return Err(MezError::conflict(
+                        "bootstrap inspected preimage changed; no publication",
+                    ));
+                }
+            }
+            self.publisher
+                .recover_pending_authorized(pending, |value, changes| {
+                    authorize_recovery(
+                        &self.publisher,
+                        &self.intent.manifest,
+                        &self.history,
+                        value,
+                        changes,
+                    )
+                })?;
         }
         self.publisher.require_no_pending_journal()?;
         for (path, before) in &self.observed {
@@ -301,113 +368,7 @@ fn recover_with_history_mode(
         Publisher::open(root)?
     };
     let authorize = |value: &serde_json::Value, changes: &[Change]| {
-        let intent: Intent = serde_json::from_value(value.clone())
-            .map_err(|_| MezError::conflict("bootstrap journal intent invalid"))?;
-        if intent.manifest.harness != manifest.harness
-            || (intent.manifest != *manifest && !history.contains(&intent.manifest))
-            || intent.previous.as_ref().is_some_and(|old| {
-                old.harness != manifest.harness || (old != manifest && !history.contains(old))
-            })
-        {
-            return Err(MezError::forbidden(
-                "bootstrap recovery manifest/release mismatch",
-            ));
-        }
-        // Compiled membership above is authority; the journal only identifies
-        // which original immutable target must finish before current refresh.
-        let target = &intent.manifest;
-        validate_manifest(target)?;
-        if let Some(old) = &intent.previous {
-            validate_manifest(old)?;
-        }
-        let old = intent
-            .previous
-            .as_ref()
-            .map(|old| {
-                old.entries
-                    .iter()
-                    .map(|entry| (entry.path.as_str(), &entry.artifact))
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
-        let desired = if matches!(intent.operation, Operation::Install) {
-            target
-                .entries
-                .iter()
-                .map(|entry| (entry.path.as_str(), &entry.artifact))
-                .collect::<BTreeMap<_, _>>()
-        } else {
-            BTreeMap::new()
-        };
-        let receipt_path = format!("mez-bootstrap-ownership-{}.json", manifest.harness);
-        let mut paths = BTreeSet::new();
-        for change in changes {
-            if !paths.insert(change.path.as_str()) {
-                return Err(MezError::conflict("duplicate recovery destination"));
-            }
-            if change.path == receipt_path {
-                let previous: Option<Receipt> = change
-                    .before
-                    .as_ref()
-                    .map(|bytes| serde_json::from_slice(bytes))
-                    .transpose()
-                    .map_err(|_| MezError::conflict("recovery receipt invalid"))?;
-                if previous.as_ref().is_some_and(|receipt| receipt.schema != 1)
-                    || previous.map(|receipt| receipt.manifest) != intent.previous
-                {
-                    return Err(MezError::forbidden("recovery prior receipt mismatch"));
-                }
-                let expected = if matches!(intent.operation, Operation::Install) {
-                    Some(receipt_bytes(target)?)
-                } else {
-                    None
-                };
-                if change.after != expected {
-                    return Err(MezError::forbidden("recovery receipt payload mismatch"));
-                }
-            } else {
-                let prior = old.get(change.path.as_str()).copied();
-                let next = desired.get(change.path.as_str()).copied();
-                if prior.is_none() && next.is_none() {
-                    return Err(MezError::forbidden(
-                        "recovery destination outside compiled manifest",
-                    ));
-                }
-                if reconcile(change.before.as_deref(), prior, next)? != change.after {
-                    return Err(MezError::forbidden("recovery artifact payload mismatch"));
-                }
-            }
-        }
-        // Omitted destinations must already satisfy the exact desired state;
-        // a forged journal cannot omit a required edit or ownership receipt.
-        for path in old.keys().chain(desired.keys()) {
-            if paths.contains(path) {
-                continue;
-            }
-            let current = publisher.read(path)?;
-            let next = desired.get(path).copied();
-            if next.is_some() {
-                if reconcile(current.as_deref(), next, next)? != current {
-                    return Err(MezError::conflict("recovery omitted artifact changed"));
-                }
-            } else if let Some(artifact) = old.get(path)
-                && reconcile(current.as_deref(), None, Some(artifact)).is_err()
-            {
-                return Err(MezError::conflict("recovery omitted removal remains owned"));
-            }
-        }
-        if !paths.contains(receipt_path.as_str()) {
-            let current = publisher.read(&receipt_path)?;
-            let expected = if matches!(intent.operation, Operation::Install) {
-                Some(receipt_bytes(target)?)
-            } else {
-                None
-            };
-            if current != expected {
-                return Err(MezError::conflict("recovery omitted ownership receipt"));
-            }
-        }
-        Ok(())
+        authorize_recovery(&publisher, manifest, history, value, changes)
     };
     if preview {
         Ok(publisher
@@ -418,11 +379,424 @@ fn recover_with_history_mode(
     }
 }
 
+/// Recomputes original-operation authority from compiled manifests and actual
+/// omitted destinations. Shared by explicit recovery and virtual normal plans;
+/// caller-owned journal bytes never introduce paths or artifact identities.
+fn authorize_recovery(
+    publisher: &Publisher,
+    manifest: &Manifest,
+    history: &[Manifest],
+    value: &serde_json::Value,
+    changes: &[Change],
+) -> Result<()> {
+    let intent: Intent = serde_json::from_value(value.clone())
+        .map_err(|_| MezError::conflict("bootstrap journal intent invalid"))?;
+    if intent.manifest.harness != manifest.harness
+        || (intent.manifest != *manifest && !history.contains(&intent.manifest))
+        || intent.previous.as_ref().is_some_and(|old| {
+            old.harness != manifest.harness || (old != manifest && !history.contains(old))
+        })
+    {
+        return Err(MezError::forbidden(
+            "bootstrap recovery manifest/release mismatch",
+        ));
+    }
+    // Compiled membership above is authority; the journal only identifies
+    // which original immutable target must finish before current refresh.
+    let target = &intent.manifest;
+    validate_manifest(target)?;
+    if let Some(old) = &intent.previous {
+        validate_manifest(old)?;
+    }
+    let old = intent
+        .previous
+        .as_ref()
+        .map(|old| {
+            old.entries
+                .iter()
+                .map(|entry| (entry.path.as_str(), &entry.artifact))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let desired = if matches!(intent.operation, Operation::Install) {
+        target
+            .entries
+            .iter()
+            .map(|entry| (entry.path.as_str(), &entry.artifact))
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        BTreeMap::new()
+    };
+    let receipt_path = format!("mez-bootstrap-ownership-{}.json", manifest.harness);
+    let mut paths = BTreeSet::new();
+    for change in changes {
+        if !paths.insert(change.path.as_str()) {
+            return Err(MezError::conflict("duplicate recovery destination"));
+        }
+        if change.path == receipt_path {
+            let previous: Option<Receipt> = change
+                .before
+                .as_ref()
+                .map(|bytes| serde_json::from_slice(bytes))
+                .transpose()
+                .map_err(|_| MezError::conflict("recovery receipt invalid"))?;
+            if previous.as_ref().is_some_and(|receipt| receipt.schema != 1)
+                || previous.map(|receipt| receipt.manifest) != intent.previous
+            {
+                return Err(MezError::forbidden("recovery prior receipt mismatch"));
+            }
+            let expected = if matches!(intent.operation, Operation::Install) {
+                Some(receipt_bytes(target)?)
+            } else {
+                None
+            };
+            if change.after != expected {
+                return Err(MezError::forbidden("recovery receipt payload mismatch"));
+            }
+        } else {
+            let prior = old.get(change.path.as_str()).copied();
+            let next = desired.get(change.path.as_str()).copied();
+            if prior.is_none() && next.is_none() {
+                return Err(MezError::forbidden(
+                    "recovery destination outside compiled manifest",
+                ));
+            }
+            if reconcile(change.before.as_deref(), prior, next)? != change.after {
+                return Err(MezError::forbidden("recovery artifact payload mismatch"));
+            }
+        }
+    }
+    // Omitted destinations must already satisfy the exact desired state;
+    // a forged journal cannot omit a required edit or ownership receipt.
+    for path in old.keys().chain(desired.keys()) {
+        if paths.contains(path) {
+            continue;
+        }
+        let current = publisher.read(path)?;
+        let next = desired.get(path).copied();
+        if next.is_some() {
+            if reconcile(current.as_deref(), next, next)? != current {
+                return Err(MezError::conflict("recovery omitted artifact changed"));
+            }
+        } else if let Some(artifact) = old.get(path)
+            && reconcile(current.as_deref(), None, Some(artifact)).is_err()
+        {
+            return Err(MezError::conflict("recovery omitted removal remains owned"));
+        }
+    }
+    if !paths.contains(receipt_path.as_str()) {
+        let current = publisher.read(&receipt_path)?;
+        let expected = if matches!(intent.operation, Operation::Install) {
+            Some(receipt_bytes(target)?)
+        } else {
+            None
+        };
+        if current != expected {
+            return Err(MezError::conflict("recovery omitted ownership receipt"));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Captures temporary fixture tree bytes and modes without following links.
+    /// Sorted relative entries qualify preview nonmutation, including absent
+    /// lock/stage files and parent creation, not merely journal byte equality.
+    fn tree_snapshot(root: &Path) -> Vec<(String, u32, Option<Vec<u8>>)> {
+        fn visit(root: &Path, path: &Path, entries: &mut Vec<(String, u32, Option<Vec<u8>>)>) {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            entries.push((
+                path.strip_prefix(root).unwrap().to_str().unwrap().into(),
+                metadata.permissions().mode(),
+                metadata.is_file().then(|| fs::read(path).unwrap()),
+            ));
+            if metadata.is_dir() {
+                for entry in fs::read_dir(path).unwrap() {
+                    visit(root, &entry.unwrap().path(), entries);
+                }
+            }
+        }
+        let mut entries = Vec::new();
+        visit(root, root, &mut entries);
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
+    /// All current and five frozen targets for both adapters can be interrupted
+    /// at every artifact/receipt boundary, then normally installed or uninstalled.
+    /// Preview is tree-identical without even recreating the removed fixture lock;
+    /// settlement preserves authored files, reaches requested current state once,
+    /// and a second normal plan has neither recovery nor publication work.
+    #[test]
+    fn bootstrap_normal_recovery_all_targets_boundaries_and_requested_operations() {
+        for harness in ["pi", "opencode"] {
+            let current = super::super::compiled_manifest(harness, None).unwrap();
+            let mut targets = super::super::compiled_history(&current);
+            assert_eq!(targets.len(), 5);
+            targets.push(current.clone());
+            for target in targets {
+                for original in [Operation::Install, Operation::Uninstall] {
+                    for requested in [Operation::Install, Operation::Uninstall] {
+                        for boundary in 1..=target.entries.len() + 1 {
+                            let root = std::env::temp_dir().join(format!(
+                                "mez-auto-recovery-matrix-{}",
+                                crate::storage::token_usage::new_token_usage_event_id()
+                            ));
+                            fs::create_dir(&root).unwrap();
+                            fs::write(root.join("authored"), b"preserved").unwrap();
+                            if matches!(original, Operation::Uninstall) {
+                                plan(&root, &target, Operation::Install)
+                                    .unwrap()
+                                    .apply()
+                                    .unwrap();
+                            }
+                            let accepted = plan(&root, &target, original).unwrap();
+                            assert_eq!(accepted.changes.len(), target.entries.len() + 1);
+                            accepted.publisher.stop_after.set(Some(boundary));
+                            assert!(accepted.apply().is_err());
+                            fs::remove_file(root.join(".mez-bootstrap-lock")).unwrap();
+                            let before = tree_snapshot(&root);
+                            let refresh = plan(&root, &current, requested).unwrap();
+                            assert!(refresh.recovery_pending());
+                            assert!(!refresh.changed_paths().is_empty());
+                            assert_eq!(tree_snapshot(&root), before);
+                            refresh.apply().unwrap();
+                            let receipt_path =
+                                root.join(format!("mez-bootstrap-ownership-{harness}.json"));
+                            if matches!(requested, Operation::Install) {
+                                let receipt: Receipt =
+                                    serde_json::from_slice(&fs::read(receipt_path).unwrap())
+                                        .unwrap();
+                                assert_eq!(receipt.manifest, current);
+                            } else {
+                                assert!(!receipt_path.exists());
+                            }
+                            assert_eq!(fs::read(root.join("authored")).unwrap(), b"preserved");
+                            assert!(!root.join(".mez-bootstrap-journal").exists());
+                            let repeat = plan(&root, &current, requested).unwrap();
+                            assert!(!repeat.recovery_pending());
+                            assert!(repeat.changed_paths().is_empty());
+                            repeat.apply().unwrap();
+                            fs::remove_dir_all(root).unwrap();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// An inspected pending journal is fenced by exact serialized identity,
+    /// compiled authorization and the root/preimage/lock boundary. Changing even
+    /// valid formatting, removing intent, forging effects, drifting an omitted
+    /// path, replacing the root or acquiring a competing lock must prevent any
+    /// recovery publication; a new legitimate preview can be retried separately.
+    #[test]
+    fn bootstrap_normal_recovery_rejects_stale_and_unauthorized_plans() {
+        let current = super::super::compiled_manifest("pi", None).unwrap();
+        let target = super::super::compiled_history(&current).pop().unwrap();
+        for alteration in [
+            "bytes",
+            "removed",
+            "forged",
+            "preimage",
+            "requested-path",
+            "root",
+            "lock",
+        ] {
+            let root = std::env::temp_dir().join(format!(
+                "mez-auto-recovery-stale-{}",
+                crate::storage::token_usage::new_token_usage_event_id()
+            ));
+            fs::create_dir(&root).unwrap();
+            let accepted = plan(&root, &target, Operation::Install).unwrap();
+            accepted.publisher.stop_after.set(Some(1));
+            assert!(accepted.apply().is_err());
+            let refresh = plan(&root, &current, Operation::Install).unwrap();
+            let journal_path = root.join(".mez-bootstrap-journal");
+            let journal = fs::read(&journal_path).unwrap();
+            let moved = root.with_extension("moved");
+            let mut holder = None;
+            match alteration {
+                "bytes" => {
+                    let value: serde_json::Value = serde_json::from_slice(&journal).unwrap();
+                    fs::write(&journal_path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+                }
+                "removed" => fs::remove_file(&journal_path).unwrap(),
+                "forged" => {
+                    let mut value: serde_json::Value = serde_json::from_slice(&journal).unwrap();
+                    value["intent"]["manifest"]["revision"] = 999.into();
+                    fs::write(&journal_path, serde_json::to_vec(&value).unwrap()).unwrap();
+                    assert!(plan(&root, &current, Operation::Install).is_err());
+                }
+                "preimage" => {
+                    fs::write(root.join(&target.entries[0].path), b"foreign edit").unwrap();
+                    assert!(plan(&root, &current, Operation::Install).is_err());
+                }
+                "requested-path" => {
+                    let entry = current
+                        .entries
+                        .iter()
+                        .find(|entry| !target.entries.iter().any(|old| old.path == entry.path))
+                        .expect("current adapter adds a request-only destination");
+                    assert!(
+                        !refresh
+                            .pending
+                            .as_ref()
+                            .unwrap()
+                            .changes
+                            .iter()
+                            .any(|change| change.path == entry.path)
+                    );
+                    fs::write(root.join(&entry.path), b"foreign requested path").unwrap();
+                }
+                "root" => {
+                    fs::rename(&root, &moved).unwrap();
+                    fs::create_dir(&root).unwrap();
+                    fs::write(root.join("authored"), b"replacement root").unwrap();
+                }
+                "lock" => holder = Some(Publisher::open(&root).unwrap()),
+                _ => unreachable!(),
+            }
+            let before = tree_snapshot(&root);
+            let error = refresh.apply().expect_err("stale plan must reject");
+            if alteration == "requested-path" {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("bootstrap inspected preimage changed; no publication")
+                );
+            }
+            assert_eq!(tree_snapshot(&root), before, "{alteration}");
+            drop(holder);
+            if moved.exists() {
+                assert_eq!(
+                    fs::read(moved.join(".mez-bootstrap-journal")).unwrap(),
+                    journal
+                );
+                fs::remove_dir_all(moved).unwrap();
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    /// Failure inside combined recovery preserves original intent; failure in
+    /// the subsequent current refresh preserves requested intent instead. Both
+    /// original install and uninstall are exercised through the same retained
+    /// publisher, then ordinary retry reaches current state without duplicate
+    /// effects or authored-file loss. Receipt identity proves phase ordering.
+    #[test]
+    fn bootstrap_normal_recovery_and_refresh_interruptions_keep_exact_phase() {
+        let current = super::super::compiled_manifest("pi", None).unwrap();
+        let target = super::super::compiled_history(&current).remove(0);
+        for original in [Operation::Install, Operation::Uninstall] {
+            for phase in ["recovery", "refresh"] {
+                let root = std::env::temp_dir().join(format!(
+                    "mez-combined-interruption-{}",
+                    crate::storage::token_usage::new_token_usage_event_id()
+                ));
+                fs::create_dir(&root).unwrap();
+                fs::write(root.join("authored"), b"preserved").unwrap();
+                if matches!(original, Operation::Uninstall) {
+                    plan(&root, &target, Operation::Install)
+                        .unwrap()
+                        .apply()
+                        .unwrap();
+                }
+                let accepted = plan(&root, &target, original).unwrap();
+                let boundary = if phase == "recovery" {
+                    1
+                } else {
+                    accepted.changes.len()
+                };
+                accepted.publisher.stop_after.set(Some(boundary));
+                assert!(accepted.apply().is_err());
+                let refresh = plan(&root, &current, Operation::Install).unwrap();
+                refresh
+                    .publisher
+                    .stop_after
+                    .set(Some(if phase == "recovery" { 2 } else { 1 }));
+                assert!(refresh.apply().is_err());
+                let journal: serde_json::Value =
+                    serde_json::from_slice(&fs::read(root.join(".mez-bootstrap-journal")).unwrap())
+                        .unwrap();
+                let intent: Intent = serde_json::from_value(journal["intent"].clone()).unwrap();
+                if phase == "recovery" {
+                    assert_eq!(intent.manifest, target);
+                    assert_eq!(
+                        serde_json::to_value(intent.operation).unwrap(),
+                        serde_json::to_value(original).unwrap()
+                    );
+                } else {
+                    assert_eq!(intent.manifest, current);
+                    assert!(matches!(intent.operation, Operation::Install));
+                    let receipt_path = root.join("mez-bootstrap-ownership-pi.json");
+                    if matches!(original, Operation::Install) {
+                        let receipt: Receipt =
+                            serde_json::from_slice(&fs::read(receipt_path).unwrap()).unwrap();
+                        assert_eq!(receipt.manifest, target);
+                    } else {
+                        assert!(!receipt_path.exists());
+                    }
+                }
+                plan(&root, &current, Operation::Install)
+                    .unwrap()
+                    .apply()
+                    .unwrap();
+                let repeat = plan(&root, &current, Operation::Install).unwrap();
+                assert!(!repeat.recovery_pending());
+                assert!(repeat.changed_paths().is_empty());
+                assert_eq!(fs::read(root.join("authored")).unwrap(), b"preserved");
+                fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    /// Normal current installation previews the exact post-recovery refresh
+    /// without altering the pending historical journal or any artifact. Apply
+    /// then completes the original target and refreshes current artifacts,
+    /// preserving authored siblings and leaving an idempotent current receipt.
+    #[test]
+    fn bootstrap_normal_plan_recovers_historical_target_before_refresh() {
+        let current = super::super::compiled_manifest("pi", None).unwrap();
+        let target = super::super::compiled_history(&current).remove(0);
+        let root = std::env::temp_dir().join(format!(
+            "mez-auto-recovery-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("authored"), b"preserved").unwrap();
+        let accepted = plan(&root, &target, Operation::Install).unwrap();
+        accepted.publisher.stop_after.set(Some(1));
+        assert!(accepted.apply().is_err());
+        let journal = fs::read(root.join(".mez-bootstrap-journal")).unwrap();
+        let refresh = plan(&root, &current, Operation::Install)
+            .expect("normal preview must admit recognized pending recovery");
+        assert!(!refresh.changed_paths().is_empty());
+        assert_eq!(
+            fs::read(root.join(".mez-bootstrap-journal")).unwrap(),
+            journal
+        );
+        refresh.apply().unwrap();
+        let receipt: Receipt = serde_json::from_slice(
+            &fs::read(root.join("mez-bootstrap-ownership-pi.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt.manifest, current);
+        assert_eq!(fs::read(root.join("authored")).unwrap(), b"preserved");
+        assert!(!root.join(".mez-bootstrap-journal").exists());
+        assert!(
+            plan(&root, &current, Operation::Install)
+                .unwrap()
+                .changed_paths()
+                .is_empty()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     /// Every frozen target remains recoverable for its original install or
     /// uninstall, even when the caller selects the latest compiled adapter.
