@@ -102,6 +102,8 @@ mod tests {
     }
     /// Test-owned socket delivery succeeds once; a closed peer or ordinary file
     /// is rejected without retries, path writes, daemon access or secret output.
+    /// A retained peer duplicate models fork-before-exec descriptor lifetime;
+    /// closure must be established by the fixture, not assumed from one fd drop.
     #[test]
     fn codex_hook_socket_write_rejects_closed_and_non_socket_nodes() {
         use std::io::Read;
@@ -110,8 +112,11 @@ mod tests {
         let mut bytes = [0; 3];
         reader.read_exact(&mut bytes).unwrap();
         assert_eq!(&bytes, b"{}\n");
+        let duplicate = reader.try_clone().unwrap();
+        reader.shutdown(std::net::Shutdown::Both).unwrap();
         drop(reader);
         assert!(send(&socket, b"{}\n").is_err());
+        drop(duplicate);
         let file = std::fs::File::open("/dev/null").unwrap();
         assert!(send(&file, b"{}\n").is_err());
     }
