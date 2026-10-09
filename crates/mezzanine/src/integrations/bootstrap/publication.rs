@@ -10,9 +10,9 @@
 //! The explicit private path retains both cooperating lock domains
 //! and migrates only compiled-authorized exact legacy intent. Identical copies
 //! qualify interrupted migration; disagreements/location drift fence planning.
-//! Every compiled public CLI intent uses the private owner; vendor eligibility
-//! and archive migration remain independent follow-up work. Version 3 qualifies
-//! fixed logical private receipt effects; version 2 retains vendor destinations.
+//! Every compiled public CLI intent uses the private owner with ordinary vendor
+//! OS access. Version 4 qualifies generated-helper archives and live preservation
+//! dependencies; versions 2/3 retain original strict destination semantics.
 
 use super::reconciliation::publication_path;
 use super::root_directory::RootDirectory;
@@ -32,6 +32,7 @@ const JOURNAL: &str = ".mez-bootstrap-journal";
 const LOCK: &str = ".mez-bootstrap-lock";
 const PRIVATE_JOURNAL: &str = "journal.json";
 const PRIVATE_RECEIPT_PREFIX: &str = "@mez-bootstrap-receipt/";
+const PRIVATE_ARCHIVE_PREFIX: &str = "@mez-bootstrap-archive/";
 const MAX_BYTES: usize = 1024 * 1024;
 const MAX_JOURNAL: usize = 32 * 1024 * 1024;
 
@@ -43,9 +44,25 @@ pub(super) fn private_receipt_path(harness: &str) -> Result<String> {
     Ok(path)
 }
 
-/// Resolves only the reserved private receipt namespace to a flat state name.
+/// Resolves reserved private receipt/archive namespaces to bounded flat names.
 /// Unknown suffixes cannot traverse or collide with lock/journal/staging files.
 fn private_receipt_name(path: &str) -> Result<Option<String>> {
+    if let Some(tail) = path.strip_prefix(PRIVATE_ARCHIVE_PREFIX) {
+        let (harness, digest) = tail
+            .split_once('/')
+            .ok_or_else(|| MezError::invalid_args("bootstrap archive target unavailable"))?;
+        private_receipt_path(harness)?;
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(MezError::invalid_args(
+                "bootstrap archive identity unavailable",
+            ));
+        }
+        return Ok(Some(format!("archive-{harness}-{digest}")));
+    }
     let Some(harness) = path.strip_prefix(PRIVATE_RECEIPT_PREFIX) else {
         return Ok(None);
     };
@@ -495,7 +512,7 @@ impl Publisher {
 
     /// Verifies all destinations before journal publication or recovery progress.
     fn validate_changes(&self, changes: &[Change], recovering: bool) -> Result<()> {
-        if changes.is_empty() || changes.len() > 17 {
+        if changes.is_empty() || changes.len() > 32 {
             return Err(MezError::invalid_args("bootstrap transaction entry limit"));
         }
         let mut paths = std::collections::BTreeSet::new();
@@ -520,10 +537,26 @@ impl Publisher {
     fn finish(&self, changes: &[Change], bytes: &[u8], location: JournalLocation) -> Result<()> {
         self.require_lock()?;
         self.require_journal(bytes, location)?;
+        let journal: Journal = serde_json::from_slice(bytes)
+            .map_err(|_| MezError::invalid_state("bootstrap accepted journal invalid"))?;
+        let archives: std::collections::BTreeMap<String, String> = journal
+            .intent
+            .get("archives")
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(|_| MezError::invalid_state("bootstrap archive dependency encoding invalid"))?
+            .unwrap_or_default();
         self.validate_changes(changes, true)?;
         for (index, change) in changes.iter().enumerate() {
             #[cfg(not(test))]
             let _ = index;
+            if let Some(archive) = archives.get(&change.path)
+                && self.read(archive)? != change.before
+            {
+                return Err(MezError::conflict(
+                    "bootstrap required preservation archive changed; no file publication",
+                ));
+            }
             let current = self.read(&change.path)?;
             if current == change.after {
                 continue;
@@ -580,6 +613,15 @@ impl Publisher {
         }
         self.require_lock()?;
         self.require_journal(bytes, location)?;
+        for change in changes {
+            if let Some(archive) = archives.get(&change.path)
+                && self.read(archive)? != change.before
+            {
+                return Err(MezError::conflict(
+                    "bootstrap required preservation archive changed; journal retained",
+                ));
+            }
+        }
         if let Some(state) = &self.state {
             state.publish(PRIVATE_JOURNAL, Some(bytes), None, MAX_JOURNAL)?;
         } else {
@@ -634,7 +676,7 @@ impl Publisher {
         })?;
         let root = self.directory.file()?.metadata()?;
         self.validate_root()?;
-        if !matches!(journal.version, 2 | 3)
+        if !matches!(journal.version, 2..=4)
             || journal.root_device != root.dev()
             || journal.root_inode != root.ino()
         {
@@ -653,7 +695,18 @@ impl Publisher {
                 "bootstrap version-2 journal cannot authorize private receipt targets",
             ));
         }
-        if journal.version == 3 && !self.uses_private_state() {
+        if journal.version < 4
+            && (journal.changes.len() > if journal.version == 2 { 16 } else { 17 }
+                || journal
+                    .changes
+                    .iter()
+                    .any(|change| change.path.starts_with(PRIVATE_ARCHIVE_PREFIX)))
+        {
+            return Err(MezError::forbidden(
+                "bootstrap historical journal cannot authorize archives",
+            ));
+        }
+        if journal.version >= 3 && !self.uses_private_state() {
             return Err(MezError::forbidden(
                 "bootstrap version-3 journal requires private owner",
             ));
@@ -707,7 +760,7 @@ impl Publisher {
         self.validate_changes(&changes, false)?;
         let root = self.directory.file()?.metadata()?;
         let bytes = serde_json::to_vec(&Journal {
-            version: if self.uses_private_state() { 3 } else { 2 },
+            version: if self.uses_private_state() { 4 } else { 2 },
             root_device: root.dev(),
             root_inode: root.ino(),
             intent,

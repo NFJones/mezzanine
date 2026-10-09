@@ -7,6 +7,7 @@
 //! receipt targets; version 3 freezes explicit private placement/source identity.
 //! Shared documents may be reformatted on change, but unrelated values survive.
 
+use super::preservation::reconcile_preserving;
 use super::publication::{Change, PendingRecovery, Publisher, private_receipt_path};
 use super::reconciliation::{Entry, reconcile, validate};
 use crate::error::{MezError, Result};
@@ -62,6 +63,8 @@ struct Intent {
     previous_private: Option<Manifest>,
     #[serde(default)]
     previous_vendor: Option<Manifest>,
+    #[serde(default)]
+    archives: BTreeMap<String, String>,
 }
 
 /// One read-only inspected plan; publication acquires ownership and revalidates
@@ -290,6 +293,7 @@ fn plan_with_publisher(
         ));
     }
     let mut changes = Vec::new();
+    let mut archive_requirements = BTreeMap::new();
     let mut observed = vec![(receipt_path.clone(), receipt_bytes.clone())];
     if receipt_location == ReceiptLocation::Private {
         observed.push((vendor_receipt_path.clone(), vendor_bytes.clone()));
@@ -297,11 +301,31 @@ fn plan_with_publisher(
     for path in paths {
         let before = read(&path)?;
         observed.push((path.clone(), before.clone()));
-        let after = reconcile(
+        let (after, archive) = reconcile_preserving(
+            &manifest.harness,
+            &path,
             before.as_deref(),
             old.get(&path).copied(),
             desired.get(&path).copied(),
+            receipt_location == ReceiptLocation::Private,
         )?;
+        if let Some(archive) = archive {
+            archive_requirements.insert(path.clone(), archive.clone());
+            let archived = read(&archive)?;
+            if archived.is_some() && archived != before {
+                return Err(MezError::conflict(
+                    "bootstrap archive collision; no overwrite",
+                ));
+            }
+            observed.push((archive.clone(), archived.clone()));
+            if archived.is_none() {
+                changes.push(Change {
+                    path: archive,
+                    before: None,
+                    after: before.clone(),
+                });
+            }
+        }
         if before != after {
             changes.push(Change {
                 path,
@@ -356,6 +380,7 @@ fn plan_with_publisher(
             receipt_location,
             previous_private,
             previous_vendor,
+            archives: archive_requirements,
         },
         pending,
         history: history.to_vec(),
@@ -583,7 +608,7 @@ fn authorize_recovery(
         && (intent.receipt_location != ReceiptLocation::Vendor
             || intent.previous_private.is_some()
             || intent.previous_vendor.is_some()))
-        || (version == 3 && intent.receipt_location != ReceiptLocation::Private)
+        || (version >= 3 && intent.receipt_location != ReceiptLocation::Private)
     {
         return Err(MezError::forbidden(
             "bootstrap journal receipt placement/version mismatch",
@@ -656,13 +681,53 @@ fn authorize_recovery(
         vendor_receipt_path.clone()
     };
     let mut paths = BTreeSet::new();
+    let mut required_archives = BTreeMap::new();
+    let mut archive_requirements = BTreeMap::new();
+    for change in changes {
+        let prior = old.get(change.path.as_str()).copied();
+        let next = desired.get(change.path.as_str()).copied();
+        if prior.is_some() || next.is_some() {
+            let (after, archive) = reconcile_preserving(
+                &manifest.harness,
+                &change.path,
+                change.before.as_deref(),
+                prior,
+                next,
+                version >= 4,
+            )?;
+            if after != change.after {
+                return Err(MezError::forbidden("recovery artifact payload mismatch"));
+            }
+            if let Some(archive) = archive {
+                archive_requirements.insert(change.path.clone(), archive.clone());
+                required_archives.insert(archive, change.before.clone());
+            }
+        }
+    }
+    if intent.archives != archive_requirements || (version < 4 && !intent.archives.is_empty()) {
+        return Err(MezError::forbidden(
+            "recovery archive requirements differ from compiled preservation",
+        ));
+    }
+    let mut seen_archives = BTreeSet::new();
     let mut receipt_phase = false;
     let mut vendor_receipt_seen = false;
     for change in changes {
         if !paths.insert(change.path.as_str()) {
             return Err(MezError::conflict("duplicate recovery destination"));
         }
-        if change.path == receipt_path {
+        if change.path.starts_with("@mez-bootstrap-archive/") {
+            if version < 4
+                || receipt_phase
+                || change.before.is_some()
+                || required_archives.get(&change.path) != Some(&change.after)
+            {
+                return Err(MezError::forbidden(
+                    "recovery archive outside qualified preservation",
+                ));
+            }
+            seen_archives.insert(change.path.clone());
+        } else if change.path == receipt_path {
             if intent.receipt_location == ReceiptLocation::Private && vendor_receipt_seen {
                 return Err(MezError::forbidden(
                     "recovery private receipt must precede legacy removal",
@@ -724,8 +789,25 @@ fn authorize_recovery(
                     "recovery destination outside compiled manifest",
                 ));
             }
-            if reconcile(change.before.as_deref(), prior, next)? != change.after {
+            let (after, archive) = reconcile_preserving(
+                &manifest.harness,
+                &change.path,
+                change.before.as_deref(),
+                prior,
+                next,
+                version >= 4,
+            )?;
+            if after != change.after {
                 return Err(MezError::forbidden("recovery artifact payload mismatch"));
+            }
+            if let Some(archive) = archive
+                && !seen_archives.contains(&archive)
+                && (changes.iter().any(|change| change.path == archive)
+                    || publisher.read(&archive)? != change.before)
+            {
+                return Err(MezError::forbidden(
+                    "recovery required archive absent or misordered",
+                ));
             }
         }
     }

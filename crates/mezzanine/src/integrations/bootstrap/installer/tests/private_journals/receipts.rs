@@ -157,7 +157,7 @@ fn bootstrap_private_receipt_migration_edges_are_recoverable_and_private() {
             assert_eq!(legacy.exists(), boundary == 1);
             let journal: serde_json::Value =
                 serde_json::from_slice(&fs::read(fixture.journal()).unwrap()).unwrap();
-            assert_eq!(journal["version"], 3);
+            assert_eq!(journal["version"], 4);
             assert_eq!(journal["intent"]["receipt_location"], "Private");
             assert_eq!(fs::metadata(&private).unwrap().mode() & 0o777, 0o600);
             assert_eq!(

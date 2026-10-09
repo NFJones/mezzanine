@@ -323,9 +323,11 @@ read-only preview and installation-only anchored creation. Bare install and
 recognized receipt can be recreated by ordinary install, including upgrades;
 already absent private files do not block uninstall. Check/dry-run captures
 absence without creating artifact parents, and apply revalidates it before
-no-replace publication. Present edited or unreceipted content still conflicts,
-even if it matches generated current bytes; missing shared JSON ownership is
-not treated as private-file absence. Durable edited-file preservation and broader
+no-replace publication. Unreceipted content remains a conflict. Receipt-proven edited
+Pi `.mjs` helpers and OpenCode generated JavaScript/module helpers now preserve exact
+preimages in private content-addressed archives before replacement/removal. Shared
+package metadata, hooks and config do not inherit that exception; missing shared
+JSON ownership is not treated as private-file absence. Broader preservation and
 adapter activation remain work.
 Explicit `--recover` (and `--recover --dry-run`) now recognizes exact same-harness
 historical targets from compiled artifact history. Recovery finishes the original
@@ -371,7 +373,7 @@ new transactions journal privately, and compiled-authorized legacy recovery copi
 exact original bytes durably before removing the old journal. Identical dual copies
 after a copy-boundary interruption can resume; conflicting copies and changed
 inspected source locations reject without choosing a winner. Final journal removal
-checks exact accepted bytes/location. New private transactions use journal version 3,
+checks exact accepted bytes/location. New private transactions use journal version 4,
 with explicit Private receipt placement and qualified prior receipt sources.
 Recognized version-2 intent still finishes its original vendor destinations; it cannot
 authorize private receipt targets. Unknown or altered version/placement/root/effects
@@ -385,8 +387,13 @@ for recognized legacy cooperation. New ownership receipts live privately as
 effect, not a vendor-relative path. Receipt payload schema remains 1; both copies
 are inspected/compiled-qualified, disagreement refuses mutation, and private
 publication follows artifacts before exact legacy marker removal. Interrupted
-migration can resume with the same original intent. Private archives,
-edited-file preservation remain unfinished. Vendor root and artifact-parent Unix
+migration can resume with the same original intent. Generated-helper archives use
+`archive-<harness>-<digest>` private files and logical changed-path labels
+`@mez-bootstrap-archive/<harness>/<digest>`. Version 4 recomputes preservation authority
+and rechecks dependencies before file effects and settlement; collision/failure
+prevents overwrite, while confirmed effects are never implicitly undone. Historical
+v2/v3 intent cannot invent archive effects. Broader shared-document preservation
+remains unfinished. Vendor root and artifact-parent Unix
 owner/mode metadata no longer add bootstrap eligibility rules: normal OS operations
 decide access, and existing directory properties are not rewritten. Shared vendor
 documents retain type/single-link/bounds/preimage/compiled-entry checks rather than

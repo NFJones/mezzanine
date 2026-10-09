@@ -86,6 +86,8 @@ pub(crate) mod pi_session;
     reason = "Pi capability transport awaits private launcher integration"
 )]
 pub(crate) mod pi_transport;
+/// Owns bounded receipt-proven generated-helper preservation, not shared config.
+mod preservation;
 #[allow(
     dead_code,
     reason = "release-qualified vendor adapters consume the common installer"
@@ -93,6 +95,7 @@ pub(crate) mod pi_transport;
 mod publication;
 #[cfg(test)]
 mod publication_tests;
+
 /// Holds exact root/ancestor absence witnesses for read-only native planning.
 mod root_directory;
 /// Selects documented vendor user roots without I/O or authority inference.
