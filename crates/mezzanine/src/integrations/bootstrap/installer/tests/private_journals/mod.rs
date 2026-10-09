@@ -5,6 +5,7 @@ use crate::integrations::bootstrap::state_directory::StateDirectory;
 use std::fs::File;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 
+mod permissions;
 mod receipts;
 
 /// Explicit recovery freezes its exact pre-lock bytes/location, not merely an

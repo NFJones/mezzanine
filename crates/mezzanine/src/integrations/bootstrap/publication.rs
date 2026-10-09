@@ -120,8 +120,32 @@ pub(super) struct Publisher {
     pub(super) before_private_binding: std::cell::RefCell<Option<Box<dyn FnOnce()>>>,
 }
 
-/// Reads a regular single-link owned file promptly, bounded before and during I/O.
-fn read_at(directory: &File, name: &str, limit: usize) -> Result<Option<Vec<u8>>> {
+/// Separates OS-authorized vendor data from recognized legacy installer state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReadPolicy {
+    Vendor,
+    LegacyState,
+}
+
+/// Classifies reserved old journal/ownership names, never arbitrary vendor data.
+fn read_policy(name: &str) -> ReadPolicy {
+    if name == JOURNAL || name.starts_with("mez-bootstrap-ownership-") {
+        ReadPolicy::LegacyState
+    } else {
+        ReadPolicy::Vendor
+    }
+}
+
+/// Reads bounded regular single-link nodes promptly without following links.
+/// Vendor UID/mode is not ownership authority; legacy state retains its former
+/// file admission until exact compiled-authorized migration. Private I/O uses
+/// the separately protected StateDirectory boundary instead.
+fn read_at(
+    directory: &File,
+    name: &str,
+    limit: usize,
+    policy: ReadPolicy,
+) -> Result<Option<Vec<u8>>> {
     let descriptor = match openat(
         directory,
         name,
@@ -136,12 +160,13 @@ fn read_at(directory: &File, name: &str, limit: usize) -> Result<Option<Vec<u8>>
     let metadata = file.metadata()?;
     if !metadata.is_file()
         || metadata.nlink() != 1
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o022 != 0
+        || (policy == ReadPolicy::LegacyState
+            && (metadata.uid() != rustix::process::geteuid().as_raw()
+                || metadata.mode() & 0o022 != 0))
         || metadata.len() > limit as u64
     {
         return Err(MezError::forbidden(
-            "bootstrap destination must be bounded, owned and single-link regular file",
+            "bootstrap destination must be bounded single-link regular file; legacy state must retain owned safe admission",
         ));
     }
     let mut bytes = Vec::new();
@@ -184,7 +209,7 @@ impl Publisher {
     /// Captures private HOME/base state without writing either tree. Existing
     /// vendor roots bind immediately; absent roots retain a key-free witness
     /// until publication materializes the actual root. All compiled CLI intents
-    /// share this owner; vendor-directory policy migration remains separate.
+    /// share this owner; vendor access remains ordinary OS-authorized I/O.
     pub(super) fn inspect_private(root: &Path, home: &Path) -> Result<Self> {
         let mut publisher = Self::inspect(root)?;
         if publisher.directory.is_missing() {
@@ -311,7 +336,12 @@ impl Publisher {
         if self.directory.is_missing() {
             return Ok(None);
         }
-        let legacy = read_at(self.directory.file()?, JOURNAL, MAX_JOURNAL)?;
+        let legacy = read_at(
+            self.directory.file()?,
+            JOURNAL,
+            MAX_JOURNAL,
+            ReadPolicy::LegacyState,
+        )?;
         let private = self
             .state
             .as_ref()
@@ -408,13 +438,6 @@ impl Publisher {
                 Err(error) => return Err(std::io::Error::from(error).into()),
             };
             directory = File::from(child);
-            let metadata = directory.metadata()?;
-            if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0
-            {
-                return Err(MezError::forbidden(
-                    "bootstrap parent must be owned and not writable by others",
-                ));
-            }
         }
         Ok(Some((directory, parts[parts.len() - 1].into())))
     }
@@ -436,7 +459,7 @@ impl Publisher {
         let Some((parent, name)) = self.parent(path, false)? else {
             return Ok(None);
         };
-        read_at(&parent, &name, MAX_BYTES)
+        read_at(&parent, &name, MAX_BYTES, read_policy(&name))
     }
 
     /// Publishes bytes using exclusive staging; additions use atomic no-replace rename.
@@ -528,7 +551,7 @@ impl Publisher {
                         "bootstrap destination parent unavailable",
                     ));
                 };
-                if read_at(&parent, &name, MAX_BYTES)? != change.before {
+                if read_at(&parent, &name, MAX_BYTES, read_policy(&name))? != change.before {
                     return Err(MezError::conflict(
                         "bootstrap preimage changed before commit",
                     ));

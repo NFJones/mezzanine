@@ -253,8 +253,8 @@ fn bootstrap_private_state_inspection_and_publication_are_distinct() {
 }
 
 /// Existing readable config ancestors remain byte/mode-identical. Inspection
-/// and acquisition never chmod them, while a nonprivate managed state root or
-/// other-writable ancestor is rejected rather than normalized or relocated.
+/// and acquisition never chmod them. Shared .config is routing only, while HOME,
+/// the owned Mez boundary and private managed leaves remain fail-closed.
 #[test]
 fn bootstrap_private_state_preserves_config_ancestors_and_refuses_unsafe_modes() {
     let fixture = Fixture::new();
@@ -288,7 +288,14 @@ fn bootstrap_private_state_preserves_config_ancestors_and_refuses_unsafe_modes()
             0o777
         };
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(unsafe_mode)).unwrap();
-        assert!(fixture.inspect().is_err(), "{suffix}");
+        if suffix == ".config" {
+            let mut shared = fixture
+                .inspect()
+                .expect("routing ancestor is not private data");
+            shared.acquire().unwrap();
+        } else {
+            assert!(fixture.inspect().is_err(), "{suffix}");
+        }
         assert_eq!(
             std::fs::metadata(&path).unwrap().mode() & 0o777,
             unsafe_mode

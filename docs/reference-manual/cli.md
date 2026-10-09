@@ -286,8 +286,9 @@ the normal locked publication boundary. Competing creation/replacement rejects
 before artifact publication. Existing ancestor modes/ownership stay untouched.
 No-op uninstall stays absent; explicit recovery never creates a root. Creation
 is not atomic: an error may leave created directories, with no foreign/nonempty
-cleanup sweep. Normal-directory permission policy/private-state migration remains
-unfinished. Recovery dry-run uses the same journal version/root, compiled-intent
+cleanup sweep. Normal-directory access uses OS permissions independently of
+protected private state; archive/edited-file preservation remains unfinished.
+Recovery dry-run uses the same journal version/root, compiled-intent
 and before/after preimage checks as recovery, but takes no lock and finishes no
 effects. JSON `operation` is install/check/uninstall/recover; `dry_run` is explicit,
 `changed_paths` describes planned edits and `recovered` requires actual settlement.
@@ -385,7 +386,13 @@ effect, not a vendor-relative path. Receipt payload schema remains 1; both copie
 are inspected/compiled-qualified, disagreement refuses mutation, and private
 publication follows artifacts before exact legacy marker removal. Interrupted
 migration can resume with the same original intent. Private archives,
-ordinary-directory eligibility and edited-file preservation remain unfinished.
+edited-file preservation remain unfinished. Vendor root and artifact-parent Unix
+owner/mode metadata no longer add bootstrap eligibility rules: normal OS operations
+decide access, and existing directory properties are not rewritten. Shared vendor
+documents retain type/single-link/bounds/preimage/compiled-entry checks rather than
+private-file Unix ownership policy. HOME and the managed Mez boundary stay protected;
+shared `.config` is a pinned routing ancestor only. Unsafe legacy installer nodes or
+private state still reject; actual filesystem denial is not bypassed or redirected.
 No additional enable command, private-root override, or configuration option is
 required for this private-journal routing.
 

@@ -1,7 +1,8 @@
 //! Private native bootstrap storage, separate from vendor configuration trees.
 //!
-//! The user HOME anchor and existing config ancestors must be owned and not
-//! other-writable; managed bootstrap/namespace directories must be user-private.
+//! HOME and the managed Mez boundary remain owned/non-other-writable; .config
+//! is an OS-authorized routing ancestor with held incarnation, not a privacy
+//! eligibility gate. Bootstrap/namespace directories and files stay user-private.
 //! Existing modes/ownership are never normalized. Read-only inspection captures
 //! exact directory/absence witnesses without mkdir, locking, or publication.
 //! Mutating methods require nonwaiting cooperating ownership and revalidate held
@@ -179,7 +180,12 @@ fn validate_chain(anchor: &File, namespace: Option<&str>) -> Result<Vec<File>> {
             Err(rustix::io::Errno::NOENT) => return Ok(chain),
             Err(error) => return Err(std::io::Error::from(error).into()),
         };
-        validate_directory(&child, index >= 2)?;
+        // .config is an OS-selected routing ancestor, not private data. Its
+        // exact descriptor is still captured/revalidated; owned non-writable
+        // Mez directories and private bootstrap/namespace leaves remain required.
+        if index != 0 {
+            validate_directory(&child, index >= 2)?;
+        }
         chain.push(child.try_clone()?);
         directory = child;
     }

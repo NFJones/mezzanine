@@ -159,7 +159,7 @@ pub(crate) fn plan_with_history(
 
 /// Captures a private-journal plan with explicit HOME and native root witnesses.
 /// Public CLI intents share compiled history and deterministic reconciliation
-/// through this owner; vendor-directory eligibility migration remains separate.
+/// through this owner; actual OS access governs vendor-directory eligibility.
 pub(crate) fn plan_private(
     root: &Path,
     home: &Path,

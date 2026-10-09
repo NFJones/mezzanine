@@ -8,8 +8,9 @@
 //! No symlink traversal, cwd mutation, chmod/chown, helpers or recursive cleanup.
 //! Creation is not an atomic tree transaction: partial created directories may
 //! remain on error; no foreign/nonempty nodes are deleted to hide that outcome.
-//! Existing root eligibility remains the current publisher policy, independently
-//! tracked for migration; no ownership/mode eligibility is imposed on ancestors.
+//! Directory ownership/mode is not vendor eligibility: required OS operations
+//! report their actual errors. Private callers independently qualify their state
+//! subtree; this witness boundary owns types, paths and physical identities only.
 
 use crate::error::{MezError, Result};
 use rustix::fs::{AtFlags, Mode, OFlags, mkdirat, openat, statat};
@@ -90,24 +91,11 @@ pub(super) fn walk(path: &Path) -> Result<(File, PathBuf, Vec<OsString>)> {
     Ok((directory, spelling, Vec::new()))
 }
 
-/// Preserves current root/new-private-directory policy, never policing existing
-/// ancestors. Fresh suffix handles must remain owned/private before descent.
-fn eligible(directory: &File) -> Result<()> {
-    let metadata = directory.metadata()?;
-    if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0 {
-        return Err(MezError::forbidden(
-            "bootstrap root must be owned and not writable by other users",
-        ));
-    }
-    Ok(())
-}
-
 impl RootDirectory {
     /// Captures a root/absence witness without creating any directory/state.
     pub(super) fn inspect(root: &Path) -> Result<Self> {
         let (directory, spelling, suffix) = walk(root)?;
         if suffix.is_empty() {
-            eligible(&directory)?;
             Ok(Self::Existing(directory))
         } else {
             Ok(Self::Missing {
@@ -168,7 +156,7 @@ impl RootDirectory {
                 Err(error) => Err(std::io::Error::from(error).into()),
             }
         } else {
-            eligible(&current.0)
+            Ok(())
         }
     }
 
@@ -219,11 +207,9 @@ impl RootDirectory {
                 )
                 .map_err(std::io::Error::from)?,
             );
-            eligible(&directory)?;
             spelling.push(part);
             created.push((spelling.clone(), directory.try_clone()?));
         }
-        eligible(&directory)?;
         *self = Self::Existing(directory);
         self.validate(root)?;
         Ok(CreatedDirectories(created))

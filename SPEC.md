@@ -679,15 +679,17 @@ Unix platforms; Cursor uses it on Linux/BSD, not macOS. Copilot MUST NOT reuse
 its migrated legacy XDG root. File-only OpenCode config overrides MUST NOT be
 interpreted as plugin directories. Unknown/retired names MUST reject before
 environment/root discovery; absent compiled adapters MUST remain no-mutation
-diagnostics rather than selecting/writing guessed integration roots. The
-directory/private-state policy and preservation repair remain unfinished UX work,
-not completed by new intent grammar alone.
+diagnostics rather than selecting/writing guessed integration roots. Private
+state protection and ordinary vendor-directory access are independent boundaries;
+edited-file preservation/archive repair remains unfinished UX work.
 The private bootstrap storage primitive MUST inspect a fixed HOME-relative
 `.config/mezzanine/bootstrap` namespace without writes. Namespace selection uses
 effective UID and held vendor-root device/inode, sharing coordination across path
 aliases/harnesses; this identifier MUST NOT become receipt or journal authority.
-HOME/config ancestors MUST retain their existing owner/mode and be owned/non-other-
-writable; managed state directories/files MUST satisfy user-private Unix modes.
+HOME and the managed Mez boundary MUST remain owned/non-other-writable, with all
+existing owner/mode metadata preserved. `.config` MUST be treated only as an
+OS-authorized routing ancestor, retaining held no-follow incarnation fences rather
+than a UID/mode admission gate. Managed state directories/files MUST remain private.
 No symlink/special-node/hardlink state or unbounded read is admitted. Creation MUST
 use the captured missing suffix only; state replacement/relocation or appeared
 absences MUST reject. Every existing intermediate directory incarnation MUST be
@@ -704,8 +706,8 @@ including install/check/dry-run/uninstall and explicit recovery/preview. Private
 MUST be captured only after compiled adapter/harness/root admission; missing adapters
 and retired Gemini MUST reject before HOME/root lookup. Root overrides MUST NOT
 become private-state overrides. Native root and protected HOME/base witnesses MUST
-be captured without writes; vendor eligibility policy remains unchanged pending
-its separate migration. Absent
+be captured without writes; vendor eligibility MUST follow actual OS access,
+not added directory UID/mode policy. Absent
 vendor roots MUST retain a key-free HOME/base witness; no namespace, journal read
 or writer ownership may be inferred from absence/path hints. Install MAY bind only
 after materializing the captured suffix and obtaining the actual root descriptor,
@@ -746,8 +748,14 @@ which MUST precede exact legacy-marker removal in the same bounded journal/owner
 Migration interruption and omitted required receipt/removal effects MUST remain
 recoverable or truthful non-destructive conflicts. The namespace is coordination,
 not authority to invent artifacts or proof against durable inode reuse.
-Private receipt migration MUST NOT imply archive migration,
-ordinary-directory permission support or ACL attestation.
+Vendor roots/parents and authorized vendor data MUST use ordinary OS access without
+extra UID/mode eligibility. Existing directory ownership/modes/ACLs MUST NOT be
+normalized; actual required-operation errors MUST remain truthful, not alternate-root
+fallback or privilege escalation. File types, bounded/nonblocking/single-link reads,
+exact compiled ownership/preimages and physical root/absence/creator fences remain.
+Private locks/journals/receipts and recognized legacy state file admission MUST stay
+separate and protected; permission metadata MUST NOT become artifact authority.
+Private receipt migration MUST NOT imply archive migration or ACL attestation.
 Those integration and platform qualification phases remain unfinished.
 Explicit recovery/preview MUST admit only exact same-harness current or known
 compiled historical targets and qualified previous manifests. Recovery MUST finish
