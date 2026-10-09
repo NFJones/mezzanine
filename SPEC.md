@@ -682,6 +682,26 @@ environment/root discovery; absent compiled adapters MUST remain no-mutation
 diagnostics rather than selecting/writing guessed integration roots. The
 directory/private-state policy and preservation repair remain unfinished UX work,
 not completed by new intent grammar alone.
+The private bootstrap storage primitive MUST inspect a fixed HOME-relative
+`.config/mezzanine/bootstrap` namespace without writes. Namespace selection uses
+effective UID and held vendor-root device/inode, sharing coordination across path
+aliases/harnesses; this identifier MUST NOT become receipt or journal authority.
+HOME/config ancestors MUST retain their existing owner/mode and be owned/non-other-
+writable; managed state directories/files MUST satisfy user-private Unix modes.
+No symlink/special-node/hardlink state or unbounded read is admitted. Creation MUST
+use the captured missing suffix only; state replacement/relocation or appeared
+absences MUST reject. Every existing intermediate directory incarnation MUST be
+held and revalidated, even if the final namespace inode survives an ancestor swap.
+Retained writer ownership MUST revalidate the live no-follow lock entry against
+its held descriptor and current private/single-link/zero-byte admission; missing,
+replaced or modified locks MUST fence reuse/publication. Publication MUST require
+explicit nonwaiting ownership,
+bounded exact preimages, synced exclusive staging and no-replace additions.
+Reserved lock/staging names MUST reject before I/O, including ASCII-case aliases
+of the lock on case-insensitive supported filesystems.
+The primitive alone MUST NOT relax vendor-root eligibility, relocate current
+Publisher state, admit edited artifacts, or claim legacy-journal migration/ACL
+attestation. Those integration and platform qualification phases remain unfinished.
 Explicit recovery/preview MUST admit only exact same-harness current or known
 compiled historical targets and qualified previous manifests. Recovery MUST finish
 the original operation using that target's artifacts and receipt, not reinterpret

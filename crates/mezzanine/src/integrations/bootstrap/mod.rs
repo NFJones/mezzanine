@@ -97,6 +97,12 @@ mod publication_tests;
 mod root_directory;
 /// Selects documented vendor user roots without I/O or authority inference.
 pub(crate) mod roots;
+/// Private native state primitive; publisher migration remains a separate phase.
+#[allow(
+    dead_code,
+    reason = "private publisher journal/archive migration is in progress"
+)]
+mod state_directory;
 /// Rejects ambiguous shared JSON before exact array-member reconciliation.
 use crate::protocol::strict_json;
 

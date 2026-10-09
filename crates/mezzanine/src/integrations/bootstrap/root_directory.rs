@@ -33,7 +33,7 @@ pub(super) enum RootDirectory {
 
 /// Shared no-follow absolute walk. NOENT alone means absence; all other errors
 /// retain their I/O cause. Paths/components are finite before any filesystem I/O.
-fn walk(path: &Path) -> Result<(File, PathBuf, Vec<OsString>)> {
+pub(super) fn walk(path: &Path) -> Result<(File, PathBuf, Vec<OsString>)> {
     if !path.is_absolute() || path.as_os_str().as_bytes().len() > 4096 {
         return Err(MezError::invalid_args(
             "bootstrap root must be bounded and absolute",

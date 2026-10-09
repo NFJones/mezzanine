@@ -342,6 +342,21 @@ Successful automatic settlement reports `recovered=true` and
 The two operations retain separate journals, not whole-workflow atomicity: an
 interruption can leave original or requested intent pending for the next command.
 
+Private bootstrap storage now has an internal native primitive for write-free
+inspection, anchored private creation, cooperating locking, bounded exact-byte
+reads and synced publication under `HOME/.config/mezzanine/bootstrap`. Its opaque
+namespace follows the held vendor-root device/inode and effective UID, so aliases
+share coordination; it does not supply artifact or recovery authority. Existing
+HOME/config ancestor modes are not rewritten, and protected state remains
+user-private under the Unix owner/mode contract. Captured intermediate directory
+incarnations and the current lock-entry identity are revalidated before retained
+writer ownership is reused; replacing an ancestor or lock fences the old holder.
+This component is **not yet
+wired into normal bootstrap**: Publisher still uses its existing vendor-root
+lock/journal, and ordinary-directory eligibility, private state migration and
+edited-file preservation remain unfinished. No new user setup or config option
+is introduced by this primitive.
+
 ### Normalized observational hook helper
 
 `mez -S /absolute/control.sock harness-event` reads one JSON envelope from stdin:
