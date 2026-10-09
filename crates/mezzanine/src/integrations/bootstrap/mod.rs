@@ -121,8 +121,10 @@ pub(crate) fn compiled_manifest(
 }
 
 /// Recognizes exact shipped predecessors using independent frozen source bytes.
-/// Receipts cannot supply authority; older byte variants/old-target recovery
-/// remain installer work, and unknown fixed-helper references fail closed.
+/// Receipts cannot supply authority; explicit recovery may finish these exact
+/// historical targets, while unknown fixed-helper references fail closed.
+/// Automatic recovery/refresh and additional byte-variant recognition remain
+/// installer work, separate from this immutable authority directory.
 pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer::Manifest> {
     let (current, revision, paths) = match manifest.harness.as_str() {
         "pi" => (

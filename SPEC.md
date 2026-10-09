@@ -680,8 +680,15 @@ its migrated legacy XDG root. File-only OpenCode config overrides MUST NOT be
 interpreted as plugin directories. Unknown/retired names MUST reject before
 environment/root discovery; absent compiled adapters MUST remain no-mutation
 diagnostics rather than selecting/writing guessed integration roots. The
-directory/private-state policy, historical pending-target recovery and preservation
+directory/private-state policy, automatic pending recovery/refresh and preservation
 repair remain unfinished UX work, not completed by new intent grammar alone.
+Explicit recovery/preview MUST admit only exact same-harness current or known
+compiled historical targets and qualified previous manifests. Recovery MUST finish
+the original operation using that target's artifacts and receipt, not reinterpret
+historical intent with current bytes. Target/version text and journal paths MUST
+NOT add authority; altered targets, effects or receipts MUST reject non-destructively.
+Current refresh remains a distinct reconciliation; this historical-target primitive
+MUST NOT be represented as automatic recovery/refresh under one publication owner.
 Owned-file and exact-JSON-entry receipts MUST protect unrelated settings;
 Exact JSON-array-member ownership MUST preserve unrelated members and order,
 replace at the owned position, and uninstall only that member, not the containing
