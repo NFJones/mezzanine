@@ -119,10 +119,19 @@ $create-skill Create a user skill for read-only release-checklist reviews.
 ```
 
 User skills live under `~/.config/mezzanine/skills/<name>/SKILL.md`; trusted
-project skills live under `.mezzanine/skills/<name>/SKILL.md`. Project skills
-are discovered only after project trust. A trusted project entry overrides a
-user entry of the same name, and both override the built-in entry. Inspect the
+project skills live under `.mezzanine/skills/<name>/SKILL.md`, with additive shared
+placement at `.agents/skills/<name>/SKILL.md` using the same format. Both roots
+are discovered only after project trust. Per name, native project placement wins
+over shared project placement, then user, then built-in; invalid entries are
+diagnosed and skipped rather than hiding valid lower-precedence entries. Inspect the
 catalog's source before invoking an unfamiliar name.
+
+Native authoring defaults and `.mezzanine` configuration behavior are unchanged.
+Shared discovery creates no directories and imports no foreign `.agents` commands,
+profiles, instructions or configuration. Shared enumeration rejects more than 4096
+direct entries. Shared listing and invocation use bounded regular UTF-8 document
+reads (1 MiB) and reject namespace/descendant symlinks and special nodes. A trusted
+project base alias remains supported; a shared namespace alias does not.
 
 A skill file needs YAML front matter with `name` and `description`, followed
 by Markdown instructions. The directory name must match `name`, using only

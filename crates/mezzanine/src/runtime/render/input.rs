@@ -19,6 +19,9 @@ use crate::runtime::service_state::{RuntimeLiveOverlaySource, RuntimeRecordBrows
 use mez_mux::readline::{ReadlineDecodedInput, ReadlineHistoryEntry, readline_input_is_ctrl_v};
 use std::sync::mpsc::TryRecvError;
 
+#[cfg(test)]
+mod shared_skills;
+
 /// Bounded status notice for the primary prompt discarding a rejected payload.
 ///
 /// Closing the prompt drops its decoder, so the notice names that action. It

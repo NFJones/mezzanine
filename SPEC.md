@@ -10800,6 +10800,8 @@ Both user and project skill roots MUST use the same directory layout:
 - User skills: `~/.config/mezzanine/skills/<skill-name>/SKILL.md`.
 - Project skills:
   `<project-root>/.mezzanine/skills/<skill-name>/SKILL.md`.
+- Shared project placement:
+  `<project-root>/.agents/skills/<skill-name>/SKILL.md`, using the same format.
 
 Skill directories MAY contain auxiliary `scripts/`, `references/`, `assets/`,
 and `agents/` subdirectories following OpenAI skill conventions, but Mezzanine
@@ -10814,6 +10816,19 @@ material from the primary user configuration directory. When a user skill and a
 trusted project skill have the same name, the trusted project skill MUST take
 precedence for panes whose current working directory is inside that project.
 Skill catalog order MUST be deterministic, sorted by effective skill name.
+Valid project entries MUST merge per name in native `.mezzanine` then shared
+`.agents` order, both with `project` source rank above user and built-in entries.
+Invalid entries MUST diagnose and skip rather than hide an otherwise valid
+lower-precedence entry. Both roots MUST use the same current project-trust owner;
+`.agents` MUST NOT create trust, import foreign commands/configuration, change
+`.mezzanine` authoring defaults, or cause discovery-time writes.
+Shared enumeration and loading MUST reject namespace, root, entry and document
+symlinks beneath the authorized project base, special files and unbounded reads.
+Shared enumeration MUST reject more than 4096 direct entries; document reads MUST
+remain limited to regular UTF-8 files of at most 1 MiB. An alias of the authorized
+project base MAY remain usable, not an alias of `.agents` or its descendants.
+Model-selected authorization MUST derive allowed roots from live trust and match
+the exact winning summary path; the summary's parent path MUST NOT grant authority.
 Effective source scopes MUST include `builtin`, `user`, and `project` when
 those source types are present.
 

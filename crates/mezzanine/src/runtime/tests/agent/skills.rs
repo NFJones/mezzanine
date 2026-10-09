@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod shared;
+
 /// Actor-style manual preparation must discover current project overlays before
 /// capturing configuration freshness, then recheck on result adoption. A disk
 /// edit or newly rejected trust decision invalidates the old prepared source;
