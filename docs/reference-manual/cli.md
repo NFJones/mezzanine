@@ -351,7 +351,12 @@ HOME/config ancestor modes are not rewritten, and protected state remains
 user-private under the Unix owner/mode contract. Captured intermediate directory
 incarnations and the current lock-entry identity are revalidated before retained
 writer ownership is reused; replacing an ancestor or lock fences the old holder.
-An internal explicit-HOME publisher path now captures existing or absent vendor
+Every compiled bootstrap intent now uses the private publisher: bare install,
+check/dry-run, uninstall, and explicit recovery/preview all inspect both private
+and recognized legacy intent. The standard process HOME is captured after adapter
+and root admission, independently of vendor-root overrides; missing HOME is an
+explicit private-state admission error, not a fallback location. Missing adapters
+and retired Gemini do not perform HOME/root discovery. This owner captures existing or absent vendor
 roots and protected HOME/base witnesses without writes. An absent root has no
 speculative namespace or state access; install binds only after actual anchored
 root creation and private HOME/base revalidation. Noop absent uninstall creates
@@ -367,10 +372,13 @@ after a copy-boundary interruption can resume; conflicting copies and changed
 inspected source locations reject without choosing a winner. Final journal removal
 checks exact accepted bytes/location. The serialized journal remains version 2;
 location is inspected evidence, not new artifact authority.
-This path is **not yet wired into normal bootstrap**: public CLI routing still uses
-the existing vendor-root lock/journal. Private receipts/archives,
+Explicit recovery freezes the accepted bytes/location before acquiring ownership
+and revalidates that exact snapshot; absent roots or no pending journal are no-ops
+without creating locks, directories or state. Both lock domains remain retained
+for recognized legacy cooperation. Private receipts/archives,
 ordinary-directory eligibility and edited-file preservation remain unfinished.
-No new user setup or configuration option is introduced by this checkpoint.
+No additional enable command, private-root override, or configuration option is
+required for this private-journal routing.
 
 ### Normalized observational hook helper
 

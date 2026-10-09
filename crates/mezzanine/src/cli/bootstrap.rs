@@ -59,7 +59,16 @@ fn run_with_manifest<W: Write>(
         stdout,
         manifest,
         crate::integrations::bootstrap::roots::resolve,
+        process_home,
     )
+}
+
+/// Captures the standard private-state HOME without initializing user config.
+/// Native state inspection validates its absolute path, ownership and witnesses.
+fn process_home() -> Result<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
+        MezError::invalid_args("HOME is not set; cannot locate private bootstrap state")
+    })
 }
 
 /// Root selection is injected only for isolated tests; publication still derives
@@ -73,6 +82,7 @@ fn run_with_root_selector<W: Write>(
         &str,
         Option<&std::path::Path>,
     ) -> Result<crate::integrations::bootstrap::roots::SelectedRoot>,
+    select_home: impl FnOnce() -> Result<PathBuf>,
 ) -> Result<()> {
     if args.vendor_version.as_ref().is_some_and(|version| {
         version.is_empty() || version.len() > 128 || version.chars().any(char::is_control)
@@ -88,6 +98,7 @@ fn run_with_root_selector<W: Write>(
             ));
         }
         let selected = select_root(&args.harness, args.root.as_deref())?;
+        let home = select_home()?;
         let root = &selected.path;
         let mut recovered = false;
         let mut recovery_pending = false;
@@ -95,19 +106,24 @@ fn run_with_root_selector<W: Write>(
         let operation = if args.recover {
             if args.dry_run {
                 if let Some(paths) =
-                    crate::integrations::bootstrap::installer::preview_recovery(root, &manifest)?
+                    crate::integrations::bootstrap::installer::preview_recovery_private(
+                        root, &home, &manifest,
+                    )?
                 {
                     recovery_pending = true;
                     changed_paths = paths;
                 }
             } else {
-                recovered = crate::integrations::bootstrap::installer::recover(root, &manifest)?;
+                recovered = crate::integrations::bootstrap::installer::recover_private(
+                    root, &home, &manifest,
+                )?;
             }
             "recover"
         } else {
-            use crate::integrations::bootstrap::installer::{Operation, plan};
-            let plan = plan(
+            use crate::integrations::bootstrap::installer::{Operation, plan_private};
+            let plan = plan_private(
                 root,
+                &home,
                 &manifest,
                 if args.uninstall {
                     Operation::Uninstall
@@ -164,6 +180,259 @@ mod tests {
     use super::*;
     use clap::Parser;
 
+    /// Owns a unique physical private HOME, separate from vendor fixture roots.
+    /// No unit fixture changes process HOME or writes ambient user configuration.
+    struct PrivateHome(PathBuf);
+
+    impl PrivateHome {
+        /// Creates only a new test-owned HOME with safe initial Unix permissions.
+        fn new() -> Self {
+            use std::os::unix::fs::DirBuilderExt;
+            let path = std::fs::canonicalize(std::env::temp_dir())
+                .unwrap()
+                .join(format!(
+                    "mez-bootstrap-home-{}",
+                    crate::storage::token_usage::new_token_usage_event_id()
+                ));
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&path)
+                .unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for PrivateHome {
+        /// Best-effort fixture-only cleanup avoids double panic after failures.
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Drives the compiled production CLI with explicit isolated private HOME.
+    /// Explicit vendor roots still use the real literal root-selector policy.
+    fn run_at_home<W: Write>(
+        args: BootstrapCliArgs,
+        format: CliOutputFormat,
+        stdout: &mut W,
+        home: &std::path::Path,
+    ) -> Result<()> {
+        let manifest = crate::integrations::bootstrap::compiled_manifest(
+            &args.harness,
+            args.vendor_version.as_deref(),
+        );
+        run_manifest_at_home(args, format, stdout, manifest, home)
+    }
+
+    /// Injects fixture-only compiled artifacts and HOME through the same CLI
+    /// owner; no public manifest or state-directory override is introduced.
+    fn run_manifest_at_home<W: Write>(
+        args: BootstrapCliArgs,
+        format: CliOutputFormat,
+        stdout: &mut W,
+        manifest: Option<crate::integrations::bootstrap::installer::Manifest>,
+        home: &std::path::Path,
+    ) -> Result<()> {
+        run_with_root_selector(
+            args,
+            format,
+            stdout,
+            manifest,
+            crate::integrations::bootstrap::roots::resolve,
+            || Ok(home.to_path_buf()),
+        )
+    }
+
+    /// Captures isolated fixture bytes and Unix modes without following links.
+    /// Complete HOME snapshots qualify both vendor and private-state nonmutation.
+    fn tree_snapshot(root: &std::path::Path) -> Vec<(PathBuf, u32, Option<Vec<u8>>)> {
+        use std::os::unix::fs::PermissionsExt;
+        fn visit(
+            root: &std::path::Path,
+            path: &std::path::Path,
+            entries: &mut Vec<(PathBuf, u32, Option<Vec<u8>>)>,
+        ) {
+            let metadata = std::fs::symlink_metadata(path).unwrap();
+            entries.push((
+                path.strip_prefix(root).unwrap().into(),
+                metadata.permissions().mode(),
+                metadata.is_file().then(|| std::fs::read(path).unwrap()),
+            ));
+            if metadata.is_dir() {
+                for entry in std::fs::read_dir(path).unwrap() {
+                    visit(root, &entry.unwrap().path(), entries);
+                }
+            }
+        }
+        let mut entries = Vec::new();
+        visit(root, root, &mut entries);
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
+    /// Parses real CLI argument bytes and runs the compiled adapter at isolated
+    /// HOME. Helpers supply only test paths, never alternate artifact authority.
+    fn invoke_private_fixture(
+        home: &std::path::Path,
+        root: &std::path::Path,
+        flags: &[&str],
+    ) -> Result<serde_json::Value> {
+        #[derive(Parser)]
+        struct Fixture {
+            #[command(flatten)]
+            args: BootstrapCliArgs,
+        }
+        let mut args = vec![
+            std::ffi::OsString::from("fixture"),
+            "pi".into(),
+            "--root".into(),
+            root.as_os_str().to_owned(),
+        ];
+        args.extend(flags.iter().map(std::ffi::OsString::from));
+        let parsed = Fixture::try_parse_from(args).unwrap();
+        let mut output = Vec::new();
+        run_at_home(parsed.args, CliOutputFormat::Json, &mut output, home)?;
+        Ok(serde_json::from_slice(&output).unwrap())
+    }
+
+    /// Observes the sole test-owned namespace after real engine publication.
+    /// The pathname is fixture evidence only; production never discovers journal
+    /// authority by enumerating HOME or choosing an arbitrary namespace.
+    fn private_fixture_journal(home: &std::path::Path) -> PathBuf {
+        let entries = std::fs::read_dir(home.join(".config/mezzanine/bootstrap"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1);
+        entries[0].join("journal.json")
+    }
+
+    /// The former legacy route rejects a real private-only interrupted install;
+    /// all normal activated intents must instead preview and settle that exact
+    /// accepted intent. Read-only CLI snapshots preserve both trees, uninstall
+    /// follows original completion, and repeats neither recover nor publish.
+    #[test]
+    fn bootstrap_cli_private_pending_intents_share_the_public_owner() {
+        use crate::integrations::bootstrap::installer::{Operation, plan_private};
+        let current = crate::integrations::bootstrap::compiled_manifest("pi", None).unwrap();
+        for intent in ["install", "uninstall", "recover"] {
+            let home = PrivateHome::new();
+            let root = home.0.join(".pi/agent");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("authored"), b"preserved").unwrap();
+            let accepted = plan_private(&root, &home.0, &current, Operation::Install).unwrap();
+            accepted.fixture_interrupt_after(1);
+            assert!(accepted.apply().is_err());
+            assert!(!root.join(".mez-bootstrap-journal").exists());
+            assert!(
+                crate::integrations::bootstrap::installer::plan(
+                    &root,
+                    &current,
+                    Operation::Install
+                )
+                .is_err(),
+                "former legacy-only route cannot admit private pending intent"
+            );
+            let before = tree_snapshot(&home.0);
+            for flags in [
+                vec!["--check"],
+                vec!["--dry-run"],
+                vec!["--uninstall", "--dry-run"],
+                vec!["--recover", "--dry-run"],
+            ] {
+                let output = invoke_private_fixture(&home.0, &root, &flags).unwrap();
+                assert_eq!(output["recovery_pending"], true);
+                assert_eq!(output["recovered"], false);
+                assert!(!output["changed_paths"].as_array().unwrap().is_empty());
+                assert_eq!(tree_snapshot(&home.0), before);
+            }
+            let flags: &[&str] = match intent {
+                "install" => &[],
+                "uninstall" => &["--uninstall"],
+                _ => &["--recover"],
+            };
+            let output = invoke_private_fixture(&home.0, &root, flags).unwrap();
+            assert_eq!(output["recovered"], true);
+            assert_eq!(output["recovery_pending"], false);
+            assert!(!private_fixture_journal(&home.0).exists());
+            assert_eq!(
+                root.join("mez-bootstrap-ownership-pi.json").exists(),
+                intent != "uninstall"
+            );
+            assert_eq!(std::fs::read(root.join("authored")).unwrap(), b"preserved");
+            let repeated = invoke_private_fixture(&home.0, &root, flags).unwrap();
+            assert_eq!(repeated["recovered"], false);
+            assert_eq!(repeated["recovery_pending"], false);
+            assert!(repeated["changed_paths"].as_array().unwrap().is_empty());
+        }
+    }
+
+    /// Divergent private and legacy copies cannot be ignored by any public
+    /// maintenance/install/check path. Rejection occurs without journal changes,
+    /// artifact progress or silent winner selection, even for actual operations.
+    #[test]
+    fn bootstrap_cli_private_copy_disagreement_rejects_every_intent_unchanged() {
+        use crate::integrations::bootstrap::installer::{Operation, plan_private};
+        let home = PrivateHome::new();
+        let root = home.0.join(".pi/agent");
+        std::fs::create_dir_all(&root).unwrap();
+        let current = crate::integrations::bootstrap::compiled_manifest("pi", None).unwrap();
+        let accepted = plan_private(&root, &home.0, &current, Operation::Install).unwrap();
+        accepted.fixture_interrupt_after(1);
+        assert!(accepted.apply().is_err());
+        let bytes = std::fs::read(private_fixture_journal(&home.0)).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        std::fs::write(
+            root.join(".mez-bootstrap-journal"),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+        let before = tree_snapshot(&home.0);
+        for flags in [
+            vec!["--check"],
+            vec!["--dry-run"],
+            vec!["--recover", "--dry-run"],
+            vec![],
+            vec!["--uninstall"],
+            vec!["--recover"],
+        ] {
+            let error = invoke_private_fixture(&home.0, &root, &flags).unwrap_err();
+            assert!(error.to_string().contains("copies disagree"));
+            assert_eq!(tree_snapshot(&home.0), before);
+        }
+    }
+
+    /// Recovery/check/noop uninstall against an absent selected vendor root
+    /// must not materialize either vendor or private state. Actual recovery is
+    /// a truthful no-op with the same bounded admission as recovery preview.
+    #[test]
+    fn bootstrap_cli_private_absent_maintenance_creates_neither_tree() {
+        let home = PrivateHome::new();
+        let root = home.0.join("absent/vendor");
+        let before = tree_snapshot(&home.0);
+        for flags in [
+            vec!["--recover", "--dry-run"],
+            vec!["--recover"],
+            vec!["--uninstall", "--dry-run"],
+            vec!["--uninstall"],
+        ] {
+            let output = invoke_private_fixture(&home.0, &root, &flags).unwrap();
+            assert_eq!(output["recovered"], false);
+            assert_eq!(output["recovery_pending"], false);
+            assert!(output["changed_paths"].as_array().unwrap().is_empty());
+            assert_eq!(tree_snapshot(&home.0), before);
+        }
+        for flags in [vec!["--check"], vec!["--dry-run"]] {
+            assert!(
+                !invoke_private_fixture(&home.0, &root, &flags).unwrap()["changed_paths"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(tree_snapshot(&home.0), before);
+        }
+    }
+
     /// Bare bootstrap installs at its captured automatic root, while explicit
     /// dry-run keeps even absent roots untouched. Repetition is unchanged;
     /// uninstall preview preserves exact installed artifacts before removal.
@@ -198,6 +467,7 @@ mod tests {
                         false,
                     )
                 },
+                || Ok(home.clone()),
             )
             .unwrap();
             serde_json::from_slice::<serde_json::Value>(&output).unwrap()
@@ -294,6 +564,7 @@ mod tests {
             crate::storage::token_usage::new_token_usage_event_id()
         ));
         std::fs::create_dir(&root).unwrap();
+        let home = PrivateHome::new();
         let manifest = Manifest {
             harness: "codex".into(),
             revision: 1,
@@ -318,11 +589,12 @@ mod tests {
             arguments.extend_from_slice(flags);
             let parsed = Fixture::try_parse_from(arguments).unwrap();
             let mut output = Vec::new();
-            run_with_manifest(
+            run_manifest_at_home(
                 parsed.args,
                 CliOutputFormat::Json,
                 &mut output,
                 Some(manifest.clone()),
+                &home.0,
             )
             .unwrap();
             serde_json::from_slice::<serde_json::Value>(&output).unwrap()
@@ -413,6 +685,7 @@ mod tests {
                             false,
                         )
                     },
+                    || Ok(home.clone()),
                 )
                 .unwrap();
                 let output: serde_json::Value = serde_json::from_slice(&output).unwrap();
@@ -446,6 +719,7 @@ mod tests {
                         false,
                     )
                 },
+                || Ok(home.clone()),
             )
             .unwrap();
             let output: serde_json::Value = serde_json::from_slice(&output).unwrap();
@@ -454,6 +728,151 @@ mod tests {
             assert_eq!(std::fs::read(root.join("authored")).unwrap(), b"preserved");
         }
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// Invalid captured private HOME must reject without creating either tree.
+    /// Root errors and absent adapters must not invoke private HOME selection;
+    /// injected failures stand in for missing HOME without process-env mutation.
+    #[test]
+    fn bootstrap_private_home_invalid_or_missing_is_non_mutating() {
+        #[derive(Parser)]
+        struct Fixture {
+            #[command(flatten)]
+            args: BootstrapCliArgs,
+        }
+        let home = PrivateHome::new();
+        let root = home.0.join("vendor");
+        std::fs::create_dir(&root).unwrap();
+        let before = tree_snapshot(&home.0);
+        for invalid in [
+            PathBuf::from("relative"),
+            home.0.join("../home"),
+            home.0.join("absent"),
+        ] {
+            let parsed = Fixture::try_parse_from([
+                "fixture",
+                "pi",
+                "--root",
+                root.to_str().unwrap(),
+                "--check",
+            ])
+            .unwrap();
+            assert!(
+                run_with_root_selector(
+                    parsed.args,
+                    CliOutputFormat::Json,
+                    &mut Vec::new(),
+                    crate::integrations::bootstrap::compiled_manifest("pi", None),
+                    crate::integrations::bootstrap::roots::resolve,
+                    || Ok(invalid)
+                )
+                .is_err()
+            );
+            assert_eq!(tree_snapshot(&home.0), before);
+        }
+        let parsed =
+            Fixture::try_parse_from(["fixture", "pi", "--root", root.to_str().unwrap(), "--check"])
+                .unwrap();
+        assert!(
+            run_with_root_selector(
+                parsed.args,
+                CliOutputFormat::Json,
+                &mut Vec::new(),
+                crate::integrations::bootstrap::compiled_manifest("pi", None),
+                crate::integrations::bootstrap::roots::resolve,
+                || Err(MezError::invalid_args("fixture HOME unavailable"))
+            )
+            .is_err()
+        );
+        assert_eq!(tree_snapshot(&home.0), before);
+    }
+
+    /// Guarded child owns the real production environment path for all public
+    /// bootstrap intents. It never executes a vendor/provider, and missing HOME
+    /// remains an admission error even with an explicit valid vendor-root override.
+    #[test]
+    fn bootstrap_process_environment_private_intent_fixture() {
+        let Some(root) = std::env::var_os("MEZ_TEST_PRIVATE_ROOT").map(PathBuf::from) else {
+            return;
+        };
+        let intent = std::env::var("MEZ_TEST_PRIVATE_INTENT").unwrap();
+        let harness = std::env::var("MEZ_TEST_PRIVATE_HARNESS").unwrap();
+        let args = BootstrapCliArgs {
+            harness: harness.clone(),
+            vendor_version: None,
+            root: (intent == "missing-home").then(|| root.clone()),
+            dry_run: intent == "dry-run",
+            check: matches!(intent.as_str(), "check" | "missing-home"),
+            uninstall: intent == "uninstall",
+            recover: intent == "recover",
+        };
+        let mut output = Vec::new();
+        let result = run(args, CliOutputFormat::Json, &mut output);
+        if intent == "missing-home" {
+            assert!(result.unwrap_err().to_string().contains("HOME is not set"));
+            assert!(output.is_empty());
+            return;
+        }
+        result.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(value["scope_root"], root.to_str().unwrap());
+        assert_eq!(value["root_source"], "vendor-default");
+        assert_eq!(value["supported"], true);
+    }
+
+    /// Real child process HOME lookup drives bare first install, repeat/check,
+    /// uninstall and absent recovery for every currently compiled adapter. Fresh
+    /// OpenCode starts with no shared .config ancestor; read-only snapshots and
+    /// actual journal placement qualify the public routing without fixture tokens.
+    #[test]
+    fn bootstrap_process_environment_private_intents_are_isolated() {
+        for (harness, suffix) in [
+            ("pi", ".pi/agent"),
+            ("opencode", ".config/opencode"),
+            ("codex", ".codex"),
+        ] {
+            let home = PrivateHome::new();
+            let root = home.0.join(suffix);
+            let child = |intent: &str| {
+                let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                command.args(["--exact", "cli::bootstrap::tests::bootstrap_process_environment_private_intent_fixture", "--quiet"])
+                    .env_clear().env("MEZ_TEST_PRIVATE_ROOT", &root).env("MEZ_TEST_PRIVATE_INTENT", intent)
+                    .env("MEZ_TEST_PRIVATE_HARNESS", harness).stdin(std::process::Stdio::null());
+                if intent != "missing-home" {
+                    command.env("HOME", &home.0);
+                }
+                let output = command.output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{harness}/{intent}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            };
+            let before = tree_snapshot(&home.0);
+            for intent in ["dry-run", "check", "recover", "uninstall", "missing-home"] {
+                child(intent);
+                assert_eq!(tree_snapshot(&home.0), before);
+            }
+            child("install");
+            assert!(
+                root.join(format!("mez-bootstrap-ownership-{harness}.json"))
+                    .is_file()
+            );
+            assert!(!root.join(".mez-bootstrap-journal").exists());
+            assert!(!private_fixture_journal(&home.0).exists());
+            let before = tree_snapshot(&home.0);
+            for intent in ["install", "check", "dry-run", "recover"] {
+                child(intent);
+                assert_eq!(tree_snapshot(&home.0), before);
+            }
+            child("uninstall");
+            assert!(
+                !root
+                    .join(format!("mez-bootstrap-ownership-{harness}.json"))
+                    .exists()
+            );
+            assert!(!private_fixture_journal(&home.0).exists());
+        }
     }
 
     /// Guarded self-process fixture exercises the production HOME/vendor-env
@@ -547,7 +966,8 @@ mod tests {
                         },
                         false,
                     )
-                }
+                },
+                || panic!("invalid root selected private HOME"),
             )
             .is_err()
         );
@@ -559,6 +979,7 @@ mod tests {
             &mut output,
             None,
             |_, _| panic!("absent adapter selected root"),
+            || panic!("absent adapter selected private HOME"),
         )
         .unwrap();
         assert_eq!(
@@ -573,6 +994,7 @@ mod tests {
     #[test]
     fn bootstrap_non_utf8_root_publication_keeps_exact_os_path() {
         use std::os::unix::ffi::OsStringExt;
+        let home = PrivateHome::new();
         #[derive(Parser)]
         struct Fixture {
             #[command(flatten)]
@@ -597,7 +1019,7 @@ mod tests {
             }
             let parsed = Fixture::try_parse_from(arguments).unwrap();
             let mut output = Vec::new();
-            run(parsed.args, CliOutputFormat::Json, &mut output).unwrap();
+            run_at_home(parsed.args, CliOutputFormat::Json, &mut output, &home.0).unwrap();
             let output: serde_json::Value = serde_json::from_slice(&output).unwrap();
             assert_eq!(output["scope_root"], root.to_string_lossy().as_ref());
             assert_eq!(output["root_source"], "explicit");
@@ -616,6 +1038,7 @@ mod tests {
     #[test]
     fn bootstrap_public_check_and_plan_leave_root_tree_unchanged() {
         use std::os::unix::fs::PermissionsExt;
+        let home = PrivateHome::new();
         #[derive(Parser)]
         struct Fixture {
             #[command(flatten)]
@@ -639,7 +1062,7 @@ mod tests {
                 ])
                 .unwrap();
                 let mut output = Vec::new();
-                run(parsed.args, CliOutputFormat::Json, &mut output).unwrap();
+                run_at_home(parsed.args, CliOutputFormat::Json, &mut output, &home.0).unwrap();
                 let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
                 assert_eq!(value["supported"], true);
                 assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
@@ -662,7 +1085,7 @@ mod tests {
             "--check",
         ])
         .unwrap();
-        run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).unwrap();
+        run_at_home(parsed.args, CliOutputFormat::Json, &mut Vec::new(), &home.0).unwrap();
         assert!(!root.join("missing").exists());
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::remove_dir_all(root).unwrap();
@@ -673,6 +1096,7 @@ mod tests {
     /// manifest owns only extension artifacts and not vendor settings.
     #[test]
     fn bootstrap_pi_candidate_is_not_installation_certification() {
+        let home = PrivateHome::new();
         #[derive(Parser)]
         struct Fixture {
             #[command(flatten)]
@@ -686,7 +1110,7 @@ mod tests {
         let parsed =
             Fixture::try_parse_from(["fixture", "pi", "--root", root.to_str().unwrap()]).unwrap();
         let mut output = Vec::new();
-        run(parsed.args, CliOutputFormat::Json, &mut output).unwrap();
+        run_at_home(parsed.args, CliOutputFormat::Json, &mut output, &home.0).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(value["supported"], true);
         assert!(root.join("extensions/mezzanine/index.mjs").is_file());
@@ -700,11 +1124,11 @@ mod tests {
             "--check",
         ])
         .unwrap();
-        run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).unwrap();
+        run_at_home(parsed.args, CliOutputFormat::Json, &mut Vec::new(), &home.0).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
         let parsed =
             Fixture::try_parse_from(["fixture", "pi", "--root", root.to_str().unwrap()]).unwrap();
-        run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).unwrap();
+        run_at_home(parsed.args, CliOutputFormat::Json, &mut Vec::new(), &home.0).unwrap();
         assert!(root.join("extensions/mezzanine/index.mjs").is_file());
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -754,6 +1178,7 @@ mod tests {
             "mez-bootstrap-cli-{}",
             crate::storage::token_usage::new_token_usage_event_id()
         ));
+        let home = PrivateHome::new();
         std::fs::create_dir(&root).unwrap();
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
         let manifest = Manifest {
@@ -781,11 +1206,12 @@ mod tests {
             }
             let parsed = Fixture::try_parse_from(arguments).unwrap();
             let mut output = Vec::new();
-            run_with_manifest(
+            run_manifest_at_home(
                 parsed.args,
                 CliOutputFormat::Json,
                 &mut output,
                 Some(manifest.clone()),
+                &home.0,
             )
             .unwrap();
             serde_json::from_slice::<serde_json::Value>(&output).unwrap()

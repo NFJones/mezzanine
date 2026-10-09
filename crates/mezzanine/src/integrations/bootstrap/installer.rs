@@ -127,8 +127,8 @@ pub(crate) fn plan_with_history(
 }
 
 /// Captures a private-journal plan with explicit HOME and native root witnesses.
-/// This staged engine entry point shares compiled history and reconciliation;
-/// it does not change public CLI routing or vendor-directory eligibility.
+/// Public CLI intents share compiled history and deterministic reconciliation
+/// through this owner; vendor-directory eligibility migration remains separate.
 pub(crate) fn plan_private(
     root: &Path,
     home: &Path,
@@ -279,6 +279,14 @@ fn plan_with_publisher(
 }
 
 impl Plan {
+    /// Stops a controlled fixture after one confirmed publication boundary.
+    /// This test-only seam drives CLI recovery with real accepted engine intent;
+    /// no public CLI flag, process-visible manifest, or production fault is added.
+    #[cfg(test)]
+    pub(crate) fn fixture_interrupt_after(&self, count: usize) {
+        self.publisher.stop_after.set(Some(count));
+    }
+
     /// Whether publication must first finish an accepted original operation.
     pub(crate) fn recovery_pending(&self) -> bool {
         self.pending.is_some()
@@ -359,6 +367,70 @@ impl Plan {
         })?;
         self.publisher.apply_authorized(self.changes, intent)
     }
+}
+
+/// Explicitly settles previously accepted intent; conflicts preserve the journal.
+/// Public private-state recovery shares compiled authorization and exact source
+/// fencing with normal installation. An absent root is a no-op, never creation.
+pub(crate) fn recover_private(root: &Path, home: &Path, manifest: &Manifest) -> Result<bool> {
+    Ok(recover_private_mode(root, home, manifest, false)?.is_some())
+}
+
+/// Previews original accepted private/legacy intent without locks or writes.
+/// Unknown or conflicting copies remain errors; root absence returns no work.
+pub(crate) fn preview_recovery_private(
+    root: &Path,
+    home: &Path,
+    manifest: &Manifest,
+) -> Result<Option<Vec<String>>> {
+    recover_private_mode(root, home, manifest, true)
+}
+
+/// Uses the same captured private publication owner for inspection and explicit
+/// original-operation recovery. No unlocked recovery/replanning shortcut exists.
+fn recover_private_mode(
+    root: &Path,
+    home: &Path,
+    manifest: &Manifest,
+    preview: bool,
+) -> Result<Option<Vec<String>>> {
+    validate_manifest(manifest)?;
+    let history = super::compiled_history(manifest);
+    recover_private_owner(
+        Publisher::inspect_private(root, home)?,
+        manifest,
+        &history,
+        preview,
+    )
+}
+
+/// Settles explicit recovery through one already captured private publisher.
+/// Snapshot inspection precedes acquisition; exact reauthorization and source
+/// fencing occur under the same retained owner before any recovery effects.
+fn recover_private_owner(
+    mut publisher: Publisher,
+    manifest: &Manifest,
+    history: &[Manifest],
+    preview: bool,
+) -> Result<Option<Vec<String>>> {
+    if preview {
+        return Ok(publisher
+            .inspect_recovery_authorized(|value, changes| {
+                authorize_recovery(&publisher, manifest, history, value, changes)
+            })?
+            .map(|changes| changes.into_iter().map(|change| change.path).collect()));
+    }
+    let Some(pending) = publisher.inspect_pending_authorized(|value, changes| {
+        authorize_recovery(&publisher, manifest, history, value, changes)
+    })?
+    else {
+        return Ok(None);
+    };
+    publisher.acquire_lock()?;
+    publisher.recover_pending_authorized(&pending, |value, changes| {
+        authorize_recovery(&publisher, manifest, history, value, changes)
+    })?;
+    Ok(Some(Vec::new()))
 }
 
 /// Explicitly settles previously accepted intent; conflicts preserve the journal.

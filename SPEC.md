@@ -699,9 +699,13 @@ explicit nonwaiting ownership,
 bounded exact preimages, synced exclusive staging and no-replace additions.
 Reserved lock/staging names MUST reject before I/O, including ASCII-case aliases
 of the lock on case-insensitive supported filesystems.
-The explicit HOME-qualified private Publisher/installer entry point MUST capture
-native root and protected HOME/base witnesses without writes, keeping public CLI
-routing/vendor eligibility unchanged until their migration is completed. Absent
+Every compiled bootstrap CLI intent MUST use the HOME-qualified private publisher,
+including install/check/dry-run/uninstall and explicit recovery/preview. Private HOME
+MUST be captured only after compiled adapter/harness/root admission; missing adapters
+and retired Gemini MUST reject before HOME/root lookup. Root overrides MUST NOT
+become private-state overrides. Native root and protected HOME/base witnesses MUST
+be captured without writes; vendor eligibility policy remains unchanged pending
+its separate migration. Absent
 vendor roots MUST retain a key-free HOME/base witness; no namespace, journal read
 or writer ownership may be inferred from absence/path hints. Install MAY bind only
 after materializing the captured suffix and obtaining the actual root descriptor,
@@ -724,7 +728,10 @@ dual copies MUST remain recoverable; disagreements MUST reject without selecting
 a winner. Pending snapshots MUST bind exact bytes AND location; source drift MUST
 reject stale plans. Journal deletion MUST revalidate accepted bytes/location after
 effects, not silently discard a replaced journal. This is not whole-workflow CAS.
-The entry point MUST NOT imply public CLI activation, receipt/archive migration,
+Explicit recovery MUST freeze pending bytes/location before writer acquisition and
+reauthorize the identical snapshot under retained ownership. No pending intent,
+including absent roots, MUST return a truthful no-op without root/state/lock writes.
+Public private-journal activation MUST NOT imply receipt/archive migration,
 ordinary-directory permission support or ACL attestation.
 Those integration and platform qualification phases remain unfinished.
 Explicit recovery/preview MUST admit only exact same-harness current or known

@@ -5,6 +5,65 @@ use crate::integrations::bootstrap::state_directory::StateDirectory;
 use std::fs::File;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 
+/// Explicit recovery freezes its exact pre-lock bytes/location, not merely an
+/// admissible decoded operation. Changes made during acquisition must preserve
+/// journal evidence and the previously committed first file without finishing
+/// any remaining artifact/receipt. Fresh reinspection can subsequently settle.
+#[test]
+fn bootstrap_private_explicit_recovery_rejects_acquisition_snapshot_drift() {
+    let current = crate::integrations::bootstrap::compiled_manifest("pi", None).unwrap();
+    for drift in ["bytes", "location"] {
+        let fixture = Fixture::new();
+        let accepted = fixture.plan(&current, Operation::Install).unwrap();
+        accepted.fixture_interrupt_after(1);
+        assert!(accepted.apply().is_err());
+        let publisher = Publisher::inspect_private(&fixture.root, &fixture.home).unwrap();
+        let private = fixture.journal();
+        let legacy = fixture.root.join(".mez-bootstrap-journal");
+        let path = private.clone();
+        let legacy_path = legacy.clone();
+        *publisher.before_private_binding.borrow_mut() = Some(Box::new(move || {
+            let original = std::fs::read(&path).unwrap();
+            if drift == "bytes" {
+                let value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+                std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+            } else {
+                std::fs::write(&legacy_path, &original).unwrap();
+            }
+        }));
+        let vendor_before = tree_snapshot(&fixture.root);
+        let error = recover_private_owner(
+            publisher,
+            &current,
+            &crate::integrations::bootstrap::compiled_history(&current),
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("inspected recovery changed"));
+        assert!(private.exists());
+        assert!(
+            !fixture
+                .root
+                .join("mez-bootstrap-ownership-pi.json")
+                .exists()
+        );
+        if drift == "bytes" {
+            assert_eq!(tree_snapshot(&fixture.root), vendor_before);
+        } else {
+            assert_eq!(
+                std::fs::read(&legacy).unwrap(),
+                std::fs::read(&private).unwrap()
+            );
+            std::fs::remove_file(&legacy).unwrap();
+            assert_eq!(tree_snapshot(&fixture.root), vendor_before);
+            std::fs::write(&legacy, std::fs::read(&private).unwrap()).unwrap();
+        }
+        assert!(recover_private(&fixture.root, &fixture.home, &current).unwrap());
+        assert!(!private.exists() && !legacy.exists());
+        assert!(!recover_private(&fixture.root, &fixture.home, &current).unwrap());
+    }
+}
+
 /// A journal can change after every artifact/receipt effect is already committed.
 /// Final settlement must preserve the changed bytes or location and report the
 /// conflict without undoing confirmed files. Foreign bytes remain rejected;

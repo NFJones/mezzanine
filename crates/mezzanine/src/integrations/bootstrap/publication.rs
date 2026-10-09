@@ -10,7 +10,8 @@
 //! The explicit private path retains both cooperating lock domains
 //! and migrates only compiled-authorized exact legacy intent. Identical copies
 //! qualify interrupted migration; disagreements/location drift fence planning.
-//! Public CLI routing and vendor eligibility are unchanged by this staged path.
+//! Every compiled public CLI intent uses the private owner; vendor eligibility
+//! and private receipt/archive migration remain independent follow-up work.
 
 use super::reconciliation::publication_path;
 use super::root_directory::RootDirectory;
@@ -147,7 +148,8 @@ impl Publisher {
 
     /// Captures private HOME/base state without writing either tree. Existing
     /// vendor roots bind immediately; absent roots retain a key-free witness
-    /// until publication materializes the actual root. Public CLI is unchanged.
+    /// until publication materializes the actual root. All compiled CLI intents
+    /// share this owner; vendor-directory policy migration remains separate.
     pub(super) fn inspect_private(root: &Path, home: &Path) -> Result<Self> {
         let mut publisher = Self::inspect(root)?;
         if publisher.directory.is_missing() {

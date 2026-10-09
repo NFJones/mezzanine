@@ -12,8 +12,9 @@
 //! not artifact or journal authority: the installer must independently qualify
 //! root identity, harness, compiled intent, receipts and every effect. File names
 //! are internal bounded flat identifiers; no stored name supplies vendor paths.
-//! Publisher's explicit private path owns journal migration; public CLI routing
-//! and receipt/archive activation remain outside this storage primitive.
+//! CLI admission selects the private Publisher, which owns exact journal
+//! migration; receipt/archive activation and vendor eligibility remain outside
+//! this storage primitive.
 //! It follows the repository's Unix owner/mode privacy contract, not ACL or
 //! executable attestation. Preimage checks plus rename are not external-writer
 //! CAS. Partial directory creation may remain after failure; no tree sweeping.
