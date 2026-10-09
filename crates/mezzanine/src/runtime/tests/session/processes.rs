@@ -3397,6 +3397,23 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
 /// workload evidence. User shell panes are unchanged.
 #[test]
 fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_it() {
+    qualify_agent_owned_pane_environment(false);
+}
+
+/// An independent child environment report must not require incidental PATH
+/// utilities. Force env/mv/cat to fail deterministically while retaining the
+/// ordinary executable search path and every isolation assertion.
+#[test]
+fn runtime_agent_owned_pane_environment_report_does_not_require_shell_utilities() {
+    qualify_agent_owned_pane_environment(true);
+}
+
+/// Exercises the actual user/agent-owned launch boundary with an optional
+/// fixture-owned utility failure. The injected daemon snapshot never changes
+/// this test process's global environment or another fixture's search path.
+fn qualify_agent_owned_pane_environment(fail_report_utilities: bool) {
+    use std::os::unix::ffi::OsStrExt;
+
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -3415,20 +3432,36 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
         key: b"MEZ_AGENT_OWNED_DAEMON_SENTINEL".to_vec(),
         value: b"daemon-only".to_vec(),
     });
+    let root = temp_root("agent-owned-pane-exec-environment");
+    if fail_report_utilities {
+        let tools = root.join("unavailable-report-tools");
+        fs::create_dir(&tools).unwrap();
+        for tool in ["env", "mv", "cat"] {
+            let path = tools.join(tool);
+            fs::write(&path, "#!/bin/sh\nexit 127\n").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = daemon
+            .iter_mut()
+            .find(|entry| entry.key == b"PATH")
+            .unwrap();
+        let mut value = tools.as_os_str().as_bytes().to_vec();
+        value.push(b':');
+        value.extend_from_slice(&path.value);
+        path.value = value;
+    }
     assert!(
         environment_forwards(&user_environment, &probe),
         "a user shell pane must keep inheriting the daemon environment"
     );
     service.inject_agent_owned_pane_daemon_environment_for_tests(daemon);
 
-    let root = temp_root("agent-owned-pane-exec-environment");
     let report = root.join("environment");
-    let pending_report = root.join("environment.pending");
+    let executable = std::env::current_exe().unwrap();
     let command = format!(
-        "env > {}; mv {} {}; exec cat\n",
-        mez_agent::shell_quote(&pending_report.to_string_lossy()),
-        mez_agent::shell_quote(&pending_report.to_string_lossy()),
+        "export MEZ_TEST_PANE_ENVIRONMENT_REPORT={}; exec {} --exact runtime::tests::session::processes::pane_environment_report_child --nocapture\n",
         mez_agent::shell_quote(&report.to_string_lossy()),
+        mez_agent::shell_quote(&executable.to_string_lossy()),
     );
     let window_id = service.session().active_window().unwrap().id.clone();
     let agent_started = service
@@ -3452,7 +3485,7 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
     // is authoritative even if it exposes a real launch-boundary failure.
     let reported = wait_for_first_pane_report(&mut agent_process, &report);
     let agent_environment = reported
-        .split(|byte| *byte == b'\n')
+        .split(|byte| *byte == 0)
         .filter_map(|line| {
             let separator = line.iter().position(|byte| *byte == b'=')?;
             Some(mez_mux::process::RawEnvironmentEntry {
@@ -3479,6 +3512,31 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
     drop(user_process);
     drop(agent_process);
     let _ = fs::remove_dir_all(root);
+}
+
+/// Self-executed reporting child for the isolation fixture. The ordinary suite
+/// invocation is inert; only the parent supplies its private report path.
+/// Observe the actual child environment independently of the launch builder,
+/// preserve arbitrary bytes with NUL records, and publish the first complete
+/// snapshot atomically using Rust filesystem operations, not PATH utilities.
+#[test]
+fn pane_environment_report_child() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let Some(report) = std::env::var_os("MEZ_TEST_PANE_ENVIRONMENT_REPORT") else {
+        return;
+    };
+    let report = PathBuf::from(report);
+    let pending = report.with_extension("pending");
+    let mut bytes = Vec::new();
+    for (key, value) in std::env::vars_os() {
+        bytes.extend_from_slice(key.as_os_str().as_bytes());
+        bytes.push(b'=');
+        bytes.extend_from_slice(value.as_os_str().as_bytes());
+        bytes.push(0);
+    }
+    fs::write(&pending, bytes).unwrap();
+    fs::rename(pending, report).unwrap();
 }
 
 /// Classifies only fixed POSIX-shell missing-command phrases while discarding
