@@ -19,6 +19,24 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
+/// Sealed task-local evidence of exact directories created by one native
+/// materialization. Held descriptors distinguish own creation from appeared
+/// paths or swapped ancestors; stored/process input cannot construct receipts.
+pub(super) struct CreatedDirectories(Vec<(PathBuf, File)>);
+
+impl CreatedDirectories {
+    /// Matches an exact created spelling and still-identical observed directory.
+    /// Metadata/path resemblance alone never establishes native creation proof.
+    pub(super) fn matches(&self, path: &Path, observed: &File) -> Result<bool> {
+        let Some((_, held)) = self.0.iter().find(|(created, _)| created == path) else {
+            return Ok(false);
+        };
+        let held = held.metadata()?;
+        let observed = observed.metadata()?;
+        Ok(held.dev() == observed.dev() && held.ino() == observed.ino())
+    }
+}
+
 /// Exact existing root or original bounded ancestor/absence witness.
 pub(super) enum RootDirectory {
     /// Held final root; never substituted by an unqualified spelling.
@@ -158,14 +176,26 @@ impl RootDirectory {
     /// Existing directories are never chmod/chown'd; CREATE collisions reject.
     /// Root descriptor/spelling is checked again before any lock/artifact work.
     pub(super) fn materialize(&mut self, root: &Path) -> Result<()> {
+        self.materialize_witnessed(root).map(|_| ())
+    }
+
+    /// Returns sealed descriptor receipts only for suffix components created by
+    /// this operation. Existing paths are not creation authority, and failed
+    /// validation never returns receipts for caller adoption. Partial directories
+    /// can still remain on failure, as with ordinary materialization.
+    pub(super) fn materialize_witnessed(&mut self, root: &Path) -> Result<CreatedDirectories> {
         self.validate(root)?;
         let Self::Missing {
-            ancestor, suffix, ..
+            ancestor,
+            spelling,
+            suffix,
         } = self
         else {
-            return Ok(());
+            return Ok(CreatedDirectories(Vec::new()));
         };
         let mut directory = ancestor.try_clone()?;
+        let mut spelling = spelling.clone();
+        let mut created = Vec::new();
         for part in suffix {
             mkdirat(
                 &directory,
@@ -190,10 +220,13 @@ impl RootDirectory {
                 .map_err(std::io::Error::from)?,
             );
             eligible(&directory)?;
+            spelling.push(part);
+            created.push((spelling.clone(), directory.try_clone()?));
         }
         eligible(&directory)?;
         *self = Self::Existing(directory);
-        self.validate(root)
+        self.validate(root)?;
+        Ok(CreatedDirectories(created))
     }
 }
 

@@ -699,9 +699,23 @@ explicit nonwaiting ownership,
 bounded exact preimages, synced exclusive staging and no-replace additions.
 Reserved lock/staging names MUST reject before I/O, including ASCII-case aliases
 of the lock on case-insensitive supported filesystems.
-The explicit HOME-qualified private Publisher/installer entry point MUST require
-an actual held existing vendor root and keep public CLI routing/vendor eligibility
-unchanged until their migration is completed. It MUST hold both private and legacy
+The explicit HOME-qualified private Publisher/installer entry point MUST capture
+native root and protected HOME/base witnesses without writes, keeping public CLI
+routing/vendor eligibility unchanged until their migration is completed. Absent
+vendor roots MUST retain a key-free HOME/base witness; no namespace, journal read
+or writer ownership may be inferred from absence/path hints. Install MAY bind only
+after materializing the captured suffix and obtaining the actual root descriptor,
+with HOME/base revalidation before and after creation. Shared private-base prefixes
+created by that same native materialization MAY advance absence only through sealed
+held-descriptor creation receipts; every added prefix MUST match its exact receipt
+and all preexisting incarnations MUST remain unchanged. Path/mode resemblance or
+a swapped prefix preserving the final vendor inode MUST NOT supply creation proof.
+Appeared base/vendor entries,
+HOME/ancestor swaps and binding failures MUST fence stale reuse; failed binding
+MUST NOT erase private authority or fall through to legacy publication. Noop absent
+uninstall MUST create neither tree. Materialized directories may remain after a
+later binding failure; absence of artifact effects MUST NOT imply no setup effects.
+It MUST hold both private and legacy
 cooperating locks, revalidating live lock identities before publication/reuse.
 New transactions through that entry point MUST journal privately. Legacy recovery
 MUST first qualify compiled original intent/root/preimages, then durably copy exact
@@ -710,8 +724,8 @@ dual copies MUST remain recoverable; disagreements MUST reject without selecting
 a winner. Pending snapshots MUST bind exact bytes AND location; source drift MUST
 reject stale plans. Journal deletion MUST revalidate accepted bytes/location after
 effects, not silently discard a replaced journal. This is not whole-workflow CAS.
-The entry point MUST NOT imply public CLI activation, absent-root state binding,
-receipt/archive migration, ordinary-directory permission support or ACL attestation.
+The entry point MUST NOT imply public CLI activation, receipt/archive migration,
+ordinary-directory permission support or ACL attestation.
 Those integration and platform qualification phases remain unfinished.
 Explicit recovery/preview MUST admit only exact same-harness current or known
 compiled historical targets and qualified previous manifests. Recovery MUST finish

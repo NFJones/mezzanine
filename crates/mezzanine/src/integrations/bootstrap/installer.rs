@@ -126,7 +126,7 @@ pub(crate) fn plan_with_history(
     plan_with_publisher(Publisher::inspect(root)?, manifest, operation, history)
 }
 
-/// Captures a private-journal plan for an existing held root and explicit HOME.
+/// Captures a private-journal plan with explicit HOME and native root witnesses.
 /// This staged engine entry point shares compiled history and reconciliation;
 /// it does not change public CLI routing or vendor-directory eligibility.
 pub(crate) fn plan_private(

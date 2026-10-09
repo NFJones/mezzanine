@@ -371,22 +371,257 @@ fn bootstrap_private_publisher_requires_both_live_lock_domains() {
     }
 }
 
-/// This staged private entry point rejects missing vendor roots before HOME
-/// state creation; it does not manufacture a namespace from path/absence hints
-/// or silently alter the existing public root-materialization contract.
+/// A fresh default OpenCode root shares the initially absent .config ancestor
+/// A shared ancestor replaced after native creation cannot be adopted by name
+/// even when the actual vendor-root inode survives intact. The held creation
+/// receipt must disagree with the replacement's descriptor, preserving partial
+/// setup truthfully without publishing artifacts or entering legacy fallback.
 #[test]
-fn bootstrap_private_publisher_requires_actual_existing_root() {
+fn bootstrap_private_publisher_created_shared_ancestor_swap_is_rejected() {
+    let fixture = Fixture::new();
+    let current = crate::integrations::bootstrap::compiled_manifest("opencode", None).unwrap();
+    let root = fixture.home.join(".config/opencode");
+    let install = plan_private(&root, &fixture.home, &current, Operation::Install).unwrap();
+    let home = fixture.home.clone();
+    let saved = fixture.workspace.join("saved-config");
+    let target = root.clone();
+    *install.publisher.before_private_binding.borrow_mut() = Some(Box::new(move || {
+        let original = fs::metadata(&target).unwrap();
+        fs::rename(home.join(".config"), &saved).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(home.join(".config"))
+            .unwrap();
+        fs::rename(saved.join("opencode"), &target).unwrap();
+        let current = fs::metadata(&target).unwrap();
+        assert_eq!(
+            (original.dev(), original.ino()),
+            (current.dev(), current.ino())
+        );
+    }));
+    let error = install
+        .apply()
+        .expect_err("swapped created prefix cannot be adopted");
+    assert!(error.to_string().contains("without creation proof"));
+    assert!(root.is_dir());
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    assert!(!fixture.home.join(".config/mezzanine").exists());
+}
+
+/// A fresh default OpenCode root shares the initially absent .config ancestor
+/// with private HOME state. Its securely witnessed own creation must permit
+/// first-apply installation without treating that ancestor as foreign drift;
+/// preview stays write-free and no reinspection/retry is needed for success.
+#[test]
+fn bootstrap_private_publisher_fresh_opencode_home_installs_on_first_apply() {
+    let fixture = Fixture::new();
+    let current = crate::integrations::bootstrap::compiled_manifest("opencode", None).unwrap();
+    let root = fixture.home.join(".config/opencode");
+    let before = tree_snapshot(&fixture.workspace);
+    let install = plan_private(&root, &fixture.home, &current, Operation::Install).unwrap();
+    assert_eq!(tree_snapshot(&fixture.workspace), before);
+    install
+        .apply()
+        .expect("own shared .config creation must not invalidate private binding");
+    assert!(root.join("mez-bootstrap-ownership-opencode.json").is_file());
+    assert!(
+        plan_private(&root, &fixture.home, &current, Operation::Install)
+            .unwrap()
+            .changed_paths()
+            .is_empty()
+    );
+    assert!(!root.join(".mez-bootstrap-journal").exists());
+}
+
+/// HOME/base/vendor absence witnesses must reject stale preparation before
+/// materialization or state creation. This includes a swapped managed ancestor
+/// whose final base directory survives intact, and an independently appeared
+/// vendor tree whose bytes cannot become implicit installation ownership.
+#[test]
+fn bootstrap_private_publisher_missing_root_rejects_home_and_absence_drift() {
+    let current = crate::integrations::bootstrap::compiled_manifest("pi", None).unwrap();
+    for drift in [
+        "home",
+        "config-appeared",
+        "config-swapped",
+        "preserved-base",
+        "vendor-appeared",
+        "vendor-ancestor",
+    ] {
+        let fixture = Fixture::new();
+        let missing = fixture.root.join("absent/vendor");
+        if drift == "config-swapped" {
+            fs::DirBuilder::new()
+                .mode(0o755)
+                .create(fixture.home.join(".config"))
+                .unwrap();
+        } else if drift == "preserved-base" {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(fixture.home.join(".config/mezzanine/bootstrap"))
+                .unwrap();
+        }
+        let inspected =
+            plan_private(&missing, &fixture.home, &current, Operation::Install).unwrap();
+        match drift {
+            "home" => {
+                fs::rename(&fixture.home, fixture.workspace.join("saved-home")).unwrap();
+                fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&fixture.home)
+                    .unwrap();
+            }
+            "config-appeared" => fs::create_dir(fixture.home.join(".config")).unwrap(),
+            "config-swapped" => {
+                fs::rename(
+                    fixture.home.join(".config"),
+                    fixture.workspace.join("saved-config"),
+                )
+                .unwrap();
+                fs::DirBuilder::new()
+                    .mode(0o755)
+                    .create(fixture.home.join(".config"))
+                    .unwrap();
+            }
+            "preserved-base" => {
+                fs::rename(
+                    fixture.home.join(".config/mezzanine"),
+                    fixture.workspace.join("saved-mezzanine"),
+                )
+                .unwrap();
+                fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(fixture.home.join(".config/mezzanine"))
+                    .unwrap();
+                fs::rename(
+                    fixture.workspace.join("saved-mezzanine/bootstrap"),
+                    fixture.home.join(".config/mezzanine/bootstrap"),
+                )
+                .unwrap();
+            }
+            "vendor-appeared" => {
+                fs::create_dir_all(&missing).unwrap();
+                fs::write(missing.join("foreign"), b"not installer-owned").unwrap();
+            }
+            "vendor-ancestor" => {
+                fs::rename(&fixture.root, fixture.workspace.join("saved-vendor")).unwrap();
+                fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&fixture.root)
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = tree_snapshot(&fixture.workspace);
+        assert!(inspected.apply().is_err(), "{drift}");
+        assert_eq!(tree_snapshot(&fixture.workspace), before, "{drift}");
+    }
+}
+
+/// Unbound HOME inspection cannot read or lock another root's namespace. A
+/// foreign pending journal and its live private lock remain unchanged while
+/// the new actual root binds a different namespace and installs normally.
+#[test]
+fn bootstrap_private_publisher_missing_root_ignores_other_namespace() {
     let fixture = Fixture::new();
     let current = crate::integrations::bootstrap::compiled_manifest("pi", None).unwrap();
+    let mut foreign =
+        StateDirectory::inspect(&fixture.home, &File::open(&fixture.root).unwrap()).unwrap();
+    foreign.acquire().unwrap();
+    foreign
+        .publish("journal.json", None, Some(b"unknown other-root intent"), 64)
+        .unwrap();
+    let missing = fixture.root.join("absent/vendor");
     let before = tree_snapshot(&fixture.workspace);
+    let install = plan_private(&missing, &fixture.home, &current, Operation::Install).unwrap();
+    assert!(!install.recovery_pending());
+    assert_eq!(tree_snapshot(&fixture.workspace), before);
+    install.apply().unwrap();
+    let actual = StateDirectory::inspect(&fixture.home, &File::open(&missing).unwrap()).unwrap();
+    assert_ne!(actual.fixture_path(), foreign.fixture_path());
+    assert_eq!(
+        foreign.read("journal.json", 64).unwrap().as_deref(),
+        Some(b"unknown other-root intent".as_slice())
+    );
+    assert!(!actual.fixture_path().join("journal.json").exists());
+}
+
+/// A private HOME binding failure may follow already completed directory
+/// creation, but cannot erase its captured witness or fall through to legacy
+/// publication on reuse. Repeated failed acquisition changes nothing further;
+/// restoring the exact original HOME permits safe binding under actual root ID.
+#[test]
+fn bootstrap_private_publisher_failed_binding_keeps_private_authority() {
+    let fixture = Fixture::new();
+    let missing = fixture.root.join("absent/vendor");
+    let mut publisher = Publisher::inspect_private(&missing, &fixture.home).unwrap();
+    let home = fixture.home.clone();
+    let moved = fixture.workspace.join("saved-home");
+    let saved = moved.clone();
+    *publisher.before_private_binding.borrow_mut() = Some(Box::new(move || {
+        fs::rename(&home, &saved).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(&home).unwrap();
+    }));
+    assert!(publisher.acquire_lock().is_err());
     assert!(
-        plan_private(
-            &fixture.root.join("absent"),
-            &fixture.home,
-            &current,
-            Operation::Install
-        )
-        .is_err()
+        missing.is_dir(),
+        "materialized directories remain truthful partial effects"
+    );
+    assert!(!missing.join(".mez-bootstrap-lock").exists());
+    assert!(!fixture.home.join(".config").exists());
+    let before = tree_snapshot(&fixture.workspace);
+    assert!(publisher.acquire_lock().is_err());
+    assert!(
+        publisher
+            .apply(vec![Change {
+                path: "owned".into(),
+                before: None,
+                after: Some(b"wrong".to_vec())
+            }])
+            .is_err()
     );
     assert_eq!(tree_snapshot(&fixture.workspace), before);
+    fs::remove_dir(&fixture.home).unwrap();
+    fs::rename(&moved, &fixture.home).unwrap();
+    publisher.acquire_lock().unwrap();
+    assert!(missing.join(".mez-bootstrap-lock").is_file());
+    assert!(!missing.join(".mez-bootstrap-journal").exists());
+}
+
+/// A missing vendor root remains previewable without creating either tree.
+/// Noop uninstall stays absent; install materializes only its captured suffix
+/// and binds private state to the actual resulting root descriptor, retaining
+/// interrupted private intent and ordinary retry without a hint-derived key.
+#[test]
+fn bootstrap_private_publisher_missing_root_binds_only_after_creation() {
+    let fixture = Fixture::new();
+    let current = crate::integrations::bootstrap::compiled_manifest("pi", None).unwrap();
+    let missing = fixture.root.join("absent/vendor");
+    let before = tree_snapshot(&fixture.workspace);
+    let uninstall = plan_private(&missing, &fixture.home, &current, Operation::Uninstall).unwrap();
+    assert!(uninstall.changed_paths().is_empty());
+    uninstall.apply().unwrap();
+    assert_eq!(tree_snapshot(&fixture.workspace), before);
+    let install = plan_private(&missing, &fixture.home, &current, Operation::Install)
+        .expect("missing private root must remain previewable");
+    assert_eq!(tree_snapshot(&fixture.workspace), before);
+    install.publisher.stop_after.set(Some(1));
+    assert!(install.apply().is_err());
+    let private = StateDirectory::inspect(&fixture.home, &File::open(&missing).unwrap()).unwrap();
+    assert!(private.fixture_path().join("journal.json").is_file());
+    assert!(!missing.join(".mez-bootstrap-journal").exists());
+    let retry = plan_private(&missing, &fixture.home, &current, Operation::Install).unwrap();
+    assert!(retry.recovery_pending());
+    retry.apply().unwrap();
+    assert!(
+        plan_private(&missing, &fixture.home, &current, Operation::Install)
+            .unwrap()
+            .changed_paths()
+            .is_empty()
+    );
+    assert_eq!(
+        fs::read(fixture.root.join("authored")).unwrap(),
+        b"preserved"
+    );
 }

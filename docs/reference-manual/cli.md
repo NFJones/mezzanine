@@ -351,8 +351,16 @@ HOME/config ancestor modes are not rewritten, and protected state remains
 user-private under the Unix owner/mode contract. Captured intermediate directory
 incarnations and the current lock-entry identity are revalidated before retained
 writer ownership is reused; replacing an ancestor or lock fences the old holder.
-An internal explicit-HOME publisher path now integrates this store for existing
-held vendor roots. It retains both legacy and private cooperating lock domains;
+An internal explicit-HOME publisher path now captures existing or absent vendor
+roots and protected HOME/base witnesses without writes. An absent root has no
+speculative namespace or state access; install binds only after actual anchored
+root creation and private HOME/base revalidation. Noop absent uninstall creates
+nothing. Own shared-ancestor creation (such as fresh `.config/opencode`) advances
+the private-base witness only with exact held-descriptor creation receipts, not
+fresh path-based adoption. Replaced or externally appeared ancestors still reject.
+Changed/appeared roots, HOME/config ancestors, and failed binding reject
+without switching to legacy publication; created directories may remain after a
+later binding failure. It retains both legacy and private cooperating lock domains;
 new transactions journal privately, and compiled-authorized legacy recovery copies
 exact original bytes durably before removing the old journal. Identical dual copies
 after a copy-boundary interruption can resume; conflicting copies and changed
@@ -360,7 +368,7 @@ inspected source locations reject without choosing a winner. Final journal remov
 checks exact accepted bytes/location. The serialized journal remains version 2;
 location is inspected evidence, not new artifact authority.
 This path is **not yet wired into normal bootstrap**: public CLI routing still uses
-the existing vendor-root lock/journal. Absent-root binding, private receipts/archives,
+the existing vendor-root lock/journal. Private receipts/archives,
 ordinary-directory eligibility and edited-file preservation remain unfinished.
 No new user setup or configuration option is introduced by this checkpoint.
 

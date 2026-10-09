@@ -7,14 +7,14 @@
 //! only when every current preimage equals one of those states; foreign edits
 //! leave the journal intact. This is not atomic CAS against arbitrary writers.
 //! No symlink or special node is followed, and no executable is launched.
-//! The explicit existing-root private path retains both cooperating lock domains
+//! The explicit private path retains both cooperating lock domains
 //! and migrates only compiled-authorized exact legacy intent. Identical copies
 //! qualify interrupted migration; disagreements/location drift fence planning.
 //! Public CLI routing and vendor eligibility are unchanged by this staged path.
 
 use super::reconciliation::publication_path;
 use super::root_directory::RootDirectory;
-use super::state_directory::StateDirectory;
+use super::state_directory::{StateDirectory, StateHome};
 use crate::error::{MezError, Result};
 use rustix::fs::{
     AtFlags, FlockOperation, Mode, OFlags, RenameFlags, flock, mkdirat, openat, renameat,
@@ -75,6 +75,7 @@ pub(super) struct Publisher {
     directory: RootDirectory,
     _lock: Option<File>,
     state: Option<StateDirectory>,
+    unbound_home: Option<StateHome>,
     /// Task-local publication barrier; no shared fault state.
     #[cfg(test)]
     pub(super) stop_after: std::cell::Cell<Option<usize>>,
@@ -84,6 +85,9 @@ pub(super) struct Publisher {
     /// Task-local journal replacement seam after effects and before settlement.
     #[cfg(test)]
     pub(super) before_journal_removal: std::cell::RefCell<Option<Box<dyn FnOnce()>>>,
+    /// Task-local drift after root materialization but before private binding.
+    #[cfg(test)]
+    pub(super) before_private_binding: std::cell::RefCell<Option<Box<dyn FnOnce()>>>,
 }
 
 /// Reads a regular single-link owned file promptly, bounded before and during I/O.
@@ -129,26 +133,28 @@ impl Publisher {
             directory: RootDirectory::inspect(root)?,
             _lock: None,
             state: None,
+            unbound_home: None,
             #[cfg(test)]
             stop_after: std::cell::Cell::new(None),
             #[cfg(test)]
             stop_after_migration_copy: std::cell::Cell::new(false),
             #[cfg(test)]
             before_journal_removal: std::cell::RefCell::new(None),
+            #[cfg(test)]
+            before_private_binding: std::cell::RefCell::new(None),
         })
     }
 
-    /// Captures private state for an actual held existing vendor root without
-    /// writing either tree. This staged entry point takes explicit HOME and
-    /// retains vendor eligibility; public CLI/absent-root routing is not changed.
+    /// Captures private HOME/base state without writing either tree. Existing
+    /// vendor roots bind immediately; absent roots retain a key-free witness
+    /// until publication materializes the actual root. Public CLI is unchanged.
     pub(super) fn inspect_private(root: &Path, home: &Path) -> Result<Self> {
         let mut publisher = Self::inspect(root)?;
         if publisher.directory.is_missing() {
-            return Err(MezError::invalid_args(
-                "bootstrap private publisher requires existing root",
-            ));
+            publisher.unbound_home = Some(StateHome::inspect(home)?);
+        } else {
+            publisher.state = Some(StateDirectory::inspect(home, publisher.directory.file()?)?);
         }
-        publisher.state = Some(StateDirectory::inspect(home, publisher.directory.file()?)?);
         Ok(publisher)
     }
 
@@ -176,7 +182,16 @@ impl Publisher {
         if self._lock.is_some() {
             return self.require_lock();
         }
-        self.directory.materialize(&self.root)?;
+        let created = self.directory.materialize_witnessed(&self.root)?;
+        #[cfg(test)]
+        if let Some(barrier) = self.before_private_binding.borrow_mut().take() {
+            barrier();
+        }
+        if let Some(home) = &mut self.unbound_home {
+            home.accept_created(&created)?;
+            self.state = Some(home.bind(self.directory.file()?)?);
+            self.unbound_home = None;
+        }
         if let Some(state) = &mut self.state {
             state.acquire()?;
         }
@@ -324,7 +339,11 @@ impl Publisher {
 
     /// Revalidates held root spelling before publishing through its descriptors.
     fn validate_root(&self) -> Result<()> {
-        self.directory.validate(&self.root)
+        self.directory.validate(&self.root)?;
+        if let Some(home) = &self.unbound_home {
+            home.validate()?;
+        }
+        Ok(())
     }
 
     /// Resolves a relative parent with no-follow handles, optionally creating it.

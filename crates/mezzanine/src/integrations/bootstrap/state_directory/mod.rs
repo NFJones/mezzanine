@@ -18,7 +18,7 @@
 //! executable attestation. Preimage checks plus rename are not external-writer
 //! CAS. Partial directory creation may remain after failure; no tree sweeping.
 
-use super::root_directory::{RootDirectory, walk};
+use super::root_directory::{CreatedDirectories, RootDirectory, walk};
 use crate::error::{MezError, Result};
 use rustix::fs::{
     AtFlags, FlockOperation, Mode, OFlags, RenameFlags, flock, openat, renameat, renameat_with,
@@ -33,6 +33,95 @@ use std::path::{Path, PathBuf};
 const LOCK: &str = "lock";
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 const SUFFIX: [&str; 3] = [".config", "mezzanine", "bootstrap"];
+
+/// Read-only HOME/config-base witness captured before a vendor root exists.
+/// It owns no namespace/key and cannot read or publish another root's state.
+pub(super) struct StateHome {
+    home: PathBuf,
+    anchor: File,
+    chain: Vec<File>,
+    path: PathBuf,
+    base: RootDirectory,
+}
+
+impl StateHome {
+    /// Captures exact protected HOME/base incarnations or first absence without
+    /// creating state, deriving a speculative key, or acquiring writer ownership.
+    pub(super) fn inspect(home: &Path) -> Result<Self> {
+        let anchor = open_home(home)?;
+        let chain = validate_chain(&anchor, None)?;
+        let path = SUFFIX
+            .iter()
+            .fold(home.to_path_buf(), |path, part| path.join(part));
+        let owner = Self {
+            home: home.into(),
+            anchor,
+            chain,
+            base: RootDirectory::inspect(&path)?,
+            path,
+        };
+        owner.validate()?;
+        Ok(owner)
+    }
+
+    /// Revalidates every originally existing protected prefix and the captured
+    /// base/absence witness; appeared state cannot be implicitly adopted.
+    pub(super) fn validate(&self) -> Result<()> {
+        revalidate_chain(&self.home, &self.anchor, &self.chain, None)?;
+        self.base.validate(&self.path)
+    }
+
+    /// Advances absence only for exact shared ancestors created by the held
+    /// vendor-root materializer. Every new protected prefix needs its sealed
+    /// creation descriptor, while all prior incarnations remain immutable.
+    /// Candidate adoption occurs only after complete new witness validation.
+    pub(super) fn accept_created(&mut self, created: &CreatedDirectories) -> Result<()> {
+        let current = revalidate_chain(&self.home, &self.anchor, &self.chain, None)?;
+        if current.len() == self.chain.len() {
+            return self.validate();
+        }
+        let mut spelling = self.home.clone();
+        for (index, file) in current.iter().enumerate() {
+            spelling.push(SUFFIX[index]);
+            if index >= self.chain.len() && !created.matches(&spelling, file)? {
+                return Err(MezError::conflict(
+                    "bootstrap private state ancestor appeared without creation proof",
+                ));
+            }
+        }
+        let candidate = Self {
+            home: self.home.clone(),
+            anchor: self.anchor.try_clone()?,
+            chain: current,
+            path: self.path.clone(),
+            base: RootDirectory::inspect(&self.path)?,
+        };
+        candidate.validate()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Binds a namespace from an actual held vendor directory only after HOME
+    /// revalidation. Failed binding leaves this witness reusable but fail-closed;
+    /// the returned namespace independently retains the complete exact chain.
+    pub(super) fn bind(&self, vendor: &File) -> Result<StateDirectory> {
+        self.validate()?;
+        let namespace = namespace(vendor)?;
+        let chain = revalidate_chain(&self.home, &self.anchor, &self.chain, Some(&namespace))?;
+        self.base.validate(&self.path)?;
+        let path = self.path.join(namespace);
+        let owner = StateDirectory {
+            home: self.home.clone(),
+            anchor: self.anchor.try_clone()?,
+            chain,
+            directory: RootDirectory::inspect(&path)?,
+            path,
+            lock: None,
+        };
+        owner.validate()?;
+        Ok(owner)
+    }
+}
 
 /// Inspected private namespace with optional acquired cooperating-writer lock.
 /// HOME and namespace descriptors fence relocation/replacement independently.
@@ -75,10 +164,10 @@ fn open_home(home: &Path) -> Result<File> {
 
 /// Traverses only the fixed managed suffix and derived namespace, qualifying
 /// every existing parent. NOENT alone denotes absence; no symlink is followed.
-fn validate_chain(anchor: &File, namespace: &str) -> Result<Vec<File>> {
+fn validate_chain(anchor: &File, namespace: Option<&str>) -> Result<Vec<File>> {
     let mut directory = anchor.try_clone()?;
     let mut chain = Vec::new();
-    for (index, part) in SUFFIX.into_iter().chain([namespace]).enumerate() {
+    for (index, part) in SUFFIX.into_iter().chain(namespace).enumerate() {
         let child = match openat(
             &directory,
             part,
@@ -94,6 +183,39 @@ fn validate_chain(anchor: &File, namespace: &str) -> Result<Vec<File>> {
         directory = child;
     }
     Ok(chain)
+}
+
+/// Reopens and compares protected HOME and every retained prefix descriptor.
+/// Optional actual namespace extension never substitutes an existing ancestor;
+/// callers separately check their exact base/final absence witness.
+fn revalidate_chain(
+    home: &Path,
+    anchor: &File,
+    captured: &[File],
+    namespace: Option<&str>,
+) -> Result<Vec<File>> {
+    let current = open_home(home)?;
+    let held = anchor.metadata()?;
+    let observed = current.metadata()?;
+    if held.dev() != observed.dev() || held.ino() != observed.ino() {
+        return Err(MezError::conflict("bootstrap private state HOME replaced"));
+    }
+    let current = validate_chain(&current, namespace)?;
+    if current.len() < captured.len() {
+        return Err(MezError::conflict(
+            "bootstrap private state ancestor disappeared",
+        ));
+    }
+    for (held, observed) in captured.iter().zip(&current) {
+        let held = held.metadata()?;
+        let observed = observed.metadata()?;
+        if held.dev() != observed.dev() || held.ino() != observed.ino() {
+            return Err(MezError::conflict(
+                "bootstrap private state ancestor replaced",
+            ));
+        }
+    }
+    Ok(current)
 }
 
 /// Derives an opaque shared namespace from actual held vendor-root metadata.
@@ -177,23 +299,7 @@ impl StateDirectory {
     /// Inspects a fixed HOME-relative namespace for a held existing vendor root.
     /// Does not create HOME/config/state directories, files or writer ownership.
     pub(super) fn inspect(home: &Path, vendor: &File) -> Result<Self> {
-        let anchor = open_home(home)?;
-        let namespace = namespace(vendor)?;
-        let chain = validate_chain(&anchor, &namespace)?;
-        let path = SUFFIX
-            .iter()
-            .fold(home.to_path_buf(), |path, part| path.join(part))
-            .join(namespace);
-        let owner = Self {
-            home: home.into(),
-            anchor,
-            chain,
-            directory: RootDirectory::inspect(&path)?,
-            path,
-            lock: None,
-        };
-        owner.validate()?;
-        Ok(owner)
+        StateHome::inspect(home)?.bind(vendor)
     }
 
     /// Revalidates HOME incarnation, every protected ancestor, and the exact
@@ -225,12 +331,6 @@ impl StateDirectory {
     /// An owned suffix may extend it only after materialization has updated the
     /// independent absence witness; replacing any existing prefix still fails.
     fn current_chain(&self) -> Result<Vec<File>> {
-        let current = open_home(&self.home)?;
-        let held = self.anchor.metadata()?;
-        let observed = current.metadata()?;
-        if held.dev() != observed.dev() || held.ino() != observed.ino() {
-            return Err(MezError::conflict("bootstrap private state HOME replaced"));
-        }
         let namespace = self
             .path
             .file_name()
@@ -238,21 +338,7 @@ impl StateDirectory {
             .ok_or_else(|| {
                 MezError::invalid_state("bootstrap private state namespace unavailable")
             })?;
-        let current = validate_chain(&current, namespace)?;
-        if current.len() < self.chain.len() {
-            return Err(MezError::conflict(
-                "bootstrap private state ancestor disappeared",
-            ));
-        }
-        for (held, observed) in self.chain.iter().zip(&current) {
-            let held = held.metadata()?;
-            let observed = observed.metadata()?;
-            if held.dev() != observed.dev() || held.ino() != observed.ino() {
-                return Err(MezError::conflict(
-                    "bootstrap private state ancestor replaced",
-                ));
-            }
-        }
+        let current = revalidate_chain(&self.home, &self.anchor, &self.chain, Some(namespace))?;
         self.directory.validate(&self.path)?;
         Ok(current)
     }
