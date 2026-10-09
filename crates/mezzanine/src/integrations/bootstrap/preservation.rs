@@ -13,15 +13,36 @@ use sha2::{Digest, Sha256};
 
 /// Recomputes current private repairs and required archives for edited artifacts.
 /// Caller qualifies compiled receipts and checks vendor/archive observations.
-/// `enabled` admits current private semantics; legacy journals retain strict rules.
+/// Journal versions admit only their frozen private semantics; new Codex shared
+/// migration requires v5. No version grants authority outside compiled receipts.
 pub(super) fn reconcile_preserving(
     harness: &str,
     path: &str,
     current: Option<&[u8]>,
     previous: Option<&Artifact>,
     desired: Option<&Artifact>,
-    enabled: bool,
+    journal_version: Option<u32>,
 ) -> Result<(Option<Vec<u8>>, Option<String>)> {
+    let enabled = journal_version.is_some_and(|version| version >= 4);
+    if journal_version.is_some_and(|version| version >= 5) {
+        if harness == "codex"
+            && path == "hooks.json"
+            && matches!(desired, Some(Artifact::JsonArrayEntries { .. }) | None)
+            && let Some(previous) = previous
+            && let Some(shared) = super::codex_artifact::historical_shared_ownership(previous)?
+        {
+            return Ok((
+                super::shared_arrays::reconcile_arrays(current, Some(&shared), desired, true)?,
+                None,
+            ));
+        }
+        if matches!(previous, Some(Artifact::JsonArrayEntries { .. })) {
+            return Ok((
+                super::shared_arrays::reconcile_arrays(current, previous, desired, true)?,
+                None,
+            ));
+        }
+    }
     if enabled && let Some(Artifact::JsonArrayEntry { pointer, .. }) = previous {
         return Ok((
             reconcile_array(current, previous, desired, pointer, true)?,

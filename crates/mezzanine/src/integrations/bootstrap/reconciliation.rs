@@ -25,6 +25,18 @@ pub(crate) enum Artifact {
         pointer: String,
         value: serde_json::Value,
     },
+    /// Bounded exact members in distinct arrays of one shared strict-JSON file.
+    JsonArrayEntries { entries: Vec<JsonArrayMember> },
+}
+
+/// One exact registration; neither its containing array nor file is owned.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct JsonArrayMember {
+    /// Object-only pointer to the containing array.
+    pub(crate) pointer: String,
+    /// Complete exact owned member, never a command-substring match.
+    pub(crate) value: serde_json::Value,
 }
 
 /// One bounded adapter-owned destination, relative to an explicit root.
@@ -47,6 +59,7 @@ pub(crate) fn validate(entry: &Entry) -> Result<()> {
             pointer_parts(pointer)?;
             Ok(())
         }
+        Artifact::JsonArrayEntries { entries } => validate_members(entries),
         _ => Ok(()),
     }
 }
@@ -69,7 +82,7 @@ pub(super) fn publication_path(path: &str) -> Result<()> {
 }
 
 /// Resolves object-only JSON pointer components, rejecting ambiguous escapes.
-fn pointer_parts(pointer: &str) -> Result<Vec<String>> {
+pub(super) fn pointer_parts(pointer: &str) -> Result<Vec<String>> {
     if !pointer.starts_with('/') || pointer.len() > 1024 {
         return Err(MezError::invalid_args("bootstrap JSON pointer unavailable"));
     }
@@ -101,6 +114,27 @@ fn pointer_parts(pointer: &str) -> Result<Vec<String>> {
         return Err(MezError::invalid_args("bootstrap JSON pointer too deep"));
     }
     Ok(parts)
+}
+
+/// Rejects unbounded, duplicate or overlapping array destinations before edits.
+pub(super) fn validate_members(entries: &[JsonArrayMember]) -> Result<()> {
+    if entries.is_empty() || entries.len() > 16 {
+        return Err(MezError::invalid_args(
+            "bootstrap shared array member bounds",
+        ));
+    }
+    let mut paths: Vec<Vec<String>> = Vec::new();
+    for entry in entries {
+        let parts = pointer_parts(&entry.pointer)?;
+        if paths
+            .iter()
+            .any(|path| path.starts_with(&parts) || parts.starts_with(path))
+        {
+            return Err(MezError::invalid_args("bootstrap shared arrays overlap"));
+        }
+        paths.push(parts);
+    }
+    Ok(())
 }
 
 /// Produces replacement bytes, or `None` for an owned-file deletion.
@@ -148,6 +182,9 @@ pub(crate) fn reconcile(
         }
         Artifact::JsonArrayEntry { pointer, .. } => {
             reconcile_array(current, previous, desired, pointer, false)
+        }
+        Artifact::JsonArrayEntries { .. } => {
+            super::shared_arrays::reconcile_arrays(current, previous, desired, false)
         }
         Artifact::JsonEntry { pointer, .. } => {
             let parts = pointer_parts(pointer)?;

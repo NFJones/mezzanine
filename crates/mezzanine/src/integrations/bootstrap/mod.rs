@@ -114,6 +114,8 @@ use crate::protocol::strict_json;
     reason = "release-qualified vendor adapters consume the common installer"
 )]
 pub(crate) mod reconciliation;
+/// Bounded multi-array planning reuses exact-member ownership, not whole files.
+mod shared_arrays;
 
 /// Selects compiled best-effort artifacts. Version text is observation metadata,
 /// not an installation gate; artifact identity remains stable across versions.
@@ -135,6 +137,9 @@ pub(crate) fn compiled_manifest(
 /// closed. The installer owns read-only overlays and locked reconciliation;
 /// this directory supplies immutable artifact authority only.
 pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer::Manifest> {
+    if manifest == &codex_artifact::manifest() {
+        return vec![codex_artifact::historical_manifest()];
+    }
     let (current, revision, paths) = match manifest.harness.as_str() {
         "pi" => (
             pi_artifact::candidate_manifest(),

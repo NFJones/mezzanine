@@ -13,6 +13,8 @@
 //! Every compiled public CLI intent uses the private owner with ordinary vendor
 //! OS access. Version 4 qualifies generated-helper archives and live preservation
 //! dependencies; versions 2/3 retain original strict destination semantics.
+//! Version 5 additionally admits bounded multi-array ownership and receipt-proven
+//! Codex whole-file-to-shared migration; genuine v2-v4 targets remain frozen.
 
 use super::reconciliation::publication_path;
 use super::root_directory::RootDirectory;
@@ -678,7 +680,7 @@ impl Publisher {
         })?;
         let root = self.directory.file()?.metadata()?;
         self.validate_root()?;
-        if !matches!(journal.version, 2..=4)
+        if !matches!(journal.version, 2..=5)
             || journal.root_device != root.dev()
             || journal.root_inode != root.ino()
         {
@@ -772,7 +774,7 @@ impl Publisher {
         self.validate_changes(&changes, false)?;
         let root = self.directory.file()?.metadata()?;
         let bytes = serde_json::to_vec(&Journal {
-            version: if self.uses_private_state() { 4 } else { 2 },
+            version: if self.uses_private_state() { 5 } else { 2 },
             root_device: root.dev(),
             root_inode: root.ino(),
             intent,

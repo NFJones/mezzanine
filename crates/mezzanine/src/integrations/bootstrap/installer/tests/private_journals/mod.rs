@@ -6,6 +6,7 @@ use std::fs::File;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 
 mod archives;
+mod codex_hooks;
 mod permissions;
 mod receipts;
 

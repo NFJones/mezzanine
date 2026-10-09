@@ -231,6 +231,18 @@ fn plan_with_publisher(
     operation: Operation,
     history: &[Manifest],
 ) -> Result<Plan> {
+    if !publisher.uses_private_state()
+        && manifest.entries.iter().any(|entry| {
+            matches!(
+                entry.artifact,
+                super::reconciliation::Artifact::JsonArrayEntries { .. }
+            )
+        })
+    {
+        return Err(MezError::invalid_args(
+            "bootstrap multi-array ownership requires private publication",
+        ));
+    }
     let pending = publisher.inspect_pending_authorized(|version, value, changes| {
         authorize_recovery(&publisher, manifest, history, version, value, changes)
     })?;
@@ -351,7 +363,7 @@ fn plan_with_publisher(
             before.as_deref(),
             old.get(&path).copied(),
             desired.get(&path).copied(),
-            receipt_location == ReceiptLocation::Private,
+            (receipt_location == ReceiptLocation::Private).then_some(5),
         )?;
         if let Some(archive) = archive {
             archive_requirements.insert(path.clone(), archive.clone());
@@ -719,6 +731,24 @@ fn authorize_recovery(
     }
     // Compiled membership above is authority; the journal only identifies
     // which original immutable target must finish before current refresh.
+    if version < 5
+        && std::iter::once(&intent.manifest)
+            .chain(intent.previous.iter())
+            .chain(intent.previous_private.iter())
+            .chain(intent.previous_vendor.iter())
+            .any(|source| {
+                source.entries.iter().any(|entry| {
+                    matches!(
+                        entry.artifact,
+                        super::reconciliation::Artifact::JsonArrayEntries { .. }
+                    )
+                })
+            })
+    {
+        return Err(MezError::forbidden(
+            "bootstrap historical journal cannot authorize multi-array ownership",
+        ));
+    }
     let target = &intent.manifest;
     validate_manifest(target)?;
     if let Some(old) = &intent.previous {
@@ -786,7 +816,7 @@ fn authorize_recovery(
                 change.before.as_deref(),
                 prior,
                 next,
-                version >= 4,
+                Some(version),
             )?;
             if after != change.after {
                 return Err(MezError::forbidden("recovery artifact payload mismatch"));
@@ -888,7 +918,7 @@ fn authorize_recovery(
                 change.before.as_deref(),
                 prior,
                 next,
-                version >= 4,
+                Some(version),
             )?;
             if after != change.after {
                 return Err(MezError::forbidden("recovery artifact payload mismatch"));

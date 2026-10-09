@@ -109,10 +109,18 @@ or certify a live Codex process. Its release reference is
 That reference is evidence, not a compatibility gate. The fixed internal helper
 normalizes at most 64 KiB/250 ms of stdin and remains neutral on unavailable
 telemetry; it never starts Codex, initializes a primary or bypasses vendor trust.
-The current whole-file hook candidate conflicts on authored files rather than
-overwriting them. Independently resolvable ordinary-command helper admission and
-shared hook-array migration remain unfinished. No token expense is inferred from
-hooks or ambiguous context/cumulative structured samples.
+The revision-2 hook candidate owns only exact compiled members of five lifecycle
+event arrays in shared `hooks.json`. Authored callbacks/matchers/timeouts, unrelated
+events, metadata, disabled policy and `config.toml` survive install and uninstall.
+Exact receipt-owned duplicates collapse at the first position; unreceipted matches
+or edited/missing owned members conflict. Recognized revision-1 whole-file receipts
+migrate to shared ownership during current reconciliation without deleting authored
+additions; current uninstall retains the containing document. Strict-JSON changes
+may reformat whitespace, but noops are byte-exact and JSONC comments are not stripped.
+Independently resolvable ordinary-command helper admission remains unfinished: these
+entries still use the historical helper environment gate. Ownership installation is
+not proof of loaded/enrolled hooks. No token expense is inferred from hooks or
+ambiguous context/cumulative structured samples.
 
 The best-effort OpenCode component projects settled assistant-message snapshots
 only for an explicitly bound session. Its released producer separates uncached
@@ -428,6 +436,15 @@ shared `.config` is a pinned routing ancestor only. Unsafe legacy installer node
 private state still reject; actual filesystem denial is not bypassed or redirected.
 No additional enable command, private-root override, or configuration option is
 required for this private-journal routing.
+
+Current private journals use version 5, adding bounded multi-array ownership and
+exact compiled Codex whole-file receipt projection while retaining v4 archive
+dependencies, finite limits and preimage/root/source fences. Genuine v2-v4 recovery
+keeps original target semantics, including old whole-file Codex deletion. Older
+version labels cannot authorize new shared manifests or migration payloads; unknown
+future versions reject. The legacy vendor-root publisher cannot emit new multi-array
+intent: public bootstrap uses the private owner. Receipt payload schema remains 1;
+there is no Mezzanine configuration schema change.
 
 ### Normalized observational hook helper
 

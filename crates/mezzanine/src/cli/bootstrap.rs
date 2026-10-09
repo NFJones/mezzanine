@@ -24,7 +24,7 @@ pub(super) struct BootstrapCliArgs {
     /// Check accepted ownership without publishing artifacts.
     #[arg(long, conflicts_with_all = ["uninstall", "recover"])]
     check: bool,
-    /// Remove receipted artifacts only when present owned content is unchanged.
+    /// Remove qualified owned integration entries, preserving shared siblings/archived edits.
     #[arg(long, conflicts_with = "recover")]
     uninstall: bool,
     /// Explicitly finish an already accepted publication journal.
@@ -380,6 +380,77 @@ mod tests {
         let mut output = Vec::new();
         run_at_home(parsed.args, CliOutputFormat::Json, &mut output, home)?;
         Ok(serde_json::from_slice(&output).unwrap())
+    }
+
+    /// CLI result labels derive from accepted ownership and actual publication,
+    /// not exit success or runtime activation. Read-only previews/checks preserve
+    /// both trees; repairs report archived destinations without exposing bytes.
+    /// Historical upgrade and pending recovery use the same production owners.
+    /// Public Codex bootstrap merges shared authored callbacks through the same
+    /// private owner as its previews. Historical ownership upgrade can change only
+    /// the receipt while retaining byte-exact authored JSON and disabled config.
+    /// Installation reports unverified runtime activation, never token coverage.
+    #[test]
+    fn bootstrap_cli_codex_shared_hooks_preserve_authored_state_and_history() {
+        use crate::integrations::bootstrap::installer::{Operation, plan_private};
+        #[derive(Parser)]
+        struct Fixture {
+            #[command(flatten)]
+            args: BootstrapCliArgs,
+        }
+        let home = PrivateHome::new();
+        let root = home.0.join("vendor");
+        std::fs::create_dir(&root).unwrap();
+        let input = br#"{ "description":"authored", "hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"user","timeout":7}],"matcher":"authored"}]}, "enabled":false }"#;
+        std::fs::write(root.join("hooks.json"), input).unwrap();
+        std::fs::write(root.join("config.toml"), b"[features]\nhooks = false\n").unwrap();
+        let invoke = |flags: &[&str]| {
+            let mut arguments = vec!["fixture", "codex", "--root", root.to_str().unwrap()];
+            arguments.extend_from_slice(flags);
+            let args = Fixture::try_parse_from(arguments).unwrap().args;
+            let mut output = Vec::new();
+            run_at_home(args, CliOutputFormat::Json, &mut output, &home.0).unwrap();
+            serde_json::from_slice::<serde_json::Value>(&output).unwrap()
+        };
+        let before = tree_snapshot(&home.0);
+        assert_eq!(invoke(&["--dry-run"])["planned_outcome"], "installed");
+        assert_eq!(tree_snapshot(&home.0), before);
+        assert_eq!(invoke(&[])["result"], "installed");
+        assert_eq!(invoke(&[])["result"], "unchanged");
+        assert_eq!(
+            invoke(&["--check"])["runtime_verification"],
+            "not-performed"
+        );
+        assert_eq!(invoke(&["--uninstall"])["result"], "uninstalled");
+        let after: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("hooks.json")).unwrap()).unwrap();
+        assert_eq!(
+            after["hooks"]["SessionStart"],
+            serde_json::from_slice::<serde_json::Value>(input).unwrap()["hooks"]["SessionStart"]
+        );
+        assert_eq!(after["enabled"], false);
+        assert_eq!(
+            std::fs::read(root.join("config.toml")).unwrap(),
+            b"[features]\nhooks = false\n"
+        );
+
+        std::fs::remove_file(root.join("hooks.json")).unwrap();
+        let current = crate::integrations::bootstrap::compiled_manifest("codex", None).unwrap();
+        let old = crate::integrations::bootstrap::compiled_history(&current)
+            .pop()
+            .unwrap();
+        plan_private(&root, &home.0, &old, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        let bytes = std::fs::read(root.join("hooks.json")).unwrap();
+        let output = invoke(&[]);
+        assert_eq!(output["result"], "upgraded");
+        assert_eq!(
+            output["changed_paths"],
+            serde_json::json!(["@mez-bootstrap-receipt/codex"])
+        );
+        assert_eq!(std::fs::read(root.join("hooks.json")).unwrap(), bytes);
     }
 
     /// CLI result labels derive from accepted ownership and actual publication,

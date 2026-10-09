@@ -808,6 +808,22 @@ Archive collision/failure/loss MUST prevent future file publication or retain pe
 intent after already confirmed effects. Versions 2/3 MUST NOT authorize archive effects
 or relaxed edited-file reconciliation; their original target semantics remain frozen.
 The v4 transaction is bounded to 32 effects with finite payload/journal limits.
+Current private publication MUST use journal version 5 for bounded multi-array
+ownership and Codex receipt-qualified whole-file-to-shared migration. Version 5
+MUST retain v4 archive dependencies/bounds and exact compiled recovery authority.
+Genuine v2-v4 targets MUST retain original effects; new multi-array manifests or
+new migration payloads relabelled as older journals MUST reject without mutation.
+One shared artifact MAY own at most 16 distinct nonoverlapping object-only array
+pointers with exact complete member values. First install MAY create absent object
+ancestors only for those new registrations; wrong types, missing owned members,
+duplicate keys and unreceipted exact matches MUST remain conflicts. Changed strict
+JSON MAY reformat whitespace; unchanged documents MUST remain byte-exact.
+Codex revision-1 whole-file ownership MUST be frozen independently of the current
+candidate. Normal current private reconciliation MAY project only its exact
+compiled receipted members, preserving authored sibling fields/order, unrelated
+events, metadata, disabled policy and config.toml. Current uninstall MUST retain
+hooks.json and shared containers. Genuine historical whole-file uninstall recovery
+MUST still finish its original deletion, not reinterpret accepted v4 intent.
 Missing shared JSON ownership
 MUST NOT inherit private-file repair rules. Recovery MUST recompute authorized
 repairs and reject omitted required artifacts rather than trust journal payloads.
