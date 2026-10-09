@@ -504,6 +504,104 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
+    /// Current and recognized historical private files may be missing without
+    /// blocking reinstall/upgrade or uninstall. Preview does not create absent
+    /// parents, actual repair has recoverable intent, and forged omission of a
+    /// missing required file is still refused. Shared documents and authored
+    /// siblings are not mistaken for private-file absence or deletion authority.
+    #[test]
+    fn bootstrap_installer_repairs_missing_private_files_and_recovers() {
+        use super::super::reconciliation::Artifact;
+        for harness in ["pi", "opencode"] {
+            let current = super::super::compiled_manifest(harness, None).unwrap();
+            let oldest = super::super::compiled_history(&current).pop().unwrap();
+            for target in [&oldest, &current] {
+                for operation in [Operation::Install, Operation::Uninstall] {
+                    let root = std::env::temp_dir().join(format!(
+                        "mez-missing-private-{}",
+                        crate::storage::token_usage::new_token_usage_event_id()
+                    ));
+                    fs::create_dir(&root).unwrap();
+                    fs::write(root.join("authored"), b"preserved").unwrap();
+                    plan(&root, target, Operation::Install)
+                        .unwrap()
+                        .apply()
+                        .unwrap();
+                    for entry in &target.entries {
+                        if matches!(entry.artifact, Artifact::File { .. }) {
+                            fs::remove_file(root.join(&entry.path)).unwrap();
+                        }
+                    }
+                    // Remove empty generated leaf directories, not any authored
+                    // sibling or shared document; preview must keep them absent.
+                    for entry in &target.entries {
+                        let parent = root.join(&entry.path).parent().unwrap().to_path_buf();
+                        if parent != root
+                            && parent.is_dir()
+                            && fs::read_dir(&parent).unwrap().next().is_none()
+                        {
+                            fs::remove_dir(parent).unwrap();
+                        }
+                    }
+                    let before = tree_snapshot(&root);
+                    let repair = plan(&root, &current, operation).unwrap();
+                    assert_eq!(tree_snapshot(&root), before);
+                    assert!(!repair.changed_paths().is_empty());
+                    if matches!(operation, Operation::Install) {
+                        repair.publisher.stop_after.set(Some(1));
+                        assert!(repair.apply().is_err());
+                        let journal_path = root.join(".mez-bootstrap-journal");
+                        let journal = fs::read(&journal_path).unwrap();
+                        let mut forged: serde_json::Value =
+                            serde_json::from_slice(&journal).unwrap();
+                        let missing = current
+                            .entries
+                            .iter()
+                            .find(|entry| {
+                                matches!(entry.artifact, Artifact::File { .. })
+                                    && !root.join(&entry.path).exists()
+                            })
+                            .expect(
+                                "repair interruption leaves a required private artifact absent",
+                            );
+                        let changes = forged["changes"].as_array_mut().unwrap();
+                        let count = changes.len();
+                        changes.retain(|change| change["path"] != missing.path);
+                        assert_eq!(changes.len(), count - 1);
+                        fs::write(&journal_path, serde_json::to_vec(&forged).unwrap()).unwrap();
+                        let unchanged = tree_snapshot(&root);
+                        assert!(preview_recovery(&root, &current).is_err());
+                        assert!(plan(&root, &current, operation).is_err());
+                        assert_eq!(tree_snapshot(&root), unchanged);
+                        fs::write(&journal_path, &journal).unwrap();
+                        plan(&root, &current, operation).unwrap().apply().unwrap();
+                        for entry in &current.entries {
+                            if let Artifact::File { bytes } = &entry.artifact {
+                                assert_eq!(fs::read(root.join(&entry.path)).unwrap(), *bytes);
+                            }
+                        }
+                    } else {
+                        repair.apply().unwrap();
+                        assert!(
+                            !root
+                                .join(format!("mez-bootstrap-ownership-{harness}.json"))
+                                .exists()
+                        );
+                    }
+                    assert_eq!(fs::read(root.join("authored")).unwrap(), b"preserved");
+                    assert!(!root.join(".mez-bootstrap-journal").exists());
+                    assert!(
+                        plan(&root, &current, operation)
+                            .unwrap()
+                            .changed_paths()
+                            .is_empty()
+                    );
+                    fs::remove_dir_all(root).unwrap();
+                }
+            }
+        }
+    }
+
     /// Captures temporary fixture tree bytes and modes without following links.
     /// Sorted relative entries qualify preview nonmutation, including absent
     /// lock/stage files and parent creation, not merely journal byte equality.

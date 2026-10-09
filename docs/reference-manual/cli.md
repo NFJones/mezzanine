@@ -318,8 +318,14 @@ remain exact. No vendor probing or cwd/focus/project ancestor discovery occurs.
 The six root policies do not imply six compiled adapters: absent adapter diagnostics
 still perform no root discovery or mutation. Missing selected roots now support
 read-only preview and installation-only anchored creation. Bare install and
-`--dry-run` now use these owners; missing/edited owned repair/preservation and
-broader adapter activation remain work.
+`--dry-run` now use these owners. Missing private whole-file artifacts under a
+recognized receipt can be recreated by ordinary install, including upgrades;
+already absent private files do not block uninstall. Check/dry-run captures
+absence without creating artifact parents, and apply revalidates it before
+no-replace publication. Present edited or unreceipted content still conflicts,
+even if it matches generated current bytes; missing shared JSON ownership is
+not treated as private-file absence. Durable edited-file preservation and broader
+adapter activation remain work.
 Explicit `--recover` (and `--recover --dry-run`) now recognizes exact same-harness
 historical targets from compiled artifact history. Recovery finishes the original
 install/uninstall target's immutable bytes and receipt, never substitutes the

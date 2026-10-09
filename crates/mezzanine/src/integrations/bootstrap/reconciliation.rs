@@ -1,8 +1,9 @@
 //! Pure exact-entry ownership planning for install, upgrade and uninstall.
 //!
 //! Vendor configuration remains opaque except the adapter's exact JSON pointer.
-//! Unknown or edited ownership is a conflict; uninstall never restores an old
-//! whole-file backup. Shared documents retain unrelated semantic values. Strict
+//! Unknown or edited ownership is a conflict; absent receipted private files
+//! may be recreated or treated as already removed. Uninstall never restores an
+//! old whole-file backup. Shared documents retain unrelated semantic values. Strict
 //! JSON is intentionally supported here; JSONC/TOML adapters need their own
 //! format-preserving planner rather than silently stripping comments.
 
@@ -129,7 +130,10 @@ pub(crate) fn reconcile(
                     ));
                 }
             };
-            if current != expected {
+            // Missing private artifacts need no preservation. The caller still
+            // qualifies receipt authority and captures absence for publication;
+            // a populated unowned or edited slot never becomes an implicit grant.
+            if current.is_some() && current != expected {
                 return Err(MezError::conflict(
                     "bootstrap owned file changed; no overwrite",
                 ));
@@ -409,6 +413,32 @@ mod tests {
         };
         assert!(reconcile(Some(b"{}"), None, Some(&entry)).is_err());
         assert!(reconcile(Some(b"{/*comment*/}"), None, Some(&entry)).is_err());
+    }
+
+    /// An absent receipted private artifact can be recreated at its exact owned
+    /// path or treated as already removed during uninstall. Absence is not an
+    /// edited preimage, while present foreign/edited bytes remain conflicts and
+    /// cannot be adopted simply because they match current generated content.
+    #[test]
+    fn bootstrap_file_reconciliation_repairs_receipted_absence() {
+        let old = Artifact::File {
+            bytes: b"old generated".to_vec(),
+        };
+        let new = Artifact::File {
+            bytes: b"new generated".to_vec(),
+        };
+        assert_eq!(
+            reconcile(None, Some(&old), Some(&old)).unwrap(),
+            Some(b"old generated".to_vec())
+        );
+        assert_eq!(
+            reconcile(None, Some(&old), Some(&new)).unwrap(),
+            Some(b"new generated".to_vec())
+        );
+        assert_eq!(reconcile(None, Some(&old), None).unwrap(), None);
+        assert!(reconcile(Some(b"edited"), Some(&old), Some(&new)).is_err());
+        assert!(reconcile(Some(b"new generated"), None, Some(&new)).is_err());
+        assert!(reconcile(Some(b"new generated"), Some(&old), None).is_err());
     }
 
     /// Exact array ownership preserves authored order/settings across install,

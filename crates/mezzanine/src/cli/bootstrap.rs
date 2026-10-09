@@ -24,7 +24,7 @@ pub(super) struct BootstrapCliArgs {
     /// Check accepted ownership without publishing artifacts.
     #[arg(long, conflicts_with_all = ["uninstall", "recover"])]
     check: bool,
-    /// Remove only unchanged, receipted adapter-owned artifacts.
+    /// Remove receipted artifacts only when present owned content is unchanged.
     #[arg(long, conflicts_with = "recover")]
     uninstall: bool,
     /// Explicitly finish an already accepted publication journal.
@@ -206,6 +206,20 @@ mod tests {
         assert!(!home.join(".pi").exists());
         assert_eq!(invoke(&[])["operation"], "install");
         assert!(root.join("extensions/mezzanine/index.mjs").is_file());
+        assert!(invoke(&[])["changed_paths"].as_array().unwrap().is_empty());
+        let owned = root.join("extensions/mezzanine/index.mjs");
+        let bytes = std::fs::read(&owned).unwrap();
+        std::fs::remove_file(&owned).unwrap();
+        for preview in ["--check", "--dry-run"] {
+            let output = invoke(&[preview]);
+            assert_eq!(
+                output["changed_paths"],
+                serde_json::json!(["extensions/mezzanine/index.mjs"])
+            );
+            assert!(!owned.exists());
+        }
+        invoke(&[]);
+        assert_eq!(std::fs::read(&owned).unwrap(), bytes);
         assert!(invoke(&[])["changed_paths"].as_array().unwrap().is_empty());
         assert_eq!(
             invoke(&["--uninstall", "--dry-run"])["operation"],
