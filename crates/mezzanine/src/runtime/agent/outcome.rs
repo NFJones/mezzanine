@@ -99,9 +99,10 @@ impl RuntimeSessionService {
     ///
     /// Real execution failures are useful model context: a bad shell command,
     /// timeout, or failed tool call often gives the model enough information to
-    /// correct itself. Policy denials, rejected actions, cancellations, and
-    /// user interrupts are intentionally excluded because repeating them would
-    /// violate user intent or approval boundaries.
+    /// correct itself. Policy/user denials, cancellations and user interrupts
+    /// stay excluded. An opaque pre-effect unavailable `close_agent` rejection
+    /// permits bounded rediscovery or a changed course, not automatic replay or
+    /// any relaxation of persistent-child ownership.
     pub(crate) fn queue_agent_failure_feedback_for_correction(
         &mut self,
         turn: &AgentTurnRecord,

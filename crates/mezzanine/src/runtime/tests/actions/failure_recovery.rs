@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod close;
+
 /// Builds a running agent turn in a secondary pane that can be removed without
 /// terminating the complete test session.
 ///

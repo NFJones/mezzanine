@@ -10122,6 +10122,13 @@ denials, policy denials, command timeouts, or user cancellations, and MUST
 preserve the failed action result for audit, diagnostics, and model context.
 If the bounded correction attempts for each model-correctable failed action are
 exhausted, Mezzanine MUST settle the turn as failed.
+An opaque pre-effect `close_agent` result with `Rejected` status and `unavailable`
+error MAY enter this same bounded correction path. The rejected result MUST remain
+in audit and model context; rejection is not proof of closure. The model may
+rediscover a verified caller-owned persistent child or change course. This MUST
+NOT automatically replay close, soften ownership checks, admit policy/user denials
+or cancellation, or treat post-effect checkpoint errors as unexecuted operations.
+Different action IDs MUST NOT reset the stable rejection correction budget.
 When one model-correctable action fails before later shell-backed sibling
 actions have reached the pane shell, those inactive unsent siblings MUST NOT
 make recovery unavailable. Mezzanine SHOULD abandon the unsent sibling actions,
