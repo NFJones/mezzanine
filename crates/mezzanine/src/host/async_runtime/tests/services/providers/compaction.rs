@@ -16,14 +16,23 @@ mod transport_retries;
 #[tokio::test(flavor = "current_thread")]
 async fn async_manual_compaction_executes_provider_and_publishes_durable_epoch() {
     for attached in [false, true] {
-        Box::pin(qualify(attached)).await;
+        Box::pin(qualify(attached, false)).await;
     }
+}
+
+/// Typed assistant/result history must survive the real source worker, context
+/// capture and request worker before one actual provider dispatch. The selected
+/// prefix appears once; retained evidence never leaks into compactor input, and
+/// publication reopens valid owned tail history without changing the archive.
+#[tokio::test(flavor = "current_thread")]
+async fn async_manual_compaction_typed_replay_preserves_execution_ownership() {
+    Box::pin(qualify(false, true)).await;
 }
 
 /// Directly owns server/provider/actor/client futures under an external fixture
 /// deadline. Response release is explicit; no retry or artificial paint delay is
 /// added to the product. Archive/summary assertions use independent store reads.
-async fn qualify(attached: bool) {
+async fn qualify(attached: bool, typed: bool) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let started = StdArc::new(tokio::sync::Notify::new());
@@ -35,6 +44,11 @@ async fn qualify(attached: bool) {
         let request = async_provider_concurrency_read_http_request(&mut stream).await;
         assert!(request.contains("eligible-source-1"));
         assert!(request.contains("local-chat-model"));
+        if typed {
+            assert_eq!(request.matches("typed-result-1").count(), 1, "{request}");
+            assert!(!request.contains("typed-result-2"), "{request}");
+            assert!(!request.contains("typed-result-3"), "{request}");
+        }
         server_started.notify_one();
         server_release.notified().await;
         async_provider_concurrency_write_chat_content_response(
@@ -53,7 +67,11 @@ async fn qualify(attached: bool) {
         store
             .append(&mez_agent::transcript::TranscriptEntry {
                 conversation_id: conversation.into(),
-                sequence,
+                sequence: if typed {
+                    (sequence - 1) * 3 + 1
+                } else {
+                    sequence
+                },
                 created_at_unix_seconds: sequence,
                 role: mez_agent::transcript::TranscriptRole::Assistant,
                 turn_id: format!("turn-{sequence}"),
@@ -65,6 +83,44 @@ async fn qualify(attached: bool) {
                 ),
             })
             .unwrap();
+        if typed {
+            let group =
+                mez_agent::ContextExecutionGroupId::new(format!("typed-{sequence}")).unwrap();
+            for (ordinal, source, content) in [
+                (
+                    1,
+                    mez_agent::ContextSourceKind::TranscriptAssistant,
+                    format!("typed-assistant-{sequence}"),
+                ),
+                (
+                    2,
+                    mez_agent::ContextSourceKind::ActionResult,
+                    format!("typed-result-{sequence}"),
+                ),
+            ] {
+                store
+                    .append(&mez_agent::transcript::TranscriptEntry {
+                        conversation_id: conversation.into(),
+                        sequence: (sequence - 1) * 3 + ordinal + 1,
+                        created_at_unix_seconds: sequence,
+                        role: mez_agent::transcript::TranscriptRole::System,
+                        turn_id: format!("turn-{sequence}"),
+                        agent_id: "agent-%1".into(),
+                        pane_id: "%1".into(),
+                        content: mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                            source,
+                            "typed replay",
+                            content,
+                            group.clone(),
+                            ordinal,
+                            None,
+                        )
+                        .unwrap()
+                        .to_transcript_content(),
+                    })
+                    .unwrap();
+            }
+        }
     }
     let original = store.inspect(conversation).unwrap();
     let mut service = test_service();
@@ -85,8 +141,24 @@ async fn qualify(attached: bool) {
         .unwrap();
     service
         .agent_shell_store_mut()
-        .bind_conversation("%1", conversation, 3)
+        .bind_conversation("%1", conversation, if typed { 9 } else { 3 })
         .unwrap();
+    let source_started = StdArc::new(tokio::sync::Notify::new());
+    let source_release = StdArc::new(tokio::sync::Notify::new());
+    let request_started = StdArc::new(tokio::sync::Notify::new());
+    let request_release = StdArc::new(tokio::sync::Notify::new());
+    if typed {
+        service.set_manual_compaction_preparation_probe_for_tests(
+            source_started.clone(),
+            source_release.clone(),
+            StdArc::new(tokio::sync::Notify::new()),
+        );
+        service.set_manual_compaction_request_probe_for_tests(
+            request_started.clone(),
+            request_release.clone(),
+            StdArc::new(tokio::sync::Notify::new()),
+        );
+    }
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
@@ -133,6 +205,41 @@ async fn qualify(attached: bool) {
                 .await
                 .unwrap();
             assert!(response.contains("state=preparing"));
+        }
+        if typed {
+            for (phase_started, phase_release) in [
+                (&source_started, &source_release),
+                (&request_started, &request_release),
+            ] {
+                tokio::time::timeout(Duration::from_secs(5), phase_started.notified())
+                    .await
+                    .unwrap();
+                assert!(store.compaction_epoch(conversation).unwrap().is_none());
+                let config = handle
+                    .terminal_client_loop_config(TerminalClientLoopConfig::default())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    config
+                        .frame_context
+                        .panes
+                        .get("%1")
+                        .and_then(|pane| pane.agent_status.as_deref()),
+                    Some("compacting")
+                );
+                assert!(
+                    !handle
+                        .drain_agent_provider_dispatch_side_effects(16)
+                        .await
+                        .unwrap()
+                        .iter()
+                        .any(|effect| matches!(
+                            effect,
+                            RuntimeSideEffect::DispatchAgentCompaction { .. }
+                        ))
+                );
+                phase_release.notify_one();
+            }
         }
         tokio::time::timeout(Duration::from_secs(5), started.notified())
             .await
@@ -222,7 +329,7 @@ async fn qualify(attached: bool) {
     assert!(exit.service.agent_turn_ledger().turns().is_empty());
     let epoch = store.compaction_epoch(conversation).unwrap().unwrap();
     assert!(epoch.summary.contains("model-authored-compaction-marker"));
-    assert_eq!(epoch.through_sequence, 1);
+    assert_eq!(epoch.through_sequence, if typed { 3 } else { 1 });
     let archive = store.inspect(conversation).unwrap();
     assert_eq!(&archive[..original.len()], original.as_slice());
     let reopened = AgentTranscriptStore::new(root.join("transcripts"));
@@ -239,6 +346,27 @@ async fn qualify(attached: bool) {
         .agent_context_for_pane_prompt("%1", "continue", 0)
         .unwrap();
     assert!(format!("{context:?}").contains("model-authored-compaction-marker"));
+    context.validate_durable().unwrap();
+    if typed {
+        assert!(
+            !context
+                .blocks()
+                .iter()
+                .any(|block| block.content == "typed-result-1")
+        );
+        for sequence in [2, 3] {
+            let group =
+                mez_agent::ContextExecutionGroupId::new(format!("typed-{sequence}")).unwrap();
+            assert_eq!(
+                context
+                    .chronology()
+                    .iter()
+                    .filter(|event| event.execution_group_id() == Some(&group))
+                    .count(),
+                2
+            );
+        }
+    }
     exit.service.terminate_all_pane_processes().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }

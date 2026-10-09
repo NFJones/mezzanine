@@ -41,6 +41,8 @@ mod handoff;
 mod preparation;
 mod selection;
 mod source;
+#[cfg(test)]
+mod tests;
 pub(crate) use preparation::{
     RuntimeManualCompactionPreparation, RuntimeManualCompactionRequestWork,
 };
@@ -2509,6 +2511,8 @@ impl RuntimeSessionService {
             runtime_agent_compaction_replay_context(&task.pane_id, retained_entries, &ranges);
         let compact_memory_id =
             mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
+        let base_context =
+            runtime_compaction_context_without_transcript_blocks(base_context.clone())?;
         let mut blocks = base_context
             .blocks()
             .iter()
@@ -3604,15 +3608,29 @@ pub(super) fn runtime_model_compact_memory_content(
     .join("\n")
 }
 
-/// Removes raw transcript replay blocks from the context supplied to the model
-/// compactor so the retained tail is not summarized a second time.
+/// Removes raw transcript replay and all members of its captured execution
+/// groups so the compactor sees selected source once and never a retained tail.
+/// Source labels identify replay owners; canonical group identities identify
+/// their evidence, including native, action and MCP events. Unrelated exact
+/// references keep their original metadata and order, even with identical bytes.
 ///
 /// # Parameters
 /// - `context`: The provider context assembled for the compaction turn.
 pub(super) fn runtime_compaction_context_without_transcript_blocks(
     mut context: AgentContext,
 ) -> Result<AgentContext> {
-    context.retain_blocks(|block| !runtime_context_block_is_transcript_replay(block))?;
+    let replay_groups = context
+        .chronology()
+        .iter()
+        .filter(|event| runtime_context_block_is_transcript_replay(event.block()))
+        .filter_map(|event| event.execution_group_id().cloned())
+        .collect::<std::collections::BTreeSet<_>>();
+    context.retain_blocks_with_metadata(|block, metadata| {
+        !runtime_context_block_is_transcript_replay(block)
+            && !metadata
+                .execution_group_id()
+                .is_some_and(|group| replay_groups.contains(group))
+    })?;
     Ok(context.revalidate()?)
 }
 

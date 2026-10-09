@@ -251,3 +251,53 @@ fn agent_context_rejects_causality_breaking_retention_atomically() {
     assert!(error.message().contains("preceding owning assistant"));
     assert_eq!(context, original);
 }
+
+/// Metadata-aware retention distinguishes identical visible execution groups
+/// while preserving surviving identities. Partial removal is still rejected
+/// atomically rather than assigning the evidence to a neighbouring assistant.
+#[test]
+fn agent_context_metadata_retention_preserves_owned_identity_and_atomicity() {
+    let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+        "user prompt",
+        "run the check",
+    )])
+    .unwrap();
+    let first = ContextExecutionGroupId::new("first").unwrap();
+    let second = ContextExecutionGroupId::new("second").unwrap();
+    for group in [&first, &second] {
+        context
+            .append_assistant_event("assistant", "same", group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "result",
+                "same",
+                group.clone(),
+                None,
+                true,
+            )
+            .unwrap();
+    }
+    let original = context.clone();
+    assert!(
+        context
+            .retain_blocks_with_metadata(|block, metadata| {
+                metadata.execution_group_id() != Some(&first)
+                    || block.source != ContextSourceKind::TranscriptAssistant
+            })
+            .is_err()
+    );
+    assert_eq!(context, original);
+    let expected = original
+        .chronology()
+        .iter()
+        .filter(|event| event.execution_group_id() != Some(&first))
+        .cloned()
+        .collect::<Vec<_>>();
+    context
+        .retain_blocks_with_metadata(|_, metadata| metadata.execution_group_id() != Some(&first))
+        .unwrap();
+    assert_eq!(context.chronology(), expected);
+    context.validate_durable().unwrap();
+}
