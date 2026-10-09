@@ -239,6 +239,7 @@ impl RuntimeSessionService {
         self.clear_accepted_streaming_headers_for_turn(turn_id);
         self.clear_pending_final_say_previews_for_turn(turn_id);
         self.agent_turn_contexts_mut().remove(turn_id);
+        self.agent.agent_turn_compaction_handoffs.remove(turn_id);
         self.agent
             .agent_turn_native_shell_timeout_ms
             .remove(turn_id);

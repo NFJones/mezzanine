@@ -101,6 +101,31 @@ Manual and observed-input compaction use the same policy. Stop and human pause
 remain effective during backoff. Exhausted or nonretryable failures are terminal,
 and incomplete summaries never replace authoritative history.
 Missing or corrupt required history is reported rather than silently omitted.
+Provider-rejection recovery and observed-input recovery with uncommitted source
+can initially be **turn-local**. An accepted summary is not automatically a
+saved Memory record. At terminal settlement, Mez retains its original source
+occurrences and can publish a separate durable handoff after complete typed
+execution groups have committed through transcript receipts. Following prompts
+wait for that handoff's bookkeeping and receipt settlement. Its summaries then
+survive subsequent turns and reopen once, without restoring covered raw groups
+or re-executing their actions. The archive itself is never truncated.
+
+Legacy/unowned source and archive layouts that cannot be represented safely by
+the selective epoch contract remain turn-local. In particular, interleaved
+display rows can make adjacent model-visible groups unmappable. Mez reports
+that limitation before recording a publication certificate and keeps raw replay
+authoritative. A changed source/epoch or failed publication instead fails closed
+with an explicit persistence/history error; receipt recovery retries persistence,
+not provider actions. These guarantees do not assert that every old session is
+compactable, or that a larger follow-up prompt cannot legitimately need recovery.
+
+The context percentage is the latest positive ordinary execution sample divided
+by the model's context-window budget, not the size of a newly rebuilt request or
+its `max_input_tokens` limit. Below 100% therefore does not establish that the
+next request is under its input cap. Proactive compaction needs a fresh ordinary
+response at or above that cap; prior-turn compaction and auxiliary usage are not
+triggers. Installing a summary clears the displayed usage but keeps the old
+pressure sample consumed until a new ordinary execution response arrives.
 Check the error and model limits, or start `/new` with a concise, verified
 handoff. After a successful compaction, ask the agent to recheck important file
 contents and results instead of treating the summary as exact evidence.

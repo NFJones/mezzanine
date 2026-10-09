@@ -1132,7 +1132,7 @@ impl AgentTranscriptStore {
                 .last()
                 .map_or(1, |row| row.sequence.saturating_add(1));
             let mut matched = false;
-            for entry in entries {
+            for &entry in &entries {
                 if let Some(existing) = durable.iter().find(|row| row.sequence == entry.sequence) {
                     if existing != entry {
                         return Err(MezError::conflict(
@@ -1177,6 +1177,17 @@ impl AgentTranscriptStore {
                     self.write_summary_sidecar(&summary)?;
                 }
                 self.upsert_catalog_from_files(&conversation_id, None)?;
+            }
+            // Terminal audit evidence is durable now, but is not itself a
+            // replay epoch. Publish its distinct source-proven transition
+            // outside the append lock; publication reacquires that lock and
+            // checks the exact baseline and frozen rows independently.
+            drop(_conversation_lock);
+            if entries.iter().any(|entry| {
+                entry.role == mez_agent::transcript::TranscriptRole::System
+                    && entry.content.starts_with(super::compaction_handoff::MARKER)
+            }) {
+                self.publish_terminal_compaction_handoffs(&conversation_id)?;
             }
         }
         Ok(bytes)
@@ -1264,6 +1275,7 @@ impl AgentTranscriptStore {
                 ranges: Vec::new(),
             },
             None,
+            None,
         )
     }
 
@@ -1284,6 +1296,7 @@ impl AgentTranscriptStore {
                 ranges,
             },
             None,
+            None,
         )
     }
 
@@ -1294,7 +1307,17 @@ impl AgentTranscriptStore {
         epoch: AgentCompactionEpoch,
         frozen_rows: &[TranscriptEntry],
     ) -> Result<()> {
-        self.save_compaction_projection(epoch, Some(frozen_rows))
+        self.save_compaction_projection(epoch, Some(frozen_rows), None)
+    }
+
+    /// Fences a distinct terminal handoff against its exact authoritative epoch.
+    pub(super) fn save_terminal_compaction_ranges_with_proof(
+        &self,
+        epoch: AgentCompactionEpoch,
+        frozen_rows: &[TranscriptEntry],
+        baseline: &Option<AgentCompactionEpoch>,
+    ) -> Result<()> {
+        self.save_compaction_projection(epoch, Some(frozen_rows), Some(baseline))
     }
 
     /// Shares the crash-safe v1 and v2 publication boundary.
@@ -1302,6 +1325,7 @@ impl AgentTranscriptStore {
         &self,
         epoch: AgentCompactionEpoch,
         frozen_rows: Option<&[TranscriptEntry]>,
+        baseline: Option<&Option<AgentCompactionEpoch>>,
     ) -> Result<()> {
         let conversation_id = epoch.conversation_id.as_str();
         let through_sequence = epoch.through_sequence;
@@ -1344,6 +1368,11 @@ impl AgentTranscriptStore {
             latest_sequence.unwrap_or(0).saturating_add(1),
         )?;
         let previous = self.compaction_epoch(conversation_id)?;
+        if baseline.is_some_and(|baseline| *baseline != previous) {
+            return Err(MezError::conflict(
+                "terminal compaction epoch changed before publication",
+            ));
+        }
         if !epoch.ranges.is_empty() {
             let committed = self.inspect(conversation_id)?;
             validate_compaction_range_sources(&epoch.ranges, &committed)?;
@@ -1351,9 +1380,14 @@ impl AgentTranscriptStore {
                 let prior_ranges = previous
                     .as_ref()
                     .map_or(&[][..], |old| old.ranges.as_slice());
-                if !epoch.ranges.starts_with(prior_ranges)
-                    || epoch.ranges.len() <= prior_ranges.len()
-                {
+                let retains_prior_ranges = if baseline.is_some() {
+                    prior_ranges
+                        .iter()
+                        .all(|range| epoch.ranges.contains(range))
+                } else {
+                    epoch.ranges.starts_with(prior_ranges)
+                };
+                if !retains_prior_ranges || epoch.ranges.len() <= prior_ranges.len() {
                     return Err(MezError::conflict(
                         "compaction publication no longer extends its prior ranges",
                     ));
@@ -1361,9 +1395,14 @@ impl AgentTranscriptStore {
                 let selected = committed
                     .into_iter()
                     .filter(|row| {
-                        epoch.ranges[prior_ranges.len()..].iter().any(|range| {
-                            (range.first_sequence..=range.through_sequence).contains(&row.sequence)
-                        })
+                        epoch
+                            .ranges
+                            .iter()
+                            .filter(|range| !prior_ranges.contains(range))
+                            .any(|range| {
+                                (range.first_sequence..=range.through_sequence)
+                                    .contains(&row.sequence)
+                            })
                     })
                     .collect::<Vec<_>>();
                 if selected != frozen_rows {

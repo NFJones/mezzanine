@@ -35,11 +35,22 @@ impl RuntimePersistenceComponent {
             .collect()
     }
 
-    /// Reports whether unchecked history fences this conversation.
+    /// Reports whether unchecked history or an unsettled terminal handoff
+    /// fences this conversation. Ordinary pending raw rows remain available
+    /// for checked logical replay; terminal summary proof must commit first.
     pub(crate) fn bookkeeping_pending(&self, conversation_id: &str) -> bool {
         self.bookkeeping_candidates
             .iter()
             .any(|candidate| candidate.turn.conversation_id == conversation_id)
+            || self
+                .pending_transcript_entries(conversation_id)
+                .iter()
+                .any(|entry| {
+                    entry.role == mez_agent::transcript::TranscriptRole::System
+                        && entry
+                            .content
+                            .starts_with(crate::storage::transcript::compaction_handoff::MARKER)
+                })
     }
 
     /// Consumes an exact worker claim; duplicate results cannot admit another append.

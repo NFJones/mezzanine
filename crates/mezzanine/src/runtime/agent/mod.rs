@@ -797,6 +797,9 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_ledger: AgentTurnLedger,
     /// Assembled provider context keyed by turn id.
     agent_turn_contexts: BTreeMap<String, AgentContext>,
+    /// Accepted local summary coverage, captured by terminal bookkeeping before cleanup.
+    pub(in crate::runtime) agent_turn_compaction_handoffs:
+        BTreeMap<String, crate::runtime::agent_state::RuntimeTurnCompactionHandoff>,
     /// Receiver-owned peer presentation receipts awaiting durable pane settlement.
     received_peer_message_presentations: BTreeMap<String, RuntimeReceivedPeerMessagePresentation>,
     /// Highest chronology sequence owned by replayed history in each active turn.
@@ -3259,7 +3262,8 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Re-arms observed-input compaction after a successful context replacement.
+    /// Retires the consumed-sample fence when a newly accepted execution replaces
+    /// the old usage sample. Installing a summary alone must not re-arm old pressure.
     pub(crate) fn clear_observed_input_compaction_fence(&mut self, turn_id: &str) {
         self.agent
             .agent_turn_observed_input_compaction_turns

@@ -67,6 +67,8 @@ pub(crate) struct RuntimeAgentHistoryEpochWork {
 pub(crate) fn execute_runtime_agent_history_epoch_work(
     work: RuntimeAgentHistoryEpochWork,
 ) -> Result<RuntimeAgentTranscriptContext> {
+    work.store
+        .publish_terminal_compaction_handoffs(&work.inputs.conversation_id)?;
     let epoch = work.store.compaction_epoch(&work.inputs.conversation_id)?;
     execute_runtime_agent_history_epoch_with_projection(work, epoch)
 }

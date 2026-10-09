@@ -722,6 +722,28 @@ pub struct RuntimeStagedCompaction {
     pub attempts: u32,
     /// Frozen authoritative chronology for append-only arrival validation.
     pub source_chronology: Vec<mez_agent::ConversationEvent>,
+    /// Source witnesses for private summaries, not selective publication authority.
+    pub(crate) handoff_witnesses: Vec<RuntimeCompactionWitness>,
+}
+
+/// An accepted summary's immutable original source occurrences.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeCompactionWitness {
+    /// Original chronological anchor inherited by the model summary.
+    pub(crate) anchor: u64,
+    /// Original source, expanded through earlier witnessed local summaries.
+    pub(crate) source: Vec<mez_agent::ConversationEvent>,
+    /// Accepted bounded model-authored summary.
+    pub(crate) summary: String,
+}
+
+/// Independent terminal handoff evidence retained until bookkeeping captures it.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeTurnCompactionHandoff {
+    /// Prior authoritative epoch, never refreshed after acceptance.
+    pub(crate) baseline: Option<crate::storage::transcript::AgentCompactionEpoch>,
+    /// Ordered witnessed model replacements.
+    pub(crate) witnesses: Vec<RuntimeCompactionWitness>,
 }
 
 /// Bounded complete-request retry accounting across compactor rebuilds.

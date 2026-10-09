@@ -8598,6 +8598,24 @@ An earlier durable selection MUST NOT make a later valid live, pending or
 legacy selection a mapping error. Such a transition MUST retain earlier private
 summaries, abandon selective publication for the combined operation, and keep
 the prior epoch authoritative even if selected rows subsequently commit.
+An accepted turn-local replacement MAY subsequently acquire cross-turn
+durability through a distinct terminal handoff. That handoff MUST retain the
+accepted summary's chronological anchor and original source occurrences,
+including immutable execution-group identity and provider ownership. Terminal
+bookkeeping MUST persist required original live source through the ordinary
+exact append-receipt pipeline without replaying any actions. Only a complete
+committed source proof and an unchanged authoritative epoch may publish the
+terminal replay projection; pending rows and optional Memory blocks are not
+publication authority. Next-prompt admission MUST wait while the terminal
+handoff's bookkeeping or append receipt remains unsettled. Publication and
+receipt recovery MUST be idempotent across restart, preserving summaries once,
+exact barriers, retained groups, and the append-only archive. A failed handoff
+MUST keep the previous epoch authoritative and report its failure. Source
+without typed occurrence ownership, or a layout not representable by the
+selective epoch contract (including interleaved display rows), MUST be reported
+as unsupported before an unreconcilable terminal certificate is committed;
+that source remains turn-local and raw replay remains authoritative. Terminal
+handoff MUST NOT opportunistically republish an abandoned staged operation.
 Missing required archives, changed frozen rows, conflicting typed ownership,
 overlap and stale epochs remain integrity failures, not fallback admission.
 Turn-local request validation MUST include exact externally owned transcript
@@ -8702,7 +8720,14 @@ ordinary execution response reports input usage at or above the threshold, it
 MUST wait for a safe continuation boundary, preserve any settled action group,
 and compact eligible durable context before queuing the continuation. It MUST
 fence the triggering response sample so it queues at most one compaction, and
-invalidate that fence after a successful replacement or when the turn ends.
+retain that consumed-sample fence across context replacement. A newly accepted
+ordinary execution response retires the old sample and re-arms pressure for its
+own usage; terminal cleanup also removes the turn's fence. Clearing a fence
+alone while retaining the old high usage MUST NOT trigger another compaction.
+The first request of a new turn MUST NOT proactively compact merely because a
+previous turn compacted. Unknown/zero and fresh below-threshold input remain
+non-triggers; equality intentionally qualifies. Authoritative provider rejection
+remains an independent recovery trigger, including for an oversized new prompt.
 Provider usage is a whole-request measurement, including cached input. Per-block
 accounting metadata MUST remain outside provider messages and transcript text;
 without a provider-supported block counting operation, block costs are labeled

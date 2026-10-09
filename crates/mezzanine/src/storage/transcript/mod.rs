@@ -22,6 +22,8 @@ pub(crate) mod activity;
 /// Exact settled steering occurrences, never pending execution input.
 pub(crate) mod steering;
 
+/// Source-proven terminal handoffs for accepted turn-local model summaries.
+pub(crate) mod compaction_handoff;
 /// Exposes the encoding module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

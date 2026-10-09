@@ -37,6 +37,7 @@ use crate::security::auth::AuthProfileCredentialSource;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 use mez_agent::{ProviderErrorRetryClass, apply_model_context_compaction_plan};
 
+mod handoff;
 mod preparation;
 mod selection;
 mod source;
@@ -1565,6 +1566,13 @@ impl RuntimeSessionService {
                     &final_summary,
                 )
                 .map_err(|error| MezError::invalid_state(error.message()))?;
+                let handoff_witnesses = self.compaction_handoff_witnesses(
+                    &task,
+                    &turn_id,
+                    &context,
+                    plan.as_ref(),
+                    &final_summary,
+                );
                 let model_profile = self
                     .agent_turn_model_profile(&turn_id)
                     .cloned()
@@ -1825,6 +1833,7 @@ impl RuntimeSessionService {
                                 baseline_epoch,
                                 attempts: attempts.saturating_add(1),
                                 source_chronology,
+                                handoff_witnesses: handoff_witnesses.clone(),
                             },
                         ));
                         final_request_retry.last_input_tokens = Some(retry_estimate.input_tokens);
@@ -2031,6 +2040,7 @@ impl RuntimeSessionService {
                                         baseline_epoch: baseline_epoch.clone(),
                                         attempts: 0,
                                         source_chronology: source_chronology.clone(),
+                                        handoff_witnesses: handoff_witnesses.clone(),
                                     },
                                 ));
                             }
@@ -2082,6 +2092,7 @@ impl RuntimeSessionService {
                                         baseline_epoch,
                                         attempts: attempts.saturating_add(1),
                                         source_chronology: source_chronology.clone(),
+                                        handoff_witnesses: handoff_witnesses.clone(),
                                     },
                                 ));
                                 final_request_retry.last_input_tokens = Some(candidate_tokens);
@@ -2129,6 +2140,7 @@ impl RuntimeSessionService {
                         // selected source is visible to this turn but has no
                         // committed rows an epoch may reference. The complete
                         // retry request was checked above before this mutation.
+                        self.retain_compaction_handoff(&task, &turn_id, handoff_witnesses.clone())?;
                         self.agent_turn_contexts_mut()
                             .insert(turn_id.clone(), request_candidate);
                         self.clear_agent_turn_provider_request_chain(&turn_id);
@@ -2140,6 +2152,9 @@ impl RuntimeSessionService {
                             pane_id,
                             "agent: observed input recovery applied turn-local model summary; raw transcript remains authoritative",
                         )?;
+                        self.restore_agent_latest_request_usage(&task.conversation_id, None);
+                        self.restore_agent_context_usage(&task.conversation_id, None, None);
+                        self.checkpoint_agent_session_metadata()?;
                         return Ok(());
                     }
                     self.persist_agent_compaction_epoch(
@@ -2179,6 +2194,7 @@ impl RuntimeSessionService {
                         return Ok(());
                     }
                 }
+                self.retain_compaction_handoff(&task, &turn_id, handoff_witnesses)?;
                 self.agent_turn_contexts_mut()
                     .insert(turn_id.clone(), compacted);
                 self.clear_agent_turn_provider_request_chain(&turn_id);

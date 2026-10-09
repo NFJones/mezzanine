@@ -2,6 +2,8 @@
 
 use super::super::*;
 
+mod terminal_compaction;
+
 /// Verifies that provider-poll timer events convert pending provider work into
 /// bounded dispatch side effects without executing provider I/O inside the
 /// actor. The second poll before a drain proves the actor does not enqueue

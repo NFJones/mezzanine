@@ -32,6 +32,8 @@ pub(crate) struct RuntimeBookkeepingTranscriptReadWork {
     compaction_epoch: u64,
     committed_prefix_required: bool,
     pending: Vec<TranscriptEntry>,
+    /// Terminal coverage needs the complete archive, not only this turn's delta.
+    terminal_handoff: bool,
 }
 
 impl RuntimeBookkeepingTranscriptReadWork {
@@ -59,7 +61,11 @@ impl RuntimeBookkeepingTranscriptReadWork {
             .store
             .conversation_transcript_view(
                 &self.conversation_id,
-                ConversationTranscriptRead::ForTurn(&self.turn_id),
+                if self.terminal_handoff {
+                    ConversationTranscriptRead::All
+                } else {
+                    ConversationTranscriptRead::ForTurn(&self.turn_id)
+                },
                 self.committed_prefix_required,
                 &self.pending,
             )?
@@ -122,6 +128,7 @@ impl RuntimeSessionService {
                     self.persistence
                         .pending_transcript_entries(&candidate.turn.conversation_id),
                 );
+                read.terminal_handoff |= candidate.read.terminal_handoff;
                 RuntimeBookkeepingCandidateWork { candidate, read }
             })
             .collect()
@@ -170,8 +177,17 @@ impl RuntimeSessionService {
         {
             candidate.entries.insert(0, directory);
         }
-        let entries =
-            Self::new_runtime_transcript_entries(candidate.entries, &history, first_sequence);
+        let mut entries = Self::new_runtime_transcript_entries(
+            candidate.entries.clone(),
+            &history,
+            first_sequence,
+        );
+        if let Err(error) =
+            self.check_terminal_compaction_handoff_admission(&turn, &history, &mut entries)
+        {
+            self.persistence.block_bookkeeping_candidate(candidate);
+            return Err(error);
+        }
         if entries.is_empty() {
             return Ok(true);
         }
@@ -231,6 +247,10 @@ impl RuntimeSessionService {
             compaction_epoch: self.agent_compaction_epoch(&turn.pane_id),
             committed_prefix_required,
             pending,
+            terminal_handoff: self
+                .agent
+                .agent_turn_compaction_handoffs
+                .contains_key(&turn.turn_id),
         }
     }
 
@@ -332,8 +352,13 @@ impl RuntimeSessionService {
                 turn,
                 execution,
             )?;
-            let entries =
+            let mut entries =
                 Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
+            self.check_terminal_compaction_handoff_admission(
+                turn,
+                &existing_entries,
+                &mut entries,
+            )?;
             if entries.is_empty() {
                 return Ok(0);
             }
@@ -356,8 +381,13 @@ impl RuntimeSessionService {
                 turn,
                 execution,
             )?;
-            let entries =
+            let mut entries =
                 Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
+            self.check_terminal_compaction_handoff_admission(
+                turn,
+                &existing_entries,
+                &mut entries,
+            )?;
             if entries.is_empty() {
                 return Ok(0);
             }
@@ -633,6 +663,13 @@ impl RuntimeSessionService {
         };
         interrupted_entry.validate()?;
         entries.push(interrupted_entry);
+        self.append_terminal_compaction_handoff_entry(
+            &mut entries,
+            &turn.conversation_id,
+            first_sequence,
+            created_at_unix_seconds,
+            turn,
+        )?;
         if self.persistence.transcript_uses_adapter() {
             self.persistence
                 .queue_bookkeeping_candidate(RuntimeBookkeepingCandidate {
@@ -650,6 +687,7 @@ impl RuntimeSessionService {
         let existing_entries = read.execute()?;
         read.check_owner(self)?;
         entries = Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
+        self.check_terminal_compaction_handoff_admission(turn, &existing_entries, &mut entries)?;
         if entries.is_empty() {
             return Ok(0);
         }
@@ -852,6 +890,22 @@ impl RuntimeSessionService {
                 content,
             )?;
         }
+        if execution.final_turn
+            || matches!(
+                execution.terminal_state,
+                mez_agent::AgentTurnState::Completed
+                    | mez_agent::AgentTurnState::Failed
+                    | mez_agent::AgentTurnState::Interrupted
+            )
+        {
+            self.append_terminal_compaction_handoff_entry(
+                &mut execution_entries,
+                conversation_id,
+                sequence,
+                created_at_unix_seconds,
+                turn,
+            )?;
+        }
         entries.extend(execution_entries);
         Ok(entries)
     }
@@ -1032,8 +1086,8 @@ impl RuntimeSessionService {
             .map_or(first_sequence, |entry| entry.sequence.saturating_add(1));
         let mut group_ordinals = BTreeMap::<String, u64>::new();
         let mut active_user_seen = false;
-        for event in context
-            .chronology()
+        let chronology = self.terminal_compaction_source_chronology(&turn.turn_id, context);
+        for event in chronology
             .iter()
             .filter(|event| event.sequence().get() > imported_history_sequence_high_water)
         {
@@ -1136,6 +1190,36 @@ impl RuntimeSessionService {
             entries.push(entry);
             sequence = sequence.saturating_add(1);
         }
+        Ok(())
+    }
+
+    /// Captures terminal source proof into the ordinary append-receipt pipeline
+    /// before turn cleanup. This audit row is never directly rendered to models.
+    fn append_terminal_compaction_handoff_entry(
+        &self,
+        entries: &mut Vec<TranscriptEntry>,
+        conversation_id: &str,
+        first_sequence: u64,
+        created_at_unix_seconds: u64,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        let Some(content) = self.terminal_compaction_handoff_content(&turn.turn_id)? else {
+            return Ok(());
+        };
+        let entry = TranscriptEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence: entries
+                .last()
+                .map_or(first_sequence, |row| row.sequence.saturating_add(1)),
+            created_at_unix_seconds,
+            role: TranscriptRole::System,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            pane_id: turn.pane_id.clone(),
+            content,
+        };
+        entry.validate()?;
+        entries.push(entry);
         Ok(())
     }
 
