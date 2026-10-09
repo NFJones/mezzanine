@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     AgentContext, ContextBlock, ContextPlacement, ContextRetention, ContextSemanticKind,
-    ContextSourceKind, ModelInteractionKind, ModelMessageRole, role_for_context_block,
+    ContextSourceKind, ModelInteractionKind, ModelMessageRole, context_block_is_compaction_summary,
+    role_for_context_block,
 };
 
 /// Sensitive-content-free digest of one immutable context block.
@@ -110,8 +111,10 @@ pub struct ContextContinuitySnapshot {
     pub stable_projection_sha256: String,
     /// Hash of canonical blocks after provider-role projection metadata.
     pub provider_projection_sha256: String,
-    /// Whether the current immutable projection contains a compaction epoch.
-    pub contains_compaction_epoch: bool,
+    /// Content identities of canonical compaction summaries observed in context.
+    /// These content-free digests are local transition evidence, not proof of
+    /// compactor dispatch, and never authorize execution or cache routing.
+    pub compaction_summary_sha256: BTreeSet<String>,
 }
 
 /// Classified reason for the latest context-continuity transition.
@@ -119,7 +122,7 @@ pub struct ContextContinuitySnapshot {
 pub enum ContextContinuityBreakReason {
     /// No earlier comparable request exists or a new logical turn began.
     NewTurn,
-    /// Immutable chronology was intentionally replaced by a compaction epoch.
+    /// A non-append rewrite introduced new canonical compaction-summary material.
     Compaction,
     /// The request moved to a different provider.
     ProviderSwitch,
@@ -224,7 +227,11 @@ pub fn context_continuity_diagnostics_for_interaction(
         ContextContinuityBreakReason::ProviderSwitch
     } else if previous.model != snapshot.model {
         ContextContinuityBreakReason::ModelSwitch
-    } else if !immutable_append_only && snapshot.contains_compaction_epoch {
+    } else if !immutable_append_only
+        && !snapshot
+            .compaction_summary_sha256
+            .is_subset(&previous.compaction_summary_sha256)
+    {
         ContextContinuityBreakReason::Compaction
     } else if previous.turn_id != snapshot.turn_id {
         ContextContinuityBreakReason::NewTurn
@@ -264,7 +271,7 @@ pub fn context_continuity_snapshot(
     let mut near_digests = BTreeSet::new();
     let mut exact_duplicate_blocks = 0usize;
     let mut near_duplicate_blocks = 0usize;
-    let mut contains_compaction_epoch = false;
+    let mut compaction_summary_sha256 = BTreeSet::new();
     for (index, block) in context.blocks().iter().enumerate() {
         let token_estimate = context_block_token_estimate(block);
         let canonical = canonical_context_block_bytes(block);
@@ -293,7 +300,9 @@ pub fn context_continuity_snapshot(
         immutable_projection.extend_from_slice(&(canonical.len() as u64).to_be_bytes());
         immutable_projection.extend_from_slice(&canonical);
         durable_token_estimate = durable_token_estimate.saturating_add(token_estimate);
-        contains_compaction_epoch |= context_block_is_compaction_epoch(block);
+        if context_block_is_compaction_summary(block) {
+            compaction_summary_sha256.insert(sha256_hex(block.content.as_bytes()));
+        }
         match block.placement {
             ContextPlacement::StablePrefix => {
                 stable_prefix_bytes = stable_prefix_bytes.saturating_add(canonical.len());
@@ -358,7 +367,7 @@ pub fn context_continuity_snapshot(
         stable_projection_bytes: immutable_projection.len(),
         stable_projection_sha256: sha256_hex(&immutable_projection),
         provider_projection_sha256: sha256_hex(&provider_projection),
-        contains_compaction_epoch,
+        compaction_summary_sha256,
     }
 }
 
@@ -458,13 +467,6 @@ fn projected_context_role(provider: &str, role: ModelMessageRole) -> &'static st
             ModelMessageRole::Context => "developer_or_system_neutral_wrapper",
         },
     }
-}
-
-/// Returns whether one immutable block denotes a completed compaction epoch.
-fn context_block_is_compaction_epoch(block: &ContextBlock) -> bool {
-    block.label == "conversation compaction notice"
-        || (block.source == ContextSourceKind::Memory
-            && block.label == "context compaction summary")
 }
 
 /// Returns a lower-case SHA-256 digest.
@@ -616,6 +618,172 @@ mod tests {
             .break_reason,
             ContextContinuityBreakReason::UnexpectedRewrite
         );
+    }
+
+    /// Retaining a historical summary cannot explain unrelated chronology
+    /// replacement, either within the same turn or when a new turn rebuilds
+    /// context. Synthetic fixtures keep private transcripts out of diagnostics.
+    #[test]
+    fn context_continuity_retained_summary_does_not_imply_compaction() {
+        let summary = block(
+            ContextPlacement::ConversationAppend,
+            ContextSourceKind::Memory,
+            "context compaction summary",
+            "synthetic historical summary",
+        );
+        let initial = AgentContext::new(vec![
+            summary.clone(),
+            ContextBlock::user_event("history", "original chronology"),
+        ])
+        .unwrap();
+        let previous = context_continuity_snapshot(&initial, "openai", "gpt", "turn-1");
+        let rebuilt = AgentContext::new(vec![
+            summary,
+            ContextBlock::user_event("history", "rebuilt chronology"),
+        ])
+        .unwrap();
+        for (turn_id, expected) in [
+            ("turn-2", ContextContinuityBreakReason::NewTurn),
+            ("turn-1", ContextContinuityBreakReason::UnexpectedRewrite),
+        ] {
+            let diagnostics =
+                context_continuity_diagnostics(&rebuilt, "openai", "gpt", turn_id, Some(&previous));
+            assert!(!diagnostics.immutable_append_only);
+            assert_eq!(diagnostics.break_reason, expected);
+        }
+    }
+
+    /// Summary identity follows producer-owned content rather than position,
+    /// multiplicity, or legacy label spelling. Removal, moving an old summary,
+    /// and an unrelated producer imitating a notice are not fresh compaction.
+    #[test]
+    fn context_continuity_summary_identity_ignores_relocation_and_removal() {
+        let summary = ContextBlock::reference_event(
+            ContextSourceKind::Memory,
+            "context compaction summary",
+            "synthetic historical summary",
+        );
+        let original = AgentContext::new(vec![
+            summary.clone(),
+            ContextBlock::user_event("history", "original chronology"),
+        ])
+        .unwrap();
+        let previous = context_continuity_snapshot(&original, "openai", "gpt", "turn-1");
+        for blocks in [
+            vec![ContextBlock::user_event(
+                "history",
+                "replacement chronology",
+            )],
+            vec![
+                ContextBlock::user_event("history", "replacement chronology"),
+                summary.clone(),
+                summary.clone(),
+            ],
+            vec![ContextBlock::reference_event(
+                ContextSourceKind::Memory,
+                "memory compact-legacy",
+                &summary.content,
+            )],
+            vec![ContextBlock::reference_event(
+                ContextSourceKind::RuntimeHint,
+                "conversation compaction notice",
+                "not an accepted summary",
+            )],
+        ] {
+            let rewritten = AgentContext::new(blocks).unwrap();
+            let diagnostics = context_continuity_diagnostics(
+                &rewritten,
+                "openai",
+                "gpt",
+                "turn-1",
+                Some(&previous),
+            );
+            assert_eq!(
+                diagnostics.break_reason,
+                ContextContinuityBreakReason::UnexpectedRewrite
+            );
+        }
+    }
+
+    /// Replacement summary material explains a rewrite even at a turn boundary;
+    /// first snapshots and provider/model changes still take precedence. Repeated
+    /// summary changes each establish a new baseline, whereas append-only growth
+    /// remains append-only even when it appends a summary.
+    #[test]
+    fn context_continuity_summary_transitions_preserve_lifecycle_precedence() {
+        let mut original = AgentContext::new(vec![ContextBlock::reference_event(
+            ContextSourceKind::Memory,
+            "context compaction summary",
+            "first synthetic summary",
+        )])
+        .unwrap();
+        let mut previous = context_continuity_snapshot(&original, "openai", "gpt", "turn-1");
+        for content in ["second synthetic summary", "third synthetic summary"] {
+            let replacement = AgentContext::new(vec![ContextBlock::reference_event(
+                ContextSourceKind::Memory,
+                "context compaction summary",
+                content,
+            )])
+            .unwrap();
+            for turn_id in ["turn-1", "turn-2"] {
+                let diagnostics = context_continuity_diagnostics(
+                    &replacement,
+                    "openai",
+                    "gpt",
+                    turn_id,
+                    Some(&previous),
+                );
+                assert_eq!(
+                    diagnostics.break_reason,
+                    ContextContinuityBreakReason::Compaction
+                );
+            }
+            for (provider, model, baseline, expected) in [
+                ("openai", "gpt", None, ContextContinuityBreakReason::NewTurn),
+                (
+                    "anthropic",
+                    "claude",
+                    Some(&previous),
+                    ContextContinuityBreakReason::ProviderSwitch,
+                ),
+                (
+                    "openai",
+                    "gpt-b",
+                    Some(&previous),
+                    ContextContinuityBreakReason::ModelSwitch,
+                ),
+            ] {
+                assert_eq!(
+                    context_continuity_diagnostics(
+                        &replacement,
+                        provider,
+                        model,
+                        "turn-2",
+                        baseline
+                    )
+                    .break_reason,
+                    expected,
+                );
+            }
+            let appended = AgentContext::new(vec![
+                original.blocks()[0].clone(),
+                replacement.blocks()[0].clone(),
+            ])
+            .unwrap();
+            assert_eq!(
+                context_continuity_diagnostics(
+                    &appended,
+                    "openai",
+                    "gpt",
+                    "turn-1",
+                    Some(&previous)
+                )
+                .break_reason,
+                ContextContinuityBreakReason::AppendOnly,
+            );
+            previous = context_continuity_snapshot(&replacement, "openai", "gpt", "turn-1");
+            original = replacement;
+        }
     }
 
     /// Verifies semantic and retention changes participate in continuity

@@ -2106,6 +2106,103 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
     );
 }
 
+/// Historical summaries must not attribute unrelated same-turn rewrites or
+/// new-turn reconstruction to a new compaction. This product fixture checks
+/// both status and emitted request traces, and separately proves no auxiliary
+/// compactor was queued. Synthetic chronology contains no private transcripts.
+#[test]
+fn runtime_context_continuity_retained_summary_matches_dispatch_facts() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "first synthetic prompt")
+        .unwrap();
+    let mut turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let (_, profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    let summary = ContextBlock::reference_event(
+        ContextSourceKind::Memory,
+        "context compaction summary",
+        "synthetic unchanged historical summary",
+    );
+    let baseline = mez_agent::AgentContext::new(vec![
+        summary.clone(),
+        ContextBlock::user_event("history", "first synthetic chronology"),
+    ])
+    .unwrap();
+    service.record_runtime_provider_request_shape_for_context(
+        &profile,
+        &turn,
+        &baseline,
+        mez_agent::ModelInteractionKind::ActionExecution,
+    );
+    for (new_turn, reason, content) in [
+        (false, "unexpected_rewrite", "unrelated synthetic rewrite"),
+        (true, "new_turn", "rebuilt synthetic chronology"),
+    ] {
+        if new_turn {
+            service
+                .finish_agent_turn("%1", &turn.turn_id, mez_agent::AgentTurnState::Completed)
+                .unwrap();
+            let started = service
+                .start_agent_prompt_turn("%1", "next synthetic prompt")
+                .unwrap();
+            turn = service
+                .agent_turn_ledger()
+                .turns()
+                .iter()
+                .find(|turn| turn.turn_id == started.turn_id)
+                .cloned()
+                .unwrap();
+        }
+        let rebuilt = mez_agent::AgentContext::new(vec![
+            summary.clone(),
+            ContextBlock::user_event("history", content),
+        ])
+        .unwrap();
+        service.record_runtime_provider_request_shape_for_context(
+            &profile,
+            &turn,
+            &rebuilt,
+            mez_agent::ModelInteractionKind::ActionExecution,
+        );
+        let status = service.runtime_agent_status_display("%1").unwrap();
+        assert!(status.contains(&format!("reason={reason}")), "{status}");
+        assert!(status.contains("append_only=false"), "{status}");
+        assert!(service.pending_agent_compaction_task_ids().is_empty());
+        assert!(!service.agent_is_compacting("%1"));
+        let request = crate::integrations::agent::context::assemble_model_request(
+            &profile,
+            mez_agent::ProviderApiCompatibility::default_for_kind(&profile.provider).unwrap(),
+            &turn,
+            &rebuilt,
+        )
+        .unwrap();
+        service
+            .append_agent_trace_maap_request(&turn, &request)
+            .unwrap();
+        let trace = service.agent_pane_trace_log_text("%1").unwrap();
+        assert!(
+            trace.contains(&format!("\"break_reason\": \"{reason}\"")),
+            "{trace}"
+        );
+        assert!(
+            !trace.contains("\"break_reason\": \"compaction\""),
+            "{trace}"
+        );
+    }
+}
+
 /// Verifies provider-wire status and trace data stay request-correlated,
 /// content-free, and guarded by current conversation/turn ownership.
 #[test]

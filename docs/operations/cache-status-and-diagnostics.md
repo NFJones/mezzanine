@@ -53,6 +53,14 @@ is a local continuity warning, not the provider's cache decision. Preserve that
 diagnostic and the preceding change when escalating; repeatedly retrying a task
 does not prove or repair cache behavior.
 
+Local `compaction` means a non-append-only rewrite introduced new content from
+canonical Memory compaction-summary blocks relative to the previous snapshot.
+Keeping, moving, duplicating, or removing an old summary is not a new compaction
+transition. Such a rewrite reports `new_turn` at a turn boundary, otherwise
+`unexpected_rewrite`; provider/model switches take precedence. A first snapshot
+reports `new_turn`, even if it already contains a summary. This classification
+does not prove auxiliary compactor dispatch; inspect operation traces separately.
+
 For OpenAI, `Provider wire prefix` compares the ordered input and cache-affecting
 request settings actually sent. `input_bytes` is the serialized input size;
 `common_bytes` is the identical leading input size. `append_only=true` requires

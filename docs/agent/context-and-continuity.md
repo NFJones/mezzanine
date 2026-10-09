@@ -182,6 +182,14 @@ cache reads; local size estimates are not exact provider token counts. A cache
 hit does not prove the context is correct, and a cold request after compaction
 or a model change is not by itself a continuity failure.
 
+An unchanged saved compaction summary does not imply another compaction. Local
+continuity diagnostics compare summary content identities across snapshots;
+only new canonical summary content accompanying a non-append rewrite explains
+a local `compaction` transition. Rebuilt context retaining an old summary is
+classified as `new_turn` at a turn boundary or `unexpected_rewrite` within the
+same turn. These labels describe local context changes, not compactor dispatch
+or provider cache decisions.
+
 `/show-context` browses conversation entries. It lets you edit selected content
 with `e` or delete it with `d`; this changes later model replay, not files or
 already executed actions. It does not edit persisted context documents.

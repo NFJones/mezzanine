@@ -7318,6 +7318,14 @@ immutable and volatile token estimates, the immutable projection byte length
 and digest, the longest common immutable prefix, and an append-only flag without
 retaining prompt text. Transitions MUST distinguish new turns, compaction,
 provider switches, model switches, append-only growth, and unexpected rewrites.
+The local `compaction` classification MUST require a non-append-only rewrite
+and newly observed content from canonical Memory compaction-summary blocks
+relative to the preceding comparable snapshot. An unchanged historical summary,
+its relocation or duplication, or removal alone MUST NOT imply a fresh
+compaction. Provider/model switches retain precedence; a missing baseline MUST
+report `new_turn`. Summary transition digests MUST NOT retain text or authorize
+execution, dispatch, or cache routing. These local diagnostics are not proof
+that an auxiliary compactor was queued or that the provider reused a cache.
 Provider-independent chronological context that is not user or assistant speech
 MUST use a reserved, versioned system transcript event contract. Only supported
 typed events may become model-visible context during replay; ordinary system
