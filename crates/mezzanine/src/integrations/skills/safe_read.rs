@@ -16,15 +16,27 @@ pub(super) const MAX_SKILL_BYTES: u64 = 1024 * 1024;
 
 /// Reads one named regular UTF-8 document under an explicitly selected catalog root.
 pub(super) fn read(root: &Path, name: &str) -> Result<String> {
-    if !mez_agent::is_valid_skill_name(name) {
-        return Err(MezError::invalid_args("skill unavailable"));
-    }
-    // Permit aliases of the explicitly configured user/project base, but never
-    // follow .mezzanine or skills links below that base into an unrelated tree.
+    read_impl(root, name, false)
+}
+
+/// Reads new shared placement while anchoring `.agents` below the project base.
+/// Legacy user and native readers keep their established base-alias semantics.
+pub(super) fn read_shared(root: &Path, name: &str) -> Result<String> {
+    read_impl(root, name, true)
+}
+
+/// Opens a catalog without following protected namespace or descendant links.
+fn open_root(root: &Path, shared: bool) -> Result<File> {
     let parent = root
         .parent()
         .ok_or_else(|| MezError::forbidden("skill root unavailable"))?;
-    let base = if parent.file_name().is_some_and(|name| name == ".mezzanine") {
+    if shared
+        && (root.file_name().is_none_or(|name| name != "skills")
+            || parent.file_name().is_none_or(|name| name != ".agents"))
+    {
+        return Err(MezError::forbidden("shared skill root unavailable"));
+    }
+    let base = if shared || parent.file_name().is_some_and(|name| name == ".mezzanine") {
         parent
             .parent()
             .ok_or_else(|| MezError::forbidden("skill root unavailable"))?
@@ -49,6 +61,42 @@ pub(super) fn read(root: &Path, name: &str) -> Result<String> {
             _ => return Err(MezError::forbidden("skill root unavailable")),
         }
     }
+    Ok(directory)
+}
+
+/// Lists a finite shared namespace through its held directory descriptor.
+/// Symlink swaps cannot redirect enumeration outside the selected project.
+pub(super) fn shared_entry_names(root: &Path) -> Result<Vec<std::ffi::OsString>> {
+    use std::os::unix::ffi::OsStrExt;
+    let directory = open_root(root, true)?;
+    let entries = rustix::fs::Dir::read_from(&directory).map_err(std::io::Error::from)?;
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(std::io::Error::from)?;
+        let name = entry.file_name().to_bytes();
+        if name == b"." || name == b".." {
+            continue;
+        }
+        if names.len() == 4096 {
+            return Err(MezError::invalid_args(
+                "shared skill catalog exceeds entry limit",
+            ));
+        }
+        names.push(std::ffi::OsStr::from_bytes(name).to_os_string());
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Reads one bounded regular document through the selected namespace policy.
+fn read_impl(root: &Path, name: &str, shared: bool) -> Result<String> {
+    if !mez_agent::is_valid_skill_name(name) {
+        return Err(MezError::invalid_args("skill unavailable"));
+    }
+    // Permit aliases of the explicitly configured user/project base, but never
+    // follow .mezzanine or skills links below that base into an unrelated tree.
+    let directory = open_root(root, shared)?;
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let skill =
         File::from(openat(&directory, name, flags, Mode::empty()).map_err(std::io::Error::from)?);
     let mut file = File::from(

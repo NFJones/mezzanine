@@ -10,7 +10,9 @@ use super::{
     MezError, PathBuf, Result, RuntimeSessionService, runtime_agent_action_summary,
     runtime_agent_turn_state_from_action_results,
 };
-use crate::integrations::skills::{discover_skill_catalog, load_model_skill_document};
+use crate::integrations::skills::{
+    discover_skill_catalog, load_model_skill_document, project_skill_root_for_summary,
+};
 use mez_agent::{
     SkillActionContext, SkillCatalog, SkillSource, SkillSummary, skill_action_context_from_blocks,
 };
@@ -52,8 +54,8 @@ impl RuntimeSessionService {
     }
 
     /// Resolves only the currently authorized source root, never a payload path.
-    fn model_skill_root(&self, pane: &str, source: SkillSource) -> Option<PathBuf> {
-        match source {
+    fn model_skill_root(&self, pane: &str, summary: &SkillSummary) -> Option<PathBuf> {
+        match summary.source {
             SkillSource::Builtin => None,
             SkillSource::User => self
                 .integration
@@ -61,7 +63,7 @@ impl RuntimeSessionService {
                 .map(|root| root.join("skills")),
             SkillSource::Project => self
                 .trusted_skill_project_root_for_pane(pane)
-                .map(|root| root.join(".mezzanine/skills")),
+                .and_then(|root| project_skill_root_for_summary(&root, summary)),
         }
     }
 
@@ -181,7 +183,7 @@ impl RuntimeSessionService {
                     .filter(|summary| policy.eligible(&summary.name, summary.discovery))
                     .take(256)
                 {
-                    let root = self.model_skill_root(&turn.pane_id, summary.source);
+                    let root = self.model_skill_root(&turn.pane_id, summary);
                     if let Ok(document) = load_model_skill_document(summary, root.as_deref()) {
                         receipts.push(SkillSelectionReceipt {
                             summary: summary.clone(),
@@ -229,7 +231,7 @@ impl RuntimeSessionService {
                 {
                     return Ok(denied()?);
                 }
-                let root = self.model_skill_root(&turn.pane_id, receipt.summary.source);
+                let root = self.model_skill_root(&turn.pane_id, &receipt.summary);
                 let Ok(document) = load_model_skill_document(&receipt.summary, root.as_deref())
                 else {
                     return Ok(denied()?);
@@ -323,6 +325,8 @@ impl RuntimeSessionService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod shared;
 
     /// Creates eligible user metadata before capturing a new conversation surface.
     fn fixture(global: bool) -> (RuntimeSessionService, AgentTurnRecord, PathBuf) {

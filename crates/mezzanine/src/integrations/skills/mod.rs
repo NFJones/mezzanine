@@ -2,7 +2,8 @@
 //!
 //! Skills are reusable markdown workflow descriptions stored as built-ins,
 //! below the user configuration root, or below a trusted project's `.mezzanine`
-//! directory. This module keeps discovery deterministic and side-effect free:
+//! and additive `.agents` skill roots, in native-first order. This module keeps
+//! discovery deterministic and side-effect free:
 //! it reads `SKILL.md` metadata for catalogs, loads full skill text only on
 //! explicit invocation, and never executes auxiliary skill files.
 
@@ -135,6 +136,44 @@ struct BuiltinSkillAsset {
     contents: String,
 }
 
+/// Ordered project skill roots under the already authorized trust boundary.
+/// Native placement wins at equal source rank; no ancestor discovery or writes
+/// occur here. The same policy supplies model-selected path authorization.
+pub(crate) fn project_skill_roots(project: &Path) -> [PathBuf; 2] {
+    [
+        project.join(".mezzanine/skills"),
+        project.join(".agents/skills"),
+    ]
+}
+
+/// Finds a selected project's exact document path among live authorized roots.
+/// A summary path selects only within that policy, never grants its own root.
+pub(crate) fn project_skill_root_for_summary(
+    project: &Path,
+    summary: &SkillSummary,
+) -> Option<PathBuf> {
+    project_skill_roots(project).into_iter().find(|root| {
+        summary.source == SkillSource::Project
+            && summary.path == root.join(&summary.name).join(SKILL_FILE_NAME)
+    })
+}
+
+/// Identifies shared placement only for a valid project summary's exact suffix.
+/// This selects the protected shared loader, not model filesystem authority.
+fn shared_skill_root(summary: &SkillSummary) -> Option<&Path> {
+    let root = summary.path.parent()?.parent()?;
+    (summary.source == SkillSource::Project
+        && summary.path == root.join(&summary.name).join(SKILL_FILE_NAME)
+        && root
+            .file_name()
+            .is_some_and(|name| name == SKILLS_DIRECTORY_NAME)
+        && root
+            .parent()?
+            .file_name()
+            .is_some_and(|name| name == ".agents"))
+    .then_some(root)
+}
+
 /// Discovers the effective skill catalog for one user/project context.
 ///
 /// # Parameters
@@ -156,11 +195,9 @@ pub fn discover_skill_catalog(
         );
     }
     if let Some(root) = project_root {
-        discover_skills_under_root(
-            &root.join(".mezzanine").join(SKILLS_DIRECTORY_NAME),
-            SkillSource::Project,
-            &mut catalog,
-        );
+        let [native, shared] = project_skill_roots(root);
+        discover_skills_under_root(&native, SkillSource::Project, &mut catalog);
+        discover_shared_skills_under_root(&shared, &mut catalog);
     }
     catalog
 }
@@ -432,17 +469,21 @@ pub fn load_skill_document(summary: &SkillSummary) -> Result<SkillDocument> {
             text,
         });
     }
-    let text = fs::read_to_string(&summary.path).map_err(|error| {
-        MezError::new(
-            MezErrorKind::Io,
-            format!(
-                "failed to read skill {} from {}: {}",
-                summary.name,
-                summary.path.display(),
-                error
-            ),
-        )
-    })?;
+    let text = if let Some(root) = shared_skill_root(summary) {
+        safe_read::read_shared(root, &summary.name)?
+    } else {
+        fs::read_to_string(&summary.path).map_err(|error| {
+            MezError::new(
+                MezErrorKind::Io,
+                format!(
+                    "failed to read skill {} from {}: {}",
+                    summary.name,
+                    summary.path.display(),
+                    error
+                ),
+            )
+        })?
+    };
     Ok(SkillDocument {
         summary: summary.clone(),
         text,
@@ -467,7 +508,11 @@ pub(crate) fn load_model_skill_document(
         if summary.path != root.join(&summary.name).join(SKILL_FILE_NAME) {
             return Err(unavailable());
         }
-        safe_read::read(root, &summary.name).map_err(|_| unavailable())?
+        if shared_skill_root(summary).is_some() {
+            safe_read::read_shared(root, &summary.name).map_err(|_| unavailable())?
+        } else {
+            safe_read::read(root, &summary.name).map_err(|_| unavailable())?
+        }
     };
     let parsed = parse_skill_document(&text).map_err(|_| unavailable())?;
     if parsed.name != summary.name
@@ -600,13 +645,37 @@ fn format_builtin_mez_reference_skill(template: &str) -> String {
     )
 }
 
-/// Discovers valid direct child skill directories below one `skills` root.
-///
-/// # Parameters
-/// - `root`: Directory containing one subdirectory per skill.
-/// - `source`: Source scope assigned to discovered skill summaries.
-/// - `skills`: Effective skill map updated by skill name.
-/// - `diagnostics`: Non-fatal discovery diagnostics appended for skipped paths.
+/// Enumerates only the protected shared root through a no-follow descriptor.
+/// Missing placement is inert; unsafe roots are diagnosed without listing the
+/// unrelated directory behind a namespace alias. Entry parsing stays shared.
+fn discover_shared_skills_under_root(root: &Path, catalog: &mut SkillCatalog) {
+    let names = match safe_read::shared_entry_names(root) {
+        Ok(names) => names,
+        Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => return,
+        Err(_) => {
+            catalog.diagnostics.push(SkillDiagnostic {
+                path: root.to_path_buf(),
+                message: "shared skill root unavailable".into(),
+            });
+            return;
+        }
+    };
+    for name in names {
+        let directory = root.join(name);
+        let skill_path = directory.join(SKILL_FILE_NAME);
+        match read_skill_summary(&directory, &skill_path, SkillSource::Project) {
+            Ok(summary) => catalog.insert(summary),
+            Err(message) => catalog.diagnostics.push(SkillDiagnostic {
+                path: skill_path,
+                message,
+            }),
+        }
+    }
+}
+
+/// Discovers valid direct child directories under the legacy user/native root.
+/// Reads remain side-effect free; invalid entries add non-fatal diagnostics and
+/// leave existing winner precedence intact.
 fn discover_skills_under_root(root: &Path, source: SkillSource, catalog: &mut SkillCatalog) {
     let metadata = match fs::metadata(root) {
         Ok(metadata) => metadata,
@@ -678,8 +747,17 @@ fn read_skill_summary(
     let root = directory
         .parent()
         .ok_or_else(|| "skill root unavailable".to_string())?;
-    let text = safe_read::read(root, directory_name)
-        .map_err(|error| format!("failed to read SKILL.md: {error}"))?;
+    let shared = source == SkillSource::Project
+        && root
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == ".agents");
+    let text = if shared {
+        safe_read::read_shared(root, directory_name)
+    } else {
+        safe_read::read(root, directory_name)
+    }
+    .map_err(|error| format!("failed to read SKILL.md: {error}"))?;
     let document = parse_skill_document(&text).map_err(|error| error.message().to_string())?;
     if document.name != directory_name {
         return Err(format!(
@@ -708,6 +786,8 @@ mod tests {
     use mez_agent::{SkillSource, skill_context_text, split_skill_front_matter};
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    mod shared;
 
     /// Creates a unique temporary root for skill-discovery tests without
     /// adding test-only dependencies to the production crate graph.

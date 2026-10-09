@@ -11,6 +11,7 @@ Create the smallest skill that satisfies the user's intent.
 
 - User scope: `<config-root>/skills/<skill-name>/SKILL.md`. If the active Mezzanine config root is unavailable, use `~/.config/mezzanine`.
 - Project scope: `<project-root>/.mezzanine/skills/<skill-name>/SKILL.md`.
+- Optional shared project placement: `<project-root>/.agents/skills/<skill-name>/SKILL.md`, using the same format. Native project placement wins for duplicate names. Keep native project authoring as the default; use shared placement only when requested.
 - Default to user scope. Use project scope only when the user explicitly asks for a repo/project-scoped skill or says the skill must live with the current repository.
 
 ## Create
