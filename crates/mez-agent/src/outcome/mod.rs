@@ -595,6 +595,14 @@ pub fn runtime_action_result_is_feedback_candidate(result: &ActionResult) -> boo
     {
         return true;
     }
+    if result.action_type == "close_agent"
+        && result.status == ActionStatus::Rejected
+        && error.code == "unavailable"
+    {
+        // An opaque pre-close ownership/availability rejection supplies model
+        // feedback, not authority to retry or proof that a child was closed.
+        return true;
+    }
     if result.status != ActionStatus::Failed {
         return false;
     }
@@ -1597,6 +1605,79 @@ mod tests {
             failure.message(),
             "provider MAAP output is malformed: actions[0].type is required"
         );
+    }
+
+    /// Only an opaque pre-effect unavailable persistent-child close rejection
+    /// permits bounded model correction. Policy denials, interrupted work,
+    /// infrastructure failures and results without actual error evidence stay
+    /// terminal; this classification never authorizes or automatically replays
+    /// a close operation.
+    #[test]
+    fn close_unavailable_rejection_is_narrow_correctable_feedback() {
+        let action = AgentAction {
+            id: "close-unknown".into(),
+            payload: AgentActionPayload::CloseAgent {
+                agent_id: "agent-unknown".into(),
+            },
+        };
+        for (status, code, message, expected) in [
+            (
+                ActionStatus::Rejected,
+                "unavailable",
+                "persistent child is unavailable",
+                true,
+            ),
+            (ActionStatus::Rejected, "forbidden", "policy denial", false),
+            (
+                ActionStatus::Denied,
+                "unavailable",
+                "persistent child is unavailable",
+                false,
+            ),
+            (
+                ActionStatus::Failed,
+                "unavailable",
+                "checkpoint failure",
+                false,
+            ),
+            (ActionStatus::Interrupted, "unavailable", "cancelled", false),
+            (ActionStatus::TimedOut, "unavailable", "timeout", false),
+            (
+                ActionStatus::Rejected,
+                "unavailable",
+                "pane process not found",
+                false,
+            ),
+        ] {
+            let result = ActionResult::failed(&turn(), &action, status, code, message).unwrap();
+            assert_eq!(
+                runtime_action_result_is_feedback_candidate(&result),
+                expected,
+                "{status:?}/{code}/{message}"
+            );
+        }
+        let mut result = ActionResult::failed(
+            &turn(),
+            &action,
+            ActionStatus::Rejected,
+            "unavailable",
+            "persistent child is unavailable",
+        )
+        .unwrap();
+        result.is_error = false;
+        assert!(!runtime_action_result_is_feedback_candidate(&result));
+        result.is_error = true;
+        result.error = None;
+        assert!(!runtime_action_result_is_feedback_candidate(&result));
+        let result = ActionResult::failed(
+            &turn(),
+            &shell_action(),
+            ActionStatus::Rejected,
+            "unavailable",
+            "persistent child is unavailable",
+        )
+        .unwrap();
+        assert!(!runtime_action_result_is_feedback_candidate(&result));
     }
 
     /// Verifies model-authored network failures remain eligible for feedback.

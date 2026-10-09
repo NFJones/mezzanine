@@ -82,6 +82,13 @@ default view lists primary agents in the same trusted project; use
 widens discovery across projects but grants no authority. Discovery is bounded,
 so a truncated result is not a complete census.
 
+An unavailable persistent-child close can offer bounded same-turn correction;
+the rejected result does not mean the child was closed. Rediscover children with
+`agent_type: "subagent"` or `"all"`, verify current parent-conversation ownership,
+then choose a corrected close or continue useful work. Do not replay an unchanged
+unavailable target or bypass ownership. Exhaustion ends the turn truthfully;
+policy/user denials and post-close checkpoint failures are not this pre-effect case.
+
 Published objectives describe current work. Set `/objective <text>` to override
 the generated objective for the current conversation; `/objective --clear`
 restores generated publication. Bare `/objective` reports its source and value.
