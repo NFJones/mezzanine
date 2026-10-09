@@ -439,7 +439,7 @@ fn steering_recovery_public_ingress_preserves_acceptance_on_persistent_failure()
     let started = service.start_agent_prompt_turn("%1", "initial").unwrap();
     service.set_agent_transcript_store(store.clone());
     service.checkpoint_agent_session_metadata().unwrap();
-    let path = store.agent_session_metadata_path_for_tests();
+    let path = store.agent_session_metadata_checkpoint_file(service.session().id.as_str());
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
     let result =

@@ -146,6 +146,41 @@ separately from snapshots. Use `/resume` to select a saved conversation,
 pane for a copied conversation branch. After a restart, an active turn that
 cannot be reconnected is marked interrupted rather than silently resumed.
 
+Active pane-to-conversation bindings now use independent version-1 checkpoints
+at `agent-sessions/.active-agent-session-metadata-v1/<session-key>.json`. The
+key is derived from the Mezzanine session ID, not a conversation title or path.
+Private locks wait at most two seconds; publication uses exclusive staging and
+file/directory synchronization. A checkpoint stores validated binding rows, not
+a duplicate transcript. An empty checkpoint deliberately means no bindings.
+
+The older shared `active-agent-sessions.tsv` is a read-only migration source for
+new versions. New writers never touch it or `active-agent-sessions.tmp`, so an
+older running daemon need not be stopped merely to protect new checkpoints from
+its uncoordinated writes. This does **not** fix old writers racing each other,
+make one Mezzanine session jointly ownable by two daemons, or make an older build
+able to restore the new format. Avoid downgrade restoration of active bindings
+written by the newer version. Durable conversation payloads remain separate.
+
+First import checks a bounded snapshot and fails if it observes source changes.
+For the specific corruption consisting of otherwise-valid legacy records plus
+one final standalone `]`, Mez first preserves every original byte privately at
+`.active-agent-session-metadata-v1/legacy-<digest>.tsv`, then imports the valid
+bindings into their session checkpoint and reports the source/backup and line.
+The older daemon's source file is **left unchanged**. Do not post these backups:
+they contain the original private metadata. Arbitrary damaged records, unsafe
+nodes and newer unsupported formats are not silently ignored; the diagnostic
+names the file/row and version/field count without exposing the rejected text.
+Already-authoritative scoped checkpoints do not consult a subsequently damaged
+legacy index or another session's checkpoint.
+
+Recovery and publication errors are not proof that no data was written. Before
+rename, old checkpoint authority and sidecar rollback are preserved. An error
+after rename retains consistent sidecars and reports uncertain durability;
+retrying checkpoint persistence never re-executes provider or action work.
+If the source is changing, retry after that writer settles rather than deleting
+the index. For other corruption, preserve the files and diagnostic for reviewed
+recovery; do not erase all bindings or edit the shared file under active writers.
+
 Saved-conversation discovery metadata is indexed in
 `agent-sessions/catalog.sqlite3` under Mezzanine's user-private configuration
 area. Transcript and presentation payloads remain in their existing session

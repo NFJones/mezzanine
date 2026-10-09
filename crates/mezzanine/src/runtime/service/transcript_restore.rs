@@ -160,6 +160,17 @@ impl RuntimeSessionService {
         store.recover_append_receipts()?;
         let session_id = self.session.id.as_str().to_string();
         let records = store.load_agent_session_metadata(&session_id)?;
+        if let Some(notice) = store.agent_session_metadata_recovery_notice(&session_id)? {
+            self.append_runtime_diagnostic_event(
+                serde_json::json!({
+                    "kind": "active_metadata_legacy_recovery", "detail": notice,
+                })
+                .to_string(),
+            )?;
+            if let Ok(pane_id) = self.active_pane_id().map(|id| id.to_string()) {
+                self.append_agent_status_text_to_terminal_buffer(&pane_id, &notice)?;
+            }
+        }
         // Reserve every restored name before backfilling any legacy root.
         for record in &records {
             if let Some(name) = store

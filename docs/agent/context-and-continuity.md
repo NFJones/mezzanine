@@ -34,6 +34,13 @@ Conversation continuity is not proof that a command completed or that the
 filesystem is unchanged: verify interrupted work before asking the agent to
 continue.
 
+Active bindings are checkpointed separately for each Mezzanine session. New
+versions import older shared binding metadata once without rewriting a running
+older daemon's index. The known trailing-bracket corruption is recovered only
+after an exact private backup; other damage is diagnosed rather than silently
+discarded. See [lifecycle recovery](../operations/lifecycle-detach-and-recovery.md)
+for coexistence, backup privacy and downgrade limitations.
+
 ## Choose a conversation operation
 
 | Goal | Command | Effect |

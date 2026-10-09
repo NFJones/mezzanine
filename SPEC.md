@@ -14179,8 +14179,40 @@ compress it into concatenated zstd frames in the same saved-session directory.
 Readers of presentation logs MUST treat the concatenated zstd history and the
 active cleartext tail as one ordered presentation stream.
 
-The parent agent-session directory MUST also contain a structured active-session
-metadata checkpoint. This checkpoint MUST be metadata-only: it MAY contain the
+The parent agent-session directory MUST also contain structured active-session
+metadata checkpoints. New writers MUST isolate these by Mezzanine session id
+under `.active-agent-session-metadata-v1/<session-key>.json`, using a
+domain-separated SHA-256 session key and a version-1 ownership-bearing envelope
+around validated active-binding TSV rows. Each checkpoint MUST be serialized
+across cooperating processes by a private bounded-wait advisory lock and
+published from an exclusive private staging inode with file and directory sync.
+Sorted conversation locks MUST precede the session checkpoint lock; a shared
+legacy recovery backup lock follows it. An empty published checkpoint MUST
+remain authoritative and MUST NOT resurrect legacy bindings on restart.
+
+The legacy shared `active-agent-sessions.tsv` and its fixed `.tmp` pathname
+MUST NOT be rewritten or removed by new checkpoint writers. An older daemon
+that does not honor new locks can therefore continue writing its legacy index
+without corrupting or overwriting new checkpoints. Legacy import MUST use a
+bounded regular-file snapshot, reject observed mutation/replacement, validate
+the supported row contracts and select only the requested session's bindings.
+Once a scoped checkpoint exists, later legacy writes MUST NOT replace it.
+Older versions cannot read this new checkpoint layout; concurrent execution is
+not a promise of safe downgrade restoration or joint ownership of one session.
+
+Exactly one standalone terminal `]` after fully validated legacy records MAY
+be excluded from imported bindings only after the complete original bytes have
+been durably preserved in a private content-addressed backup. Its source file
+MUST remain untouched and the recovery MUST be reported with source/backup
+paths and row number, never raw field content. Other corruption, unsupported
+versions, missing/conflicting recovery evidence, or an unsafe file MUST fail
+with content-free actionable diagnostics rather than fabricate empty history.
+A failed publication before rename MUST retain the previous checkpoint and
+roll back newly captured sidecars. After authoritative rename, a directory-sync
+failure MUST report uncertain durability and retain consistent sidecar captures;
+it MUST NOT imply that nothing was written or replay actions to repair state.
+
+Each checkpoint MUST be metadata-only: it MAY contain the
 Mezzanine session id, pane id, active conversation id, visibility state, active
 turn id, known transcript-entry count, log level, model-profile selection, plan
 mode, and response style. It MUST NOT duplicate model request context, terminal

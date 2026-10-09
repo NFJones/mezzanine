@@ -17,6 +17,9 @@ mod catalog;
 /// Crash-safe tar+zstd lifecycle storage for saved conversations.
 mod archive;
 
+/// Isolated, cross-process serialized active bindings and checked legacy import.
+mod active_metadata;
+
 /// Versioned identity-bearing presentation source, separate from model context.
 pub(crate) mod activity;
 /// Exact settled steering occurrences, never pending execution input.

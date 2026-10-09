@@ -25,10 +25,7 @@ use super::archive::{
     archived_payloads_exist,
 };
 use super::catalog::{self, CatalogCandidate, CatalogPayloadLayout};
-use super::encoding::{
-    decode_agent_session_metadata, decode_transcript_entry, encode_agent_session_metadata,
-    encode_transcript_entry,
-};
+use super::encoding::{decode_transcript_entry, encode_transcript_entry};
 use super::fs::{set_private_dir_permissions, set_private_file_permissions};
 use super::history;
 use super::types::{
@@ -545,6 +542,8 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            active_metadata_fault: Arc::new(AtomicU8::new(0)),
+            #[cfg(test)]
             fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             fail_compaction_epoch_before_rename: Arc::new(AtomicBool::new(false)),
@@ -586,6 +585,7 @@ impl AgentTranscriptStore {
             fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
+            active_metadata_fault: Arc::new(AtomicU8::new(0)),
             fail_compaction_epoch_before_rename: Arc::new(AtomicBool::new(false)),
             fail_compaction_epoch_before_marker: Arc::new(AtomicBool::new(false)),
             fail_next_transcript_append: Arc::new(AtomicBool::new(false)),
@@ -3523,100 +3523,6 @@ impl AgentTranscriptStore {
         self.agent_session_metadata_path()
     }
 
-    /// Loads active agent-session metadata for one Mezzanine session id.
-    pub fn load_agent_session_metadata(
-        &self,
-        mezzanine_session_id: &str,
-    ) -> Result<Vec<AgentSessionMetadata>> {
-        if mezzanine_session_id.trim().is_empty() {
-            return Err(MezError::invalid_args(
-                "mezzanine session id must not be empty",
-            ));
-        }
-        let path = self.agent_session_metadata_path();
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let mut data = String::new();
-        std_fs::File::open(path)?.read_to_string(&mut data)?;
-        data.lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(decode_agent_session_metadata)
-            .filter_map(|decoded| match decoded {
-                Ok(metadata) if metadata.mezzanine_session_id == mezzanine_session_id => {
-                    Some(Ok(metadata))
-                }
-                Ok(_) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect()
-    }
-
-    /// Replaces active agent-session metadata for one Mezzanine session id.
-    ///
-    /// Records for other live or saved Mezzanine sessions are preserved. This
-    /// makes each checkpoint idempotent while avoiding cross-session
-    /// contamination when a new daemon owns a different session identity.
-    pub fn save_agent_session_metadata(
-        &self,
-        mezzanine_session_id: &str,
-        records: &[AgentSessionMetadata],
-    ) -> Result<usize> {
-        if mezzanine_session_id.trim().is_empty() {
-            return Err(MezError::invalid_args(
-                "mezzanine session id must not be empty",
-            ));
-        }
-        for record in records {
-            record.validate()?;
-            if record.mezzanine_session_id != mezzanine_session_id {
-                return Err(MezError::invalid_args(
-                    "agent session metadata belongs to a different Mezzanine session",
-                ));
-            }
-        }
-        #[cfg(test)]
-        if self
-            .fail_agent_session_metadata_write
-            .swap(false, Ordering::SeqCst)
-        {
-            return Err(MezError::invalid_state(
-                "injected agent session metadata write failure",
-            ));
-        }
-        self.ensure_store_dir()?;
-        let path = self.agent_session_metadata_path();
-        let mut merged = Vec::new();
-        if path.exists() {
-            let mut data = String::new();
-            std_fs::File::open(&path)?.read_to_string(&mut data)?;
-            for line in data.lines().filter(|line| !line.trim().is_empty()) {
-                let metadata = decode_agent_session_metadata(line)?;
-                if metadata.mezzanine_session_id != mezzanine_session_id {
-                    merged.push(metadata);
-                }
-            }
-        }
-        merged.extend(records.iter().cloned());
-        let temp_path = path.with_extension("tmp");
-        {
-            let mut file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&temp_path)?;
-            for metadata in &merged {
-                file.write_all(encode_agent_session_metadata(metadata)?.as_bytes())?;
-                file.write_all(b"\n")?;
-            }
-            file.sync_all()?;
-        }
-        set_private_file_permissions(&temp_path)?;
-        std_fs::rename(&temp_path, &path)?;
-        set_private_file_permissions(&path)?;
-        Ok(records.len())
-    }
-
     /// Persists immutable identities/catalogs with the active binding checkpoint.
     /// Sorted conversation locks remain owned through capture, commit and rollback,
     /// so another writer cannot have its committed identity erased by restoration.
@@ -3635,7 +3541,9 @@ impl AgentTranscriptStore {
             .iter()
             .map(|id| self.acquire_conversation_lock(id))
             .collect::<Result<Vec<_>>>()?;
+        let _metadata_lock = self.lock_agent_session_metadata(mezzanine_session_id)?;
         let mut changed = Vec::<(String, PathBuf, Option<Vec<u8>>)>::new();
+        let mut checkpoint_published = false;
         let commit = (|| -> Result<usize> {
             for record in records {
                 record.validate()?;
@@ -3682,9 +3590,24 @@ impl AgentTranscriptStore {
                     changed.push((record.conversation_id.clone(), path, previous));
                 }
             }
-            self.save_agent_session_metadata(mezzanine_session_id, records)
+            self.save_agent_session_metadata_locked(mezzanine_session_id, records)
+                .map_err(|failure| {
+                    checkpoint_published = failure.published;
+                    failure.error
+                })
         })();
         if let Err(error) = commit {
+            if checkpoint_published {
+                // The new binding checkpoint can already be authoritative.
+                // Keep its immutable sidecar captures consistent instead of
+                // rolling them back after a directory-sync uncertainty.
+                return Err(MezError::new(
+                    error.kind(),
+                    format!(
+                        "active binding checkpoint published but durability is uncertain; sidecar captures retained: {error}"
+                    ),
+                ));
+            }
             let mut failures = Vec::new();
             for (id, path, previous) in changed.iter().rev() {
                 if let Err(rollback) = self.restore_conversation_metadata_snapshot_locked(
@@ -4002,7 +3925,8 @@ impl AgentTranscriptStore {
         history::export_tsv_read_only(&self.root)
     }
 
-    /// Returns the durable active agent-session metadata file path.
+    /// Returns the read-only legacy shared active metadata import path.
+    /// New checkpoints use `agent_session_metadata_checkpoint_file` instead.
     pub fn agent_session_metadata_file(&self) -> PathBuf {
         self.agent_session_metadata_path()
     }
@@ -4386,7 +4310,7 @@ impl AgentTranscriptStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn ensure_store_dir(&self) -> Result<()> {
+    pub(super) fn ensure_store_dir(&self) -> Result<()> {
         std_fs::create_dir_all(&self.root)?;
         set_private_dir_permissions(&self.root)?;
         Ok(())

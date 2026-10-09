@@ -1131,7 +1131,7 @@ where
                     retry_attempt,
                     records,
                 } => {
-                    let path = store.agent_session_metadata_file();
+                    let path = store.agent_session_metadata_checkpoint_file(&mezzanine_session_id);
                     match persist_agent_session_metadata(
                         store.clone(),
                         mezzanine_session_id.clone(),

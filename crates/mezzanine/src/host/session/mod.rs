@@ -1327,6 +1327,52 @@ mod tests {
         fixture.cleanup();
     }
 
+    /// Initial daemon startup imports the exact legacy bracket incident only
+    /// after preserving its source, then reaches a live Unix control socket.
+    /// The foreign binding is not inherited by the newly created session and
+    /// neither old global metadata nor any older staging inode is rewritten.
+    #[tokio::test(flavor = "current_thread")]
+    async fn initial_session_startup_recovers_legacy_metadata_fragment_before_connections() {
+        let seed = RestoredAgentBindingFixture::new("initial-fragment-source");
+        let seed_store = AgentTranscriptStore::new(seed.transcript_root.clone());
+        let checkpoint =
+            seed_store.agent_session_metadata_checkpoint_file(seed.service.session().id.as_str());
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&fs::read(checkpoint).unwrap()).unwrap();
+        let mut legacy = envelope["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| format!("{}\n", row.as_str().unwrap()))
+            .collect::<String>();
+        legacy.push_str("]\n");
+        seed.cleanup();
+        let root = test_root("initial-fragment-ready");
+        let store = AgentTranscriptStore::under_config_root(&root);
+        fs::create_dir_all(store.root()).unwrap();
+        fs::write(store.agent_session_metadata_file(), &legacy).unwrap();
+        let control = root.join("control.sock");
+        let mut request = test_request("initial-fragment", root.clone(), control.clone());
+        let id = request.session.id.to_string();
+        request.sockets.publish_control = true;
+        let runtime = SessionFactory::create(request).await.unwrap();
+        let connection = tokio::net::UnixStream::connect(&control).await.unwrap();
+        assert!(store.load_agent_session_metadata(&id).unwrap().is_empty());
+        let notice = store
+            .agent_session_metadata_recovery_notice(&id)
+            .unwrap()
+            .unwrap();
+        assert!(notice.contains("line 2") && notice.contains("legacy file left unchanged"));
+        assert_eq!(
+            fs::read(store.agent_session_metadata_file()).unwrap(),
+            legacy.as_bytes()
+        );
+        drop(connection);
+        drop(runtime);
+        assert!(!control.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// Verifies restored snapshot startup degrades instead of failing when the
     /// durable agent session metadata is malformed.
     ///
@@ -1339,7 +1385,7 @@ mod tests {
         let mut fixture = RestoredAgentBindingFixture::new("malformed-metadata");
         let probe = fixture.daemon_only_probe();
         let metadata_path = AgentTranscriptStore::new(fixture.transcript_root.clone())
-            .agent_session_metadata_path_for_tests();
+            .agent_session_metadata_checkpoint_file(fixture.service.session().id.as_str());
         let mut contents = fs::read_to_string(&metadata_path).unwrap();
         contents.push_str("malformed-agent-session-record\n");
         fs::write(&metadata_path, contents).unwrap();

@@ -344,6 +344,9 @@ pub struct AgentTranscriptStore {
     /// Test-only one-shot failure immediately before replacing session metadata.
     #[cfg(test)]
     pub(super) fail_agent_session_metadata_write: Arc<AtomicBool>,
+    /// One-shot active binding publication/recovery phase fault.
+    #[cfg(test)]
+    pub(super) active_metadata_fault: Arc<AtomicU8>,
     #[cfg(test)]
     pub(super) fail_compaction_epoch_write: Arc<AtomicBool>,
     /// One-shot failure at the first-epoch rename boundary.

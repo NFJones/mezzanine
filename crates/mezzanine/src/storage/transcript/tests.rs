@@ -1,5 +1,7 @@
 //! Tests for transcript persistence, forking, and TSV escaping.
 
+/// Shared-index corruption, isolated checkpoints and legacy recovery.
+mod active_metadata;
 /// Regression coverage for shared, saturating failure-injection countdowns.
 mod failure_countdowns;
 
@@ -4479,7 +4481,17 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
     assert_eq!(live, vec![replacement]);
     assert_eq!(other, vec![foreign]);
     assert!(store.list().unwrap().is_empty());
-    assert!(store.agent_session_metadata_file().exists());
+    assert!(
+        store
+            .agent_session_metadata_checkpoint_file("$live")
+            .exists()
+    );
+    assert!(
+        store
+            .agent_session_metadata_checkpoint_file("$other")
+            .exists()
+    );
+    assert!(!store.agent_session_metadata_file().exists());
     let _ = fs::remove_dir_all(root);
 }
 
