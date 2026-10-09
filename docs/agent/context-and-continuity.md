@@ -75,6 +75,12 @@ Live context capture and source eligibility remain actor-owned; workers cannot
 rediscover or expand authority. A cancelled blocking source read or request worker
 can retain one of the finite slots until its actual work finishes.
 
+The compactor receives the selected source once, without duplicating ordinary raw
+replay or leaking the retained tail into its input. Replay removal keeps assistant
+and owned action/native-tool/MCP evidence together as complete execution groups;
+unrelated exact references keep their original identities and order. The summary
+candidate restores the retained groups with their original execution ownership.
+
 If an earlier accepted prompt or command is still preparing its history, a new
 `/compact` is refused before changing the conversation epoch. The earlier input
 continues normally; this also protects guidance resumed after cancelling compaction.

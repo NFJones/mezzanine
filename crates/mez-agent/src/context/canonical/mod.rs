@@ -1451,9 +1451,24 @@ impl AgentContext {
         &mut self,
         mut keep: impl FnMut(&ContextBlock) -> bool,
     ) -> AgentContextResult<()> {
+        self.retain_blocks_with_metadata(|block, _| keep(block))
+    }
+
+    /// Retains blocks using their captured causal metadata, without rebuilding
+    /// ownership from visible text or source labels. Surviving slots and events
+    /// retain their identities and order. An invalid causal projection returns
+    /// an error and leaves the original context unchanged.
+    pub fn retain_blocks_with_metadata(
+        &mut self,
+        mut keep: impl FnMut(&ContextBlock, &ContextBlockMetadata) -> bool,
+    ) -> AgentContextResult<()> {
         let mut candidate = self.clone();
-        candidate.stable_slots.retain(|slot| keep(&slot.block));
-        candidate.chronology.retain(|event| keep(&event.block));
+        candidate
+            .stable_slots
+            .retain(|slot| keep(&slot.block, &slot.metadata()));
+        candidate
+            .chronology
+            .retain(|event| keep(&event.block, &event.metadata()));
         candidate.rebuild_projections();
         candidate.validate_stored_metadata()?;
         validate_context_placement_order(&candidate.blocks)?;

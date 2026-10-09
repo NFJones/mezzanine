@@ -11229,6 +11229,13 @@ The baseline command capabilities are:
   same logical owner and finite capacity; final adoption MUST revalidate that owner
   before queuing the existing compactor. Live context capture and source eligibility
   remain actor-owned; workers MUST NOT rediscover or broaden runtime authority.
+  Manual compactor context and prospective replay candidates MUST exclude raw
+  transcript replay as complete captured execution groups, including owned action,
+  native-tool, committed and MCP evidence. They MUST NOT orphan evidence by removing
+  only its assistant's source kind, invent replacement owners, or weaken canonical
+  validation. Unrelated exact references MUST retain their identities and ordering.
+  The selected prefix MUST enter compactor source exactly once; the retained raw
+  tail MUST NOT also enter through ordinary context blocks.
   If the manual compactor's complete request exceeds a configured input cap or
   the provider rejects it for context length, it MUST split redacted temporary
   source at UTF-8 boundaries, summarize bounded chunks in source order, and
