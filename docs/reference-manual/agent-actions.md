@@ -69,6 +69,12 @@ target effective write scopes. Other execution modes reject absolute patch
 headers and targets outside the pane working directory. These patch checks are
 not general confinement of an unsandboxed shell.
 
+The shell patch resolver fails closed if its native component walker cannot read
+a symbolic link or exceeds its link-expansion bound. It reports a fixed reason
+without adding target path content to that diagnostic. These errors do not retry
+the reader, authorize a weaker resolution fallback, or establish the cause of an
+earlier intermittent failure; inspect the current evidence before repairing work.
+
 Confirmed earlier file changes remain applied if a later operation fails.
 Review the result and changed files, then ask the agent to repair only the
 remaining work using fresh file context. Replaying the original batch can
