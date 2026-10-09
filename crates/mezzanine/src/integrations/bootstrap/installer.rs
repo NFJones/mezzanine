@@ -82,6 +82,8 @@ pub(crate) struct RecoveryReport {
     pub(crate) changed_paths: Vec<String>,
     /// Exact preserved destinations, never archived configuration payloads.
     pub(crate) preserved_paths: Vec<String>,
+    /// Whether original accepted intent includes exact compiled private adoption.
+    pub(crate) adopted: bool,
 }
 
 /// Original receipt destination is frozen by the journal version and intent.
@@ -107,6 +109,9 @@ struct Intent {
     previous_private: Option<Manifest>,
     #[serde(default)]
     previous_vendor: Option<Manifest>,
+    /// Exact unreceipted compiled bundle, not a previous receipt or journal grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adopted: Option<Manifest>,
     #[serde(default)]
     archives: BTreeMap<String, String>,
 }
@@ -318,11 +323,20 @@ fn plan_with_publisher(
         None
     };
     let previous = primary.or(vendor);
+    let adopted = if previous.is_none()
+        && receipt_location == ReceiptLocation::Private
+        && matches!(operation, Operation::Install)
+    {
+        super::adoption::recognize(manifest, history, &read)?
+    } else {
+        None
+    };
     let old = previous
         .as_ref()
-        .map(|receipt| {
-            receipt
-                .manifest
+        .map(|receipt| &receipt.manifest)
+        .or(adopted.as_ref())
+        .map(|manifest| {
+            manifest
                 .entries
                 .iter()
                 .map(|entry| (entry.path.clone(), &entry.artifact))
@@ -357,13 +371,21 @@ fn plan_with_publisher(
     for path in paths {
         let before = read(&path)?;
         observed.push((path.clone(), before.clone()));
+        if adopted.is_some()
+            && let Some(super::reconciliation::Artifact::File { bytes }) = old.get(&path).copied()
+            && before.as_deref() != Some(bytes.as_slice())
+        {
+            return Err(MezError::conflict(
+                "bootstrap adopted bundle changed during inspection",
+            ));
+        }
         let (after, archive) = reconcile_preserving(
             &manifest.harness,
             &path,
             before.as_deref(),
             old.get(&path).copied(),
             desired.get(&path).copied(),
-            (receipt_location == ReceiptLocation::Private).then_some(5),
+            (receipt_location == ReceiptLocation::Private).then_some(6),
         )?;
         if let Some(archive) = archive {
             archive_requirements.insert(path.clone(), archive.clone());
@@ -436,6 +458,7 @@ fn plan_with_publisher(
             receipt_location,
             previous_private,
             previous_vendor,
+            adopted,
             archives: archive_requirements,
         },
         pending,
@@ -457,6 +480,11 @@ impl Plan {
         self.pending.is_some()
     }
 
+    /// Reports qualified requested/original adoption, not proof of publication.
+    pub(crate) fn adoption_pending(&self) -> bool {
+        self.intent.adopted.is_some() || self.pending.iter().any(|pending| pending.adopted)
+    }
+
     /// Classifies requested reconciliation after any original pending recovery.
     /// Receipt migration counts as repair; runtime behavior is not inspected.
     pub(crate) fn outcome(&self) -> BootstrapOutcome {
@@ -464,7 +492,12 @@ impl Plan {
             BootstrapOutcome::Unchanged
         } else if matches!(self.intent.operation, Operation::Uninstall) {
             BootstrapOutcome::Uninstalled
-        } else if let Some(previous) = &self.intent.previous {
+        } else if let Some(previous) = self
+            .intent
+            .previous
+            .as_ref()
+            .or(self.intent.adopted.as_ref())
+        {
             if previous == &self.intent.manifest {
                 BootstrapOutcome::Repaired
             } else {
@@ -638,6 +671,7 @@ fn recover_private_owner(
             .map(|change| change.path.clone())
             .collect(),
         preserved_paths: pending.preserved_paths.clone(),
+        adopted: pending.adopted,
     };
     if preview {
         return Ok(Some(report));
@@ -709,6 +743,23 @@ fn authorize_recovery(
 ) -> Result<()> {
     let intent: Intent = serde_json::from_value(value.clone())
         .map_err(|_| MezError::conflict("bootstrap journal intent invalid"))?;
+    if let Some(adopted) = &intent.adopted {
+        if version < 6
+            || intent.receipt_location != ReceiptLocation::Private
+            || !matches!(intent.operation, Operation::Install)
+            || intent.previous.is_some()
+            || intent.previous_private.is_some()
+            || intent.previous_vendor.is_some()
+            || adopted.harness != manifest.harness
+            || (adopted != manifest && !history.contains(adopted))
+        {
+            return Err(MezError::forbidden(
+                "bootstrap adoption provenance/version unavailable",
+            ));
+        }
+        validate_manifest(adopted)?;
+        super::adoption::prove_preimages(adopted, changes, |path| publisher.read(path))?;
+    }
     if (version == 2
         && (intent.receipt_location != ReceiptLocation::Vendor
             || intent.previous_private.is_some()
@@ -781,6 +832,7 @@ fn authorize_recovery(
     let old = intent
         .previous
         .as_ref()
+        .or(intent.adopted.as_ref())
         .map(|old| {
             old.entries
                 .iter()

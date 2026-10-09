@@ -105,6 +105,7 @@ fn run_with_root_selector<W: Write>(
         let mut recovery_pending = false;
         let mut changed_paths = Vec::new();
         let mut planned_preserved_paths = Vec::new();
+        let mut adoption_planned = false;
         let outcome;
         let operation = if args.recover {
             let report = if args.dry_run {
@@ -119,6 +120,7 @@ fn run_with_root_selector<W: Write>(
             outcome = if let Some(report) = report {
                 changed_paths = report.changed_paths;
                 planned_preserved_paths = report.preserved_paths;
+                adoption_planned = report.adopted;
                 recovery_pending = args.dry_run;
                 recovered = !args.dry_run;
                 BootstrapOutcome::Recovered
@@ -150,6 +152,7 @@ fn run_with_root_selector<W: Write>(
                 .map(str::to_string)
                 .collect();
             recovery_pending = plan.recovery_pending();
+            adoption_planned = plan.adoption_pending();
             if !args.dry_run && !args.check {
                 plan.apply()?;
                 recovered = recovery_pending;
@@ -185,6 +188,7 @@ fn run_with_root_selector<W: Write>(
                 "dry_run":args.dry_run,"recovery_pending":recovery_pending,
                 "result":result,"planned_outcome":outcome.as_str(),
                 "planned_preserved_paths":planned_preserved_paths,"preserved_paths":preserved_paths,
+                "adoption_planned":adoption_planned,"legacy_adopted":adoption_planned && !args.dry_run && !args.check,
                 "runtime_verification":"not-performed",
                 "support":"best-effort",
                 "guidance":"Installation is observational only. Use ordinary vendor commands and preserve vendor review/disabled policy. Automatic enrollment and accounting capabilities may still be unavailable; no Mez vendor-launch wrappers exist",
@@ -201,6 +205,7 @@ fn run_with_root_selector<W: Write>(
         "harness":args.harness, "vendor_version":args.vendor_version,
         "scope_root":args.root, "operation":if args.recover {"recover"} else if args.uninstall {"uninstall"} else if args.check {"check"} else {"install"},"dry_run":args.dry_run,
         "supported":false, "certification":"unavailable", "changed_paths":[],
+        "adoption_planned":false,"legacy_adopted":false,
         "result":"unavailable","planned_outcome":null,"planned_preserved_paths":[],"preserved_paths":[],"runtime_verification":"not-performed",
         "lifecycle":"unavailable", "usage":"unavailable",
         "reason":"No compiled adapter manifest; no vendor configuration, credentials or hook trust changed",
@@ -238,7 +243,7 @@ fn write_report<W: Write>(
         )?;
         writeln!(
             stdout,
-            "Changes: {}; preservation: {} planned, {} confirmed; recovery: {}",
+            "Changes: {}; preservation: {} planned, {} confirmed; recovery: {}; adoption: {}",
             report["changed_paths"].as_array().map_or(0, Vec::len),
             report["planned_preserved_paths"]
                 .as_array()
@@ -248,6 +253,13 @@ fn write_report<W: Write>(
                 "completed"
             } else if report["recovery_pending"] == true {
                 "pending"
+            } else {
+                "none"
+            },
+            if report["legacy_adopted"] == true {
+                "confirmed"
+            } else if report["adoption_planned"] == true {
+                "planned"
             } else {
                 "none"
             },
@@ -382,10 +394,81 @@ mod tests {
         Ok(serde_json::from_slice(&output).unwrap())
     }
 
-    /// CLI result labels derive from accepted ownership and actual publication,
-    /// not exit success or runtime activation. Read-only previews/checks preserve
-    /// both trees; repairs report archived destinations without exposing bytes.
-    /// Historical upgrade and pending recovery use the same production owners.
+    /// Public private-bundle adoption distinguishes planned from completed work,
+    /// preserves both trees during previews, and reports current receipt repair
+    /// versus historical upgrade without claiming runtime activation. Original
+    /// interrupted adoption remains visible through explicit and automatic recovery.
+    #[test]
+    fn bootstrap_cli_private_adoption_reports_only_qualified_settlement() {
+        use crate::integrations::bootstrap::{
+            installer::{Operation, plan_private},
+            reconciliation::Artifact,
+        };
+        let current = crate::integrations::bootstrap::compiled_manifest("pi", None).unwrap();
+        let old = crate::integrations::bootstrap::compiled_history(&current)
+            .pop()
+            .unwrap();
+        for (prior, explicit_recovery) in [
+            (&current, false),
+            (&current, true),
+            (&old, false),
+            (&old, true),
+        ] {
+            let home = PrivateHome::new();
+            let root = home.0.join("vendor");
+            std::fs::create_dir(&root).unwrap();
+            for entry in &prior.entries {
+                let Artifact::File { bytes } = &entry.artifact else {
+                    panic!("private only");
+                };
+                let file = root.join(&entry.path);
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                std::fs::write(file, bytes).unwrap();
+            }
+            let before = tree_snapshot(&home.0);
+            for flags in [vec!["--dry-run"], vec!["--check"]] {
+                let output = invoke_private_fixture(&home.0, &root, &flags).unwrap();
+                assert_eq!(output["adoption_planned"], true);
+                assert_eq!(output["legacy_adopted"], false);
+                assert_eq!(
+                    output["planned_outcome"],
+                    if prior == &current {
+                        "repaired"
+                    } else {
+                        "upgraded"
+                    }
+                );
+                assert_eq!(tree_snapshot(&home.0), before);
+            }
+            let accepted = plan_private(&root, &home.0, &current, Operation::Install).unwrap();
+            accepted.fixture_interrupt_after(1);
+            assert!(accepted.apply().is_err());
+            let before = tree_snapshot(&home.0);
+            for flags in [vec!["--dry-run"], vec!["--recover", "--dry-run"]] {
+                let output = invoke_private_fixture(&home.0, &root, &flags).unwrap();
+                assert_eq!(output["adoption_planned"], true);
+                assert_eq!(output["legacy_adopted"], false);
+                assert_eq!(tree_snapshot(&home.0), before);
+            }
+            let flags: &[&str] = if explicit_recovery {
+                &["--recover"]
+            } else {
+                &[]
+            };
+            let output = invoke_private_fixture(&home.0, &root, flags).unwrap();
+            assert_eq!(output["legacy_adopted"], true);
+            assert_eq!(output["recovered"], true);
+            if explicit_recovery {
+                assert_eq!(output["result"], "recovered");
+            }
+            assert_eq!(output["runtime_verification"], "not-performed");
+            let repeated = invoke_private_fixture(&home.0, &root, &[]).unwrap();
+            assert_eq!(repeated["legacy_adopted"], false);
+            assert_eq!(repeated["adoption_planned"], false);
+            assert_eq!(repeated["result"], "unchanged");
+        }
+    }
+
     /// Public Codex bootstrap merges shared authored callbacks through the same
     /// private owner as its previews. Historical ownership upgrade can change only
     /// the receipt while retaining byte-exact authored JSON and disabled config.

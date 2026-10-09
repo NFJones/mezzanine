@@ -15,6 +15,9 @@
 //! dependencies; versions 2/3 retain original strict destination semantics.
 //! Version 5 additionally admits bounded multi-array ownership and receipt-proven
 //! Codex whole-file-to-shared migration; genuine v2-v4 targets remain frozen.
+//! Version 6 records exact unreceipted private-bundle adoption independently of
+//! receipt provenance; its compiled preimage proof is installer-owned. V2-v5
+//! cannot acquire adoption authority, and inspection still performs no writes.
 
 use super::reconciliation::publication_path;
 use super::root_directory::RootDirectory;
@@ -118,6 +121,8 @@ pub(super) struct PendingRecovery {
     pub(super) changes: Vec<Change>,
     /// Content-free destinations from compiled-authorized archive dependencies.
     pub(super) preserved_paths: Vec<String>,
+    /// Content-free fact extracted only after exact adoption authorization.
+    pub(super) adopted: bool,
 }
 
 /// Held root, with optional exclusive ownership acquired only for publication.
@@ -680,7 +685,7 @@ impl Publisher {
         })?;
         let root = self.directory.file()?.metadata()?;
         self.validate_root()?;
-        if !matches!(journal.version, 2..=5)
+        if !matches!(journal.version, 2..=6)
             || journal.root_device != root.dev()
             || journal.root_inode != root.ino()
         {
@@ -721,6 +726,10 @@ impl Publisher {
             bytes,
             location,
             changes: journal.changes,
+            adopted: journal
+                .intent
+                .get("adopted")
+                .is_some_and(|value| !value.is_null()),
             preserved_paths: serde_json::from_value::<std::collections::BTreeMap<String, String>>(
                 journal
                     .intent
@@ -774,7 +783,7 @@ impl Publisher {
         self.validate_changes(&changes, false)?;
         let root = self.directory.file()?.metadata()?;
         let bytes = serde_json::to_vec(&Journal {
-            version: if self.uses_private_state() { 5 } else { 2 },
+            version: if self.uses_private_state() { 6 } else { 2 },
             root_device: root.dev(),
             root_inode: root.ino(),
             intent,

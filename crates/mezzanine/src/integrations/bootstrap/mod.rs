@@ -7,6 +7,8 @@
 //! No vendor binary, credential, hook trust or daemon authority is installed here.
 //! An external writer can still race final check and rename: this is not atomic CAS.
 
+/// Exact private-bundle recognition, never user-document or filename ownership.
+mod adoption;
 #[allow(
     dead_code,
     reason = "pinned projection awaits launch-bound vendor qualification"

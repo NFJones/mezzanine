@@ -349,7 +349,9 @@ read-only preview and installation-only anchored creation. Bare install and
 recognized receipt can be recreated by ordinary install, including upgrades;
 already absent private files do not block uninstall. Check/dry-run captures
 absence without creating artifact parents, and apply revalidates it before
-no-replace publication. Unreceipted content remains a conflict. Receipt-proven edited
+no-replace publication. Unqualified unreceipted content remains a conflict; only
+the complete exact private-bundle adoption described below is an exception.
+Receipt-proven edited
 Pi `.mjs` helpers, the private `extensions/mezzanine/package.json` loader metadata,
 and OpenCode generated JavaScript/module helpers now preserve exact preimages in
 private content-addressed archives before replacement/removal. Only that exact
@@ -407,7 +409,7 @@ new transactions journal privately, and compiled-authorized legacy recovery copi
 exact original bytes durably before removing the old journal. Identical dual copies
 after a copy-boundary interruption can resume; conflicting copies and changed
 inspected source locations reject without choosing a winner. Final journal removal
-checks exact accepted bytes/location. New private transactions use journal version 4,
+checks exact accepted bytes/location. New private transactions use journal version 6,
 with explicit Private receipt placement and qualified prior receipt sources.
 Recognized version-2 intent still finishes its original vendor destinations; it cannot
 authorize private receipt targets. Unknown or altered version/placement/root/effects
@@ -437,7 +439,7 @@ private state still reject; actual filesystem denial is not bypassed or redirect
 No additional enable command, private-root override, or configuration option is
 required for this private-journal routing.
 
-Current private journals use version 5, adding bounded multi-array ownership and
+Version-5 private journals added bounded multi-array ownership and
 exact compiled Codex whole-file receipt projection while retaining v4 archive
 dependencies, finite limits and preimage/root/source fences. Genuine v2-v4 recovery
 keeps original target semantics, including old whole-file Codex deletion. Older
@@ -445,6 +447,23 @@ version labels cannot authorize new shared manifests or migration payloads; unkn
 future versions reject. The legacy vendor-root publisher cannot emit new multi-array
 intent: public bootstrap uses the private owner. Receipt payload schema remains 1;
 there is no Mezzanine configuration schema change.
+
+Current private journals use version 6 for exact unreceipted private-bundle
+adoption. Install can recognize a complete compiled Pi/OpenCode all-file bundle
+at its enumerated private paths only when every file matches exact generated
+bytes. It chooses the most-complete compiled match and checks all observed
+preimages again; unknown/edited/partial unqualified slots and invalid receipts
+still conflict. Surrounding authored files are not scanned or adopted. Shared
+config/hooks, including unreceipted Codex hooks, are excluded. Unreceipted uninstall
+does not adopt anything. Recovery keeps `adopted` distinct from previous receipt
+provenance and re-proves the entire original byte bundle; versions 2–5 cannot
+claim adoption. Existing receipt payload and Mezzanine configuration schemas do
+not change. JSON `adoption_planned` includes qualified pending recovery/requested
+intent; `legacy_adopted` stays false for read-only work and requires successful
+actual settlement. Matching-current adoption reports `repaired`; historical
+refresh reports `upgraded`. No adoption report implies vendor loading, enrollment
+or accounting support. Failed publication may create coordination lock/private
+directories, but cannot overwrite changed artifact preimages or publish success.
 
 ### Normalized observational hook helper
 
