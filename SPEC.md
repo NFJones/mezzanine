@@ -800,7 +800,10 @@ MUST NOT inherit private-file repair rules. Recovery MUST recompute authorized
 repairs and reject omitted required artifacts rather than trust journal payloads.
 Exact JSON-array-member ownership MUST preserve unrelated members and order,
 replace at the owned position, and uninstall only that member, not the containing
-document. Duplicate JSON keys, edited/ambiguous ownership and unowned matching
+document. Current private transactions MAY collapse exact receipt-owned duplicate
+members at their first owned position, or remove all exact owned copies on uninstall.
+This MUST NOT adopt unreceipted matching content or relax v2/v3 recovery semantics.
+Duplicate JSON keys, edited/ambiguous ownership and unowned matching
 members MUST conflict; strict JSON planning MUST NOT strip authored JSONC comments.
 edited ownership MUST conflict. Publication MUST retain bounded recovery intent
 before changing destinations, reject symlink/special-node traversal, and never
@@ -5277,6 +5280,12 @@ configuration root, independent of frontend runtime directories. Root and named
 lock objects MUST be revalidated before startup effects; unsafe or replaced
 objects MUST reject without unlinking them. Election does not replace the
 endpoint identity's exclusive lifetime lock or itself launch a broker.
+Successful startup-election acquisition MUST remain process-owned: disposal in
+the acquiring process MUST explicitly unlock the held object rather than rely
+only on descriptor closure. Fork-inherited duplicates MUST NOT prolong normal
+owner release; an unacquired or inherited guard MUST NOT unlock a live owner or
+authorize startup. Unexpected host unlock failures retain descriptor-close
+fallback, never lock unlinking, stealing or a guaranteed host-I/O liveness claim.
 Internal broker readiness MUST authenticate the kernel Unix peer before hello
 exchange, bound negotiation, and revalidate retained private root/socket identity.
 Readiness MUST retain the admitted stream and exact inert handle; socket existence

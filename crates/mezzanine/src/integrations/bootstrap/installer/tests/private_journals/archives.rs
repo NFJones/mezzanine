@@ -2,6 +2,82 @@
 
 use super::*;
 
+/// A compiled receipt qualifies exact duplicate registrations, not lookalike
+/// authored values. Current private planning collapses duplicates at the first
+/// owned position, or removes all exact copies on uninstall, preserving siblings.
+/// Every interrupted effect must recover once; historical v3 journals must not
+/// acquire this relaxed reconciliation merely by changing their version label.
+#[test]
+fn bootstrap_private_array_duplicates_reconcile_and_recover_without_sibling_loss() {
+    let current = crate::integrations::bootstrap::compiled_manifest("opencode", None).unwrap();
+    let owned = "./plugins/mezzanine/opencode_tui.mjs";
+    for operation in [Operation::Install, Operation::Uninstall] {
+        let probe = Fixture::new();
+        probe
+            .plan(&current, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        let input = serde_json::to_vec(&serde_json::json!({
+            "plugin": ["user-a", owned, ["user-b", {"enabled": true}], owned, "user-c", owned],
+            "theme": "authored"
+        }))
+        .unwrap();
+        fs::write(probe.root.join("tui.json"), &input).unwrap();
+        let effects = probe.plan(&current, operation).unwrap().changes.len();
+        for boundary in 1..=effects {
+            let fixture = Fixture::new();
+            fixture
+                .plan(&current, Operation::Install)
+                .unwrap()
+                .apply()
+                .unwrap();
+            fs::write(fixture.root.join("tui.json"), &input).unwrap();
+            let before = tree_snapshot(&fixture.workspace);
+            let accepted = fixture.plan(&current, operation).unwrap();
+            assert_eq!(tree_snapshot(&fixture.workspace), before);
+            assert!(accepted.intent.archives.is_empty());
+            accepted.fixture_interrupt_after(boundary);
+            assert!(accepted.apply().is_err());
+            let original = fs::read(fixture.journal()).unwrap();
+            let mut journal: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            journal["version"] = 3.into();
+            fs::write(fixture.journal(), serde_json::to_vec(&journal).unwrap()).unwrap();
+            let before = tree_snapshot(&fixture.workspace);
+            assert!(recover_private(&fixture.root, &fixture.home, &current).is_err());
+            assert_eq!(tree_snapshot(&fixture.workspace), before);
+            fs::write(fixture.journal(), &original).unwrap();
+            assert!(recover_private(&fixture.root, &fixture.home, &current).unwrap());
+            assert!(!recover_private(&fixture.root, &fixture.home, &current).unwrap());
+            let document: serde_json::Value =
+                serde_json::from_slice(&fs::read(fixture.root.join("tui.json")).unwrap()).unwrap();
+            let expected = if matches!(operation, Operation::Install) {
+                serde_json::json!(["user-a", owned, ["user-b", {"enabled": true}], "user-c"])
+            } else {
+                serde_json::json!(["user-a", ["user-b", {"enabled": true}], "user-c"])
+            };
+            assert_eq!(document["plugin"], expected);
+            assert_eq!(document["theme"], "authored");
+            assert!(
+                fixture
+                    .plan(&current, operation)
+                    .unwrap()
+                    .changed_paths()
+                    .is_empty()
+            );
+        }
+    }
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.root.join("tui.json"),
+        serde_json::to_vec(&serde_json::json!({"plugin": [owned, owned]})).unwrap(),
+    )
+    .unwrap();
+    let before = tree_snapshot(&fixture.workspace);
+    assert!(fixture.plan(&current, Operation::Install).is_err());
+    assert_eq!(tree_snapshot(&fixture.workspace), before);
+}
+
 /// The private Pi loader package is generated metadata, not shared vendor config.
 /// Current and every compiled historical receipt must preserve its exact edited
 /// bytes before repair/removal. Preview is write-free, every publication boundary

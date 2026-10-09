@@ -69,12 +69,18 @@ async fn outbound_startup_composition_elects_once_and_returns_retained_clients()
 
 /// Failed launch and absent readiness must release the short-lived election
 /// guard, with at most one launcher invocation and no ownership unlink/replay.
+/// Retained same-description duplicates make release independent of incidental
+/// fork/exec timing, rather than qualifying the fix with passing reruns alone.
 #[tokio::test]
 async fn outbound_startup_composition_failure_and_timeout_release_election() {
     let root = std::env::temp_dir().join(format!("mez-start-fail-{:032x}", rand::random::<u128>()));
     drop(StartupElection::acquire(&root).unwrap().unwrap());
     let count = AtomicUsize::new(0);
-    let failed = connect_with_launcher(&root, Duration::from_secs(1), |_| {
+    let duplicates = std::cell::RefCell::new(Vec::new());
+    let failed = connect_with_launcher(&root, Duration::from_secs(1), |guard| {
+        duplicates
+            .borrow_mut()
+            .push(guard.fixture_duplicate_lock()?);
         count.fetch_add(1, Ordering::SeqCst);
         Err(MezError::invalid_state("fixture launch failure"))
     })
@@ -84,7 +90,10 @@ async fn outbound_startup_composition_failure_and_timeout_release_election() {
     assert_eq!(failed.message(), "fixture launch failure");
     assert_eq!(count.load(Ordering::SeqCst), 1);
     drop(StartupElection::acquire(&root).unwrap().unwrap());
-    let timed_out = connect_with_launcher(&root, Duration::from_millis(200), |_| {
+    let timed_out = connect_with_launcher(&root, Duration::from_millis(200), |guard| {
+        duplicates
+            .borrow_mut()
+            .push(guard.fixture_duplicate_lock()?);
         count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     })
@@ -93,7 +102,9 @@ async fn outbound_startup_composition_failure_and_timeout_release_election() {
     .unwrap();
     assert!(timed_out.message().contains("timeout"));
     assert_eq!(count.load(Ordering::SeqCst), 2);
+    assert_eq!(duplicates.borrow().len(), 2);
     drop(StartupElection::acquire(&root).unwrap().unwrap());
+    drop(duplicates);
     assert!(!root.join("remote/client/endpoint.key").exists());
     std::fs::remove_dir_all(root).unwrap();
 }

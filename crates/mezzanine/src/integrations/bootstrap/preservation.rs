@@ -1,17 +1,19 @@
 //! Narrow generated-file preservation, independent of vendor shared documents.
 //!
 //! Only compiled receipt-owned Pi/OpenCode helper destinations and the private Pi
-//! loader package may preserve edited whole-file preimages. Shared package metadata,
-//! hooks/config and unowned slots retain strict
+//! loader package may preserve edited whole-file preimages. Current private
+//! transactions also deduplicate exact receipt-owned shared array registrations.
+//! Shared package metadata, hooks/config and unowned slots otherwise retain strict
 //! reconciliation. Archive keys are deterministic bounded identities of harness,
 //! relative destination and exact preimage; they never supply filesystem authority.
 
-use super::reconciliation::{Artifact, publication_path, reconcile};
+use super::reconciliation::{Artifact, publication_path, reconcile, reconcile_array};
 use crate::error::{MezError, Result};
 use sha2::{Digest, Sha256};
 
-/// Recomputes desired bytes plus a required archive for edited private artifacts.
-/// Caller qualifies compiled receipts and checks both vendor/archive observations.
+/// Recomputes current private repairs and required archives for edited artifacts.
+/// Caller qualifies compiled receipts and checks vendor/archive observations.
+/// `enabled` admits current private semantics; legacy journals retain strict rules.
 pub(super) fn reconcile_preserving(
     harness: &str,
     path: &str,
@@ -20,6 +22,12 @@ pub(super) fn reconcile_preserving(
     desired: Option<&Artifact>,
     enabled: bool,
 ) -> Result<(Option<Vec<u8>>, Option<String>)> {
+    if enabled && let Some(Artifact::JsonArrayEntry { pointer, .. }) = previous {
+        return Ok((
+            reconcile_array(current, previous, desired, pointer, true)?,
+            None,
+        ));
+    }
     let generated = match harness {
         "pi" => {
             path == "extensions/mezzanine/package.json"

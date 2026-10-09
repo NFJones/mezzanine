@@ -147,7 +147,7 @@ pub(crate) fn reconcile(
             }
         }
         Artifact::JsonArrayEntry { pointer, .. } => {
-            reconcile_array(current, previous, desired, pointer)
+            reconcile_array(current, previous, desired, pointer, false)
         }
         Artifact::JsonEntry { pointer, .. } => {
             let parts = pointer_parts(pointer)?;
@@ -226,15 +226,22 @@ pub(crate) fn reconcile(
 }
 
 /// Reconciles a single exact owned array member while preserving sibling order.
-/// Missing or ambiguous prior ownership conflicts; unowned matching members are
-/// never adopted. Replacement retains its old position and uninstall keeps the
-/// shared document/array, not a stale whole-file backup.
-fn reconcile_array(
+/// Missing prior ownership conflicts; unowned matching members are never adopted.
+/// Current private transactions may deduplicate exact receipt-owned copies at
+/// their first position. Legacy journals remain strict. Uninstall keeps the
+/// shared document/array and all authored siblings, not a stale whole-file backup.
+pub(super) fn reconcile_array(
     current: Option<&[u8]>,
     previous: Option<&Artifact>,
     desired: Option<&Artifact>,
     pointer: &str,
+    deduplicate: bool,
 ) -> Result<Option<Vec<u8>>> {
+    if current.is_some_and(|bytes| bytes.len() > 1024 * 1024) {
+        return Err(MezError::invalid_args(
+            "bootstrap destination exceeds byte limit",
+        ));
+    }
     let parts = pointer_parts(pointer)?;
     let old = match previous {
         Some(Artifact::JsonArrayEntry {
@@ -298,7 +305,10 @@ fn reconcile_array(
             .filter_map(|(index, value)| (value == old).then_some(index))
             .collect::<Vec<_>>()
     });
-    if indices.as_ref().is_some_and(|indices| indices.len() != 1) {
+    if indices
+        .as_ref()
+        .is_some_and(|indices| indices.is_empty() || (!deduplicate && indices.len() != 1))
+    {
         return Err(MezError::conflict(
             "bootstrap owned array entry changed or ambiguous",
         ));
@@ -308,14 +318,21 @@ fn reconcile_array(
         .and_then(|indices| indices.first())
         .copied();
     if new.is_some_and(|new| {
-        array
-            .iter()
-            .enumerate()
-            .any(|(index, value)| Some(index) != position && value == new)
+        array.iter().enumerate().any(|(index, value)| {
+            value == new
+                && !indices
+                    .as_ref()
+                    .is_some_and(|indices| indices.binary_search(&index).is_ok())
+        })
     }) {
         return Err(MezError::conflict(
             "bootstrap array target has unowned matching entry",
         ));
+    }
+    if let Some(indices) = &indices {
+        for index in indices.iter().skip(1).rev() {
+            array.remove(*index);
+        }
     }
     match (position, new) {
         (Some(index), Some(value)) => array[index] = value.clone(),
@@ -505,6 +522,7 @@ mod tests {
     /// Generic JSON parsing overwrites duplicate keys and could discard authored
     /// plugins while appending ours. Ambiguous root/nested fields must refuse
     /// mutation before producing replacement bytes, including escaped aliases.
+    /// Current private deduplication must preserve the same rejection controls.
     #[test]
     fn bootstrap_array_reconciliation_refuses_duplicate_authored_fields() {
         let entry = Artifact::JsonArrayEntry {
@@ -517,6 +535,51 @@ mod tests {
             br#"{"plugin":[],"authored":{"value":1,"value":2}}"#,
         ] {
             assert!(reconcile(Some(input), None, Some(&entry)).is_err());
+            assert!(
+                reconcile_array(Some(input), Some(&entry), Some(&entry), "/plugin", true).is_err()
+            );
         }
+    }
+
+    /// Current private repair deduplicates only exact old receipt values, retaining
+    /// the first position on upgrade and all distinct authored values. Missing or
+    /// edited ownership, unowned new matches, kind changes and oversized documents
+    /// remain errors; legacy reconciliation cannot accept duplicate preimages.
+    #[test]
+    fn bootstrap_array_reconciliation_current_duplicates_upgrade_and_refuse_conflicts() {
+        let old = Artifact::JsonArrayEntry {
+            pointer: "/plugin".into(),
+            value: serde_json::json!(["owned", {"enabled": true}]),
+        };
+        let new = Artifact::JsonArrayEntry {
+            pointer: "/plugin".into(),
+            value: serde_json::json!("new-owned"),
+        };
+        let input = br#"{"plugin":["before",["owned",{"enabled":true}],["owned",{"enabled":false}],["owned",{"enabled":true}],"after"]}"#;
+        assert!(reconcile(Some(input), Some(&old), Some(&new)).is_err());
+        let upgraded = reconcile_array(Some(input), Some(&old), Some(&new), "/plugin", true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&upgraded).unwrap()["plugin"],
+            serde_json::json!(["before", "new-owned", ["owned", {"enabled": false}], "after"])
+        );
+        for input in [
+            br#"{"plugin":[["owned",{"enabled":true}],"new-owned"]}"#.as_slice(),
+            br#"{"plugin":[["owned",{"enabled":false}]]}"#,
+            br#"{"plugin":[]}"#,
+        ] {
+            assert!(reconcile_array(Some(input), Some(&old), Some(&new), "/plugin", true).is_err());
+        }
+        let mut oversized = input.to_vec();
+        oversized.resize(1024 * 1024 + 1, b' ');
+        assert!(
+            reconcile_array(Some(&oversized), Some(&old), Some(&new), "/plugin", true).is_err()
+        );
+        let wrong = Artifact::File {
+            bytes: b"unqualified".to_vec(),
+        };
+        assert!(reconcile_array(Some(input), Some(&old), Some(&wrong), "/plugin", true).is_err());
+        assert!(reconcile_array(Some(input), None, Some(&old), "/plugin", true).is_err());
     }
 }

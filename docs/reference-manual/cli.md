@@ -331,6 +331,12 @@ compiled Pi package destination qualifies; shared package metadata, hooks and
 config do not inherit that exception. Missing shared
 JSON ownership is not treated as private-file absence. Broader preservation and
 adapter activation remain work.
+Current private transactions collapse exact receipt-owned duplicate array
+registrations at the first owned position; uninstall removes all exact owned
+copies while preserving authored siblings and order. Unreceipted matches, edited
+members and duplicate JSON keys still conflict. Historical v2/v3 recovery retains
+its original strict single-member rules. Changed strict JSON may be reformatted;
+JSONC comments are not silently discarded.
 Explicit `--recover` (and `--recover --dry-run`) now recognizes exact same-harness
 historical targets from compiled artifact history. Recovery finishes the original
 install/uninstall target's immutable bytes and receipt, never substitutes the
@@ -1216,6 +1222,12 @@ canonical configuration root, not a frontend runtime directory. It revalidates
 private root/lock objects without replacing them. The guard alone launches no
 process and does not replace the endpoint's exclusive identity lock; automatic
 startup and ordinary CLI consumer migration remain unfinished.
+The acquiring process explicitly releases its election on guard disposal so
+fork-before-exec duplicate descriptors cannot prolong normal release. A failed
+contender or an inherited guard cannot unlock a live owner's election; inherited
+guards also cannot authorize startup. Release targets the held object even after
+path replacement, never a reopened path or unlink. Unexpected unlock errors use
+ordinary descriptor-close fallback; arbitrary host-I/O liveness is not guaranteed.
 The internal readiness connector authenticates the Unix peer and negotiates a
 bounded hello while retaining the exact local stream. Discovery checks private
 root/socket identity without creating or replacing state; socket existence alone

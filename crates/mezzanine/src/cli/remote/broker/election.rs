@@ -5,6 +5,9 @@
 //! The held root and lock objects are revalidated without unlinking or stealing
 //! ownership. This component starts no processes or network operations. The
 //! persistent endpoint key's existing exclusive lifetime lock remains mandatory.
+//! Successful acquisition belongs to this process, not fork-inherited descriptor
+//! lifetimes. Only that process explicitly unlocks on disposal; unacquired or
+//! inherited guards cannot release an active owner's open-file-description lock.
 
 use std::fs::File;
 use std::os::unix::fs::MetadataExt;
@@ -23,6 +26,7 @@ pub(super) struct StartupElection {
     root: File,
     lock: File,
     uid: u32,
+    owner_pid: Option<u32>,
 }
 
 impl StartupElection {
@@ -49,15 +53,17 @@ impl StartupElection {
         )
         .map_err(std::io::Error::from)?
         .into();
-        let guard = Self {
+        let mut guard = Self {
             root_path,
             root,
             lock,
             uid,
+            owner_pid: None,
         };
         guard.validate()?;
         match flock(&guard.lock, FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => {
+                guard.owner_pid = Some(std::process::id());
                 guard.validate()?;
                 Ok(Some(guard))
             }
@@ -69,6 +75,11 @@ impl StartupElection {
     /// Revalidates current private-root policy and named lock identity before
     /// startup effects. This is not an atomic capability against same-user renames.
     pub(super) fn validate(&self) -> Result<()> {
+        if self.owner_pid.is_some_and(|pid| pid != std::process::id()) {
+            return Err(MezError::forbidden(
+                "outbound startup election belongs to another process",
+            ));
+        }
         validate_root(&self.root_path, &self.root, self.uid)?;
         let held = self.lock.metadata()?;
         if !held.is_file()
@@ -93,6 +104,27 @@ impl StartupElection {
     pub(super) fn launch_root(&self) -> Result<(&Path, &File)> {
         self.validate()?;
         Ok((&self.root_path, &self.root))
+    }
+
+    /// Retains an inherited-style descriptor only for startup release fixtures.
+    /// Production launchers cannot borrow the lock through this test-only seam.
+    #[cfg(test)]
+    pub(super) fn fixture_duplicate_lock(&self) -> Result<File> {
+        self.validate()?;
+        Ok(self.lock.try_clone()?)
+    }
+}
+
+impl Drop for StartupElection {
+    /// Best-effort explicit release of only this process's successful acquisition.
+    /// The held descriptor, never a reopened path, targets the original lock even
+    /// after replacement. Surviving duplicates cannot extend normal ownership;
+    /// inherited guard disposal cannot unlock its parent. Unexpected host unlock
+    /// errors retain normal descriptor-close fallback, not unlink or lock stealing.
+    fn drop(&mut self) {
+        if self.owner_pid == Some(std::process::id()) {
+            let _ = flock(&self.lock, FlockOperation::Unlock);
+        }
     }
 }
 
