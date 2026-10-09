@@ -324,9 +324,11 @@ recognized receipt can be recreated by ordinary install, including upgrades;
 already absent private files do not block uninstall. Check/dry-run captures
 absence without creating artifact parents, and apply revalidates it before
 no-replace publication. Unreceipted content remains a conflict. Receipt-proven edited
-Pi `.mjs` helpers and OpenCode generated JavaScript/module helpers now preserve exact
-preimages in private content-addressed archives before replacement/removal. Shared
-package metadata, hooks and config do not inherit that exception; missing shared
+Pi `.mjs` helpers, the private `extensions/mezzanine/package.json` loader metadata,
+and OpenCode generated JavaScript/module helpers now preserve exact preimages in
+private content-addressed archives before replacement/removal. Only that exact
+compiled Pi package destination qualifies; shared package metadata, hooks and
+config do not inherit that exception. Missing shared
 JSON ownership is not treated as private-file absence. Broader preservation and
 adapter activation remain work.
 Explicit `--recover` (and `--recover --dry-run`) now recognizes exact same-harness

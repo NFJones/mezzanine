@@ -1,7 +1,8 @@
 //! Narrow generated-file preservation, independent of vendor shared documents.
 //!
-//! Only compiled receipt-owned Pi/OpenCode helper destinations may preserve edited
-//! whole-file preimages. Shared hooks/config and unowned slots retain strict
+//! Only compiled receipt-owned Pi/OpenCode helper destinations and the private Pi
+//! loader package may preserve edited whole-file preimages. Shared package metadata,
+//! hooks/config and unowned slots retain strict
 //! reconciliation. Archive keys are deterministic bounded identities of harness,
 //! relative destination and exact preimage; they never supply filesystem authority.
 
@@ -9,7 +10,7 @@ use super::reconciliation::{Artifact, publication_path, reconcile};
 use crate::error::{MezError, Result};
 use sha2::{Digest, Sha256};
 
-/// Recomputes desired bytes plus a required private archive for edited helpers.
+/// Recomputes desired bytes plus a required archive for edited private artifacts.
 /// Caller qualifies compiled receipts and checks both vendor/archive observations.
 pub(super) fn reconcile_preserving(
     harness: &str,
@@ -20,7 +21,10 @@ pub(super) fn reconcile_preserving(
     enabled: bool,
 ) -> Result<(Option<Vec<u8>>, Option<String>)> {
     let generated = match harness {
-        "pi" => path.starts_with("extensions/mezzanine/") && path.ends_with(".mjs"),
+        "pi" => {
+            path == "extensions/mezzanine/package.json"
+                || (path.starts_with("extensions/mezzanine/") && path.ends_with(".mjs"))
+        }
         "opencode" => {
             path == "plugins/mezzanine.js"
                 || (path.starts_with("plugins/mezzanine/") && path.ends_with(".mjs"))

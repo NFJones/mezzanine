@@ -2,6 +2,124 @@
 
 use super::*;
 
+/// The private Pi loader package is generated metadata, not shared vendor config.
+/// Current and every compiled historical receipt must preserve its exact edited
+/// bytes before repair/removal. Preview is write-free, every publication boundary
+/// recovers original intent, and the requested state is byte-exact and idempotent.
+#[test]
+fn bootstrap_private_archive_preserves_pi_package_metadata_across_recovery() {
+    use crate::integrations::bootstrap::reconciliation::Artifact;
+    let current = crate::integrations::bootstrap::compiled_manifest("pi", None).unwrap();
+    let path = "extensions/mezzanine/package.json";
+    let edited = b"{\n  \"private\": true, \"authored\": \"preserve exactly\"\n}\n";
+    let expected = match &current
+        .entries
+        .iter()
+        .find(|entry| entry.path == path)
+        .unwrap()
+        .artifact
+    {
+        Artifact::File { bytes } => bytes,
+        _ => unreachable!(),
+    };
+    for old in std::iter::once(current.clone())
+        .chain(crate::integrations::bootstrap::compiled_history(&current))
+    {
+        for operation in [Operation::Install, Operation::Uninstall] {
+            let probe = Fixture::new();
+            probe
+                .plan(&old, Operation::Install)
+                .unwrap()
+                .apply()
+                .unwrap();
+            fs::write(probe.root.join(path), edited).unwrap();
+            let effects = probe.plan(&current, operation).unwrap().changes.len();
+            for boundary in 1..=effects {
+                let fixture = Fixture::new();
+                fixture
+                    .plan(&old, Operation::Install)
+                    .unwrap()
+                    .apply()
+                    .unwrap();
+                let file = fixture.root.join(path);
+                fs::write(&file, edited).unwrap();
+                let before = tree_snapshot(&fixture.workspace);
+                let accepted = fixture.plan(&current, operation).unwrap();
+                assert_eq!(tree_snapshot(&fixture.workspace), before);
+                let archive = accepted.intent.archives.get(path).unwrap().clone();
+                let archive_index = accepted
+                    .changes
+                    .iter()
+                    .position(|change| change.path == archive)
+                    .unwrap();
+                let file_index = accepted
+                    .changes
+                    .iter()
+                    .position(|change| change.path == path)
+                    .unwrap();
+                assert!(archive_index < file_index);
+                accepted.fixture_interrupt_after(boundary);
+                assert!(accepted.apply().is_err());
+                assert!(recover_private(&fixture.root, &fixture.home, &current).unwrap());
+                assert!(!recover_private(&fixture.root, &fixture.home, &current).unwrap());
+                let publisher = Publisher::inspect_private(&fixture.root, &fixture.home).unwrap();
+                assert_eq!(
+                    publisher.read(&archive).unwrap().as_deref(),
+                    Some(edited.as_slice())
+                );
+                if matches!(operation, Operation::Install) {
+                    assert_eq!(fs::read(&file).unwrap(), *expected);
+                } else {
+                    assert!(!file.exists());
+                }
+                assert!(
+                    fixture
+                        .plan(&current, operation)
+                        .unwrap()
+                        .changed_paths()
+                        .is_empty()
+                );
+                assert_eq!(
+                    fs::read(fixture.root.join("authored")).unwrap(),
+                    b"preserved"
+                );
+            }
+        }
+    }
+}
+
+/// A private-looking filename alone is not ownership: foreign unreceipted Pi
+/// metadata remains untouched. Nor can the Pi exception grant OpenCode shared
+/// metadata or an edited shared registration any archive/overwrite authority.
+#[test]
+fn bootstrap_private_archive_package_metadata_requires_exact_ownership() {
+    let current = crate::integrations::bootstrap::compiled_manifest("pi", None).unwrap();
+    let fixture = Fixture::new();
+    let file = fixture.root.join("extensions/mezzanine/package.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, b"foreign package metadata").unwrap();
+    let before = tree_snapshot(&fixture.workspace);
+    assert!(fixture.plan(&current, Operation::Install).is_err());
+    assert_eq!(tree_snapshot(&fixture.workspace), before);
+
+    let current = crate::integrations::bootstrap::compiled_manifest("opencode", None).unwrap();
+    let fixture = Fixture::new();
+    fixture
+        .plan(&current, Operation::Install)
+        .unwrap()
+        .apply()
+        .unwrap();
+    fs::write(fixture.root.join("package.json"), b"authored dependencies").unwrap();
+    fs::write(
+        fixture.root.join("tui.json"),
+        br#"{"plugin":["authored-only"]}"#,
+    )
+    .unwrap();
+    let before = tree_snapshot(&fixture.workspace);
+    assert!(fixture.plan(&current, Operation::Install).is_err());
+    assert_eq!(tree_snapshot(&fixture.workspace), before);
+}
+
 /// Every shipped compiled predecessor can preserve an edited known entry helper
 /// during current upgrade. Each currently generated nested helper is qualified
 /// separately, not just its loader entry; exact raw bytes survive privately.
