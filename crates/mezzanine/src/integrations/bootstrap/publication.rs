@@ -7,9 +7,14 @@
 //! only when every current preimage equals one of those states; foreign edits
 //! leave the journal intact. This is not atomic CAS against arbitrary writers.
 //! No symlink or special node is followed, and no executable is launched.
+//! The explicit existing-root private path retains both cooperating lock domains
+//! and migrates only compiled-authorized exact legacy intent. Identical copies
+//! qualify interrupted migration; disagreements/location drift fence planning.
+//! Public CLI routing and vendor eligibility are unchanged by this staged path.
 
 use super::reconciliation::publication_path;
 use super::root_directory::RootDirectory;
+use super::state_directory::StateDirectory;
 use crate::error::{MezError, Result};
 use rustix::fs::{
     AtFlags, FlockOperation, Mode, OFlags, RenameFlags, flock, mkdirat, openat, renameat,
@@ -23,6 +28,7 @@ use std::path::{Path, PathBuf};
 
 const JOURNAL: &str = ".mez-bootstrap-journal";
 const LOCK: &str = ".mez-bootstrap-lock";
+const PRIVATE_JOURNAL: &str = "journal.json";
 const MAX_BYTES: usize = 1024 * 1024;
 const MAX_JOURNAL: usize = 32 * 1024 * 1024;
 
@@ -46,11 +52,20 @@ struct Journal {
     changes: Vec<Change>,
 }
 
-/// Exact accepted pending intent, including its serialized identity. Decoded
-/// changes support virtual inspection; bytes fence replacement before recovery.
+/// Durable source witness; identical dual copies represent interrupted migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JournalLocation {
+    Legacy,
+    Private,
+    Both,
+}
+
+/// Exact bytes and location of the accepted pending intent. Location is part
+/// of the snapshot fence, not authority to add paths or reinterpret operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PendingRecovery {
     bytes: Vec<u8>,
+    location: JournalLocation,
     pub(super) changes: Vec<Change>,
 }
 
@@ -59,9 +74,16 @@ pub(super) struct Publisher {
     root: PathBuf,
     directory: RootDirectory,
     _lock: Option<File>,
+    state: Option<StateDirectory>,
     /// Task-local publication barrier; no shared fault state.
     #[cfg(test)]
     pub(super) stop_after: std::cell::Cell<Option<usize>>,
+    /// Task-local failure after durable private copy, before legacy removal.
+    #[cfg(test)]
+    pub(super) stop_after_migration_copy: std::cell::Cell<bool>,
+    /// Task-local journal replacement seam after effects and before settlement.
+    #[cfg(test)]
+    pub(super) before_journal_removal: std::cell::RefCell<Option<Box<dyn FnOnce()>>>,
 }
 
 /// Reads a regular single-link owned file promptly, bounded before and during I/O.
@@ -106,9 +128,28 @@ impl Publisher {
             root: root.into(),
             directory: RootDirectory::inspect(root)?,
             _lock: None,
+            state: None,
             #[cfg(test)]
             stop_after: std::cell::Cell::new(None),
+            #[cfg(test)]
+            stop_after_migration_copy: std::cell::Cell::new(false),
+            #[cfg(test)]
+            before_journal_removal: std::cell::RefCell::new(None),
         })
+    }
+
+    /// Captures private state for an actual held existing vendor root without
+    /// writing either tree. This staged entry point takes explicit HOME and
+    /// retains vendor eligibility; public CLI/absent-root routing is not changed.
+    pub(super) fn inspect_private(root: &Path, home: &Path) -> Result<Self> {
+        let mut publisher = Self::inspect(root)?;
+        if publisher.directory.is_missing() {
+            return Err(MezError::invalid_args(
+                "bootstrap private publisher requires existing root",
+            ));
+        }
+        publisher.state = Some(StateDirectory::inspect(home, publisher.directory.file()?)?);
+        Ok(publisher)
     }
 
     /// Acquires a private lock for an existing root; recovery never creates an
@@ -133,9 +174,12 @@ impl Publisher {
     pub(super) fn acquire_lock(&mut self) -> Result<()> {
         self.validate_root()?;
         if self._lock.is_some() {
-            return Ok(());
+            return self.require_lock();
         }
         self.directory.materialize(&self.root)?;
+        if let Some(state) = &mut self.state {
+            state.acquire()?;
+        }
         let lock = File::from(
             openat(
                 self.directory.file()?,
@@ -154,6 +198,7 @@ impl Publisher {
             || metadata.nlink() != 1
             || metadata.uid() != rustix::process::geteuid().as_raw()
             || metadata.mode() & 0o077 != 0
+            || metadata.len() != 0
         {
             return Err(MezError::forbidden(
                 "bootstrap lock must be private and owned",
@@ -163,7 +208,7 @@ impl Publisher {
             MezError::conflict(format!("bootstrap installer lock unavailable: {error}"))
         })?;
         self._lock = Some(lock);
-        self.validate_root()
+        self.require_lock()
     }
 
     /// Read-only holders cannot accidentally publish/recover through the shared
@@ -174,7 +219,107 @@ impl Publisher {
                 "bootstrap publication requires installer lock",
             ));
         }
-        self.validate_root()
+        self.validate_root()?;
+        if let Some(state) = &self.state {
+            state.require_ownership()?;
+        }
+        let held = self
+            ._lock
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("bootstrap installer lock unavailable"))?;
+        let current = File::from(
+            openat(
+                self.directory.file()?,
+                LOCK,
+                OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)?,
+        );
+        let held = held.metadata()?;
+        let current = current.metadata()?;
+        if !current.is_file()
+            || current.nlink() != 1
+            || current.uid() != rustix::process::geteuid().as_raw()
+            || current.mode() & 0o077 != 0
+            || current.len() != 0
+            || held.nlink() != 1
+            || held.dev() != current.dev()
+            || held.ino() != current.ino()
+        {
+            return Err(MezError::conflict("bootstrap installer lock changed"));
+        }
+        Ok(())
+    }
+
+    /// Reads both possible durable locations without mutation. Identical copies
+    /// are a supported interrupted migration; disagreement never picks a winner.
+    fn journal_bytes(&self) -> Result<Option<(Vec<u8>, JournalLocation)>> {
+        self.validate_root()?;
+        if self.directory.is_missing() {
+            return Ok(None);
+        }
+        let legacy = read_at(self.directory.file()?, JOURNAL, MAX_JOURNAL)?;
+        let private = self
+            .state
+            .as_ref()
+            .map(|state| state.read(PRIVATE_JOURNAL, MAX_JOURNAL))
+            .transpose()?
+            .flatten();
+        match (legacy, private) {
+            (None, None) => Ok(None),
+            (Some(bytes), None) => Ok(Some((bytes, JournalLocation::Legacy))),
+            (None, Some(bytes)) => Ok(Some((bytes, JournalLocation::Private))),
+            (Some(legacy), Some(private)) if legacy == private => {
+                Ok(Some((private, JournalLocation::Both)))
+            }
+            _ => Err(MezError::conflict(
+                "bootstrap journal copies disagree; no mutation",
+            )),
+        }
+    }
+
+    /// Revalidates exact accepted bytes/location, not merely valid JSON intent.
+    fn require_journal(&self, bytes: &[u8], location: JournalLocation) -> Result<()> {
+        if self
+            .journal_bytes()?
+            .as_ref()
+            .map(|(current, source)| (current.as_slice(), *source))
+            != Some((bytes, location))
+        {
+            return Err(MezError::conflict(
+                "bootstrap accepted journal changed; no publication",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Migrates only an already compiled-authorized exact snapshot under both
+    /// writer domains. The private copy is durable before removing legacy;
+    /// identical dual copies remain recoverable after interruption at that edge.
+    fn migrate_journal(&self, pending: &PendingRecovery) -> Result<JournalLocation> {
+        self.require_lock()?;
+        self.require_journal(&pending.bytes, pending.location)?;
+        let Some(state) = &self.state else {
+            return Ok(pending.location);
+        };
+        if pending.location == JournalLocation::Legacy {
+            state.publish(PRIVATE_JOURNAL, None, Some(&pending.bytes), MAX_JOURNAL)?;
+            #[cfg(test)]
+            if self.stop_after_migration_copy.replace(false) {
+                return Err(MezError::invalid_state(
+                    "injected bootstrap private copy interruption",
+                ));
+            }
+        }
+        if pending.location != JournalLocation::Private {
+            self.require_lock()?;
+            self.require_journal(&pending.bytes, JournalLocation::Both)?;
+            unlinkat(self.directory.file()?, JOURNAL, AtFlags::empty())
+                .map_err(std::io::Error::from)?;
+            self.directory.file()?.sync_all()?;
+        }
+        Ok(JournalLocation::Private)
     }
 
     /// Revalidates held root spelling before publishing through its descriptors.
@@ -281,7 +426,9 @@ impl Publisher {
     }
 
     /// Completes forward publication, retaining the journal on any partial failure.
-    fn finish(&self, changes: &[Change]) -> Result<()> {
+    fn finish(&self, changes: &[Change], bytes: &[u8], location: JournalLocation) -> Result<()> {
+        self.require_lock()?;
+        self.require_journal(bytes, location)?;
         self.validate_changes(changes, true)?;
         for (index, change) in changes.iter().enumerate() {
             #[cfg(not(test))]
@@ -305,6 +452,7 @@ impl Publisher {
                     "bootstrap preimage changed before commit",
                 ));
             }
+            self.require_lock()?;
             match &change.after {
                 Some(bytes) => self.write_at(&parent, &name, bytes, change.before.is_some())?,
                 None => {
@@ -321,9 +469,19 @@ impl Publisher {
                 ));
             }
         }
-        unlinkat(self.directory.file()?, JOURNAL, AtFlags::empty())
-            .map_err(std::io::Error::from)?;
-        self.directory.file()?.sync_all()?;
+        #[cfg(test)]
+        if let Some(barrier) = self.before_journal_removal.borrow_mut().take() {
+            barrier();
+        }
+        self.require_lock()?;
+        self.require_journal(bytes, location)?;
+        if let Some(state) = &self.state {
+            state.publish(PRIVATE_JOURNAL, Some(bytes), None, MAX_JOURNAL)?;
+        } else {
+            unlinkat(self.directory.file()?, JOURNAL, AtFlags::empty())
+                .map_err(std::io::Error::from)?;
+            self.directory.file()?.sync_all()?;
+        }
         Ok(())
     }
 
@@ -333,10 +491,11 @@ impl Publisher {
         authorize: impl FnOnce(&serde_json::Value, &[Change]) -> Result<()>,
     ) -> Result<bool> {
         self.require_lock()?;
-        let Some(changes) = self.inspect_recovery_authorized(authorize)? else {
+        let Some(pending) = self.inspect_pending_authorized(authorize)? else {
             return Ok(false);
         };
-        self.finish(&changes)?;
+        let location = self.migrate_journal(&pending)?;
+        self.finish(&pending.changes, &pending.bytes, location)?;
         Ok(true)
     }
 
@@ -362,7 +521,7 @@ impl Publisher {
         if self.directory.is_missing() {
             return Ok(None);
         }
-        let Some(bytes) = read_at(self.directory.file()?, JOURNAL, MAX_JOURNAL)? else {
+        let Some((bytes, location)) = self.journal_bytes()? else {
             return Ok(None);
         };
         let journal: Journal = serde_json::from_slice(&bytes).map_err(|_| {
@@ -382,6 +541,7 @@ impl Publisher {
         self.validate_changes(&journal.changes, true)?;
         Ok(Some(PendingRecovery {
             bytes,
+            location,
             changes: journal.changes,
         }))
     }
@@ -399,7 +559,8 @@ impl Publisher {
                 "bootstrap inspected recovery changed; no publication",
             ));
         }
-        self.finish(&pending.changes)
+        let location = self.migrate_journal(pending)?;
+        self.finish(&pending.changes, &pending.bytes, location)
     }
 
     /// Commits an already planned transaction; never silently recovers old intent.
@@ -408,7 +569,7 @@ impl Publisher {
         if self.directory.is_missing() {
             return Ok(());
         }
-        if read_at(self.directory.file()?, JOURNAL, MAX_JOURNAL)?.is_some() {
+        if self.journal_bytes()?.is_some() {
             return Err(MezError::conflict("bootstrap recovery pending"));
         }
         Ok(())
@@ -435,8 +596,14 @@ impl Publisher {
         if bytes.len() > MAX_JOURNAL {
             return Err(MezError::invalid_args("bootstrap journal limit"));
         }
-        self.write_at(self.directory.file()?, JOURNAL, &bytes, false)?;
-        self.finish(&changes)
+        let location = if let Some(state) = &self.state {
+            state.publish(PRIVATE_JOURNAL, None, Some(&bytes), MAX_JOURNAL)?;
+            JournalLocation::Private
+        } else {
+            self.write_at(self.directory.file()?, JOURNAL, &bytes, false)?;
+            JournalLocation::Legacy
+        };
+        self.finish(&changes, &bytes, location)
     }
 
     /// Test-only raw transaction fixture; production always supplies manifest intent.

@@ -351,11 +351,18 @@ HOME/config ancestor modes are not rewritten, and protected state remains
 user-private under the Unix owner/mode contract. Captured intermediate directory
 incarnations and the current lock-entry identity are revalidated before retained
 writer ownership is reused; replacing an ancestor or lock fences the old holder.
-This component is **not yet
-wired into normal bootstrap**: Publisher still uses its existing vendor-root
-lock/journal, and ordinary-directory eligibility, private state migration and
-edited-file preservation remain unfinished. No new user setup or config option
-is introduced by this primitive.
+An internal explicit-HOME publisher path now integrates this store for existing
+held vendor roots. It retains both legacy and private cooperating lock domains;
+new transactions journal privately, and compiled-authorized legacy recovery copies
+exact original bytes durably before removing the old journal. Identical dual copies
+after a copy-boundary interruption can resume; conflicting copies and changed
+inspected source locations reject without choosing a winner. Final journal removal
+checks exact accepted bytes/location. The serialized journal remains version 2;
+location is inspected evidence, not new artifact authority.
+This path is **not yet wired into normal bootstrap**: public CLI routing still uses
+the existing vendor-root lock/journal. Absent-root binding, private receipts/archives,
+ordinary-directory eligibility and edited-file preservation remain unfinished.
+No new user setup or configuration option is introduced by this checkpoint.
 
 ### Normalized observational hook helper
 

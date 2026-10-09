@@ -12,7 +12,8 @@
 //! not artifact or journal authority: the installer must independently qualify
 //! root identity, harness, compiled intent, receipts and every effect. File names
 //! are internal bounded flat identifiers; no stored name supplies vendor paths.
-//! This primitive does not yet redirect Publisher or migrate legacy journals.
+//! Publisher's explicit private path owns journal migration; public CLI routing
+//! and receipt/archive activation remain outside this storage primitive.
 //! It follows the repository's Unix owner/mode privacy contract, not ACL or
 //! executable attestation. Preimage checks plus rename are not external-writer
 //! CAS. Partial directory creation may remain after failure; no tree sweeping.
@@ -154,6 +155,25 @@ fn validate_file(file: &File, limit: usize) -> Result<()> {
 }
 
 impl StateDirectory {
+    /// Exposes only the isolated fixture path for source-level recovery tests.
+    /// Production callers use descriptor operations, not this pathname.
+    #[cfg(test)]
+    pub(super) fn fixture_path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Requires currently valid acquired writer ownership, including live
+    /// lock-entry and every captured directory incarnation. Inspection alone
+    /// never supplies publication authority to an integrating publisher.
+    pub(super) fn require_ownership(&self) -> Result<()> {
+        if self.lock.is_none() {
+            return Err(MezError::invalid_state(
+                "bootstrap private state publication requires lock",
+            ));
+        }
+        self.validate()
+    }
+
     /// Inspects a fixed HOME-relative namespace for a held existing vendor root.
     /// Does not create HOME/config/state directories, files or writer ownership.
     pub(super) fn inspect(home: &Path, vendor: &File) -> Result<Self> {

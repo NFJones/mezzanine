@@ -97,7 +97,7 @@ mod publication_tests;
 mod root_directory;
 /// Selects documented vendor user roots without I/O or authority inference.
 pub(crate) mod roots;
-/// Private native state primitive; publisher migration remains a separate phase.
+/// Private native storage used by the staged explicit-HOME publisher path.
 #[allow(
     dead_code,
     reason = "private publisher journal/archive migration is in progress"

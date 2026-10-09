@@ -123,7 +123,36 @@ pub(crate) fn plan_with_history(
     history: &[Manifest],
 ) -> Result<Plan> {
     validate_manifest(manifest)?;
-    let publisher = Publisher::inspect(root)?;
+    plan_with_publisher(Publisher::inspect(root)?, manifest, operation, history)
+}
+
+/// Captures a private-journal plan for an existing held root and explicit HOME.
+/// This staged engine entry point shares compiled history and reconciliation;
+/// it does not change public CLI routing or vendor-directory eligibility.
+pub(crate) fn plan_private(
+    root: &Path,
+    home: &Path,
+    manifest: &Manifest,
+    operation: Operation,
+) -> Result<Plan> {
+    validate_manifest(manifest)?;
+    plan_with_publisher(
+        Publisher::inspect_private(root, home)?,
+        manifest,
+        operation,
+        &super::compiled_history(manifest),
+    )
+}
+
+/// Builds one deterministic plan through its captured publication owner.
+/// Both legacy and private journal paths retain the same compiled authority,
+/// virtual recovery overlay and preimage validation before any publication.
+fn plan_with_publisher(
+    publisher: Publisher,
+    manifest: &Manifest,
+    operation: Operation,
+    history: &[Manifest],
+) -> Result<Plan> {
     let pending = publisher.inspect_pending_authorized(|value, changes| {
         authorize_recovery(&publisher, manifest, history, value, changes)
     })?;
@@ -503,6 +532,8 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    mod private_journals;
 
     /// Current and recognized historical private files may be missing without
     /// blocking reinstall/upgrade or uninstall. Preview does not create absent
