@@ -7269,6 +7269,12 @@ exposing credentials, transport configuration, headers, or provider output.
 Capability continuation, MAAP repair, output-limit retry, failure summary,
 routed handoff and repair, routed presentation and failure explanation,
 auto-sizing, and macro judging MUST be represented by typed interaction modes.
+Reported usage already observed before malformed output, bounded MAAP repair,
+or best-effort failure-summary rejection MUST remain accounted exactly once.
+Adopting or repairing a response-only summary MUST NOT replace prior observed
+expense with only the final summary's counters. Failure to adopt the summary
+MUST preserve the primary failure and any newly observed expense without
+inventing successful output, replaying actions, or fabricating absent counters.
 Mode-static behavioral rules for exceptional repair, retry, routing, and
 summary requests belong in the mode's system instruction profile; dynamic
 errors and prior output MUST append as chronological evidence. Context

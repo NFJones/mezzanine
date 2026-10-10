@@ -220,6 +220,13 @@ cache reads; local size estimates are not exact provider token counts. A cache
 hit does not prove the context is correct, and a cold request after compaction
 or a model change is not by itself a continuity failure.
 
+Expense totals retain provider counters already observed before malformed output
+or bounded correction. A best-effort failure summary, including its own repair,
+must not erase that earlier expense merely because it replaces displayed text.
+An unaccepted summary remains a failure; missing counters are not proof of free
+work, and reported counters are not verified vendor invoices. Recovery never
+authorizes replaying completed actions or bypassing approvals.
+
 An unchanged saved compaction summary does not imply another compaction. Local
 continuity diagnostics compare summary content identities across snapshots;
 only new canonical summary content accompanying a non-append rewrite explains

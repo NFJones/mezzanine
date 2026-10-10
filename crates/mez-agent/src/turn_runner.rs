@@ -103,6 +103,22 @@ pub trait AgentTurnEnvironment {
     /// Classifies one provider failure for canonical recovery progression.
     fn provider_failure(&self, error: &Self::Error) -> AgentTurnProviderFailure;
 
+    /// Returns counters already observed before a provider/output failure.
+    /// Defaults to no observation; never invents a successful model response.
+    fn failed_response_usage(&self, _error: &Self::Error) -> crate::ModelTokenUsage {
+        crate::ModelTokenUsage::default()
+    }
+
+    /// Retains cumulative observed expense across a returned or summarized error.
+    /// Error classification, payload evidence and recovery authority stay intact.
+    fn with_accumulated_response_usage(
+        &self,
+        error: Self::Error,
+        _usage: crate::ModelTokenUsage,
+    ) -> Self::Error {
+        error
+    }
+
     /// Validates one parsed action batch against product-owned policy facts.
     fn validate_batch(&self, turn: &AgentTurnRecord, batch: &MaapBatch) -> Result<(), Self::Error>;
 
@@ -140,6 +156,7 @@ pub trait AgentTurnEnvironment {
         turn: &AgentTurnRecord,
         previous_request: &ModelRequest,
         error: &Self::Error,
+        latest_response_usage: crate::ModelTokenUsage,
     ) -> Option<AgentTurnExecution>;
 
     /// Attempts a best-effort user-facing summary of a controller failure.
@@ -238,6 +255,11 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
         let mut response = match environment.send_request(&request).await {
             Ok(response) => response,
             Err(error) => {
+                negotiation.observe_response(environment.failed_response_usage(&error), None, &[]);
+                let error = environment.with_accumulated_response_usage(
+                    error,
+                    negotiation.cumulative_response_usage(),
+                );
                 let failure = environment.provider_failure(&error);
                 match negotiation.advance_provider_failure(
                     failure.repairable_malformed_output,
@@ -259,7 +281,12 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                     AgentTurnProviderFailureDecision::Summarize => {}
                 }
                 if let Some(execution) = environment
-                    .summarize_provider_failure(&turn, &response_request, &error)
+                    .summarize_provider_failure(
+                        &turn,
+                        &response_request,
+                        &error,
+                        negotiation.latest_response_usage(),
+                    )
                     .await
                 {
                     project_ledger_result(
@@ -609,6 +636,8 @@ async fn failed_validation_execution_with_summary<E: AgentTurnEnvironment>(
     error: &E::Error,
     stage: &'static str,
 ) -> AgentTurnExecution {
+    response.latest_request_usage =
+        (latest_response_usage.input_tokens > 0).then_some(latest_response_usage);
     response.raw_text = format!(
         "{}\nmaap_validation_error: {}",
         response.raw_text,
@@ -830,6 +859,7 @@ mod tests {
             _turn: &AgentTurnRecord,
             _previous_request: &ModelRequest,
             _error: &Self::Error,
+            _latest_response_usage: crate::ModelTokenUsage,
         ) -> Option<AgentTurnExecution> {
             None
         }
