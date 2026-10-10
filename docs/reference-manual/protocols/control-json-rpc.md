@@ -749,6 +749,14 @@ native authority changes, without giving the stale helper a durable receipt.
 CLI failures return fixed accepted:false/durable:false; success rebuilds only
 typed public receipts. This is a common reporting primitive, not vendor callback
 association or exhaustive spend certification.
+The common curated SDK adapter binds the portable core to fixed original-observer
+usage capsules. Its caller owns the exact admitted lifetime and fixed helper
+runner; it captures public selectors once and queues at most16 operations. Stop
+or lost original receipt identity is permanent, including queued work and late
+ACKs. Known committed ACK replay is local after stop, while an unacknowledged sent
+report retains unknown-delivery semantics. Strict bounded JSON rejects duplicate,
+unknown/private fields and unsafe integers. The literal runner launches no vendor,
+selects no arbitrary RPC and installs no vendor request/counter producer.
 The installed revision-9 shared client exposes `beginRequest(id)`,
 `endRequest(ticket, normalizedObservation)` and `abandonRequest(ticket)`.
 The injected request core requires neither Node Buffer nor DOM TextEncoder and

@@ -11,6 +11,34 @@
 
 use crate::error::{MezError, Result};
 
+/// Renders the fixed accounting runner in a scope with `$`, the imported pure
+/// client and an already admitted `observerLifetime`. No event/counter schema,
+/// vendor hook, capability, installation or re-enrollment is supplied here.
+pub(crate) fn request_accounting_body(helper: &std::path::Path) -> Result<String> {
+    let path = helper
+        .to_str()
+        .filter(|path| helper.is_absolute() && path.len() <= 4096 && !path.contains('\0'))
+        .ok_or_else(|| MezError::invalid_args("curated request helper must be absolute"))?;
+    let quoted = serde_json::to_string(path)
+        .map_err(|_| MezError::invalid_args("curated request helper unavailable"))?;
+    Ok(include_str!("curated_request_runner.mjs").replace("__MEZ_HELPER__", &quoted))
+}
+
+/// Supplies only two literal sibling modules required by the accounting runner.
+/// Adapter-owned deployment must establish trusted bytes; this performs no I/O.
+pub(crate) fn request_accounting_sources() -> [(&'static str, &'static str); 2] {
+    [
+        (
+            "curated_request_accounting.mjs",
+            include_str!("curated_request_accounting.mjs"),
+        ),
+        (
+            "request_accounting.mjs",
+            include_str!("request_accounting.mjs"),
+        ),
+    ]
+}
+
 /// Renders one content-free SessionStart body for the literal curated SDK scope.
 /// Requires an absolute fixed helper and a 1–10s interval within the daemon's
 /// 30s proof window. The caller must invoke `next(e)` before this body and return
@@ -137,6 +165,25 @@ fn render_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The SDK runner quotes a single trusted helper as data and fences its
+    /// captured receipt identity. Pure sibling source has no Node/DOM imports;
+    /// generation/counter content never becomes generated executable code.
+    #[test]
+    fn curated_request_runner_keeps_fixed_helper_and_pure_sources() {
+        assert!(request_accounting_body(std::path::Path::new("relative")).is_err());
+        let helper = std::path::Path::new("/owned/__MEZ_HELPER__\"binary");
+        let body = request_accounting_body(helper).unwrap();
+        let quoted = serde_json::to_string(helper.to_str().unwrap()).unwrap();
+        assert_eq!(body.matches(&quoted).count(), 1);
+        assert!(body.contains("observerLifetime.receipt === originalObserver"));
+        assert!(body.contains("$.process.run(["));
+        for (_, source) in request_accounting_sources() {
+            assert!(!source.contains("from 'node:"));
+            assert!(!source.contains("from \"node:"));
+            assert!(!source.contains("Buffer.byteLength"));
+        }
+    }
 
     /// Fixed argv quoting is data, not executable template input. Unsupported
     /// paths/periods fail before source generation, and marker-like filenames

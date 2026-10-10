@@ -1,6 +1,7 @@
 //! Ordinary pane-process admission tests, with no supplied PID/token/fd3 proof.
 
 use super::*;
+mod curated_request_client;
 mod curated_usage;
 use crate::test_support::runtime::RuntimeServiceFixture;
 use std::io::{Read, Write};
@@ -211,6 +212,38 @@ fn external_enrollment_ordinary_child_fixture() {
                     .write_all(&u32::try_from(output.stdout.len()).unwrap().to_be_bytes())
                     .unwrap();
                 socket.write_all(&output.stdout).unwrap();
+                continue;
+            }
+            if release == [7] {
+                let mut length = [0; 4];
+                socket.read_exact(&mut length).unwrap();
+                let length = u32::from_be_bytes(length) as usize;
+                assert!(length <= 4096);
+                let mut launch = vec![0; length];
+                socket.read_exact(&mut launch).unwrap();
+                let launch: serde_json::Value = serde_json::from_slice(&launch).unwrap();
+                let helper = std::env::current_exe()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("mez");
+                let output = std::process::Command::new(launch["node"].as_str().unwrap())
+                    .arg(launch["script"].as_str().unwrap())
+                    .arg(launch["directory"].as_str().unwrap())
+                    .arg(helper)
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "SDK-shaped request fixture failed: {}",
+                    String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(8192)])
+                );
+                assert!(output.stderr.is_empty());
+                assert_eq!(output.stdout, b"{\"qualified\":true}\n");
+                socket.write_all(&[1]).unwrap();
                 continue;
             }
             assert_eq!(release, [3]);

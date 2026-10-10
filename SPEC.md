@@ -1163,6 +1163,15 @@ settles after authority changes, but a stale helper receives no durable ACK.
 The fixed argv capsule MUST reject raw content/private handles/PID/project/epoch
 claims and rebuild only typed ready/durable receipts. Neutral exit is not a
 commit. These common helpers do not attest or install a vendor usage producer.
+The shared curated request adapter MUST capture one original public observer
+receipt, use only fixed usage-begin/end capsules, and serialize at most16 queued
+operations. Stop or loss of exact caller-owned receipt identity MUST permanently
+fence queued work and late responses, never discover/re-enroll a newest source.
+Only bounded strict JSON ready/durable receipts may reach the portable core;
+duplicate/unknown/private fields and unsafe numeric evidence remain unavailable.
+Known durable ACK replay MAY remain local after stop; withheld late ACK does not
+undo expense or prove non-delivery. Its literal SDK runner uses only the trusted
+fixed helper. This primitive supplies no vendor request/counter callback schema.
 The installed shared request client MUST retain only validated content-free
 reports and client-local tickets captured before genuine new requests. It MUST
 refuse beyond128 active tickets without silently evicting unacknowledged expense,
