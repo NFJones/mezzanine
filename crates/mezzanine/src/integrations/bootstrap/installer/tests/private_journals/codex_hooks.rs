@@ -79,7 +79,7 @@ fn bootstrap_codex_shared_hooks_conflicts_remain_non_mutating() {
 fn bootstrap_codex_shared_hooks_recovery_rejects_forged_semantics() {
     let current = crate::integrations::bootstrap::compiled_manifest("codex", None).unwrap();
     for fault in [
-        "v2", "v3", "v4", "v7", "payload", "omit", "pointer", "history",
+        "v2", "v3", "v4", "v8", "payload", "omit", "pointer", "history",
     ] {
         let fixture = Fixture::new();
         let accepted = fixture.plan(&current, Operation::Install).unwrap();
@@ -91,7 +91,7 @@ fn bootstrap_codex_shared_hooks_recovery_rejects_forged_semantics() {
             "v2" => journal["version"] = 2.into(),
             "v3" => journal["version"] = 3.into(),
             "v4" => journal["version"] = 4.into(),
-            "v7" => journal["version"] = 7.into(),
+            "v8" => journal["version"] = 8.into(),
             "payload" => journal["changes"][0]["after"] = serde_json::json!(b"{}".to_vec()),
             "omit" => {
                 journal["changes"].as_array_mut().unwrap().remove(0);
@@ -313,7 +313,7 @@ fn bootstrap_codex_shared_hooks_migrate_historical_receipt_across_every_edge() {
             assert!(accepted.apply().is_err());
             let journal: serde_json::Value =
                 serde_json::from_slice(&fs::read(fixture.journal()).unwrap()).unwrap();
-            assert_eq!(journal["version"], 6);
+            assert_eq!(journal["version"], 7);
             assert!(recover_private(&fixture.root, &fixture.home, &current).unwrap());
             assert!(!recover_private(&fixture.root, &fixture.home, &current).unwrap());
             let after: serde_json::Value =

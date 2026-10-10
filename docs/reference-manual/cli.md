@@ -272,11 +272,12 @@ and uninstall checks and an offline Pi 1.0.2 discovery/runner fixture qualify th
 artifact ownership. Public bootstrap installs these same compiled files, without
 an exact vendor-version gate or a universal compatibility claim.
 
-The common engine owns exact whole files or exact object entries in strict JSON.
+The common engine owns exact whole files or compiled exact entries in shared JSON.
 Edited ownership conflicts rather than overwriting user changes. Repeat is
 byte-stable; uninstall removes owned entries rather than restoring stale backups.
-Strict-JSON changes may reformat surrounding whitespace; JSONC/TOML are not
-silently converted. Publication uses no-follow directory handles, bounded regular
+Strict-JSON changes may reformat surrounding whitespace. Qualified OpenCode TUI
+JSONC uses local token edits retaining comments/unrelated bytes; unsupported formats
+and TOML are not silently converted. Publication uses no-follow directory handles, bounded regular
 files, a cooperating-installer lock, exact preimages and a private forward-recovery
 journal. A partial transaction remains explicit; recovery refuses foreign edits.
 Final check plus rename is not atomic CAS against arbitrary external writers.
@@ -409,7 +410,7 @@ new transactions journal privately, and compiled-authorized legacy recovery copi
 exact original bytes durably before removing the old journal. Identical dual copies
 after a copy-boundary interruption can resume; conflicting copies and changed
 inspected source locations reject without choosing a winner. Final journal removal
-checks exact accepted bytes/location. New private transactions use journal version 6,
+checks exact accepted bytes/location. New private transactions use journal version 7,
 with explicit Private receipt placement and qualified prior receipt sources.
 Recognized version-2 intent still finishes its original vendor destinations; it cannot
 authorize private receipt targets. Unknown or altered version/placement/root/effects
@@ -448,7 +449,7 @@ future versions reject. The legacy vendor-root publisher cannot emit new multi-a
 intent: public bootstrap uses the private owner. Receipt payload schema remains 1;
 there is no Mezzanine configuration schema change.
 
-Current private journals use version 6 for exact unreceipted private-bundle
+Version-6 private journals added exact unreceipted private-bundle
 adoption. Install can recognize a complete compiled Pi/OpenCode all-file bundle
 at its enumerated private paths only when every file matches exact generated
 bytes. It chooses the most-complete compiled match and checks all observed
@@ -464,6 +465,27 @@ actual settlement. Matching-current adoption reports `repaired`; historical
 refresh reports `upgraded`. No adoption report implies vendor loading, enrollment
 or accounting support. Failed publication may create coordination lock/private
 directories, but cannot overwrite changed artifact preimages or publish success.
+
+Current version-7 private journals additionally qualify OpenCode revision-7 JSONC
+registration. The selected root uses existing `tui.jsonc` before `tui.json`; both
+file preimages/absence are captured and revalidated. Ownership is one exact
+`/plugin` member, or `/tui/plugin` when loader normalization makes an existing
+nested list effective and no root plugin field overrides it. Four fixed compiled
+variants do not authorize arbitrary custom paths. Receipt-qualified moves retain
+both documents and every authored setting; repeat is byte-exact. Token edits
+retain comments, BOM, CRLF, Unicode and unrelated whitespace; JSONC allows trailing
+commas, not JSON5 expressions or duplicate keys. Finite parsing and final semantic
+revalidation precede publication. Genuine older strict operations stay frozen;
+older labels cannot acquire JSONC authority. Version-6 unchanged TUI/client payload
+fingerprints fail closed on source drift until reviewed snapshots exist.
+
+Loader evidence is the maintained `anomalyco/opencode` `v1.17.13` source
+`packages/opencode/src/config/{tui,paths,parse}.ts`, plus official TUI documentation.
+These are adaptation evidence, not release pins or live-loader certification.
+The vendor merges root JSON before JSONC, normalizes nested TUI fields and deduplicates
+plugin origins. Bootstrap edits only the selected explicit/user root; supplemental
+`OPENCODE_TUI_CONFIG`/project sources are not scanned or rewritten, and installation
+does not attest that vendor policy permits loading or telemetry/accounting works.
 
 ### Normalized observational hook helper
 

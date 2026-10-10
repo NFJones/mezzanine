@@ -256,7 +256,7 @@ fn bootstrap_private_adoption_recovers_every_effect_boundary() {
             assert!(accepted.apply().is_err());
             let original = fs::read(fixture.journal()).unwrap();
             let mut journal: serde_json::Value = serde_json::from_slice(&original).unwrap();
-            assert_eq!(journal["version"], 6);
+            assert_eq!(journal["version"], 7);
             journal["version"] = 5.into();
             fs::write(fixture.journal(), serde_json::to_vec(&journal).unwrap()).unwrap();
             let before = tree_snapshot(&fixture.workspace);

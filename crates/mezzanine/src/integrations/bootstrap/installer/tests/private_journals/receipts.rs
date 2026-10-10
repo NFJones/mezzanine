@@ -130,7 +130,12 @@ fn bootstrap_private_receipt_migration_edges_are_recoverable_and_private() {
         let current = crate::integrations::bootstrap::compiled_manifest(harness, None).unwrap();
         for boundary in [1, 2] {
             let fixture = Fixture::new();
-            plan(&fixture.root, &current, Operation::Install)
+            let legacy_current = if harness == "opencode" {
+                crate::integrations::bootstrap::opencode_artifact::historical_manifest()
+            } else {
+                current.clone()
+            };
+            plan(&fixture.root, &legacy_current, Operation::Install)
                 .unwrap()
                 .apply()
                 .unwrap();
@@ -153,11 +158,20 @@ fn bootstrap_private_receipt_migration_edges_are_recoverable_and_private() {
             migrate.fixture_interrupt_after(boundary);
             assert!(migrate.apply().is_err());
             let private = fixture.receipt(harness);
-            assert_eq!(fs::read(&private).unwrap(), original);
+            assert!(
+                fs::read(&private).unwrap() == receipt_bytes(&current).unwrap(),
+                "private receipt must contain current compiled identity"
+            );
             assert_eq!(legacy.exists(), boundary == 1);
+            if legacy.exists() {
+                assert!(
+                    fs::read(&legacy).unwrap() == original,
+                    "legacy receipt preimage remains exact until removal"
+                );
+            }
             let journal: serde_json::Value =
                 serde_json::from_slice(&fs::read(fixture.journal()).unwrap()).unwrap();
-            assert_eq!(journal["version"], 6);
+            assert_eq!(journal["version"], 7);
             assert_eq!(journal["intent"]["receipt_location"], "Private");
             assert_eq!(fs::metadata(&private).unwrap().mode() & 0o777, 0o600);
             assert_eq!(
@@ -170,7 +184,10 @@ fn bootstrap_private_receipt_migration_edges_are_recoverable_and_private() {
             assert_eq!(tree_snapshot(&fixture.workspace), before);
             retry.apply().unwrap();
             assert!(!legacy.exists() && !fixture.journal().exists());
-            assert_eq!(fs::read(&private).unwrap(), original);
+            assert!(
+                fs::read(&private).unwrap() == receipt_bytes(&current).unwrap(),
+                "settled receipt must contain current compiled identity"
+            );
             assert!(
                 fixture
                     .plan(&current, Operation::Install)
@@ -201,7 +218,7 @@ fn bootstrap_private_receipts_upgrade_all_history_after_original_v2_recovery() {
     for harness in ["pi", "opencode"] {
         let current = crate::integrations::bootstrap::compiled_manifest(harness, None).unwrap();
         let history = crate::integrations::bootstrap::compiled_history(&current);
-        assert_eq!(history.len(), 5);
+        assert_eq!(history.len(), if harness == "pi" { 5 } else { 6 });
         for old in history {
             let fixture = Fixture::new();
             let pending = plan(&fixture.root, &old, Operation::Install).unwrap();

@@ -8,6 +8,7 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 mod adoption;
 mod archives;
 mod codex_hooks;
+mod jsonc;
 mod permissions;
 mod receipts;
 
@@ -270,7 +271,12 @@ fn bootstrap_private_publisher_migrates_legacy_and_recovers_copy_interruption() 
         let oldest = crate::integrations::bootstrap::compiled_history(&current)
             .pop()
             .unwrap();
-        for target in [&current, &oldest] {
+        let legacy_current = if harness == "opencode" {
+            crate::integrations::bootstrap::opencode_artifact::historical_manifest()
+        } else {
+            current.clone()
+        };
+        for target in [&legacy_current, &oldest] {
             for original in [Operation::Install, Operation::Uninstall] {
                 for requested in [Operation::Install, Operation::Uninstall] {
                     let fixture = Fixture::new();

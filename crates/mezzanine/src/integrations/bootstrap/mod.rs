@@ -111,6 +111,8 @@ mod state_directory;
 /// Rejects ambiguous shared JSON before exact array-member reconciliation.
 use crate::protocol::strict_json;
 
+/// Bounded JSONC token editing, never comment-stripping publication.
+mod jsonc;
 #[allow(
     dead_code,
     reason = "release-qualified vendor adapters consume the common installer"
@@ -152,7 +154,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
             ],
         ),
         "opencode" => (
-            opencode_artifact::manifest(),
+            opencode_artifact::historical_manifest(),
             1,
             [
                 "plugins/mezzanine/persistent_client.mjs",
@@ -161,7 +163,16 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         ),
         _ => return Vec::new(),
     };
-    if *manifest != current {
+    let current_opencode = compiled_variant_matches(manifest, &opencode_artifact::manifest());
+    if manifest.harness == "opencode"
+        && !opencode_artifact::historical_payloads_match(
+            include_bytes!("opencode_tui.mjs"),
+            include_bytes!("persistent_client.mjs"),
+        )
+    {
+        return Vec::new();
+    }
+    if *manifest != current && !current_opencode {
         return Vec::new();
     }
     let mut latest_client = current.clone();
@@ -224,16 +235,38 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         .entries
         .retain(|entry| !paths.contains(&entry.path.as_str()));
     if compiled_predecessor_matches(&previous) {
-        vec![
+        let mut history = vec![
             latest_client,
             shipped_client,
             last_shipped,
             immediate,
             previous,
-        ]
+        ];
+        if current_opencode {
+            history.insert(0, opencode_artifact::historical_manifest());
+        }
+        history
     } else {
         Vec::new()
     }
+}
+
+/// Qualifies four fixed current OpenCode filename/effective-pointer variants.
+/// No path supplied by receipts, journals or environment creates another variant.
+pub(super) fn compiled_variant_matches(
+    candidate: &installer::Manifest,
+    target: &installer::Manifest,
+) -> bool {
+    if candidate.harness != "opencode" || target.harness != "opencode" {
+        return false;
+    }
+    let variants = [
+        opencode_artifact::manifest(),
+        opencode_artifact::jsonc_manifest(),
+        opencode_artifact::nested_manifest(false),
+        opencode_artifact::nested_manifest(true),
+    ];
+    variants.contains(candidate) && variants.contains(target)
 }
 
 /// Freezes exact historical ownership bytes; edits to current modules cannot

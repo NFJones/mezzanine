@@ -394,6 +394,75 @@ mod tests {
         Ok(serde_json::from_slice(&output).unwrap())
     }
 
+    /// Real public OpenCode bootstrap selects the later root-local JSONC file,
+    /// preserves loader-effective nested plugin settings and every authored byte
+    /// outside local edits, previews without writes and repeats without mutation.
+    /// Installed format metadata remains separate from runtime verification.
+    #[test]
+    fn bootstrap_cli_opencode_jsonc_preserves_loader_selection_and_authored_bytes() {
+        #[derive(Parser)]
+        struct Fixture {
+            #[command(flatten)]
+            args: BootstrapCliArgs,
+        }
+        let home = PrivateHome::new();
+        let root = home.0.join("vendor");
+        std::fs::create_dir(&root).unwrap();
+        let lower = b"{\"plugin\":[\"lower-user\"],\"theme\":\"lower\"}";
+        std::fs::write(root.join("tui.json"), lower).unwrap();
+        let text = "// header\n{\"tui\":{\"plugin\":[\"higher-user\",],\"theme\":\"雪\",},}\n";
+        std::fs::write(root.join("tui.jsonc"), text).unwrap();
+        let invoke = |flags: &[&str]| {
+            let mut arguments = vec!["fixture", "opencode", "--root", root.to_str().unwrap()];
+            arguments.extend_from_slice(flags);
+            let mut output = Vec::new();
+            run_at_home(
+                Fixture::try_parse_from(arguments).unwrap().args,
+                CliOutputFormat::Json,
+                &mut output,
+                &home.0,
+            )
+            .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&output).unwrap()
+        };
+        let before = tree_snapshot(&home.0);
+        let preview = invoke(&["--dry-run"]);
+        assert_eq!(preview["result"], "preview");
+        assert_eq!(tree_snapshot(&home.0), before);
+        let installed = invoke(&[]);
+        assert_eq!(installed["result"], "installed");
+        assert_eq!(installed["manifest_revision"], 7);
+        assert!(
+            installed["changed_paths"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("tui.jsonc"))
+        );
+        assert_eq!(std::fs::read(root.join("tui.json")).unwrap(), lower);
+        let installed_bytes = std::fs::read(root.join("tui.jsonc")).unwrap();
+        assert!(String::from_utf8_lossy(&installed_bytes).starts_with("// header\n"));
+        assert!(String::from_utf8_lossy(&installed_bytes).contains("higher-user"));
+        assert!(String::from_utf8_lossy(&installed_bytes).ends_with("\"theme\":\"雪\",},}\n"));
+        assert_eq!(invoke(&[])["result"], "unchanged");
+        assert_eq!(
+            std::fs::read(root.join("tui.jsonc")).unwrap(),
+            installed_bytes
+        );
+        let before = tree_snapshot(&home.0);
+        invoke(&["--check"]);
+        assert_eq!(tree_snapshot(&home.0), before);
+        assert_eq!(
+            invoke(&["--uninstall"])["runtime_verification"],
+            "not-performed"
+        );
+        assert_eq!(std::fs::read(root.join("tui.json")).unwrap(), lower);
+        assert!(
+            !std::fs::read_to_string(root.join("tui.jsonc"))
+                .unwrap()
+                .contains("./plugins/mezzanine/opencode_tui.mjs")
+        );
+    }
+
     /// Public private-bundle adoption distinguishes planned from completed work,
     /// preserves both trees during previews, and reports current receipt repair
     /// versus historical upgrade without claiming runtime activation. Original

@@ -746,7 +746,7 @@ effects, not silently discard a replaced journal. This is not whole-workflow CAS
 Explicit recovery MUST freeze pending bytes/location before writer acquisition and
 reauthorize the identical snapshot under retained ownership. No pending intent,
 including absent roots, MUST return a truthful no-op without root/state/lock writes.
-New private journal transactions MUST use version 6 and explicit Private receipt
+New private journal transactions MUST use version 7 and explicit Private receipt
 placement with separately qualified prior private/vendor receipt identities.
 Version-2 journals MUST retain original vendor receipt destinations and MUST NOT
 authorize private receipt targets or new receipt-source fields. Unknown versions,
@@ -810,7 +810,7 @@ Archive collision/failure/loss MUST prevent future file publication or retain pe
 intent after already confirmed effects. Versions 2/3 MUST NOT authorize archive effects
 or relaxed edited-file reconciliation; their original target semantics remain frozen.
 The v4 transaction is bounded to 32 effects with finite payload/journal limits.
-Current private publication MUST use journal version 6, retaining version-5 bounded multi-array
+Current private publication MUST use journal version 7, retaining version-5 bounded multi-array
 ownership and Codex receipt-qualified whole-file-to-shared migration. Version 5
 MUST retain v4 archive dependencies/bounds and exact compiled recovery authority.
 Genuine v2-v4 targets MUST retain original effects; new multi-array manifests or
@@ -844,6 +844,27 @@ Unreceipted uninstall MUST NOT implicitly adopt files. `adoption_planned` report
 qualified requested/original pending intent; `legacy_adopted` MUST be false for
 check/dry-run and require successful actual settlement. Same-current adoption is
 receipt repair, historical adoption is upgrade, not verified vendor activation.
+Version 7 MAY reconcile compiled JSONC array membership with exact value tokens,
+necessary delimiter edits and new member/field insertion only. Line/block comments,
+trailing commas and a leading UTF-8 BOM MAY be admitted with bounded UTF-8/grammar
+validation; JSON5 expressions, duplicate decoded keys and malformed data MUST reject.
+The parser MUST enforce finite 1 MiB, 65,536-node and 64-level limits and existing
+4,096-member ownership/capacity bounds. Every edited output MUST be reparsed against
+the expected semantic document. Unrelated byte spans and all comment tokens MUST
+remain exact; no-op MUST be byte-exact and uninstall MUST retain shared containers.
+OpenCode revision 7 MUST qualify only four compiled root-local variants: tui.json
+or tui.jsonc, with /plugin or effective /tui/plugin ownership. An existing root
+plugin field takes precedence; otherwise an authored nested list MUST NOT be
+shadowed by newly creating a root array. Existing tui.jsonc is the later loader
+source and MUST be preferred within the selected root. Selection MUST use accepted
+pending overlays and bind both filename preimages/absence through publication.
+Receipt-proven filename transition MAY remove only the prior exact member and add
+the current exact member; neither document or unrelated plugin settings is owned.
+New JSONC identities relabelled as v2-v6 journals MUST reject, while genuine earlier
+targets retain original strict semantics. Shipped v6 payload fingerprints MUST fail
+closed on source drift until reviewed historical snapshots are supplied. Receipt
+payload schema remains 1; this does not grant arbitrary custom-file/project-root
+writes, generic TOML editing, vendor trust bypass or verified runtime activation.
 Missing shared JSON ownership
 MUST NOT inherit private-file repair rules. Recovery MUST recompute authorized
 repairs and reject omitted required artifacts rather than trust journal payloads.

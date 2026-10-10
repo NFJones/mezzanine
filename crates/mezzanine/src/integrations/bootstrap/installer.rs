@@ -219,12 +219,63 @@ pub(crate) fn plan_private(
     operation: Operation,
 ) -> Result<Plan> {
     validate_manifest(manifest)?;
-    plan_with_publisher(
-        Publisher::inspect_private(root, home)?,
-        manifest,
-        operation,
-        &super::compiled_history(manifest),
-    )
+    let publisher = Publisher::inspect_private(root, home)?;
+    let history = super::compiled_history(manifest);
+    if super::compiled_variant_matches(manifest, manifest) {
+        let pending = publisher.inspect_pending_authorized(|version, value, changes| {
+            authorize_recovery(&publisher, manifest, &history, version, value, changes)
+        })?;
+        let mut observations = Vec::new();
+        for path in ["tui.json", "tui.jsonc"] {
+            let bytes = if let Some(change) = pending
+                .as_ref()
+                .and_then(|pending| pending.changes.iter().find(|change| change.path == path))
+            {
+                change.after.clone()
+            } else {
+                publisher.read(path)?
+            };
+            observations.push((path.to_string(), bytes));
+        }
+        let higher = observations[1].1.is_some();
+        let nested = observations[usize::from(higher)]
+            .1
+            .as_deref()
+            .map(super::jsonc::plugin_pointer)
+            .transpose()?
+            == Some("/tui/plugin");
+        let selected = if nested {
+            super::opencode_artifact::nested_manifest(higher)
+        } else if higher {
+            super::opencode_artifact::jsonc_manifest()
+        } else {
+            super::opencode_artifact::manifest()
+        };
+        let mut plan = plan_with_publisher(publisher, &selected, operation, &history)?;
+        if plan.pending != pending {
+            return Err(MezError::conflict(
+                "bootstrap TUI selection recovery changed",
+            ));
+        }
+        for observation in observations {
+            if let Some((_, bytes)) = plan
+                .observed
+                .iter()
+                .find(|(path, _)| path == &observation.0)
+            {
+                if bytes != &observation.1 {
+                    return Err(MezError::conflict(
+                        "bootstrap TUI selection preimage changed",
+                    ));
+                }
+            } else {
+                plan.observed.push(observation);
+            }
+        }
+        Ok(plan)
+    } else {
+        plan_with_publisher(publisher, manifest, operation, &history)
+    }
 }
 
 /// Builds one deterministic plan through its captured publication owner.
@@ -241,6 +292,7 @@ fn plan_with_publisher(
             matches!(
                 entry.artifact,
                 super::reconciliation::Artifact::JsonArrayEntries { .. }
+                    | super::reconciliation::Artifact::JsoncArrayEntry { .. }
             )
         })
     {
@@ -299,7 +351,10 @@ fn plan_with_publisher(
             ));
         }
         validate_manifest(&receipt.manifest)?;
-        if receipt.manifest != *manifest && !history.contains(&receipt.manifest) {
+        if receipt.manifest != *manifest
+            && !history.contains(&receipt.manifest)
+            && !super::compiled_variant_matches(&receipt.manifest, manifest)
+        {
             return Err(MezError::conflict(
                 "bootstrap receipt is not a recognized compiled manifest revision",
             ));
@@ -385,7 +440,7 @@ fn plan_with_publisher(
             before.as_deref(),
             old.get(&path).copied(),
             desired.get(&path).copied(),
-            (receipt_location == ReceiptLocation::Private).then_some(6),
+            (receipt_location == ReceiptLocation::Private).then_some(7),
         )?;
         if let Some(archive) = archive {
             archive_requirements.insert(path.clone(), archive.clone());
@@ -771,9 +826,14 @@ fn authorize_recovery(
         ));
     }
     if intent.manifest.harness != manifest.harness
-        || (intent.manifest != *manifest && !history.contains(&intent.manifest))
+        || (intent.manifest != *manifest
+            && !history.contains(&intent.manifest)
+            && !super::compiled_variant_matches(&intent.manifest, manifest))
         || intent.previous.as_ref().is_some_and(|old| {
-            old.harness != manifest.harness || (old != manifest && !history.contains(old))
+            old.harness != manifest.harness
+                || (old != manifest
+                    && !history.contains(old)
+                    && !super::compiled_variant_matches(old, manifest))
         })
     {
         return Err(MezError::forbidden(
@@ -800,6 +860,24 @@ fn authorize_recovery(
             "bootstrap historical journal cannot authorize multi-array ownership",
         ));
     }
+    if version < 7
+        && std::iter::once(&intent.manifest)
+            .chain(intent.previous.iter())
+            .chain(intent.previous_private.iter())
+            .chain(intent.previous_vendor.iter())
+            .any(|source| {
+                source.entries.iter().any(|entry| {
+                    matches!(
+                        entry.artifact,
+                        super::reconciliation::Artifact::JsoncArrayEntry { .. }
+                    )
+                })
+            })
+    {
+        return Err(MezError::forbidden(
+            "bootstrap historical journal cannot authorize JSONC ownership",
+        ));
+    }
     let target = &intent.manifest;
     validate_manifest(target)?;
     if let Some(old) = &intent.previous {
@@ -810,7 +888,11 @@ fn authorize_recovery(
         .iter()
         .chain(&intent.previous_vendor)
     {
-        if source.harness != manifest.harness || (source != manifest && !history.contains(source)) {
+        if source.harness != manifest.harness
+            || (source != manifest
+                && !history.contains(source)
+                && !super::compiled_variant_matches(source, manifest))
+        {
             return Err(MezError::forbidden(
                 "bootstrap recovery receipt source outside compiled history",
             ));
@@ -1043,7 +1125,11 @@ mod tests {
     fn bootstrap_installer_repairs_missing_private_files_and_recovers() {
         use super::super::reconciliation::Artifact;
         for harness in ["pi", "opencode"] {
-            let current = super::super::compiled_manifest(harness, None).unwrap();
+            let current = if harness == "opencode" {
+                super::super::opencode_artifact::historical_manifest()
+            } else {
+                super::super::compiled_manifest(harness, None).unwrap()
+            };
             let oldest = super::super::compiled_history(&current).pop().unwrap();
             for target in [&oldest, &current] {
                 for operation in [Operation::Install, Operation::Uninstall] {
@@ -1163,7 +1249,11 @@ mod tests {
     #[test]
     fn bootstrap_normal_recovery_all_targets_boundaries_and_requested_operations() {
         for harness in ["pi", "opencode"] {
-            let current = super::super::compiled_manifest(harness, None).unwrap();
+            let current = if harness == "opencode" {
+                super::super::opencode_artifact::historical_manifest()
+            } else {
+                super::super::compiled_manifest(harness, None).unwrap()
+            };
             let mut targets = super::super::compiled_history(&current);
             assert_eq!(targets.len(), 5);
             targets.push(current.clone());
@@ -1437,7 +1527,7 @@ mod tests {
             let history = super::super::compiled_history(&current);
             assert_eq!(
                 history.len(),
-                5,
+                if harness == "pi" { 5 } else { 6 },
                 "all frozen targets must remain qualified for {harness}"
             );
             for target in history {
@@ -1473,12 +1563,12 @@ mod tests {
                         assert!(!receipt_path.exists());
                     }
                     assert_eq!(fs::read(root.join("authored")).unwrap(), b"preserved");
-                    plan(&root, &current, Operation::Install)
+                    plan_private(&root, &root, &current, Operation::Install)
                         .unwrap()
                         .apply()
                         .unwrap();
                     assert!(
-                        plan(&root, &current, Operation::Install)
+                        plan_private(&root, &root, &current, Operation::Install)
                             .unwrap()
                             .changed_paths()
                             .is_empty()

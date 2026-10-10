@@ -25,6 +25,11 @@ pub(crate) enum Artifact {
         pointer: String,
         value: serde_json::Value,
     },
+    /// Exact array member in JSON-with-comments; token edits retain authored bytes.
+    JsoncArrayEntry {
+        pointer: String,
+        value: serde_json::Value,
+    },
     /// Bounded exact members in distinct arrays of one shared strict-JSON file.
     JsonArrayEntries { entries: Vec<JsonArrayMember> },
 }
@@ -55,7 +60,9 @@ pub(crate) fn validate(entry: &Entry) -> Result<()> {
         Artifact::File { bytes } if bytes.len() > 1024 * 1024 => Err(MezError::invalid_args(
             "bootstrap artifact exceeds byte limit",
         )),
-        Artifact::JsonEntry { pointer, .. } | Artifact::JsonArrayEntry { pointer, .. } => {
+        Artifact::JsonEntry { pointer, .. }
+        | Artifact::JsonArrayEntry { pointer, .. }
+        | Artifact::JsoncArrayEntry { pointer, .. } => {
             pointer_parts(pointer)?;
             Ok(())
         }
@@ -182,6 +189,9 @@ pub(crate) fn reconcile(
         }
         Artifact::JsonArrayEntry { pointer, .. } => {
             reconcile_array(current, previous, desired, pointer, false)
+        }
+        Artifact::JsoncArrayEntry { .. } => {
+            super::jsonc::reconcile(current, previous, desired, false)
         }
         Artifact::JsonArrayEntries { .. } => {
             super::shared_arrays::reconcile_arrays(current, previous, desired, false)

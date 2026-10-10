@@ -18,6 +18,8 @@
 //! Version 6 records exact unreceipted private-bundle adoption independently of
 //! receipt provenance; its compiled preimage proof is installer-owned. V2-v5
 //! cannot acquire adoption authority, and inspection still performs no writes.
+//! Version 7 admits compiled JSONC identities/effective-pointer selection only;
+//! genuine older targets keep their original parser and publication semantics.
 
 use super::reconciliation::publication_path;
 use super::root_directory::RootDirectory;
@@ -685,7 +687,7 @@ impl Publisher {
         })?;
         let root = self.directory.file()?.metadata()?;
         self.validate_root()?;
-        if !matches!(journal.version, 2..=6)
+        if !matches!(journal.version, 2..=7)
             || journal.root_device != root.dev()
             || journal.root_inode != root.ino()
         {
@@ -783,7 +785,7 @@ impl Publisher {
         self.validate_changes(&changes, false)?;
         let root = self.directory.file()?.metadata()?;
         let bytes = serde_json::to_vec(&Journal {
-            version: if self.uses_private_state() { 6 } else { 2 },
+            version: if self.uses_private_state() { 7 } else { 2 },
             root_device: root.dev(),
             root_inode: root.ino(),
             intent,

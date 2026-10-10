@@ -40,6 +40,17 @@ pub(super) fn entries(prefix: &str) -> Vec<Entry> {
 mod tests {
     use super::*;
 
+    /// Current adapter fixtures use isolated test-owned HOME/root witnesses,
+    /// never a v2 journal unable to authorize new format artifacts. Historical
+    /// authority still comes from the compiled predecessor table.
+    fn plan(
+        root: &std::path::Path,
+        manifest: &super::super::installer::Manifest,
+        operation: super::super::installer::Operation,
+    ) -> crate::Result<super::super::installer::Plan> {
+        super::super::installer::plan_private(root, root, manifest, operation)
+    }
+
     /// Shared deployment owns only enumerated private files and pins an explicit
     /// installer executable without consulting vendor/launcher environment.
     #[test]
@@ -69,7 +80,7 @@ mod tests {
     /// wiring; arbitrary receipts cannot masquerade as compiled old authority.
     #[test]
     fn persistent_client_artifact_upgrade_recognizes_exact_previous_revision() {
-        use super::super::installer::{Operation, plan};
+        use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
             let previous = super::super::compiled_history(&current).pop().unwrap();
@@ -138,15 +149,16 @@ mod tests {
     /// A shared-client byte revision must preserve every compiled historical
     /// upgrade, not just the oldest or immediate predecessor. Historical client
     /// data stays independent of active source and upgrade touches no authored
-    /// sibling configuration. The immediate shipped bytes remain exact v4.
+    /// sibling configuration. Pi's preceding bytes remain exact v4; OpenCode's
+    /// format-only v6 predecessor retains the unchanged current client bytes.
     #[test]
     fn persistent_client_artifact_upgrade_retains_all_frozen_predecessors() {
-        use super::super::installer::{Operation, plan};
+        use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, if harness == "pi" { 7 } else { 6 });
+            assert_eq!(current.revision, 7);
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), 5);
+            assert_eq!(history.len(), if harness == "pi" { 5 } else { 6 });
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
             let frozen = immediate
@@ -157,7 +169,11 @@ mod tests {
             assert_eq!(
                 frozen.artifact,
                 Artifact::File {
-                    bytes: super::super::history::persistent_client_v4()
+                    bytes: if harness == "pi" {
+                        super::super::history::persistent_client_v4()
+                    } else {
+                        include_bytes!("persistent_client.mjs").to_vec()
+                    }
                 }
             );
             for previous in history {

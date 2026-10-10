@@ -24,6 +24,29 @@ pub(super) fn reconcile_preserving(
     journal_version: Option<u32>,
 ) -> Result<(Option<Vec<u8>>, Option<String>)> {
     let enabled = journal_version.is_some_and(|version| version >= 4);
+    if journal_version.is_some_and(|version| version >= 7)
+        && harness == "opencode"
+        && matches!(path, "tui.json" | "tui.jsonc")
+        && desired.is_none()
+        && let Some(Artifact::JsonArrayEntry { pointer, value }) = previous
+    {
+        let previous = Artifact::JsoncArrayEntry {
+            pointer: pointer.clone(),
+            value: value.clone(),
+        };
+        return Ok((
+            super::jsonc::reconcile(current, Some(&previous), None, true)?,
+            None,
+        ));
+    }
+    if journal_version.is_some_and(|version| version >= 7)
+        && matches!(desired.or(previous), Some(Artifact::JsoncArrayEntry { .. }))
+    {
+        return Ok((
+            super::jsonc::reconcile(current, previous, desired, true)?,
+            None,
+        ));
+    }
     if journal_version.is_some_and(|version| version >= 5) {
         if harness == "codex"
             && path == "hooks.json"
