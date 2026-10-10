@@ -59,7 +59,7 @@ impl AsyncRuntimeSessionActor {
     ) -> Option<(
         String,
         usize,
-        crate::Result<crate::runtime::ExternalEnrollmentWork>,
+        crate::Result<Box<crate::runtime::ExternalEnrollmentWork>>,
     )> {
         let (body, consumed) = decode_control_frame(input, max_content_length).ok()?;
         let request = crate::control::parse_json_rpc_request(&body).ok()?;
@@ -89,7 +89,7 @@ impl AsyncRuntimeSessionActor {
             self.service
                 .prepare_external_enrollment(&request, connection)
         };
-        Some((request.id, consumed, prepared))
+        Some((request.id, consumed, prepared.map(Box::new)))
     }
 
     /// Owns bounded off-actor native observation and always returns settlement
@@ -101,7 +101,7 @@ impl AsyncRuntimeSessionActor {
     fn dispatch_external_enrollment_observation(
         &self,
         request_id: String,
-        prepared: crate::Result<crate::runtime::ExternalEnrollmentWork>,
+        prepared: crate::Result<Box<crate::runtime::ExternalEnrollmentWork>>,
         connection: crate::control::ControlConnectionState,
         mut output_prefix: Vec<u8>,
         consumed: usize,
@@ -1496,7 +1496,7 @@ impl AsyncRuntimeSessionActor {
             } => {
                 let body = self
                     .service
-                    .complete_external_enrollment(work, result, &connection);
+                    .complete_external_enrollment(*work, result, &connection);
                 output_prefix.extend_from_slice(&encode_control_body(&body));
                 // First enrollment must arm idle maintenance even after reply
                 // loss; event notification alone does not schedule timers.

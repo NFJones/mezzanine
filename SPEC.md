@@ -1098,6 +1098,18 @@ coverage. Oldest-event metadata and all requested windows MUST share one read
 snapshot and UTC time, with inclusive lower cutoffs and future events excluded.
 Oversized scans MUST fail explicitly rather than truncate totals. A successful
 later write MUST NOT clear evidence of an earlier accounting write gap.
+Telemetry schema 5 adds bounded native external-source namespace mappings.
+Only server-qualified native boot-session, UID, pane-root and producer lifetime
+facts may select a mapping; vendor session IDs remain selectors within that
+qualified source. The database stores a domain-separated digest, harness and
+random accounting owner, not native IDs, paths, credentials or callback content.
+Recreated ephemeral registration state may recover the same exact native source
+namespace, but mapping possession MUST NOT authorize enrollment or usage. Lookup
+MUST run off actor and actor admission MUST retain original lifetime/root fences.
+Capacity exhaustion MUST preserve existing mappings rather than silently evict
+replay authority. Ordinary accounting remains unavailable until ordered report,
+baseline and source-replay contracts are implemented; this mapping alone MUST NOT
+claim cross-process resume/fork continuity or enable historical expense replay.
 Pane creation commands MAY specify an explicit command to run in the new pane.
 When a pane creation command specifies an explicit command, Mezzanine MUST start
 the resolved shell path and run the explicit command from within that shell by

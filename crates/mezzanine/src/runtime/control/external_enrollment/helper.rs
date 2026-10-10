@@ -164,6 +164,8 @@ impl RuntimeSessionService {
                 heartbeat,
             }),
             ancestry: Arc::new(OnceLock::new()),
+            source_store: None,
+            source_owner: Arc::new(OnceLock::new()),
             ancestry_budget: self
                 .control
                 .external_agents()

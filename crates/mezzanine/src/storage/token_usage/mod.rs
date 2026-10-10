@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{MezError, Result};
 
 mod external;
+mod external_sources;
 mod history;
 mod projects;
 mod store;
@@ -28,6 +29,7 @@ pub(crate) use projects::{
 
 pub(crate) use external::external_usage_stream_id;
 pub(crate) use external::{ExternalCounters, ExternalUsageCommit, ExternalUsageReport};
+pub(crate) use external_sources::{ExternalSourceKey, NativeSourceKind, NativeSourceWitness};
 pub(crate) use store::{TokenUsageEvent, TokenUsageStore};
 
 /// Exact rolling windows displayed by `/status --extended`.

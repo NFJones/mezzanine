@@ -40,6 +40,7 @@ mod curated;
 mod helper;
 mod producer;
 mod rotation;
+mod source;
 mod targets;
 use producer::ProducerEvidence;
 
@@ -113,6 +114,10 @@ pub(crate) struct ExternalEnrollmentWork {
     /// successful Result alone cannot fabricate or replace native ancestry.
     ancestry: Arc<OnceLock<Arc<UnixAncestryWitness>>>,
     ancestry_budget: Arc<UnixAncestryBudget>,
+    /// Immutable off-actor ledger handle; absence cannot enable accounting.
+    source_store: Option<crate::storage::token_usage::TokenUsageStore>,
+    /// One-shot native namespace observation, not an admission capability.
+    source_owner: Arc<OnceLock<Option<String>>>,
     /// Deterministic test-owned barrier proving native work does not hold actor.
     #[cfg(test)]
     pub(crate) worker_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
@@ -200,6 +205,9 @@ impl ExternalEnrollmentWork {
         self.ancestry
             .set(Arc::new(ancestry))
             .map_err(|_| MezError::conflict("external ancestry already observed"))?;
+        if self.helper.is_none() {
+            self.observe_source_owner(&ProducerEvidence::Socket(self.origin.clone()));
+        }
         Ok(())
     }
 }
@@ -389,6 +397,7 @@ impl RuntimeSessionService {
                 "external producer must be a distinct pane descendant",
             ));
         }
+        let source_store = self.persistence.cloned_token_usage_store();
         let registry = self.control.external_agents_mut();
         // An existing run needs a worker reservation, not another binding slot.
         // This is only a candidate lookup: native observation and commit fences
@@ -441,6 +450,8 @@ impl RuntimeSessionService {
             curated,
             ancestry: Arc::new(OnceLock::new()),
             ancestry_budget: registry.enrollments.ancestry_budget.clone(),
+            source_store,
+            source_owner: Arc::new(OnceLock::new()),
             #[cfg(test)]
             worker_gate: registry.enrollments.worker_gate.clone(),
             #[cfg(test)]
@@ -602,7 +613,11 @@ impl RuntimeSessionService {
                 expires: current_unix_seconds().saturating_add(60),
                 registration: None,
                 retired: false,
-                accounting_owner: crate::storage::token_usage::new_token_usage_event_id(),
+                accounting_owner: work
+                    .source_owner
+                    .get()
+                    .and_then(Clone::clone)
+                    .unwrap_or_else(crate::storage::token_usage::new_token_usage_event_id),
                 accounting_origin,
                 enrollment: Some(EnrollmentBinding {
                     producer: ProducerEvidence::Socket(work.origin.clone()),

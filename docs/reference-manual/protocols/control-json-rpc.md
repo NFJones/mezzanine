@@ -675,6 +675,15 @@ rejects exhaustion without evicting live entries, and maintenance releases it
 only after actual native creator death (or whole runtime destruction). This is
 not durable usage identity/restart replay, and no capability is persisted or
 observer freshness inferred from retained ownership.
+Separately, telemetry schema5 stores up to65,536 domain-separated native source
+digests and server-issued accounting owners. Off-actor lookup qualifies native
+boot-session UUID, UID, root/producer incarnations, evidence kind, harness and
+main-session selector; actor lifetime/deadline fences remain authoritative.
+Registry recreation can reuse the exact live source namespace. Native IDs, paths,
+callbacks and credentials are not stored. Unavailable boot/store/capacity keeps
+lifecycle observational and usage unavailable; mappings are never silently
+evicted. Ordered-report, baseline and cross-process resume/fork continuity are
+still unfinished, so this checkpoint does not enable ordinary usage reporting.
 Helper EOF is not creator death, but creator survival alone cannot keep an observer
 fresh. The finite 60s lease may expire under a living creator; this is telemetry
 expiry, not a process-death declaration. Public helper-observe callbacks still

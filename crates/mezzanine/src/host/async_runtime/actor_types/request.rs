@@ -438,7 +438,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     /// Settles one bounded native enrollment observation on the actor.
     CompleteExternalEnrollmentInput {
         /// Immutable root, origin, metadata and admission reservation.
-        work: crate::runtime::ExternalEnrollmentWork,
+        /// Heap-owned so namespace metadata cannot inflate every actor request.
+        work: Box<crate::runtime::ExternalEnrollmentWork>,
         /// Bounded native ancestry outcome, never a caller-supplied proof.
         result: Result<()>,
         /// Exact retained connection, never initialized by enrollment.

@@ -255,11 +255,12 @@ impl CuratedAdmission {
             ));
         }
         self.producer
-            .set(producer)
+            .set(producer.clone())
             .map_err(|_| MezError::conflict("curated creator already observed"))?;
         work.ancestry
             .set(Arc::new(ancestry))
             .map_err(|_| MezError::conflict("curated ancestry already observed"))?;
+        work.observe_source_owner(&producer);
         Ok(())
     }
 }
@@ -388,7 +389,11 @@ impl RuntimeSessionService {
                 expires: current_unix_seconds().saturating_add(60),
                 registration: None,
                 retired: false,
-                accounting_owner: crate::storage::token_usage::new_token_usage_event_id(),
+                accounting_owner: work
+                    .source_owner
+                    .get()
+                    .and_then(Clone::clone)
+                    .unwrap_or_else(crate::storage::token_usage::new_token_usage_event_id),
                 accounting_origin,
                 enrollment: Some(EnrollmentBinding {
                     producer: producer.clone(),

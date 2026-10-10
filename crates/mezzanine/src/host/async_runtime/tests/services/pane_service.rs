@@ -2051,9 +2051,15 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         );
     };
 
+    // Keep independent long-lived future state out of the combined test frame.
+    // This changes allocation only, not scheduling, timeout, assertions or the
+    // default test-thread stack budget.
+    let client = Box::pin(client);
+    let pane_worker = Box::pin(pane_worker);
+    let actor = Box::pin(actor.run());
     let ((), supervisor_report, mut actor_exit) =
         tokio::time::timeout(Duration::from_secs(30), async {
-            tokio::join!(client, pane_worker, actor.run())
+            tokio::join!(client, pane_worker, actor)
         })
         .await
         .expect("async pane worker shell liveness test should not hang indefinitely");
