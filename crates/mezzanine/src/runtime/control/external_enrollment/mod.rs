@@ -68,6 +68,10 @@ pub(super) struct EnrollmentAdmissions {
 #[derive(Debug)]
 pub(super) struct EnrollmentBinding {
     producer: ProducerEvidence,
+    /// Native mapping was actually observed; fallback owners cannot start usage.
+    pub(super) usage_owner_is_durable: bool,
+    /// At least one native request-bound durable report was actually received.
+    pub(super) request_reports_seen: bool,
     /// Original qualified ancestry; retirement releases it without dropping
     /// observational retry tombstones or immutable accounting provenance.
     pub(super) ancestry: Option<Arc<UnixAncestryWitness>>,
@@ -621,6 +625,8 @@ impl RuntimeSessionService {
                 accounting_origin,
                 enrollment: Some(EnrollmentBinding {
                     producer: ProducerEvidence::Socket(work.origin.clone()),
+                    usage_owner_is_durable: work.source_owner.get().is_some_and(Option::is_some),
+                    request_reports_seen: false,
                     ancestry: Some(ancestry.clone()),
                     run_generation: generation,
                     epoch: 1,

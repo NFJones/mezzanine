@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{MezError, Result};
 
 mod external;
+mod external_requests;
 mod external_sources;
 mod history;
 mod projects;
@@ -27,8 +28,10 @@ pub(crate) use projects::{
     AccountingOrigin, AccountingProjectId, AccountingProjectRecord, accounting_origin_for_root,
 };
 
+pub(crate) use external::external_observation_epoch;
 pub(crate) use external::external_usage_stream_id;
 pub(crate) use external::{ExternalCounters, ExternalUsageCommit, ExternalUsageReport};
+pub(crate) use external_requests::ExternalRequestOrigin;
 pub(crate) use external_sources::{ExternalSourceKey, NativeSourceKind, NativeSourceWitness};
 pub(crate) use store::{TokenUsageEvent, TokenUsageStore};
 
@@ -110,5 +113,7 @@ mod history_tests;
 mod observation_tests;
 #[cfg(test)]
 mod project_tests;
+#[cfg(test)]
+mod request_tests;
 #[cfg(test)]
 mod tests;

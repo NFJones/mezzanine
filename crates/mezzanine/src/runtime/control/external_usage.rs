@@ -8,6 +8,7 @@
 //! close. Reset moves only a view baseline, never the durable stream checkpoint.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, OnceLock};
 
 use crate::control::{AuthenticatedPeer, ControlConnectionState, JsonRpcRequest};
 use crate::error::{MezError, Result};
@@ -69,12 +70,42 @@ pub(crate) struct ExternalUsageWork {
     process: RuntimePaneProcessIdentity,
     /// Acceptance clock used for retention and timestamp validation.
     pub now: u64,
+    /// Original ready marker for native reports; absent for legacy streams.
+    request_marker: Option<String>,
+    /// Only actual native storage work can publish a durable completion.
+    published: Arc<OnceLock<ExternalUsageCommit>>,
     /// Test-only worker start/release barrier, captured with immutable work.
     #[cfg(test)]
     pub worker_gate: Option<(
         std::sync::Arc<tokio::sync::Notify>,
         std::sync::Arc<tokio::sync::Notify>,
     )>,
+}
+
+impl ExternalUsageWork {
+    /// Runs legacy or sealed native request accounting off actor. Native work
+    /// cannot replace its originally reserved project/group with current state.
+    pub(crate) fn execute(&self) -> Result<ExternalUsageCommit> {
+        if let Some(marker) = &self.request_marker {
+            let frozen = self
+                .store
+                .freeze_external_request_report(&self.report, marker)?;
+            if frozen.report().project != self.report.project
+                || frozen.report().epoch != self.report.epoch
+            {
+                return Err(MezError::conflict(
+                    "external request original projection changed",
+                ));
+            }
+            let commit = self.store.ingest_external_request(&frozen, self.now)?;
+            self.published
+                .set(commit.clone())
+                .map_err(|_| MezError::conflict("external request result already published"))?;
+            Ok(commit)
+        } else {
+            self.store.ingest_external(&self.report, self.now)
+        }
+    }
 }
 
 impl RuntimeSessionService {
@@ -211,7 +242,7 @@ impl RuntimeSessionService {
             ),
             counters,
         };
-        let mut work = ExternalUsageWork {
+        let work = ExternalUsageWork {
             admission: 0,
             request_id: request.id.clone(),
             store: self.persistence.cloned_token_usage_store().ok_or_else(|| {
@@ -221,9 +252,144 @@ impl RuntimeSessionService {
             pane_id: binding.pane_id.clone(),
             process: binding.process.clone(),
             now: current_unix_seconds(),
+            request_marker: None,
+            published: Arc::new(OnceLock::new()),
             #[cfg(test)]
             worker_gate: self.control.external_agents().usage.worker_gate.clone(),
         };
+        self.reserve_external_usage_work(work)
+    }
+
+    /// Admits a finalized observation under a ready original native request.
+    /// Caller epochs/projects/PIDs and legacy modes cannot select attribution;
+    /// missing readiness requires retry of the same begin, not a newest lookup.
+    pub(crate) fn prepare_external_usage_end(
+        &mut self,
+        request: &JsonRpcRequest,
+        connection: &ControlConnectionState,
+    ) -> Result<ExternalUsageWork> {
+        self.require_live()?;
+        if request.method != "agent/external/usage-end" || connection.initialized() {
+            return Err(MezError::forbidden(
+                "external request end requires capability-only ingress",
+            ));
+        }
+        let Some(AuthenticatedPeer::UnixUser { uid }) = connection.authenticated_peer() else {
+            return Err(MezError::forbidden(
+                "external request end requires Unix transport",
+            ));
+        };
+        crate::control::validate_control_method_params_schema(request)?;
+        let params = crate::protocol::strict_json::decode(
+            request.params.as_deref().unwrap_or("{}").as_bytes(),
+        )?;
+        let digest = super::external_agents::credential(&params)?;
+        self.reconcile_external_agent_registrations();
+        let binding = self
+            .control
+            .external_agents()
+            .bindings
+            .get(&digest)
+            .filter(|binding| {
+                !binding.retired
+                    && binding.uid == *uid
+                    && params["generation"].as_u64() == Some(binding.generation)
+            })
+            .ok_or_else(|| MezError::forbidden("external request producer unavailable"))?;
+        crate::integrations::harness_policy::require_active_external_harness(&binding.harness)?;
+        let session = super::external_agents::text(&params, "external_session_id", 128)?;
+        if binding
+            .registration
+            .as_ref()
+            .is_none_or(|registration| registration.external_session_id != session)
+        {
+            return Err(MezError::forbidden("external request session unavailable"));
+        }
+        let enrollment = binding
+            .enrollment
+            .as_ref()
+            .filter(|enrollment| enrollment.usage_owner_is_durable)
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotImplemented,
+                    "external request native namespace unavailable",
+                )
+            })?;
+        enrollment.authorize(connection)?;
+        let marker = super::external_agents::text(&params, "request_id", 64)?;
+        let origin = self
+            .control
+            .external_agents()
+            .usage_begins
+            .origins
+            .get(&(binding.accounting_owner.clone(), marker.clone()))
+            .ok_or_else(|| {
+                MezError::conflict(
+                    "external request original readiness unavailable; retry its original begin",
+                )
+            })?;
+        let now = current_unix_seconds();
+        let observed_at=params["observed_at"].as_u64().filter(|time|*time>=origin.admitted_at && *time<=now && *time>=now.saturating_sub(91*86_400))
+            .ok_or_else(||MezError::invalid_args("external observation requires its original request boundary and replay horizon"))?;
+        let counters: ExternalCounters = serde_json::from_value(
+            params
+                .get("counters")
+                .cloned()
+                .ok_or_else(|| MezError::invalid_args("external request counters unavailable"))?,
+        )
+        .map_err(|_| MezError::invalid_args("external request counters invalid"))?;
+        counters.validate()?;
+        let mut report = ExternalUsageReport {
+            owner: binding.accounting_owner.clone(),
+            project: origin.project.clone(),
+            harness: binding.harness.clone(),
+            epoch: "request-observation".into(),
+            event_id: super::external_agents::text(&params, "event_id", 64)?,
+            sequence: 1,
+            mode: "observation".into(),
+            baseline: false,
+            observed_at,
+            model: ModelTokenUsageKey::new(
+                super::external_agents::text(&params, "provider", 128)?,
+                super::external_agents::text(&params, "model", 128)?,
+            ),
+            counters,
+        };
+        if report.event_id.len() != 64
+            || !report
+                .event_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(MezError::invalid_args(
+                "external observation requires an opaque canonical identity",
+            ));
+        }
+        report.epoch = crate::storage::token_usage::external_observation_epoch(&report)?;
+        let work = ExternalUsageWork {
+            admission: 0,
+            request_id: request.id.clone(),
+            store: self.persistence.cloned_token_usage_store().ok_or_else(|| {
+                MezError::invalid_state("durable external accounting unavailable")
+            })?,
+            report,
+            pane_id: binding.pane_id.clone(),
+            process: binding.process.clone(),
+            now,
+            request_marker: Some(marker),
+            published: Arc::new(OnceLock::new()),
+            #[cfg(test)]
+            worker_gate: self.control.external_agents().usage.worker_gate.clone(),
+        };
+        self.reserve_external_usage_work(work)
+    }
+
+    /// Shares exact stream reservations between legacy and native request work.
+    /// New groups fail explicitly at capacity; no paid observation is evicted.
+    fn reserve_external_usage_work(
+        &mut self,
+        mut work: ExternalUsageWork,
+    ) -> Result<ExternalUsageWork> {
         let stream_id = crate::storage::token_usage::external_usage_stream_id(
             &work.report.owner,
             &work.report.epoch,
@@ -283,6 +449,39 @@ impl RuntimeSessionService {
                 projection.reservations.remove(&id);
             }
         }
+        let result = if work.request_marker.is_some() {
+            result.and_then(|commit| {
+                if work.published.get() == Some(&commit) {
+                    Ok(commit)
+                } else {
+                    Err(MezError::conflict(
+                        "external request durability result unpublished or mismatched",
+                    ))
+                }
+            })
+        } else {
+            result
+        };
+        if let Some(marker) = &work.request_marker {
+            self.control
+                .external_agents_mut()
+                .usage_begins
+                .origins
+                .remove(&(work.report.owner.clone(), marker.clone()));
+        }
+        if work.request_marker.is_some() && result.is_ok() {
+            for binding in self.control.external_agents_mut().bindings.values_mut() {
+                if !binding.retired
+                    && binding.accounting_owner == work.report.owner
+                    && binding.harness == work.report.harness
+                    && binding.process.same_incarnation(&work.process)
+                    && let Some(enrollment) = &mut binding.enrollment
+                {
+                    enrollment.request_reports_seen = true;
+                }
+            }
+        }
+        let projection = &mut self.control.external_agents_mut().usage;
         match result {
             Ok(commit) => {
                 let stream = projection

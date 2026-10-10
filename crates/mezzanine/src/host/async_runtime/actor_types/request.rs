@@ -466,6 +466,21 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Original response owner, retained even if the transport disconnects.
         reply: oneshot::Sender<Result<AsyncControlInputResult>>,
     },
+    /// Settles one producer-bound request-origin persistence operation.
+    CompleteExternalUsageBeginInput {
+        /// Immutable metadata admission and original native binding identity.
+        work: Box<crate::runtime::ExternalUsageBeginWork>,
+        /// Worker-published durable origin, never a report/expense result.
+        result: Result<crate::storage::token_usage::ExternalRequestOrigin>,
+        /// Original capability-only native connection.
+        connection: ControlConnectionState,
+        /// Prior encoded replies in the exact control continuation.
+        output_prefix: Vec<u8>,
+        /// Original frame consumption boundary.
+        consumed: usize,
+        /// Reply owner retained after transport loss to finish reservation cleanup.
+        reply: oneshot::Sender<Result<AsyncControlInputResult>>,
+    },
     /// Represents the Handle Control Input With Snapshots case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1462,6 +1477,7 @@ impl AsyncRuntimeRequest {
             | Self::CompleteStatusControlInput { .. }
             | Self::CompleteExternalEnrollmentInput { .. }
             | Self::CompleteExternalUsageInput { .. }
+            | Self::CompleteExternalUsageBeginInput { .. }
             | Self::CompleteSnapshotControlInput { .. }
             | Self::CreateHostCheckpoint { .. } => Family::Control,
             #[cfg(test)]

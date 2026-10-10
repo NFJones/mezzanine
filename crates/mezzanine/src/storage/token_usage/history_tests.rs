@@ -121,6 +121,7 @@ fn attributed_migration_preserves_legacy_receipts_and_rolls_back_failure() {
             "DROP INDEX token_usage_events_project_time;
         DROP TABLE external_usage_sources;
         DROP TABLE external_usage_observations;
+        DROP TABLE external_usage_requests;
         ALTER TABLE token_usage_events DROP COLUMN project_id;
         ALTER TABLE external_usage_streams DROP COLUMN project_id;
         PRAGMA user_version=3;

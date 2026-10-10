@@ -25,6 +25,15 @@ impl Drop for Fixture {
 /// Starts a normal shell, writes a normally invoked Rust fake vendor command,
 /// and accepts its own socket. Only nonsecret standard MEZ discovery is inherited.
 async fn fixture(mode: &str) -> Option<Fixture> {
+    fixture_with_start_directory(mode, None).await
+}
+
+/// Shares actual native fixture ownership while origin tests select a physical
+/// start directory. No payload cwd/PID field supplies admission authority.
+async fn fixture_with_start_directory(
+    mode: &str,
+    start: Option<&std::path::Path>,
+) -> Option<Fixture> {
     let directory = std::path::Path::new("/tmp").join(format!(
         "mez-enroll-{}-{:x}",
         std::process::id(),
@@ -35,7 +44,13 @@ async fn fixture(mode: &str) -> Option<Fixture> {
     let listener = tokio::net::UnixListener::bind(&path).unwrap();
     crate::runtime::enable_unix_writer_credentials(listener.as_raw_fd()).unwrap();
     let mut service = RuntimeServiceFixture::new().control_socket(&path).build();
-    service.start_initial_pane_process(None).unwrap();
+    if let Some(start) = start {
+        service
+            .start_initial_pane_process_with_start_directory(None, start)
+            .unwrap();
+    } else {
+        service.start_initial_pane_process(None).unwrap();
+    }
     let executable = std::env::current_exe().unwrap();
     let (mode_name, launch) = if mode == "root-hold" {
         ("hold", "exec ")
@@ -1209,6 +1224,7 @@ mod persistent_client;
 mod pi_observation;
 mod producer;
 mod source;
+mod usage_begin;
 
 /// Programmatic requests still undergo strict selector decoding before native
 /// reservations. Wire parsing is not the only boundary: escaped/duplicate

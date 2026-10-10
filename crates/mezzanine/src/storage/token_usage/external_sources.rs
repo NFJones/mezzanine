@@ -318,7 +318,7 @@ mod tests {
             store.ingest_external(&report, 100).unwrap();
             let connection = store.open().unwrap();
             connection
-                .execute_batch("DROP TABLE external_usage_sources; DROP TABLE external_usage_observations; PRAGMA user_version=4;")
+                .execute_batch("DROP TABLE external_usage_sources; DROP TABLE external_usage_observations; DROP TABLE external_usage_requests; PRAGMA user_version=4;")
                 .unwrap();
             if fail {
                 connection
@@ -331,7 +331,7 @@ mod tests {
                 connection
                     .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                     .unwrap(),
-                if fail { 4 } else { 6 }
+                if fail { 4 } else { 7 }
             );
             assert_eq!(
                 connection
@@ -367,7 +367,7 @@ mod tests {
         let store = store();
         store.initialize(100).unwrap();
         let connection = store.open().unwrap();
-        connection.execute_batch("PRAGMA user_version=7;").unwrap();
+        connection.execute_batch("PRAGMA user_version=8;").unwrap();
         assert!(store.external_source_owner(&key("one")).is_err());
         assert_eq!(
             connection

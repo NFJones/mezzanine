@@ -33,6 +33,8 @@ pub(super) struct ExternalAgentRegistry {
     pub(super) next_generation: u64,
     pub(super) enrollments: super::external_enrollment::EnrollmentAdmissions,
     pub(super) usage: super::external_usage::ExternalUsageProjection,
+    /// Separate bounded request-origin metadata admissions, not billing streams.
+    pub(super) usage_begins: super::external_usage_requests::ExternalUsageBegins,
 }
 
 /// Exact local launch authority and optional registration settlement.
@@ -86,10 +88,16 @@ impl LaunchBinding {
         }
     }
 
-    /// Keeps ordinary-source accounting unavailability visible in discovery.
+    /// Distinguishes actually observed request reports from source unavailability.
     /// Legacy externally reported accounting is not a completeness/invoice claim.
     fn usage_coverage(&self) -> &'static str {
-        if self.enrollment.is_some() {
+        if self
+            .enrollment
+            .as_ref()
+            .is_some_and(|enrollment| enrollment.request_reports_seen)
+        {
+            "request-bound-external-reported"
+        } else if self.enrollment.is_some() {
             "unavailable-source-continuity"
         } else {
             "external-reported"
@@ -460,6 +468,7 @@ impl RuntimeSessionService {
             enrollment.ancestry = None;
         }
         let pane_id = binding.pane_id.clone();
+        let accounting_owner = binding.accounting_owner.clone();
         let owner = format!("external-registration:{}", binding.generation);
         let agent_id = binding
             .registration
@@ -474,6 +483,16 @@ impl RuntimeSessionService {
                 &registration.external_session_id,
                 digest,
             );
+        }
+        if !registry
+            .bindings
+            .values()
+            .any(|binding| !binding.retired && binding.accounting_owner == accounting_owner)
+        {
+            registry
+                .usage_begins
+                .origins
+                .retain(|(owner, _), _| owner != &accounting_owner);
         }
         self.presentation
             .set_pane_harness_status(&pane_id, &owner, None);

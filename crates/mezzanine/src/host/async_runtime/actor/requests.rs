@@ -50,6 +50,85 @@ impl AsyncRuntimeSessionActor {
         });
     }
 
+    /// Recognizes one bounded request-begin frame without general initialization.
+    fn prepare_external_usage_begin_input(
+        &mut self,
+        input: &[u8],
+        max_content_length: usize,
+        connection: &crate::control::ControlConnectionState,
+    ) -> Option<(
+        String,
+        usize,
+        crate::Result<Box<crate::runtime::ExternalUsageBeginWork>>,
+    )> {
+        let (body, consumed) = decode_control_frame(input, max_content_length).ok()?;
+        let request = crate::control::parse_json_rpc_request(&body).ok()?;
+        if request.method != "agent/external/usage-begin" {
+            return None;
+        }
+        let prepared = if consumed != input.len() || body.len() > 8192 {
+            Err(MezError::invalid_args(
+                "external request begin requires one bounded control frame",
+            ))
+        } else {
+            self.service
+                .prepare_external_usage_begin(&request, connection)
+        };
+        Some((request.id, consumed, prepared.map(Box::new)))
+    }
+
+    /// Runs origin object qualification and metadata persistence off actor and
+    /// retains one settlement after reply loss. No expense/provider work occurs.
+    fn dispatch_external_usage_begin(
+        &self,
+        request_id: String,
+        prepared: crate::Result<Box<crate::runtime::ExternalUsageBeginWork>>,
+        connection: crate::control::ControlConnectionState,
+        mut output_prefix: Vec<u8>,
+        consumed: usize,
+        reply: tokio::sync::oneshot::Sender<crate::Result<AsyncControlInputResult>>,
+    ) {
+        let work = match prepared {
+            Ok(work) => work,
+            Err(error) => {
+                let body = crate::runtime::runtime_json_rpc_error(
+                    &request_id,
+                    error.kind(),
+                    error.message(),
+                );
+                output_prefix.extend_from_slice(&encode_control_body(&body));
+                let _ = reply.send(Ok(AsyncControlInputResult {
+                    output: output_prefix,
+                    consumed,
+                    connection,
+                    connection_cleanup: None,
+                    terminal_lifecycle_flush: None,
+                }));
+                return;
+            }
+        };
+        let sender = self.sender.clone();
+        tokio::spawn(async move {
+            let worker = work.clone();
+            let result = tokio::task::spawn_blocking(move || worker.execute())
+                .await
+                .map_err(|_| MezError::invalid_state("external request origin worker failed"))
+                .and_then(|result| result);
+            let _ = sender
+                .send(AsyncRuntimeRequestEnvelope::new(
+                    AsyncRuntimeRequest::CompleteExternalUsageBeginInput {
+                        work,
+                        result,
+                        connection,
+                        output_prefix,
+                        consumed,
+                        reply,
+                    },
+                ))
+                .await;
+        });
+    }
+
     /// Recognizes only one finite enrollment frame and reserves actor-owned work.
     fn prepare_external_enrollment_input(
         &mut self,
@@ -175,12 +254,10 @@ impl AsyncRuntimeSessionActor {
                 release.notified().await;
             }
             let worker = work.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                worker.store.ingest_external(&worker.report, worker.now)
-            })
-            .await
-            .map_err(|_| MezError::invalid_state("external accounting worker failed"))
-            .and_then(|result| result);
+            let result = tokio::task::spawn_blocking(move || worker.execute())
+                .await
+                .map_err(|_| MezError::invalid_state("external accounting worker failed"))
+                .and_then(|result| result);
             let _ = sender
                 .send(AsyncRuntimeRequestEnvelope::new(
                     AsyncRuntimeRequest::CompleteExternalUsageInput {
@@ -1079,12 +1156,35 @@ impl AsyncRuntimeSessionActor {
                     );
                     return false;
                 }
+                if let Some((id, consumed, prepared)) =
+                    self.prepare_external_usage_begin_input(&input, max_content_length, &connection)
+                {
+                    self.dispatch_external_usage_begin(
+                        id,
+                        prepared,
+                        connection,
+                        Vec::new(),
+                        consumed,
+                        reply,
+                    );
+                    return false;
+                }
                 if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
                     && let Ok(request) = crate::control::parse_json_rpc_request(&body)
-                    && request.method == "agent/external/usage"
+                    && matches!(
+                        request.method.as_str(),
+                        "agent/external/usage" | "agent/external/usage-end"
+                    )
                 {
-                    let prepared = if consumed == input.len() {
-                        self.service.prepare_external_usage(&request, &connection)
+                    let prepared = if consumed == input.len()
+                        && (request.method != "agent/external/usage-end" || body.len() <= 8192)
+                    {
+                        if request.method == "agent/external/usage-end" {
+                            self.service
+                                .prepare_external_usage_end(&request, &connection)
+                        } else {
+                            self.service.prepare_external_usage(&request, &connection)
+                        }
                     } else {
                         Err(MezError::invalid_args(
                             "external usage requires one control frame per request",
@@ -1288,12 +1388,35 @@ impl AsyncRuntimeSessionActor {
                     );
                     return false;
                 }
+                if let Some((id, consumed, prepared)) =
+                    self.prepare_external_usage_begin_input(&input, max_content_length, &connection)
+                {
+                    self.dispatch_external_usage_begin(
+                        id,
+                        prepared,
+                        connection,
+                        output_prefix,
+                        consumed_prefix.saturating_add(consumed),
+                        reply,
+                    );
+                    return false;
+                }
                 if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
                     && let Ok(request) = crate::control::parse_json_rpc_request(&body)
-                    && request.method == "agent/external/usage"
+                    && matches!(
+                        request.method.as_str(),
+                        "agent/external/usage" | "agent/external/usage-end"
+                    )
                 {
-                    let prepared = if consumed == input.len() {
-                        self.service.prepare_external_usage(&request, &connection)
+                    let prepared = if consumed == input.len()
+                        && (request.method != "agent/external/usage-end" || body.len() <= 8192)
+                    {
+                        if request.method == "agent/external/usage-end" {
+                            self.service
+                                .prepare_external_usage_end(&request, &connection)
+                        } else {
+                            self.service.prepare_external_usage(&request, &connection)
+                        }
                     } else {
                         Err(MezError::invalid_args(
                             "external usage requires one control frame per request",
@@ -1522,6 +1645,28 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let body = self.service.complete_external_usage(work, result);
+                output_prefix.extend_from_slice(&encode_control_body(&body));
+                let _ = reply.send(Ok(AsyncControlInputResult {
+                    output: output_prefix,
+                    consumed,
+                    connection,
+                    connection_cleanup: None,
+                    terminal_lifecycle_flush: None,
+                }));
+                self.notify_event_delivery();
+                false
+            }
+            AsyncRuntimeRequest::CompleteExternalUsageBeginInput {
+                work,
+                result,
+                connection,
+                mut output_prefix,
+                consumed,
+                reply,
+            } => {
+                let body = self
+                    .service
+                    .complete_external_usage_begin(*work, result, &connection);
                 output_prefix.extend_from_slice(&encode_control_body(&body));
                 let _ = reply.send(Ok(AsyncControlInputResult {
                     output: output_prefix,

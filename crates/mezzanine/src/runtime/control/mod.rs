@@ -95,6 +95,8 @@ pub(crate) use context::{
 };
 pub(crate) use external_enrollment::ExternalEnrollmentWork;
 pub(crate) use external_usage::ExternalUsageWork;
+mod external_usage_requests;
+pub(crate) use external_usage_requests::ExternalUsageBeginWork;
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
     parse_skill_prompt_invocation, project_guidance_context_block, skill_context_text,
@@ -1409,6 +1411,16 @@ impl RuntimeSessionService {
             }
         };
 
+        if matches!(
+            request.method.as_str(),
+            "agent/external/usage-begin" | "agent/external/usage-end"
+        ) {
+            return runtime_json_rpc_error(
+                &request.id,
+                crate::error::MezErrorKind::NotImplemented,
+                "external request accounting requires bounded async admission",
+            );
+        }
         if matches!(
             request.method.as_str(),
             "agent/external/register"

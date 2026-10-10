@@ -1122,6 +1122,30 @@ replay remains inert at capacity. Legacy delta/cumulative fingerprints and
 uncharged baselines MUST remain unchanged. This storage checkpoint does not
 enable ordinary reporting: attachment baselines, legacy OpenCode layout handoff,
 request-origin capture and producer/RPC integration still require qualification.
+Telemetry schema 7 adds source-scoped opaque request markers with immutable
+original project/admission time and one optional observation completion link.
+`agent/external/usage-begin` MUST require an existing kernel-qualified persistent
+producer with an actually mapped durable namespace. It MUST capture bounded
+trust/mapping snapshots and qualify the producer's native cwd and directory
+object off actor; pane hints, supplied project labels/PIDs and current focus MUST
+NOT select attribution. Readiness MUST follow worker-published durable evidence
+and exact actor source/root/generation/deadline revalidation. Begin persists no
+expense and grants no client, provider, native-task or filesystem authority.
+`agent/external/usage-end` MUST require the original ready marker and normalized
+immutable observation ID. Original origin MUST be rechecked under writer
+ownership; request completion, ID tombstone, receipt, checkpoint and expense MUST
+commit atomically. A marker cannot charge another observation, be attached to
+another request, or be detached from a completed observation. Retried begin of
+the same marker MUST recover original provenance, never current cwd. Lost replies
+retry only the same metadata/report, never provider work. Reporting clients MUST
+capture begin readiness before the genuine new request and MUST NOT mint markers
+for historical/resumed/fork-inherited completed events or infer a newest marker.
+These observational facts do not attest vendor invoice amounts. Generic legacy
+`agent/external/usage` remains unchanged and rejects internal observation mode.
+Unreported sources remain unavailable; actually committed request reports expose
+`request-bound-external-reported` coverage, not exhaustive accounting. Curated
+helper reporting, vendor producers, legacy OpenCode layout handoff and broader
+cross-process resume/fork attachment qualification remain separate work.
 Pane creation commands MAY specify an explicit command to run in the new pane.
 When a pane creation command specifies an explicit command, Mezzanine MUST start
 the resolved shell path and run the explicit command from within that shell by

@@ -191,7 +191,7 @@ pub(crate) struct ExternalUsageReport {
 }
 
 /// Durable checkpoint returned even on replay, allowing projection/reply-loss recovery.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExternalUsageCommit {
     /// Digest of the server owner and disjoint epoch.
     pub stream_id: String,
@@ -263,6 +263,28 @@ impl TokenUsageStore {
         &self,
         report: &ExternalUsageReport,
         now: u64,
+    ) -> Result<ExternalUsageCommit> {
+        self.ingest_external_with_request(report, now, None)
+    }
+
+    /// Commits one sealed original-request observation and its completion link
+    /// atomically. Stored request metadata is rechecked under writer ownership;
+    /// no caller can overwrite the original origin or bill a second ID for it.
+    pub(crate) fn ingest_external_request(
+        &self,
+        request: &super::external_requests::ExternalRequestReport,
+        now: u64,
+    ) -> Result<ExternalUsageCommit> {
+        self.ingest_external_with_request(request.report(), now, Some(request))
+    }
+
+    /// Shared legacy/native transaction owner; request binding grants no runtime
+    /// admission by itself and cannot be detached from its immutable report.
+    fn ingest_external_with_request(
+        &self,
+        report: &ExternalUsageReport,
+        now: u64,
+        request: Option<&super::external_requests::ExternalRequestReport>,
     ) -> Result<ExternalUsageCommit> {
         let observation = report.mode == "observation";
         crate::integrations::harness_policy::require_active_external_harness(&report.harness)?;
@@ -339,6 +361,34 @@ impl TokenUsageStore {
             .collect::<String>();
         let mut connection = self.open()?;
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let request_complete = if let Some(request) = request {
+            let row:Option<(String,Option<String>,u64,Option<String>)>=tx.query_row("SELECT harness,project_id,admitted_at,observation_id FROM external_usage_requests WHERE owner=?1 AND request_id=?2",
+                params![report.owner,request.origin().request_id],|row|Ok((row.get(0)?,row.get(1)?,super::store::row_u64(row,2)?,row.get(3)?))).optional()?;
+            let (harness, project, admitted_at, completed) = row.ok_or_else(|| {
+                MezError::forbidden("external request original marker unavailable")
+            })?;
+            if harness != report.harness
+                || project.as_deref()
+                    != request
+                        .origin()
+                        .project
+                        .as_ref()
+                        .map(super::AccountingProjectId::as_str)
+                || admitted_at != request.origin().admitted_at
+            {
+                return Err(MezError::conflict(
+                    "external request original provenance changed",
+                ));
+            }
+            if completed.as_ref().is_some_and(|id| id != &report.event_id) {
+                return Err(MezError::conflict(
+                    "external request already completed with another observation",
+                ));
+            }
+            completed.is_some()
+        } else {
+            false
+        };
         if observation {
             let harness: Option<String> = tx
                 .query_row(
@@ -352,8 +402,15 @@ impl TokenUsageStore {
                     "external observation requires a mapped native source",
                 ));
             }
-            let previous: Option<(String,String)> = tx.query_row("SELECT fingerprint,stream_id FROM external_usage_observations WHERE owner=?1 AND event_id=?2",params![report.owner,report.event_id],|row|Ok((row.get(0)?,row.get(1)?))).optional()?;
-            if let Some((old_fingerprint, old_stream)) = previous {
+            let previous: Option<(String,String,Option<String>)> = tx.query_row("SELECT fingerprint,stream_id,request_id FROM external_usage_observations WHERE owner=?1 AND event_id=?2",params![report.owner,report.event_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
+            if let Some((old_fingerprint, old_stream, old_request)) = previous {
+                if old_request.as_deref()
+                    != request.map(|request| request.origin().request_id.as_str())
+                {
+                    return Err(MezError::conflict(
+                        "external observation original request binding changed",
+                    ));
+                }
                 if old_fingerprint != fingerprint {
                     return Err(MezError::conflict(
                         "external observation id has conflicting immutable payload",
@@ -370,6 +427,11 @@ impl TokenUsageStore {
                     totals: decode(&totals)?,
                     applied: false,
                 });
+            }
+            if request_complete {
+                return Err(MezError::invalid_state(
+                    "external completed request lost its observation evidence",
+                ));
             }
             let owner_count: i64 = tx.query_row(
                 "SELECT count(*) FROM external_usage_observations WHERE owner=?1",
@@ -490,7 +552,10 @@ impl TokenUsageStore {
         tx.execute("INSERT INTO external_usage_receipts(stream_id,event_id,fingerprint,observed_at) VALUES(?1,?2,?3,?4)",
             params![stream_id, report.event_id, fingerprint, sqlite_i64(report.observed_at, "external timestamp")?])?;
         if observation {
-            tx.execute("INSERT INTO external_usage_observations(owner,event_id,fingerprint,stream_id) VALUES(?1,?2,?3,?4)",params![report.owner,report.event_id,fingerprint,stream_id])?;
+            tx.execute("INSERT INTO external_usage_observations(owner,event_id,fingerprint,stream_id,request_id) VALUES(?1,?2,?3,?4,?5)",params![report.owner,report.event_id,fingerprint,stream_id,request.map(|request|request.origin().request_id.as_str())])?;
+            if let Some(request) = request {
+                tx.execute("UPDATE external_usage_requests SET observation_id=?1 WHERE owner=?2 AND request_id=?3 AND observation_id IS NULL",params![report.event_id,report.owner,request.origin().request_id])?;
+            }
         }
         let normalized = delta.normalized();
         if !normalized.is_zero() {

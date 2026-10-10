@@ -694,7 +694,42 @@ Legacy reporting semantics remain unchanged. Ordinary observation-mode RPC,
 attachment baseline and legacy layout handoff are not enabled by storage alone.
 Usage admission explicitly rejects internal `observation` mode before reserving
 legacy accounting work; field-name schema validation is not a mode enum or an
-authorization substitute. Ordinary bindings remain rejected separately.
+authorization substitute. Ordinary bindings remain rejected on that legacy path.
+
+### Native request-bound accounting
+
+`agent/external/usage-begin` accepts only `launch_token`, `generation`,
+`external_session_id` and a canonical lowercase64-hex `request_id`. An existing
+persistent native producer with a mapped namespace must use its own original
+qualified socket. Database/object qualification is off actor with32 pending
+admissions,2s cooperative admission and one8192-byte body per frame. Captured
+trust/inventory snapshots are bounded at4096 records; missing or unqualified
+native cwd/mapping remains explicitly unattributed. Payload projects/PIDs/owners,
+legacy/initialized clients, foreign sources and stale roots cannot allocate
+readiness. The worker seals its actual durable origin result; a supplied success
+alone cannot acknowledge it. Reply is `external-request/1`, `accepted:true`, the
+original request ID/time, `origin:project|unattributed`, and empty controls.
+
+`agent/external/usage-end` accepts that private source identity plus `request_id`,
+opaque64-hex `event_id`, `observed_at`, `provider`, `model` and checked `counters`.
+It has no epoch, sequence, project, baseline or arbitrary RPC selector. The
+original ready marker supplies attribution and the server derives the stream and
+publication order before reserving accounting work. Native completion replies
+must match worker-published durable facts. Marker completion and all ledger
+evidence commit together; changed/detached/foreign markers cannot rebill a request.
+Readiness cache holds at most 4,096 reconstructible metadata entries, with
+metadata-only eviction and retired-source cleanup; durable request/deduplication
+evidence is not evicted. After completion/restart/cache miss or lost reply, retry the same
+original begin to restore its immutable metadata, then resend the same report.
+This is telemetry-only recovery, never provider/request replay or newest lookup.
+
+Adapters must capture begin readiness before each genuine new provider request
+and associate its exact final outcome; missing readiness is a coverage gap, not
+zero usage. Historical/resumed/fork-inherited completed events must not get new
+markers. This contract is external-reported observation, not vendor billing
+attestation. Discovery reports `request-bound-external-reported` only after an
+actual durable request report. Existing enrollment/client support may still lack
+usage producers; curated helper reporting and legacy layout handoff are unfinished.
 Helper EOF is not creator death, but creator survival alone cannot keep an observer
 fresh. The finite 60s lease may expire under a living creator; this is telemetry
 expiry, not a process-death declaration. Public helper-observe callbacks still

@@ -259,6 +259,7 @@ pub(crate) use config::{
 /// declaration makes the boundary available to the crate.
 mod control;
 pub(crate) use control::ExternalEnrollmentWork;
+pub(crate) use control::ExternalUsageBeginWork;
 pub(crate) use control::ExternalUsageWork;
 pub(crate) use control::RuntimeControlComponent;
 pub(crate) use control::status::StatusControlWork;

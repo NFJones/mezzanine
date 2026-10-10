@@ -397,6 +397,8 @@ impl RuntimeSessionService {
                 accounting_origin,
                 enrollment: Some(EnrollmentBinding {
                     producer: producer.clone(),
+                    usage_owner_is_durable: work.source_owner.get().is_some_and(Option::is_some),
+                    request_reports_seen: false,
                     ancestry: Some(ancestry.clone()),
                     run_generation: generation,
                     epoch: 1,
