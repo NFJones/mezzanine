@@ -279,6 +279,118 @@ async fn external_claude_curated_heartbeat_survives_actual_callback_return() {
     qualify_curated_probe_with_autoload(true, 5, false, false, true, true, true).await;
 }
 
+/// Actual vendor disabling must suppress the compiled observational module,
+/// not merely survive installer reconciliation. A completed isolated init-only
+/// run supplies the negative observation boundary; no timing sleep, provider
+/// request, credential or user configuration is involved.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated disabled policy"]
+async fn external_claude_curated_explicit_disabling_suppresses_native_helpers() {
+    let vendor = std::path::PathBuf::from(
+        std::env::var_os("MEZ_TEST_CLAUDE_BINARY").expect("explicit offline Claude path"),
+    );
+    let executable = std::env::current_exe().unwrap();
+    let helper = executable.parent().unwrap().parent().unwrap().join("mez");
+    assert!(vendor.is_absolute() && vendor.is_file() && helper.is_file());
+    for (policy, enabled, label) in [
+        (serde_json::json!({}), true, "enabled control"),
+        (
+            serde_json::json!({"disableAllHooks":true}),
+            false,
+            "disableAllHooks",
+        ),
+        (
+            serde_json::json!({"enabledPlugins":{"mezzanine-telemetry@skills-dir":false}}),
+            false,
+            "plugin disabled",
+        ),
+    ] {
+        let directory = std::fs::canonicalize("/tmp").unwrap().join(format!(
+            "mez-claude-disabled-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _directory = Directory(directory.clone());
+        for path in ["home", "config", "work"] {
+            std::fs::create_dir(directory.join(path)).unwrap();
+        }
+        let socket_path = directory.join("control.sock");
+        // Darwin sun_path has 104 bytes including NUL; never inherit a long
+        // TMPDIR or claim Linux-only pathname acceptance as portable evidence.
+        assert!(socket_path.as_os_str().len() < 104);
+        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+        let manifest =
+            crate::integrations::bootstrap::claude_artifact::manifest_for_helper(&helper).unwrap();
+        crate::integrations::bootstrap::installer::plan_private(
+            &directory.join("config"),
+            &directory.join("home"),
+            &manifest,
+            crate::integrations::bootstrap::installer::Operation::Install,
+        )
+        .unwrap()
+        .apply()
+        .unwrap();
+        let settings = serde_json::to_vec(&policy).unwrap();
+        std::fs::write(directory.join("config/settings.json"), &settings).unwrap();
+        struct Session(RuntimeSessionService);
+        impl Drop for Session {
+            fn drop(&mut self) {
+                let _ = self.0.terminate_all_pane_processes();
+            }
+        }
+        let mut service = Session(
+            RuntimeServiceFixture::new()
+                .control_socket(&socket_path)
+                .build(),
+        );
+        start_probe_shell(&mut service.0, &directory);
+        let quote = |path: &std::path::Path| {
+            shlex::try_quote(path.to_str().unwrap())
+                .unwrap()
+                .into_owned()
+        };
+        let command = format!(
+            "cd {} && /usr/bin/env -i PATH=/usr/bin:/bin HOME={} CLAUDE_CONFIG_DIR={} MEZ=\"$MEZ\" MEZ_PANE=\"$MEZ_PANE\" TERM=xterm-256color {} --init-only; printf '%s\\n' \"$?\" > {}\n",
+            quote(&directory.join("work")),
+            quote(&directory.join("home")),
+            quote(&directory.join("config")),
+            quote(&vendor),
+            quote(&directory.join("vendor-exit"))
+        );
+        service
+            .0
+            .write_runtime_pane_input("%1", command.as_bytes())
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Ok(exit) = std::fs::read(directory.join("vendor-exit")) {
+                    assert_eq!(exit, b"0\n", "isolated policy vendor exit under {label}");
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("isolated policy vendor did not finish");
+        assert_eq!(
+            std::fs::read(directory.join("config/settings.json")).unwrap(),
+            settings
+        );
+        let observation = tokio::time::timeout(Duration::from_millis(10), listener.accept()).await;
+        assert_eq!(
+            observation.is_ok(),
+            enabled,
+            "unexpected native helper under {label}"
+        );
+    }
+}
+
 /// Shared owned temporary source fixture for provenance-only and real transport
 /// qualification. Actor shutdown returns the owned runtime before source exit
 /// assertions, preserving pane cleanup and exact native creator inspection.
