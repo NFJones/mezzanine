@@ -64,7 +64,19 @@ pub(crate) fn session_start_successor_body(
 /// fabricates a predecessor across module reload or same-ID session restart.
 pub(crate) fn module_source(helper: &std::path::Path, interval_ms: u64) -> Result<String> {
     let body = session_start_owned_body(helper, interval_ms)?;
-    Ok(include_str!("curated_module.mjs").replace("__MEZ_SOURCE_BODY__", &body))
+    let request = request_accounting_body(helper)?;
+    let (step_before, step_after) = include_str!("claude_request_step.mjs")
+        .split_once("__MEZ_REQUEST_BODY__")
+        .ok_or_else(|| MezError::invalid_state("Claude request runner marker unavailable"))?;
+    let step = format!("{step_before}{request}{step_after}");
+    let (before, tail) = include_str!("curated_module.mjs")
+        .split_once("__MEZ_SOURCE_BODY__")
+        .ok_or_else(|| MezError::invalid_state("curated source marker unavailable"))?;
+    let (middle, after) = tail
+        .split_once("__MEZ_STEP_BODY__")
+        .ok_or_else(|| MezError::invalid_state("curated step marker unavailable"))?;
+    // Insert each literal once; marker-like helper filenames remain inert data.
+    Ok(format!("{before}{body}{middle}{step}{after}"))
 }
 
 /// Renders initial source bound to the caller-retained `observerLifetime` pure
@@ -242,9 +254,11 @@ mod tests {
             module_source(std::path::Path::new("/owned/__MEZ_SOURCE_BODY__"), 1000).unwrap();
         assert_eq!(source.matches("on('classic.SessionStart'").count(), 1);
         assert_eq!(source.matches("on('classic.SessionEnd'").count(), 1);
+        assert_eq!(source.matches("on('turn.step'").count(), 1);
+        assert!(source.contains("yield* next(e)"));
         assert!(!source.contains("on('session.start'"));
         assert!(source.contains("lifetime = observerLifetime;"));
-        assert_eq!(source.matches("\"/owned/__MEZ_SOURCE_BODY__\"").count(), 2);
+        assert_eq!(source.matches("\"/owned/__MEZ_SOURCE_BODY__\"").count(), 3);
         assert!(!source.contains("store.get"));
     }
 }

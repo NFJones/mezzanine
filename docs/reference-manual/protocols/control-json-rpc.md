@@ -757,6 +757,16 @@ ACKs. Known committed ACK replay is local after stop, while an unacknowledged se
 report retains unknown-delivery semantics. Strict bounded JSON rejects duplicate,
 unknown/private fields and unsafe integers. The literal runner launches no vendor,
 selects no arbitrary RPC and installs no vendor request/counter producer.
+The compiled Claude module now includes a documented main `turn.step` producer:
+it reserves at most16 active observations, hashes pinned session/turnId/index,
+obtains native readiness and delegates the original generator once unchanged.
+Only matching final SDK usage is reported; chunks/answers/tools are never read
+for telemetry, and errors/cancellation remain unchanged. Input includes SDK
+uncached plus cache-read/cache-create; output is the SDK count. Provider is
+labelled `unavailable`, reasoning unknown, and response model comes from usage.
+Null/missing/unsafe usage remains unavailable; SDK explicit zeros are retained.
+The first admitted request timestamp keeps immutable replay stable. Module source
+support is not bootstrap installation, vendor enablement or exhaustive billing.
 The installed revision-9 shared client exposes `beginRequest(id)`,
 `endRequest(ticket, normalizedObservation)` and `abandonRequest(ticket)`.
 The injected request core requires neither Node Buffer nor DOM TextEncoder and

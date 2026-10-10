@@ -1172,6 +1172,20 @@ duplicate/unknown/private fields and unsafe numeric evidence remain unavailable.
 Known durable ACK replay MAY remain local after stop; withheld late ACK does not
 undo expense or prove non-delivery. Its literal SDK runner uses only the trusted
 fixed helper. This primitive supplies no vendor request/counter callback schema.
+The compiled Claude module MAY observe the documented main `turn.step` generator
+using pinned session/turnId/index identity and separate opaque SHA256 request and
+outcome domains. It MUST reserve at most16 active producers before asynchronous
+work, obtain original helper readiness before one unchanged `yield* next(e)`,
+and report only matching final `TurnUsage` once, not Stop or turn aggregates.
+Chunks, final result, thrown errors and consumer cancellation MUST remain intact.
+Inclusive input is SDK uncached input plus cache-read plus cache-create; output
+is the SDK output count. SDK explicit zeros remain zeros, null/missing/unsafe
+usage stays unavailable. Response model comes from final usage; provider is
+explicitly `unavailable` and reasoning unknown because this API does not expose
+them. Expense/report time uses the immutable admitted request boundary for exact
+replay. Old owners, child loops and pressure MUST never borrow a newest binding.
+This source capability does not install/enable the mod or certify exhaustive,
+auxiliary, cross-process resumed/forked or invoice coverage.
 The installed shared request client MUST retain only validated content-free
 reports and client-local tickets captured before genuine new requests. It MUST
 refuse beyond128 active tickets without silently evicting unacknowledged expense,

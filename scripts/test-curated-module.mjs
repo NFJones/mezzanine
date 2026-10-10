@@ -6,6 +6,8 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { createCuratedLifetime } from "../crates/mezzanine/src/integrations/bootstrap/curated_lifetime.mjs";
 import { projectClaudeEvent } from "../crates/mezzanine/src/integrations/bootstrap/claude_observer.mjs";
+import { createCuratedRequestAccountingClient } from "../crates/mezzanine/src/integrations/bootstrap/curated_request_accounting.mjs";
+import { captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome } from "../crates/mezzanine/src/integrations/bootstrap/claude_request.mjs";
 
 const template = readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_module.mjs", import.meta.url), "utf8");
 const source = readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_client.mjs", import.meta.url), "utf8");
@@ -13,8 +15,11 @@ const body = source.replace(/__MEZ_[A-Z]+__/g, marker => ({ __MEZ_OWNED__: "true
   __MEZ_INTERVAL__: "10000", __MEZ_HELPER__: JSON.stringify("/owned/mez"), __MEZ_INSTANCE__: JSON.stringify("mez-curated-client-1"),
   __MEZ_REPLACING__: "false", __MEZ_PREDECESSOR__: "undefined" })[marker]);
 const code = template.replace(/^import .*;\n/gm, "").replace("export function register", "function register")
-  .replace("__MEZ_SOURCE_BODY__", body);
-const register = new Function("createCuratedLifetime", "projectClaudeEvent", `${code}\nreturn register;`)(createCuratedLifetime, projectClaudeEvent);
+  .replace("__MEZ_SOURCE_BODY__", body)
+  .replace("__MEZ_STEP_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/claude_request_step.mjs", import.meta.url), "utf8")
+    .replace("__MEZ_REQUEST_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_request_runner.mjs", import.meta.url), "utf8")
+      .replace("__MEZ_HELPER__", JSON.stringify("/owned/mez"))));
+const register = new Function("createCuratedLifetime", "projectClaudeEvent", "createCuratedRequestAccountingClient", "captureClaudeStep", "identifyClaudeStep", "projectClaudeStepOutcome", `${code}\nreturn register;`)(createCuratedLifetime, projectClaudeEvent, createCuratedRequestAccountingClient, captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome);
 
 const start = (session = "session-a", extra = {}) => ({ hook_event_name: "SessionStart", session_id: session, source: "startup", ...extra });
 const end = (session = "session-a", extra = {}) => ({ hook_event_name: "SessionEnd", session_id: session, reason: "clear", ...extra });
@@ -28,7 +33,13 @@ function fixture() {
   const timers = [];
   const sdk = { process: { run: async argv => {
     const capsule = JSON.parse(argv[2]); calls.push(capsule);
-    const receipt = capsule.operation ? { observed: true, changed: true, sequence: capsule.sequence }
+    const receipt = capsule.operation === "curated-usage-begin"
+      ? { protocol: "external-request/1", accepted: true, request_id: capsule.request_id,
+        admitted_at: 100, source_witness: "c".repeat(64), origin: "unattributed", controls: [] }
+      : capsule.operation === "curated-usage-end"
+      ? { accepted: true, durable: true, applied: false, revision: 1,
+        coverage: { source: "external-reported", reasoning_known: false } }
+      : capsule.operation ? { observed: true, changed: true, sequence: capsule.sequence }
       : { protocol: "external-agent/1", registered: true, controls: [], agent_id: "external-a", generation: 1,
         observer_witness: "a".repeat(64), run_id: 1, observer_epoch: 1, observer_instance: capsule.observer_instance,
         external_session_id: capsule.external_session_id, usage: "unavailable-source-continuity",
@@ -44,7 +55,7 @@ function fixture() {
  * stops its timer without treating Stop/tool/child observations as retirement. */
 test("curated module owns one main session and filters child or foreign end", async () => {
   const f = fixture();
-  assert.deepEqual([...f.hooks.keys()], ["classic.SessionStart", "classic.SessionEnd"]);
+  assert.deepEqual([...f.hooks.keys()], ["classic.SessionStart", "classic.SessionEnd", "turn.step"]);
   assert.equal(await f.invoke(start()), f.result);
   assert.equal(await f.invoke(start()), f.result);
   assert.equal(f.calls.length, 1);
@@ -211,4 +222,86 @@ test("curated module fences delayed starts and preserves vendor failure", async 
   await assert.rejects(f.invoke(start("session-c"), async () => { throw error; }), value => value === error);
   assert.equal(f.calls.length, 1);
   assert.equal(f.timers[0].cancelled, false);
+});
+
+const stepInput = (extra = {}) => ({ turnId: "turn-a", index: 0, model: "selected", messageCount: 2, ...extra });
+const stepResult = (extra = {}) => ({ turnId: "turn-a", index: 0, answer: "PRIVATE", toolUses: [], stopReason: "end_turn",
+  usage: { model: "response", input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 4 }, ...extra });
+
+/** The literal generator delegates once, exposes each unchanged chunk as soon
+ * as it arrives, and returns the exact final object. Only final request usage is
+ * charged; timestamps and opaque IDs remain identical on callback replay. */
+test("Claude request generator preserves chunks and final result with one usage source", async () => {
+  const f = fixture(); await f.invoke(start());
+  const chunks = [Object.freeze({ kind: "text", text: "PRIVATE" }), Object.freeze({ kind: "engine", ref: 1 })];
+  const final = stepResult();
+  const event = stepInput();
+  let delegates = 0;
+  const stream = f.hooks.get("turn.step")(f.sdk, event, async function* (passed) {
+    assert.equal(passed, event); delegates++;
+    assert.equal(f.calls.filter(call => call.operation === "curated-usage-begin").length, 1);
+    yield chunks[0]; yield chunks[1]; return final;
+  });
+  assert.equal((await stream.next()).value, chunks[0]);
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 0);
+  assert.equal((await stream.next()).value, chunks[1]);
+  const completed = await stream.next();
+  assert.equal(completed.done, true); assert.equal(completed.value, final);
+  assert.equal(delegates, 1);
+  const first = f.calls.find(call => call.operation === "curated-usage-end");
+  assert.equal(first.observed_at, 100);
+  assert.deepEqual(first.counters, { input_tokens: 16, output_tokens: 3, cached_input_tokens: 2, cache_write_input_tokens: 4 });
+  assert.equal(first.model, "response"); assert.equal(first.provider, "unavailable");
+  assert(!JSON.stringify(first).includes("PRIVATE"));
+  const replay = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () { return final; });
+  assert.equal((await replay.next()).value, final);
+  const endings = f.calls.filter(call => call.operation === "curated-usage-end");
+  assert.equal(endings.length, 2); assert.deepEqual(endings[0], endings[1]);
+});
+
+/** Downstream errors and consumer cancellation retain exact identity and native
+ * generator cleanup. Missing readiness/counters or child identity never bills,
+ * while the underlying vendor request still runs exactly once. */
+test("Claude request generator preserves error cancellation and unavailable paths", async () => {
+  const f = fixture(); await f.invoke(start());
+  const error = new Error("vendor error");
+  const failed = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () { throw error; });
+  await assert.rejects(failed.next(), caught => caught === error);
+  let closed = false;
+  const cancelled = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () {
+    try { yield "original"; return stepResult(); } finally { closed = true; }
+  });
+  assert.equal((await cancelled.next()).value, "original");
+  assert.equal((await cancelled.return("cancelled")).value, "cancelled");
+  assert.equal(closed, true);
+  for (const [event, final] of [[stepInput({ agentId: "child" }), stepResult()], [stepInput({ agentId: null }), stepResult()],
+    [stepInput(), stepResult({ usage: null })], [stepInput(), stepResult({ turnId: "other" })]]) {
+    const stream = f.hooks.get("turn.step")(f.sdk, event, async function* () { return final; });
+    assert.equal((await stream.next()).value, final);
+  }
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 0);
+});
+
+/** Old-owner completion cannot borrow a newly started session's receipt. The
+ * sixteen-active-request limit refuses telemetry only; the seventeenth vendor
+ * delegate proceeds unchanged and does not silently evict an existing report. */
+test("Claude request generator fences owner replacement and active pressure", async () => {
+  const f = fixture(); await f.invoke(start());
+  const streams = [];
+  for (let index = 0; index < 16; index++) {
+    const stream = f.hooks.get("turn.step")(f.sdk, stepInput({ index }), async function* () {
+      yield "chunk"; return stepResult({ index });
+    });
+    assert.equal((await stream.next()).value, "chunk"); streams.push(stream);
+  }
+  const before = f.calls.length;
+  const extra = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 16 }), async function* () { return "unchanged"; });
+  assert.equal((await extra.next()).value, "unchanged"); assert.equal(f.calls.length, before);
+  await f.invoke(start("session-b"));
+  for (const stream of streams) assert.equal((await stream.next()).done, true);
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 0);
+  const current = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () { return stepResult(); });
+  await current.next();
+  assert.equal(f.calls.at(-1).operation, "curated-usage-end");
+  assert.equal(f.calls.at(-1).external_session_id, "session-b");
 });

@@ -445,6 +445,19 @@ async fn qualify_curated_probe(
         .unwrap();
         let module =
             crate::integrations::bootstrap::curated_client::module_source(&helper, 1000).unwrap();
+        for (name, source) in
+            crate::integrations::bootstrap::curated_client::request_accounting_sources()
+        {
+            std::fs::write(directory.join("plugin/hooks").join(name), source).unwrap();
+        }
+        std::fs::write(
+            directory.join("plugin/hooks/claude_request.mjs"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/integrations/bootstrap/claude_request.mjs"
+            )),
+        )
+        .unwrap();
         let marker = "    return result;\n  });\n\n  on('classic.SessionEnd'";
         assert_eq!(module.matches(marker).count(), 1);
         module.replace(

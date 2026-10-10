@@ -7,6 +7,8 @@
  * cannot stop a newer binding. Native daemon provenance/retirement stays separate. */
 import { createCuratedLifetime } from './curated_lifetime.mjs';
 import { projectClaudeEvent } from './claude_observer.mjs';
+import { createCuratedRequestAccountingClient } from './curated_request_accounting.mjs';
+import { captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome } from './claude_request.mjs';
 
 export function register(on) {
   let observerLifetime = createCuratedLifetime();
@@ -16,6 +18,7 @@ export function register(on) {
   // Runtime-only identity fence; exhaustion rejects new admission, no eviction.
   const endedSessions = new Set();
   let identitiesExhausted = false;
+  let activeRequestProducers = 0;
 
   on('classic.SessionStart', async ($, e, next) => {
     let fact;
@@ -70,4 +73,5 @@ export function register(on) {
     }
     return result;
   });
+  __MEZ_STEP_BODY__
 }
