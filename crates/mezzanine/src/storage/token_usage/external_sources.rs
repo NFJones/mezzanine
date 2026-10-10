@@ -238,6 +238,205 @@ mod tests {
         std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
     }
 
+    /// Exact native source facts—not a reused vendor session/request selector—
+    /// own durable provenance. Every incarnation/domain change must remain a
+    /// distinct namespace across reopen; allocating a source/request emits no
+    /// expense, and a successor cannot inherit its predecessor's first origin.
+    #[test]
+    fn external_source_changed_native_witness_never_borrows_request_origin() {
+        let store = store();
+        let make = |harness, boot, uid, root, producer, kind, session| {
+            ExternalSourceKey::from_native(
+                harness,
+                NativeSourceWitness {
+                    boot,
+                    uid,
+                    root,
+                    producer,
+                    kind,
+                    session,
+                },
+            )
+            .unwrap()
+        };
+        let boot = "01234567-89ab-cdef-0123-456789abcdef";
+        let original = make(
+            "pi",
+            boot,
+            42,
+            (100, 2),
+            (101, 100, 3),
+            NativeSourceKind::Socket,
+            "same-session",
+        );
+        let owner = store.external_source_owner(&original).unwrap();
+        let alias = make(
+            "pi",
+            "01234567-89AB-CDEF-0123-456789ABCDEF",
+            42,
+            (100, 2),
+            (101, 100, 3),
+            NativeSourceKind::Socket,
+            "same-session",
+        );
+        assert_eq!(
+            store.external_source_owner(&alias).unwrap(),
+            owner,
+            "canonical boot case must not allocate a fresh namespace"
+        );
+        let request = "a".repeat(64);
+        let first = store
+            .begin_external_request(&owner, "pi", &request, None, 100)
+            .unwrap();
+        assert_eq!(
+            store
+                .begin_external_request(&owner, "pi", &request, None, 999)
+                .unwrap(),
+            first
+        );
+        let variants = [
+            make(
+                "pi",
+                "11234567-89ab-cdef-0123-456789abcdef",
+                42,
+                (100, 2),
+                (101, 100, 3),
+                NativeSourceKind::Socket,
+                "same-session",
+            ),
+            make(
+                "pi",
+                boot,
+                43,
+                (100, 2),
+                (101, 100, 3),
+                NativeSourceKind::Socket,
+                "same-session",
+            ),
+            make(
+                "pi",
+                boot,
+                42,
+                (102, 2),
+                (101, 100, 3),
+                NativeSourceKind::Socket,
+                "same-session",
+            ),
+            make(
+                "pi",
+                boot,
+                42,
+                (100, 4),
+                (101, 100, 3),
+                NativeSourceKind::Socket,
+                "same-session",
+            ),
+            make(
+                "pi",
+                boot,
+                42,
+                (100, 2),
+                (103, 100, 3),
+                NativeSourceKind::Socket,
+                "same-session",
+            ),
+            make(
+                "pi",
+                boot,
+                42,
+                (100, 2),
+                (101, 104, 3),
+                NativeSourceKind::Socket,
+                "same-session",
+            ),
+            make(
+                "pi",
+                boot,
+                42,
+                (100, 2),
+                (101, 100, 5),
+                NativeSourceKind::Socket,
+                "same-session",
+            ),
+            make(
+                "pi",
+                boot,
+                42,
+                (100, 2),
+                (101, 100, 3),
+                NativeSourceKind::CuratedCreator,
+                "same-session",
+            ),
+            make(
+                "claude",
+                boot,
+                42,
+                (100, 2),
+                (101, 100, 3),
+                NativeSourceKind::Socket,
+                "same-session",
+            ),
+            make(
+                "pi",
+                boot,
+                42,
+                (100, 2),
+                (101, 100, 3),
+                NativeSourceKind::Socket,
+                "new-session",
+            ),
+        ];
+        let mut owners = std::collections::HashSet::from([owner.clone()]);
+        for variant in &variants {
+            let next = store.external_source_owner(variant).unwrap();
+            assert!(
+                owners.insert(next.clone()),
+                "changed evidence cannot adopt another source owner"
+            );
+            let origin = store
+                .begin_external_request(&next, &variant.harness, &request, None, 200)
+                .unwrap();
+            assert!(
+                origin.project.is_none(),
+                "unknown request origin remains explicitly unattributed"
+            );
+            assert_eq!(
+                origin.admitted_at, 200,
+                "same selector cannot borrow predecessor origin"
+            );
+            assert_eq!(
+                TokenUsageStore::new(store.path())
+                    .external_source_owner(variant)
+                    .unwrap(),
+                next
+            );
+        }
+        assert_eq!(
+            TokenUsageStore::new(store.path())
+                .external_source_owner(&original)
+                .unwrap(),
+            owner
+        );
+        let connection = store.open().unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM token_usage_events", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM external_usage_requests", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            11
+        );
+        drop(connection);
+        std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+    }
+
     /// Capacity exhaustion preserves all existing source namespaces and reports
     /// unavailable for a new witness rather than evicting dedup authority.
     #[test]
