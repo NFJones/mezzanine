@@ -50,6 +50,17 @@ async fn qualify_terminal_facts(
     let store = AgentTranscriptStore::new(root.join("transcripts"));
     let mut service = test_service();
     service.set_agent_transcript_store(store.clone());
+    service.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
+        root.join("usage.sqlite"),
+    ));
+    service.set_auth_store(crate::security::auth::AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&root.join("auth")),
+    ));
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "canonical-failure-claim".into(), path: None, format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\nrouting=false\nshell_mode=\"native\"\ndefault_provider=\"local-chat\"\ndefault_model_profile=\"default\"\n[permissions]\nsandbox=\"policy-only\"\n[providers.local-chat]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:1/v1\"\nmodels=[\"test-model\"]\ndefault_model=\"test-model\"\n[model_profiles.default]\nprovider=\"local-chat\"\nmodel=\"test-model\"\n".into(),
+    }]).unwrap();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
@@ -98,15 +109,19 @@ async fn qualify_terminal_facts(
         .build()
         .unwrap();
     let client = async {
-        handle
-            .record_claimed_agent_provider_task_for_tests(turn.turn_id.clone(), 1)
+        let dispatch = handle
+            .claim_configured_agent_provider_task(
+                AgentId::opaque(turn.agent_id.clone()).unwrap(),
+                turn.turn_id.clone(),
+            )
             .await
+            .unwrap()
             .unwrap();
         let event = RuntimeEvent::AgentProvider(AgentProviderEvent::CanonicalFailure {
             failure: Box::new(AgentProviderEvent::Failed {
                 agent_id: AgentId::opaque(turn.agent_id.clone()).unwrap(),
                 turn_id: turn.turn_id.clone(),
-                claim_generation: if stale { 2 } else { 1 },
+                claim_generation: dispatch.claim_generation + u64::from(stale),
                 kind: "invalid_state".into(),
                 message: if mismatch.is_some() {
                     "mock nonretryable authentication failure"
@@ -119,7 +134,11 @@ async fn qualify_terminal_facts(
                 provider_output_limit_state: None,
             }),
             recovery: Box::new(emitted.clone()),
-            usage: Default::default(),
+            usage: mez_agent::ModelTokenUsage {
+                input_tokens: 7,
+                output_tokens: 3,
+                ..Default::default()
+            },
         });
         let mut batch = RuntimeEventBatch::new();
         batch.push(event.clone());
@@ -222,6 +241,33 @@ async fn qualify_terminal_facts(
                 .any(|entry| entry.content.contains("provider MAAP output is malformed"))
         );
     }
+    let usage = exit
+        .service
+        .agent_token_usage_for_conversation(&turn.conversation_id);
+    assert_eq!(
+        usage
+            .values()
+            .map(|sample| sample.input_tokens)
+            .sum::<u64>(),
+        if stale { 0 } else { 7 }
+    );
+    assert_eq!(
+        usage
+            .values()
+            .map(|sample| sample.output_tokens)
+            .sum::<u64>(),
+        if stale { 0 } else { 3 }
+    );
+    assert!(
+        exit.service
+            .agent_latest_request_usage(&turn.conversation_id)
+            .is_none()
+    );
+    assert!(
+        exit.service
+            .agent_context_usage_snapshot(&turn.conversation_id)
+            .is_none()
+    );
     exit.service.terminate_all_pane_processes().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }

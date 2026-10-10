@@ -14,7 +14,7 @@ use super::*;
 /// execution or duplicate successful file mutation.
 #[tokio::test(flavor = "current_thread")]
 async fn async_provider_exact_patch_repair_rejects_siblings_and_applies_once() {
-    Box::pin(qualify(false, false, SummaryReply::Valid, false)).await;
+    Box::pin(qualify(false, false, SummaryReply::Valid, false, false)).await;
 }
 
 /// Repeated invalid decoded patches, or a malformed outer response followed by
@@ -24,7 +24,14 @@ async fn async_provider_exact_patch_repair_rejects_siblings_and_applies_once() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_provider_exact_patch_exhaustion_leaves_all_effects_absent() {
     for malformed_outer in [false, true] {
-        Box::pin(qualify(true, malformed_outer, SummaryReply::Valid, false)).await;
+        Box::pin(qualify(
+            true,
+            malformed_outer,
+            SummaryReply::Valid,
+            false,
+            false,
+        ))
+        .await;
     }
 }
 
@@ -38,7 +45,7 @@ async fn async_provider_exact_patch_summary_repair_conserves_all_observed_expens
         SummaryReply::HostileBatch,
         SummaryReply::ExhaustedBatch,
     ] {
-        Box::pin(qualify(true, false, reply, false)).await;
+        Box::pin(qualify(true, false, reply, false, false)).await;
     }
 }
 
@@ -49,7 +56,7 @@ async fn async_provider_exact_patch_summary_repair_conserves_all_observed_expens
 #[tokio::test(flavor = "current_thread")]
 async fn async_provider_exact_patch_recovery_preserves_prior_effect_without_replay() {
     for exhausted in [false, true] {
-        Box::pin(qualify(exhausted, false, SummaryReply::Valid, true)).await;
+        Box::pin(qualify(exhausted, false, SummaryReply::Valid, true, false)).await;
     }
 }
 
@@ -73,7 +80,25 @@ enum SummaryReply {
 /// original failure once, not restart the runtime's independent MAAP budget.
 #[tokio::test(flavor = "current_thread")]
 async fn async_provider_exact_patch_failed_summary_does_not_restart_correction() {
-    Box::pin(qualify(true, true, SummaryReply::FailedRequest, false)).await;
+    Box::pin(qualify(
+        true,
+        true,
+        SummaryReply::FailedRequest,
+        false,
+        false,
+    ))
+    .await;
+}
+
+/// A real in-place routing response selects the execution profile before the
+/// malformed patch is emitted. Both correction and exhaustion stay on that
+/// selected model and logical turn, without restarting routing or resetting
+/// repair capacity; router expense is separately conserved in the same totals.
+#[tokio::test(flavor = "current_thread")]
+async fn async_provider_exact_patch_routed_recovery_preserves_selected_turn() {
+    for exhausted in [false, true] {
+        Box::pin(qualify(exhausted, false, SummaryReply::Valid, false, true)).await;
+    }
 }
 
 /// Owns one isolated actor/provider/persistence pipeline under a finite deadline.
@@ -84,6 +109,57 @@ async fn qualify(
     malformed_outer: bool,
     summary_reply: SummaryReply,
     prior_effect: bool,
+    routed: bool,
+) {
+    Box::pin(qualify_with_lifecycle(
+        exhausted,
+        malformed_outer,
+        summary_reply,
+        prior_effect,
+        routed,
+        Lifecycle::Keep,
+    ))
+    .await;
+}
+
+/// Lifecycle selected while an actual corrective HTTP request is held.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lifecycle {
+    /// Adopt the corrected or failed response normally.
+    Keep,
+    /// Stop the owning turn before releasing its response.
+    Stop,
+    /// Stop and replace its conversation before response release.
+    Replace,
+}
+
+/// Cancellation and replacement during a held correction cannot dispatch its
+/// valid late patch or replay an earlier append. The transport may already be
+/// closed by cancellation; both outcomes must leave the same effect boundary.
+#[tokio::test(flavor = "current_thread")]
+async fn async_provider_exact_patch_cancelled_and_replaced_correction_has_no_late_effect() {
+    for lifecycle in [Lifecycle::Stop, Lifecycle::Replace] {
+        Box::pin(qualify_with_lifecycle(
+            false,
+            false,
+            SummaryReply::Valid,
+            true,
+            false,
+            lifecycle,
+        ))
+        .await;
+    }
+}
+
+/// Extends the ordinary fixture with deterministic actor lifecycle changes,
+/// keeping original request/accounting and transcript ownership unchanged.
+async fn qualify_with_lifecycle(
+    exhausted: bool,
+    malformed_outer: bool,
+    summary_reply: SummaryReply,
+    prior_effect: bool,
+    routed: bool,
+    lifecycle: Lifecycle,
 ) {
     let root = std::env::temp_dir().join(format!(
         "mez-real-patch-repair-{:032x}",
@@ -98,7 +174,18 @@ async fn qualify(
     let final_seen = StdArc::new(tokio::sync::Notify::new());
     let server = async {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let first = async_provider_concurrency_read_http_request(&mut stream).await;
+        let mut first = async_provider_concurrency_read_http_request(&mut stream).await;
+        if routed {
+            assert!(first.contains(r#""model":"router-model""#));
+            async_provider_concurrency_write_chat_content_response(
+                &mut stream, "router-model",
+                r#"{"version":1,"size":"large","reasoning_effort":"high","confidence":0.99,"rationale":"qualify selected patch execution"}"#,
+            ).await;
+            drop(stream);
+            (stream, _) = listener.accept().await.unwrap();
+            first = async_provider_concurrency_read_http_request(&mut stream).await;
+            assert!(first.contains(r#""model":"local-chat-model""#));
+        }
         assert!(first.contains("repair the complete patch batch"));
         let first_body: serde_json::Value =
             serde_json::from_str(first.split_once("\r\n\r\n").unwrap().1).unwrap();
@@ -152,6 +239,21 @@ async fn qualify(
         }
         correction_seen.notify_one();
         correction_release.notified().await;
+        if lifecycle != Lifecycle::Keep {
+            use tokio::io::AsyncWriteExt;
+            let content = serde_json::json!({"rationale":"late valid correction", "actions":[{"type":"apply_patch","patch":"*** Begin Patch\n*** Add File: corrected.txt\n+late forbidden effect\n*** End Patch"}]}).to_string();
+            let body = serde_json::json!({"model":"local-chat-model","choices":[{"message":{"role":"assistant","content":content,"tool_calls":[]}}]}).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            // Cancellation may close this peer before the late response is sent.
+            // Do not reinterpret a failed transport write as a fixture failure
+            // or an adopted provider response; effects are asserted separately.
+            let _ = stream.write_all(response.as_bytes()).await;
+            final_seen.notify_one();
+            return;
+        }
         if exhausted {
             async_provider_concurrency_write_chat_content_response(
                 &mut stream,
@@ -267,7 +369,7 @@ async fn qualify(
     service.replace_config_layers(vec![ConfigLayer {
         name:"real-patch-repair".into(), path:None, format:ConfigFormat::Toml,
         scope:ConfigScope::Primary, trusted:true,
-        text:format!("[agents]\nshell_mode=\"native\"\nrouting=false\nsession_title_policy=\"objective\"\ndefault_provider=\"local-chat\"\ndefault_model_profile=\"default\"\n[permissions]\nsandbox=\"policy-only\"\n[providers.local-chat]\nkind=\"openai-compatible\"\nbase_url=\"http://{address}/v1\"\nmodels=[\"local-chat-model\"]\ndefault_model=\"local-chat-model\"\n[providers.local-chat.options]\nmaap_output=\"structured_json\"\nstructured_output=\"json_schema\"\n[model_profiles.default]\nprovider=\"local-chat\"\nmodel=\"local-chat-model\"\ncontext_window_tokens=128000\n"),
+        text:format!("[agents]\nshell_mode=\"native\"\nrouting={routed}\nsession_title_policy=\"objective\"\ndefault_provider=\"local-chat\"\ndefault_model_profile=\"default\"\n[agents.auto_sizing]\nroot_routing_policy=\"in-place\"\nrouter_model_profile=\"router\"\nsmall_model_profile=\"default\"\nmedium_model_profile=\"default\"\nlarge_model_profile=\"default\"\nallowed_reasoning_efforts=[\"high\"]\n[permissions]\nsandbox=\"policy-only\"\n[providers.local-chat]\nkind=\"openai-compatible\"\nbase_url=\"http://{address}/v1\"\nmodels=[\"local-chat-model\",\"router-model\"]\ndefault_model=\"local-chat-model\"\n[providers.local-chat.options]\nmaap_output=\"structured_json\"\nstructured_output=\"json_schema\"\n[model_profiles.router]\nprovider=\"local-chat\"\nmodel=\"router-model\"\ncontext_window_tokens=128000\n[model_profiles.default]\nprovider=\"local-chat\"\nmodel=\"local-chat-model\"\ncontext_window_tokens=128000\n"),
     }]).unwrap();
     service.set_auth_store(crate::security::auth::AuthStore::new(
         crate::security::auth::AuthPaths::under_config_root(&root.join("auth")),
@@ -333,6 +435,20 @@ async fn qualify(
             .await
             .unwrap();
         assert!(config.frame_context.panes.contains_key("%1"));
+        if lifecycle != Lifecycle::Keep {
+            let stopped = handle
+                .execute_agent_shell_command(primary.clone(), "/stop".into())
+                .await
+                .unwrap();
+            assert!(stopped.contains("state=cancelled"), "{stopped}");
+            if lifecycle == Lifecycle::Replace {
+                let replaced = handle
+                    .execute_agent_shell_command(primary.clone(), "/new".into())
+                    .await
+                    .unwrap();
+                assert!(replaced.contains("new=true"), "{replaced}");
+            }
+        }
         correction_release.notify_one();
         final_seen.notified().await;
         loop {
@@ -348,13 +464,15 @@ async fn qualify(
             if matches!(
                 summary_reply,
                 SummaryReply::ExhaustedBatch | SummaryReply::FailedRequest
-            ) || view.lines.iter().any(|line| {
-                line.contains(if exhausted {
-                    "failed bounded patch"
-                } else {
-                    "completed corrected patch"
+            ) || lifecycle != Lifecycle::Keep
+                || view.lines.iter().any(|line| {
+                    line.contains(if exhausted {
+                        "failed bounded patch"
+                    } else {
+                        "completed corrected patch"
+                    })
                 })
-            }) {
+            {
                 run_async_persistence_side_effect_service(
                     &handle,
                     AsyncRuntimeSideEffectServiceConfig {
@@ -381,6 +499,56 @@ async fn qualify(
     })
     .await
     .unwrap();
+    if lifecycle != Lifecycle::Keep {
+        assert_eq!(report.executions, u64::from(prior_effect));
+        assert_eq!(
+            exit.service.agent_turn_ledger().turns()[0].state,
+            mez_agent::AgentTurnState::Interrupted
+        );
+        assert!(!root.join("corrected.txt").exists());
+        assert!(!root.join("forbidden-first").exists());
+        assert!(!root.join("forbidden-last").exists());
+        assert_eq!(
+            std::fs::read(root.join("earlier-effect")).unwrap(),
+            b"earlier"
+        );
+        let entries = store.inspect(&conversation).unwrap();
+        let results = entries
+            .iter()
+            .filter_map(|entry| {
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content)
+            })
+            .filter_map(|event| match event {
+                mez_agent::TranscriptContextEvent::ExecutionBlock {
+                    source: mez_agent::ContextSourceKind::ActionResult,
+                    content,
+                    ..
+                } => Some(content),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            results
+                .iter()
+                .filter(|content| content.contains("shell_command")
+                    && content.contains("succeeded"))
+                .count(),
+            1
+        );
+        assert!(
+            !results
+                .iter()
+                .any(|content| content.contains("apply_patch") && content.contains("succeeded"))
+        );
+        let current = exit.service.agent_shell_store().get("%1").unwrap();
+        assert_eq!(
+            current.session_id != conversation,
+            lifecycle == Lifecycle::Replace
+        );
+        exit.service.terminate_all_pane_processes().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        return;
+    }
     assert_eq!(
         report.executions,
         (if summary_reply == SummaryReply::FailedRequest {
@@ -480,7 +648,8 @@ async fn qualify(
             12
         } else {
             9
-        } + u64::from(prior_effect) * 3,
+        } + u64::from(prior_effect) * 3
+            + u64::from(routed) * 3,
         "exhausted={exhausted} malformed_outer={malformed_outer}"
     );
     assert_eq!(
@@ -494,6 +663,7 @@ async fn qualify(
         } else {
             6
         } + u64::from(prior_effect) * 2
+            + u64::from(routed) * 2
     );
     if exhausted {
         assert!(!root.join("corrected.txt").exists());

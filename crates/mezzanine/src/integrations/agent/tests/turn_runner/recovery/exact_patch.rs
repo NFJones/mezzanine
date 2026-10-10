@@ -216,13 +216,21 @@ fn turn_runner_exact_patch_json_newline_control_is_valid() {
 #[tokio::test]
 async fn async_turn_runner_exact_patch_terminator_exhausts_two_repairs() {
     for hostile_summary in [false, true] {
-        qualify_exhaustion(hostile_summary).await;
+        qualify_exhaustion(hostile_summary, false).await;
     }
+}
+
+/// Missing batches, batch-contract rejection and exact malformed patch syntax
+/// share the same phase reservations. New rationale/action identities cannot
+/// buy another corrective call, and the terminal summary remains response-only.
+#[tokio::test]
+async fn async_turn_runner_exact_patch_mixed_errors_share_phase_budget() {
+    qualify_exhaustion(false, true).await;
 }
 
 /// Separates ordinary two-repair exhaustion from the existing summary-only
 /// recovery phase, including a valid but forbidden patch/shell summary batch.
-async fn qualify_exhaustion(hostile_summary: bool) {
+async fn qualify_exhaustion(hostile_summary: bool, mixed_errors: bool) {
     let patch = "*** Begin Patch\n*** Add File: note.txt\n+content\n";
     let mut summary = corrected_response();
     summary.action_batch.as_mut().unwrap().actions = if hostile_summary {
@@ -244,12 +252,15 @@ async fn qualify_exhaustion(hostile_summary: bool) {
             "Patch validation failed after bounded correction.",
         )]
     };
-    let mut responses = vec![
-        Ok(malformed_response(patch)),
-        Ok(malformed_response(patch)),
-        Ok(malformed_response(patch)),
-        Ok(summary),
-    ];
+    let mut first = malformed_response(patch);
+    let mut second = malformed_response(patch);
+    let mut third = malformed_response(patch);
+    if mixed_errors {
+        first.action_batch = None;
+        second.action_batch.as_mut().unwrap().rationale.clear();
+        third.action_batch.as_mut().unwrap().actions[1].id = "different-patch-id".into();
+    }
+    let mut responses = vec![Ok(first), Ok(second), Ok(third), Ok(summary)];
     if hostile_summary {
         let mut repaired_summary = corrected_response();
         repaired_summary.action_batch.as_mut().unwrap().actions =
@@ -331,8 +342,31 @@ async fn qualify_exhaustion(hostile_summary: bool) {
         );
     }
     for request in &requests[1..3] {
+        if mixed_errors {
+            continue;
+        }
         assert!(
             request
+                .messages
+                .iter()
+                .any(|message| message.content.contains(TERMINATOR_ERROR))
+        );
+    }
+    if mixed_errors {
+        assert!(
+            requests[1]
+                .messages
+                .iter()
+                .any(|message| message.content.contains("missing"))
+        );
+        assert!(
+            requests[2]
+                .messages
+                .iter()
+                .any(|message| message.content.contains("rationale"))
+        );
+        assert!(
+            requests[3]
                 .messages
                 .iter()
                 .any(|message| message.content.contains(TERMINATOR_ERROR))
