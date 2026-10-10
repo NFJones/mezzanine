@@ -8,6 +8,31 @@ use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionAct
 use crate::runtime::current_unix_seconds;
 use crate::storage::token_usage::TokenUsageStore;
 
+/// Valid legacy capabilities retain only published delta/cumulative reporting.
+/// Internal observation storage cannot reserve actor work before native request
+/// boundary and attachment contracts are enabled, regardless of schema shape.
+#[test]
+fn runtime_external_usage_rejects_internal_observation_mode_before_reservation() {
+    let (mut service, connection, mut params, store) = fixture();
+    params["mode"] = serde_json::json!("observation");
+    let request = crate::control::parse_json_rpc_request(
+        &serde_json::json!({
+            "jsonrpc":"2.0","id":"internal-mode","method":"agent/external/usage","params":params,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let result = service.prepare_external_usage(&request, &connection);
+    service.terminate_all_pane_processes().unwrap();
+    let error = result.unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::NotImplemented);
+    assert_eq!(
+        service.external_usage_reservation_counts_for_tests(),
+        (0, 0)
+    );
+    assert_eq!(external_ledger_input(&store), 0);
+}
+
 /// A retired legacy binding cannot reserve new usage work. Reports admitted
 /// before the binding changes still settle their frozen provenance once; the
 /// admission guard must not erase incurred expense at completion.

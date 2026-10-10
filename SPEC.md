@@ -1110,6 +1110,18 @@ Capacity exhaustion MUST preserve existing mappings rather than silently evict
 replay authority. Ordinary accounting remains unavailable until ordered report,
 baseline and source-replay contracts are implemented; this mapping alone MUST NOT
 claim cross-process resume/fork continuity or enable historical expense replay.
+Telemetry schema 6 adds source-wide opaque observation ID tombstones for internal
+native observation storage. IDs MUST be canonical lowercase 64-hex digests, not
+raw vendor/callback content. Model/category/project groups and publication
+ordinals MUST be server-derived; changing caller epoch or delivery sequence MUST
+NOT recharge an immutable observation. Conflicting model/counter/time/origin
+payloads MUST fail. Tombstone, receipt, checkpoint and expense MUST commit in one
+transaction. Tombstones MUST survive raw receipt/event pruning. Limits of 65,536
+IDs per source and 1,048,576 globally MUST fail explicitly without eviction; exact
+replay remains inert at capacity. Legacy delta/cumulative fingerprints and
+uncharged baselines MUST remain unchanged. This storage checkpoint does not
+enable ordinary reporting: attachment baselines, legacy OpenCode layout handoff,
+request-origin capture and producer/RPC integration still require qualification.
 Pane creation commands MAY specify an explicit command to run in the new pane.
 When a pane creation command specifies an explicit command, Mezzanine MUST start
 the resolved shell path and run the explicit command from within that shell by

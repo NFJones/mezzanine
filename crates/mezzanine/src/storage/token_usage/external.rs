@@ -6,6 +6,9 @@
 //! durable sequence high-water mark prevents old replay after receipt pruning.
 //! Normalized deltas, receipts and checkpoints commit together, without prompts,
 //! transcript text, pane paths or vendor payloads.
+//! Native immutable observations additionally share model/category/project
+//! streams and source-wide opaque ID tombstones. This internal storage mode
+//! neither enables ordinary RPC admission nor authorizes historical import.
 
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use rusqlite::{OptionalExtension, params};
@@ -13,6 +16,27 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{MezError, Result, TokenUsageStore, sqlite_i64};
+
+/// Immutable source ID tombstones are retained, never silently evicted.
+const MAX_OBSERVATIONS_PER_SOURCE: i64 = 65_536;
+/// Total durable observation namespace capacity across all native sources.
+const MAX_OBSERVATIONS_TOTAL: i64 = 1_048_576;
+
+/// Checks new-ID capacity after exact replay lookup, without modifying or
+/// evicting existing evidence. Invalid count combinations fail closed too.
+pub(super) fn require_observation_capacity(source_count: i64, total_count: i64) -> Result<()> {
+    if source_count < 0
+        || total_count < source_count
+        || source_count >= MAX_OBSERVATIONS_PER_SOURCE
+        || total_count >= MAX_OBSERVATIONS_TOTAL
+    {
+        return Err(MezError::new(
+            crate::error::MezErrorKind::RateLimited,
+            "durable external observation capacity unavailable",
+        ));
+    }
+    Ok(())
+}
 
 /// Content-free counters; omitted fields stay unknown rather than becoming zero.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,9 +176,9 @@ pub(crate) struct ExternalUsageReport {
     pub epoch: String,
     /// Stable observation identity used for fingerprint comparison.
     pub event_id: String,
-    /// Positive source sequence/high-water revision.
+    /// Positive legacy sequence; immutable observations use a server ordinal.
     pub sequence: u64,
-    /// Delta or cumulative stream semantics, immutable within the epoch.
+    /// Delta, cumulative, or internal immutable observation stream semantics.
     pub mode: String,
     /// Whether the first cumulative observation is an uncharged attachment.
     pub baseline: bool,
@@ -171,7 +195,7 @@ pub(crate) struct ExternalUsageReport {
 pub(crate) struct ExternalUsageCommit {
     /// Digest of the server owner and disjoint epoch.
     pub stream_id: String,
-    /// Current durable source sequence.
+    /// Durable legacy sequence or server-assigned observation ordinal.
     pub revision: u64,
     /// Absolute charged total, excluding attachment baseline.
     pub totals: ExternalCounters,
@@ -204,6 +228,33 @@ pub(crate) fn external_usage_stream_id(owner: &str, epoch: &str) -> Result<Strin
     .collect())
 }
 
+/// Groups immutable observations by server-frozen expense identity and category
+/// coverage, never per-message IDs or caller epochs. Source-wide replay identity
+/// is separate, so changing model/category/project cannot recharge one event.
+pub(crate) fn external_observation_epoch(report: &ExternalUsageReport) -> Result<String> {
+    let bytes = serde_json::to_vec(&(
+        "mez-observation-stream/1",
+        &report.harness,
+        &report.model.provider,
+        &report.model.model,
+        report
+            .project
+            .as_ref()
+            .map(super::AccountingProjectId::as_str),
+        report.counters.reasoning_tokens.is_some(),
+        report.counters.cached_input_tokens.is_some(),
+        report.counters.cache_write_input_tokens.is_some(),
+    ))
+    .map_err(|_| MezError::invalid_state("external observation stream encoding failed"))?;
+    Ok(format!(
+        "observation:{}",
+        Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    ))
+}
+
 impl TokenUsageStore {
     /// Commits receipt, checkpoint and normalized delta in one writer transaction.
     /// Identical replay is inert, conflicting IDs fail, stale sequences cannot
@@ -213,6 +264,7 @@ impl TokenUsageStore {
         report: &ExternalUsageReport,
         now: u64,
     ) -> Result<ExternalUsageCommit> {
+        let observation = report.mode == "observation";
         crate::integrations::harness_policy::require_active_external_harness(&report.harness)?;
         report.counters.validate()?;
         for field in [
@@ -229,7 +281,7 @@ impl TokenUsageStore {
                 ));
             }
         }
-        if !matches!(report.mode.as_str(), "delta" | "cumulative")
+        if !matches!(report.mode.as_str(), "delta" | "cumulative" | "observation")
             || report.sequence == 0
             || (report.baseline && report.mode != "cumulative")
         {
@@ -237,11 +289,32 @@ impl TokenUsageStore {
                 "invalid external accounting mode, sequence or baseline",
             ));
         }
+        if observation
+            && (report.event_id.len() != 64
+                || !report
+                    .event_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        {
+            return Err(MezError::invalid_args(
+                "external observation requires a canonical opaque identity digest",
+            ));
+        }
         if report.observed_at > now || report.observed_at < now.saturating_sub(91 * 86_400) {
             return Err(MezError::invalid_args(
                 "external usage is outside the 91-day replay horizon",
             ));
         }
+        let canonical;
+        let report = if observation {
+            canonical = ExternalUsageReport {
+                epoch: external_observation_epoch(report)?,
+                ..report.clone()
+            };
+            &canonical
+        } else {
+            report
+        };
         let stream_id = external_usage_stream_id(&report.owner, &report.epoch)?;
         let mut payload = serde_json::json!({"harness":report.harness,"provider":report.model.provider,
             "model":report.model.model,"sequence":report.sequence,"mode":report.mode,
@@ -251,6 +324,14 @@ impl TokenUsageStore {
         if let Some(project) = &report.project {
             payload["project"] = serde_json::json!(project.as_str());
         }
+        if observation {
+            // Layout/arrival sequence is not incurred-expense identity. Native
+            // admission still owns owner/harness/project; stored IDs grant no rights.
+            payload
+                .as_object_mut()
+                .ok_or_else(|| MezError::invalid_state("external observation encoding failed"))?
+                .remove("sequence");
+        }
         let payload = payload.to_string();
         let fingerprint = Sha256::digest(payload.as_bytes())
             .iter()
@@ -258,6 +339,50 @@ impl TokenUsageStore {
             .collect::<String>();
         let mut connection = self.open()?;
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if observation {
+            let harness: Option<String> = tx
+                .query_row(
+                    "SELECT harness FROM external_usage_sources WHERE owner=?1",
+                    [&report.owner],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if harness.as_deref() != Some(report.harness.as_str()) {
+                return Err(MezError::forbidden(
+                    "external observation requires a mapped native source",
+                ));
+            }
+            let previous: Option<(String,String)> = tx.query_row("SELECT fingerprint,stream_id FROM external_usage_observations WHERE owner=?1 AND event_id=?2",params![report.owner,report.event_id],|row|Ok((row.get(0)?,row.get(1)?))).optional()?;
+            if let Some((old_fingerprint, old_stream)) = previous {
+                if old_fingerprint != fingerprint {
+                    return Err(MezError::conflict(
+                        "external observation id has conflicting immutable payload",
+                    ));
+                }
+                let (revision, totals) = tx.query_row(
+                    "SELECT revision,totals FROM external_usage_streams WHERE id=?1",
+                    [&old_stream],
+                    |row| Ok((super::store::row_u64(row, 0)?, row.get::<_, String>(1)?)),
+                )?;
+                return Ok(ExternalUsageCommit {
+                    stream_id: old_stream,
+                    revision,
+                    totals: decode(&totals)?,
+                    applied: false,
+                });
+            }
+            let owner_count: i64 = tx.query_row(
+                "SELECT count(*) FROM external_usage_observations WHERE owner=?1",
+                [&report.owner],
+                |row| row.get(0),
+            )?;
+            let total_count: i64 = tx.query_row(
+                "SELECT count(*) FROM external_usage_observations",
+                [],
+                |row| row.get(0),
+            )?;
+            require_observation_capacity(owner_count, total_count)?;
+        }
         // Each admitted report also maintains long-lived-session retention.
         // High-water checkpoints are never pruned with their raw receipts.
         let cutoff = sqlite_i64(now.saturating_sub(91 * 86_400), "external retention cutoff")?;
@@ -310,7 +435,7 @@ impl TokenUsageStore {
                         "external stream baseline already exists",
                     ));
                 }
-                if report.sequence <= revision {
+                if !observation && report.sequence <= revision {
                     if report.mode == "delta" {
                         return Err(MezError::conflict(
                             "external delta sequence is stale or outside replay horizon",
@@ -339,27 +464,37 @@ impl TokenUsageStore {
         } else if report.mode == "cumulative" {
             report.counters.difference(old_sample)?
         } else {
-            if report.sequence != old_revision.saturating_add(1) {
+            if !observation && report.sequence != old_revision.saturating_add(1) {
                 return Err(MezError::conflict(
                     "external delta sequence has a gap; submit missing observations first",
                 ));
             }
             report.counters
         };
-        if report.mode == "delta" && old_revision > 0 {
+        if matches!(report.mode.as_str(), "delta" | "observation") && old_revision > 0 {
             report.counters.difference(old_sample.zero_like())?;
         }
         delta.validate()?;
         let totals = old_totals.add(delta)?;
+        let revision = if observation {
+            old_revision
+                .checked_add(1)
+                .ok_or_else(|| MezError::invalid_state("external observation revision exhausted"))?
+        } else {
+            report.sequence
+        };
         tx.execute("INSERT INTO external_usage_streams(id,harness,provider,model,mode,revision,sample,totals,project_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
             ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,sample=excluded.sample,totals=excluded.totals",
             params![stream_id, report.harness, report.model.provider, report.model.model, report.mode,
-                sqlite_i64(report.sequence, "external sequence")?, encode(report.counters)?, encode(totals)?, report.project.as_ref().map(super::AccountingProjectId::as_str)])?;
+                sqlite_i64(revision, "external sequence")?, encode(report.counters)?, encode(totals)?, report.project.as_ref().map(super::AccountingProjectId::as_str)])?;
         tx.execute("INSERT INTO external_usage_receipts(stream_id,event_id,fingerprint,observed_at) VALUES(?1,?2,?3,?4)",
             params![stream_id, report.event_id, fingerprint, sqlite_i64(report.observed_at, "external timestamp")?])?;
+        if observation {
+            tx.execute("INSERT INTO external_usage_observations(owner,event_id,fingerprint,stream_id) VALUES(?1,?2,?3,?4)",params![report.owner,report.event_id,fingerprint,stream_id])?;
+        }
         let normalized = delta.normalized();
         if !normalized.is_zero() {
-            let id = format!("external:{stream_id}:{}", report.sequence);
+            let id = format!("external:{stream_id}:{revision}");
             tx.execute("INSERT INTO token_usage_events(id,observed_at,provider,model,input_tokens,output_tokens,reasoning_tokens,cached_input_tokens,cache_write_input_tokens,harness,reasoning_known,event_source,project_id)
                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'external',?12)", params![id, sqlite_i64(report.observed_at, "external timestamp")?,
                     report.model.provider, report.model.model, sqlite_i64(normalized.input_tokens,"input")?,
@@ -371,7 +506,7 @@ impl TokenUsageStore {
         tx.commit()?;
         Ok(ExternalUsageCommit {
             stream_id,
-            revision: report.sequence,
+            revision,
             totals,
             applied: true,
         })

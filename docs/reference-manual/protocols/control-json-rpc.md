@@ -684,6 +684,17 @@ callbacks and credentials are not stored. Unavailable boot/store/capacity keeps
 lifecycle observational and usage unavailable; mappings are never silently
 evicted. Ordered-report, baseline and cross-process resume/fork continuity are
 still unfinished, so this checkpoint does not enable ordinary usage reporting.
+Telemetry schema 6 separately stores canonical opaque observation digests across
+model/category/project groups. Internal observations get server-derived stream
+identity and publication order; caller epoch/sequence changes cannot recharge an
+ID. Changed immutable payloads conflict, and all accounting evidence commits
+together. Tombstones survive 91-day raw-event/receipt pruning, with explicit
+65,536/source and 1,048,576/global capacity refusal instead of silent eviction.
+Legacy reporting semantics remain unchanged. Ordinary observation-mode RPC,
+attachment baseline and legacy layout handoff are not enabled by storage alone.
+Usage admission explicitly rejects internal `observation` mode before reserving
+legacy accounting work; field-name schema validation is not a mode enum or an
+authorization substitute. Ordinary bindings remain rejected separately.
 Helper EOF is not creator death, but creator survival alone cannot keep an observer
 fresh. The finite 60s lease may expire under a living creator; this is telemetry
 expiry, not a process-death declaration. Public helper-observe callbacks still

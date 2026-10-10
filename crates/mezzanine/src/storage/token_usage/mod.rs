@@ -107,6 +107,8 @@ mod external_tests;
 #[cfg(test)]
 mod history_tests;
 #[cfg(test)]
+mod observation_tests;
+#[cfg(test)]
 mod project_tests;
 #[cfg(test)]
 mod tests;

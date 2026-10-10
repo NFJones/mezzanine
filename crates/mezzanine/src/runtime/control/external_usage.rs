@@ -163,6 +163,12 @@ impl RuntimeSessionService {
                 "ordinary external usage source continuity unavailable",
             ));
         }
+        if params.get("mode").and_then(serde_json::Value::as_str) == Some("observation") {
+            return Err(MezError::new(
+                crate::error::MezErrorKind::NotImplemented,
+                "immutable external observation reporting is not enabled",
+            ));
+        }
         let sequence = params
             .get("sequence")
             .and_then(serde_json::Value::as_u64)
