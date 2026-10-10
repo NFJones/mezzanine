@@ -485,6 +485,15 @@ producer MUST not remain visible under a surviving pane shell's lease.
 External discovery rows and browser details MUST distinguish server-derived
 `telemetry_health` (`enrolled`, `connection-lost`, or legacy `lease-active`) from
 the vendor-reported status. Connection loss is not completion or process death.
+The shared live status display MUST expose a current-pane External Telemetry
+section for both native/external coexistence and external-only panes, projecting
+only these server-observed health/coverage fields alongside last reported state.
+Rendering MUST NOT renew leases, initialize a native conversation, query durable
+history for this section or infer installation/activation. No current evidence
+MUST be explicit rather than fabricated zero or success. Other panes' telemetry
+MUST NOT leak into this pane-scoped section; remaining session accounting stays
+separate. Connection loss and unavailable coverage MUST carry bounded caveats
+against completion, producer-death and invoice interpretations.
 `usage_coverage` MUST explicitly report `unavailable-source-continuity` for
 ordinary enrollment; legacy `external-reported` is not exhaustive billing proof.
 Ordinary usage MUST remain explicitly unavailable until durable source continuity

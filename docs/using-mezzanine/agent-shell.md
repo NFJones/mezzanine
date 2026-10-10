@@ -165,6 +165,14 @@ Active composer status is separated from its trailing horizontal rule by one
 space when room remains, without changing draft text or the allocated row width.
 `/status [--extended] [--project | --all-projects]` accepts either flag order.
 Without scope flags it retains overall totals.
+The live status view also includes a pane-scoped **External Telemetry** section:
+harness, last externally reported state, server-observed telemetry health, and
+usage coverage. `enrolled`, `connection-lost`, and legacy `lease-active` describe
+different evidence, not vendor completion or process death. Unavailable usage
+is not zero or invoice proof. With no current telemetry, the view says so without
+inferring installation or vendor activation. This read-only section works with
+or without a native conversation, does not renew leases or query durable history,
+and excludes other panes' telemetry; accounting tables keep their existing scope.
 Every token table includes Harness, Provider and Model; native calls use `mez`.
 Same-model external rows remain separate, with omitted reasoning/cache counters
 shown as unknown. External-only panes can report and reset the pane view without

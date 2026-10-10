@@ -66,6 +66,57 @@ async fn external_enrollment_discovery_tracks_observer_health_without_renewal() 
     assert_eq!(rows[0]["telemetry_health"], "enrolled");
     assert_eq!(rows[0]["usage_coverage"], "unavailable-source-continuity");
     assert_eq!(rows[0]["agent_id"], response["result"]["agent_id"]);
+    let status = fixture
+        .service
+        .runtime_agent_status_display_with_options("%1", false)
+        .unwrap();
+    assert!(status.contains("### External Telemetry"), "{status}");
+    assert!(status.contains("enrolled"), "{status}");
+    assert!(status.contains("unavailable-source-continuity"), "{status}");
+    assert!(fixture.service.agent_shell_store().get("%1").is_none());
+    let primary = fixture
+        .service
+        .attach_primary(
+            "health-status",
+            true,
+            mez_mux::layout::Size::new(100, 40).unwrap(),
+            120,
+        )
+        .unwrap();
+    fixture
+        .service
+        .split_pane_with_process(
+            &primary,
+            mez_mux::layout::SplitDirection::Vertical,
+            Some("cat >/dev/null"),
+        )
+        .unwrap();
+    let other = fixture
+        .service
+        .runtime_agent_status_display_with_options("%2", false)
+        .unwrap();
+    assert!(
+        other.contains("No current external telemetry is observed"),
+        "{other}"
+    );
+    assert!(
+        !other.contains("| enrolled |"),
+        "another pane's live observer must not leak"
+    );
+    // A retained native conversation and external observer share diagnostics,
+    // not execution authority or accounting; formatting must remain read-only.
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let native = fixture
+        .service
+        .runtime_agent_status_display_with_options("%1", false)
+        .unwrap();
+    assert!(native.contains("## Agent Status"), "{native}");
+    assert!(native.contains("### External Telemetry"), "{native}");
+    assert!(native.contains("enrolled"), "{native}");
     assert_eq!(
         fixture
             .service
@@ -102,6 +153,17 @@ async fn external_enrollment_discovery_tracks_observer_health_without_renewal() 
     let agent_id = response["result"]["agent_id"].as_str().unwrap();
     let row = fixture.service.external_agent_metadata(agent_id).unwrap();
     assert_eq!(row["telemetry_health"], "connection-lost");
+    let status = fixture
+        .service
+        .runtime_agent_status_display_with_options("%1", false)
+        .unwrap();
+    assert!(status.contains("connection-lost"), "{status}");
+    assert!(status.contains("running"), "{status}");
+    assert!(
+        status.contains("not installation, completion or invoice proof"),
+        "{status}"
+    );
+    assert!(!status.contains(response["result"]["launch_token"].as_str().unwrap()));
     assert_eq!(
         row["status"], "running",
         "observer health must not overwrite the last vendor-reported state"
@@ -129,6 +191,18 @@ async fn external_enrollment_discovery_tracks_observer_health_without_renewal() 
         .unwrap()
         .expires = overdue;
     assert!(fixture.service.external_agent_rows().is_empty());
+    let status = fixture
+        .service
+        .runtime_agent_status_display_with_options("%1", false)
+        .unwrap();
+    assert!(
+        status.contains("No current external telemetry is observed"),
+        "{status}"
+    );
+    assert!(
+        !status.contains("| session-a |"),
+        "expired registration must not remain a live row"
+    );
     assert!(
         !fixture
             .service

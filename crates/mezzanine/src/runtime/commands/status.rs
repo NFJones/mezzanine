@@ -171,6 +171,7 @@ impl RuntimeSessionService {
                     "Pane: {pane_id}; native latest-request/context samples unavailable (no native conversation)."
                 ),
             ];
+            self.append_external_telemetry_status(&mut lines, pane_id);
             if accounting {
                 lines.extend([
                     String::new(),
@@ -578,6 +579,7 @@ impl RuntimeSessionService {
         ];
         let mut lines = vec!["## Agent Status".to_string(), String::new()];
         lines.extend(runtime_markdown_table(&["Field", "Value"], &rows));
+        self.append_external_telemetry_status(&mut lines, pane_id);
         if accounting {
             let mut pane_rows = report::native_rows(self.project_usage_for_pane(pane_id))?;
             pane_rows.extend(self.external_usage_partitions(Some(pane_id)));
@@ -619,6 +621,41 @@ impl RuntimeSessionService {
             ));
         }
         Ok(lines.join("\n"))
+    }
+
+    /// Appends pane-scoped observational health without storage, enrollment or
+    /// lease mutation. Missing telemetry cannot infer installation or activation.
+    fn append_external_telemetry_status(&self, lines: &mut Vec<String>, pane_id: &str) {
+        let rows = self
+            .external_agent_rows()
+            .into_iter()
+            .filter(|row| row["pane_id"].as_str() == Some(pane_id))
+            .map(|row| {
+                ["harness", "status", "telemetry_health", "usage_coverage"]
+                    .into_iter()
+                    .map(|field| row[field].as_str().unwrap_or("unavailable").to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        lines.extend([
+            String::new(),
+            "### External Telemetry".into(),
+            String::new(),
+        ]);
+        if rows.is_empty() {
+            lines.push("No current external telemetry is observed; installation or vendor activation is not inferred.".into());
+        } else {
+            lines.extend(runtime_markdown_table(
+                &[
+                    "Harness",
+                    "Last reported state",
+                    "Telemetry health",
+                    "Usage coverage",
+                ],
+                &rows,
+            ));
+        }
+        lines.push("Observational metadata: not installation, completion or invoice proof. Connection loss does not prove producer death; unavailable usage is not zero.".into());
     }
 
     /// Appends durable rolling token-accounting sections or one bounded
