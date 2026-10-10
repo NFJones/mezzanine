@@ -708,7 +708,10 @@ native cwd/mapping remains explicitly unattributed. Payload projects/PIDs/owners
 legacy/initialized clients, foreign sources and stale roots cannot allocate
 readiness. The worker seals its actual durable origin result; a supplied success
 alone cannot acknowledge it. Reply is `external-request/1`, `accepted:true`, the
-original request ID/time, `origin:project|unattributed`, and empty controls.
+original request ID/time, non-authoritative opaque `source_witness`,
+`origin:project|unattributed`, and empty controls. The source witness is derived
+from the server-owned accounting namespace, not a request timestamp or client
+claim. A changed witness rejects restored readiness even if timestamps coincide.
 
 `agent/external/usage-end` accepts that private source identity plus `request_id`,
 opaque64-hex `event_id`, `observed_at`, `provider`, `model` and checked `counters`.
@@ -730,6 +733,21 @@ markers. This contract is external-reported observation, not vendor billing
 attestation. Discovery reports `request-bound-external-reported` only after an
 actual durable request report. Existing enrollment/client support may still lack
 usage producers; curated helper reporting and legacy layout handoff are unfinished.
+The installed revision-8 shared client exposes `beginRequest(id)`,
+`endRequest(ticket, normalizedObservation)` and `abandonRequest(ticket)`. Tickets
+are immutable client-instance-local objects; copied or successor tickets cannot
+select credentials. Up to128 active tickets and16 serialized transport operations
+are retained. Unknown fields, unsafe/negative/overflowing counters and invalid
+subsets reject before transport; callback selectors are captured once. At most
+two attempts restore the same original marker and resend the same frozen report.
+Only a typed durable ACK marks delivery; retry after a known ACK is local/inert.
+Unsent abandonment is terminal and cancels queued/restoring work without sending
+or resurrecting it. Abandonment during a report attempt returns in-flight rather
+than claiming loss; abandoning an earlier unacknowledged attempt discloses unknown
+delivery. It never undoes committed expense or invents zero. No generic RPC,
+transcript import, provider retry, vendor launcher or extra accounting-enable
+command is supplied by this client. Vendor adapters must still associate actual
+before-request and finalized outcomes correctly.
 Helper EOF is not creator death, but creator survival alone cannot keep an observer
 fresh. The finite 60s lease may expire under a living creator; this is telemetry
 expiry, not a process-death declaration. Public helper-observe callbacks still

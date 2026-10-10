@@ -1255,7 +1255,7 @@ mod tests {
                 super::super::compiled_manifest(harness, None).unwrap()
             };
             let mut targets = super::super::compiled_history(&current);
-            assert_eq!(targets.len(), 5);
+            assert_eq!(targets.len(), if harness == "pi" { 6 } else { 5 });
             targets.push(current.clone());
             for target in targets {
                 for original in [Operation::Install, Operation::Uninstall] {
@@ -1527,7 +1527,7 @@ mod tests {
             let history = super::super::compiled_history(&current);
             assert_eq!(
                 history.len(),
-                if harness == "pi" { 5 } else { 6 },
+                if harness == "pi" { 6 } else { 7 },
                 "all frozen targets must remain qualified for {harness}"
             );
             for target in history {
@@ -1538,6 +1538,55 @@ mod tests {
                     ));
                     fs::create_dir(&root).unwrap();
                     fs::write(root.join("authored"), b"preserved").unwrap();
+                    if target.entries.iter().any(|entry| {
+                        matches!(
+                            entry.artifact,
+                            super::super::reconciliation::Artifact::JsoncArrayEntry { .. }
+                        )
+                    }) {
+                        if matches!(operation, Operation::Uninstall) {
+                            plan_private(&root, &root, &target, Operation::Install)
+                                .unwrap()
+                                .apply()
+                                .unwrap();
+                        }
+                        let accepted = plan_private(&root, &root, &target, operation).unwrap();
+                        accepted.fixture_interrupt_after(1);
+                        assert!(accepted.apply().is_err());
+                        assert!(
+                            preview_recovery_private(&root, &root, &current)
+                                .unwrap()
+                                .is_some()
+                        );
+                        assert!(recover_private(&root, &root, &current).unwrap());
+                        let inspected = Publisher::inspect_private(&root, &root).unwrap();
+                        let receipt = inspected
+                            .read(
+                                &super::super::publication::private_receipt_path(harness).unwrap(),
+                            )
+                            .unwrap();
+                        if matches!(operation, Operation::Install) {
+                            let receipt: Receipt =
+                                serde_json::from_slice(receipt.as_deref().unwrap()).unwrap();
+                            assert_eq!(receipt.manifest, target);
+                        } else {
+                            assert!(receipt.is_none());
+                        }
+                        assert_eq!(fs::read(root.join("authored")).unwrap(), b"preserved");
+                        plan_private(&root, &root, &current, Operation::Install)
+                            .unwrap()
+                            .apply()
+                            .unwrap();
+                        assert!(
+                            plan_private(&root, &root, &current, Operation::Install)
+                                .unwrap()
+                                .changed_paths()
+                                .is_empty()
+                        );
+                        assert!(!recover_private(&root, &root, &current).unwrap());
+                        fs::remove_dir_all(root).unwrap();
+                        continue;
+                    }
                     if matches!(operation, Operation::Uninstall) {
                         plan(&root, &target, Operation::Install)
                             .unwrap()

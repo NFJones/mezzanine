@@ -1131,6 +1131,10 @@ object off actor; pane hints, supplied project labels/PIDs and current focus MUS
 NOT select attribution. Readiness MUST follow worker-published durable evidence
 and exact actor source/root/generation/deadline revalidation. Begin persists no
 expense and grants no client, provider, native-task or filesystem authority.
+Begin replies include a non-authoritative domain-separated `source_witness`
+derived from the server-owned native accounting namespace. Clients MUST reject
+restored readiness with a changed source witness even when coarse timestamps
+coincide; the witness never replaces kernel-source admission or grants rights.
 `agent/external/usage-end` MUST require the original ready marker and normalized
 immutable observation ID. Original origin MUST be rechecked under writer
 ownership; request completion, ID tombstone, receipt, checkpoint and expense MUST
@@ -1146,6 +1150,17 @@ Unreported sources remain unavailable; actually committed request reports expose
 `request-bound-external-reported` coverage, not exhaustive accounting. Curated
 helper reporting, vendor producers, legacy OpenCode layout handoff and broader
 cross-process resume/fork attachment qualification remain separate work.
+The installed shared request client MUST retain only validated content-free
+reports and client-local tickets captured before genuine new requests. It MUST
+refuse beyond128 active tickets without silently evicting unacknowledged expense,
+use the existing finite serialized transport queue, and attempt at most two
+same-marker/same-report deliveries per call. Only typed durable acknowledgment
+may establish delivery; neutral/accepted callback success is insufficient.
+Missing ticket/counters, changed source/payload and bounded-queue pressure MUST
+remain explicit unavailable/loss outcomes, never zero or provider replay.
+Revision8 Pi/OpenCode manifests include the request-accounting sibling and retain
+independent exact revision7 client snapshots and every older compiled authority.
+This common client capability does not prove each vendor's outcome producer.
 Pane creation commands MAY specify an explicit command to run in the new pane.
 When a pane creation command specifies an explicit command, Mezzanine MUST start
 the resolved shell path and run the explicit command from within that shell by

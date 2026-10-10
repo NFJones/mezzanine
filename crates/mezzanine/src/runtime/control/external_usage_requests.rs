@@ -317,7 +317,7 @@ impl RuntimeSessionService {
             Ok(origin) => format!(
                 "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{}}}",
                 work.request_id,
-                serde_json::json!({"protocol":"external-request/1","accepted":true,"request_id":origin.request_id,"admitted_at":origin.admitted_at,"origin":if origin.project.is_some(){"project"}else{"unattributed"},"controls":[]})
+                serde_json::json!({"protocol":"external-request/1","accepted":true,"request_id":origin.request_id,"admitted_at":origin.admitted_at,"source_witness":request_source_witness(&work.owner),"origin":if origin.project.is_some(){"project"}else{"unattributed"},"controls":[]})
             ),
             Err(error) => crate::runtime::runtime_json_rpc_error(
                 &work.request_id,
@@ -326,4 +326,14 @@ impl RuntimeSessionService {
             ),
         }
     }
+}
+/// Public non-authoritative continuity selector; only the qualified source may
+/// use markers. A fresh server-owned namespace changes this witness even if
+/// coarse request timestamps coincide after storage loss or source replacement.
+fn request_source_witness(owner: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(format!("external-request-source/1\0{owner}").as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

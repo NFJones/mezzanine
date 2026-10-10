@@ -9,7 +9,7 @@
 
 use super::reconciliation::{Artifact, Entry};
 
-/// Builds only two enumerated private siblings at a compiled adapter prefix.
+/// Builds only enumerated private siblings at a compiled adapter prefix.
 /// Versioning/upgrade reconciliation remains owned by the surrounding manifest.
 pub(super) fn entries(prefix: &str) -> Vec<Entry> {
     let helper = std::env::current_exe()
@@ -31,6 +31,12 @@ pub(super) fn entries(prefix: &str) -> Vec<Entry> {
             path: format!("{prefix}/peer_helper.mjs"),
             artifact: Artifact::File {
                 bytes: config.into_bytes(),
+            },
+        },
+        Entry {
+            path: format!("{prefix}/request_accounting.mjs"),
+            artifact: Artifact::File {
+                bytes: include_bytes!("request_accounting.mjs").to_vec(),
             },
         },
     ]
@@ -56,7 +62,7 @@ mod tests {
     #[test]
     fn persistent_client_artifacts_pin_fixed_private_helper() {
         let entries = entries("extensions/mezzanine");
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 3);
         assert_eq!(
             entries[0].path,
             "extensions/mezzanine/persistent_client.mjs"
@@ -149,16 +155,16 @@ mod tests {
     /// A shared-client byte revision must preserve every compiled historical
     /// upgrade, not just the oldest or immediate predecessor. Historical client
     /// data stays independent of active source and upgrade touches no authored
-    /// sibling configuration. Pi's preceding bytes remain exact v4; OpenCode's
-    /// format-only v6 predecessor retains the unchanged current client bytes.
+    /// sibling configuration. Both immediate revision-7 clients use exact v5
+    /// data; older strict-format/client predecessors retain independent bytes.
     #[test]
     fn persistent_client_artifact_upgrade_retains_all_frozen_predecessors() {
         use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, 7);
+            assert_eq!(current.revision, 8);
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), if harness == "pi" { 5 } else { 6 });
+            assert_eq!(history.len(), if harness == "pi" { 6 } else { 7 });
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
             let frozen = immediate
@@ -169,11 +175,7 @@ mod tests {
             assert_eq!(
                 frozen.artifact,
                 Artifact::File {
-                    bytes: if harness == "pi" {
-                        super::super::history::persistent_client_v4()
-                    } else {
-                        include_bytes!("persistent_client.mjs").to_vec()
-                    }
+                    bytes: super::super::history::persistent_client_v5()
                 }
             );
             for previous in history {

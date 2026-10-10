@@ -144,7 +144,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     if manifest == &codex_artifact::manifest() {
         return vec![codex_artifact::historical_manifest()];
     }
-    let (current, revision, paths) = match manifest.harness.as_str() {
+    let (mut current, revision, paths) = match manifest.harness.as_str() {
         "pi" => (
             pi_artifact::candidate_manifest(),
             2,
@@ -167,7 +167,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     if manifest.harness == "opencode"
         && !opencode_artifact::historical_payloads_match(
             include_bytes!("opencode_tui.mjs"),
-            include_bytes!("persistent_client.mjs"),
+            &history::persistent_client_v5(),
         )
     {
         return Vec::new();
@@ -175,6 +175,15 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     if *manifest != current && !current_opencode {
         return Vec::new();
     }
+    let last_current = if manifest.harness == "pi" || current_opencode {
+        let mut snapshot = manifest.clone();
+        snapshot.revision = 7;
+        history::freeze_pre_request_client(&mut snapshot);
+        Some(snapshot)
+    } else {
+        None
+    };
+    history::freeze_pre_request_client(&mut current);
     let mut latest_client = current.clone();
     latest_client.revision = if manifest.harness == "pi" { 6 } else { 5 };
     for entry in &mut latest_client.entries {
@@ -242,8 +251,11 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
             immediate,
             previous,
         ];
+        if let Some(last_current) = last_current {
+            history.insert(0, last_current);
+        }
         if current_opencode {
-            history.insert(0, opencode_artifact::historical_manifest());
+            history.insert(1, opencode_artifact::historical_manifest());
         }
         history
     } else {

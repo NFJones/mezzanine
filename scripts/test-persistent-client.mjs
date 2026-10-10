@@ -66,6 +66,36 @@ function enrollment(request, generation = 1, epoch = 1) {
     usage: "unavailable-source-continuity" };
 }
 
+test("lifecycle pressure refuses accounting explicitly, then retries its same frozen report", async () => {
+  let held, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const ready = request => ({ protocol: "external-request/1", accepted: true, request_id: request.params.request_id,
+    admitted_at: 100, source_witness: "c".repeat(64), origin: "unattributed", controls: [] });
+  const f = await fixture((request, socket) => {
+    if (request.method === "agent/external/enroll") return enrollment(request);
+    if (request.method === "agent/external/usage-begin") return ready(request);
+    if (request.method === "agent/external/usage-end") return { accepted: true, durable: true, applied: true, revision: 1, coverage: { source: "external-reported", reasoning_known: false } };
+    if (request.params.sequence === 1) { held = { request, socket }; entered(); return; }
+    return { changed: true, sequence: request.params.sequence };
+  });
+  const client = createPersistentTelemetryClient(f.options);
+  try {
+    const ticket = await client.beginRequest("a".repeat(64));
+    const queued = [client.presentation("running")];
+    await started;
+    for (let index = 0; index < 15; index++) queued.push(client.presentation("running"));
+    const report = { event_id: "b".repeat(64), observed_at: 101, provider: "fixture", model: "model", counters: { input_tokens: 10, output_tokens: 3 } };
+    assert.equal((await client.endRequest(ticket, report)).durable, false);
+    assert.equal(f.requests.filter(request => request.method === "agent/external/usage-end").length, 0);
+    const body = JSON.stringify({ jsonrpc: "2.0", id: held.request.id, result: { changed: true, sequence: 1 } });
+    held.socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\nContent-Type: application/vnd.mezzanine.control+json; version=1\r\n\r\n${body}`);
+    await Promise.all(queued);
+    assert.equal((await client.endRequest(ticket, report)).durable, true);
+    const sent = f.requests.filter(request => request.method === "agent/external/usage-end");
+    assert.equal(sent.length, 1); assert.equal(sent[0].params.counters.input_tokens, 10);
+  } finally { client.detach(); await f.close(); }
+});
+
 test("loading and invalid discovery remain inert; no native controls or usage surface", async () => {
   for (const env of [{}, { MEZ: "/tmp/socket", MEZ_PANE: "%1" },
     { MEZ: "relative\x1fsession=a\x1fwindow=b\x1fpane=%1\x1fprotocol=mez-control/1", MEZ_PANE: "%1" }]) {

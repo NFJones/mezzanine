@@ -1,12 +1,13 @@
-/** Restricted ordinary-producer lifecycle transport. Loading performs no I/O.
- * The producer owns its socket and sends allowlisted metadata directly; a fixed
- * native helper only verifies peer UID on a borrowed descriptor. No vendor
- * launch, general initialize/RPC, transcript reads, output pollution or usage
- * fabrication. Delivery failure is neutral and never replays vendor work. */
+/** Restricted ordinary-producer lifecycle and request accounting transport.
+ * Loading performs no I/O. The producer owns its socket; a fixed native helper
+ * verifies peer UID on a borrowed descriptor. No vendor launch, general RPC,
+ * transcript reads, output pollution or fabricated usage. Accounting retries
+ * restore only the same original marker/report, never vendor/provider work. */
 import { Socket } from "node:net";
 import { lstatSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import childProcess from "node:child_process";
+import { createRequestAccountingClient } from "./request_accounting.mjs";
 
 const states = new Set(["ready", "running", "approval-wait", "input-wait", "complete", "interrupted", "failed", "background"]);
 const text = (value, max) => typeof value === "string" && value.trim().length > 0
@@ -14,13 +15,10 @@ const text = (value, max) => typeof value === "string" && value.trim().length > 
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const contentType = "application/vnd.mezzanine.control+json; version=1";
 const unavailable = () => ({ delivered: false, reason: "telemetry-unavailable" });
-// Only currently owned peer-check helpers are tracked. This exit listener holds
-// no event-loop reference and is removed when the finite set becomes empty.
 const peerChecks = new Set();
 const cancelPeerChecks = () => { for (const cancel of [...peerChecks]) cancel(); };
 
-/** Reprojects only inert known Pi fields; arbitrary callback objects/content are
- * discarded before transport. Daemon Event validation remains authoritative. */
+/** Reprojects only inert known Pi fields; arbitrary callback content is dropped. */
 function piFact(input) {
   try {
     if (!input || typeof input !== "object" || Array.isArray(input) || !Object.hasOwn(input, "type")) return;
@@ -34,9 +32,7 @@ function piFact(input) {
     if (["ui_prompt_start", "ui_prompt_end"].includes(type)) {
       const reason = Object.hasOwn(input, "reason") ? input.reason : undefined;
       const kind = Object.hasOwn(input, "kind") ? input.kind : undefined;
-      if (reason === "ui_prompt" && ["select", "confirm", "input", "editor", "custom"].includes(kind)) {
-        return { type, reason, kind };
-      }
+      if (reason === "ui_prompt" && ["select", "confirm", "input", "editor", "custom"].includes(kind)) return { type, reason, kind };
     }
     if (type === "agent_before_settle") {
       const outcome = Object.hasOwn(input, "outcome") ? input.outcome : undefined;
@@ -45,8 +41,7 @@ function piFact(input) {
   } catch { /* telemetry input failure is neutral */ }
 }
 
-/** Reject duplicate keys (including escaped aliases) before JSON.parse can
- * overwrite them. Depth is finite; JSON.parse owns the remaining grammar. */
+/** Reject duplicate keys/escaped aliases before JSON.parse overwrites them. */
 function strictReply(raw) {
   const stack = [];
   for (const token of raw.matchAll(/"(?:[^"\\]|\\.)*"|[{}\[\],:]|[^{}\[\],:\s]+/gu)) {
@@ -54,11 +49,9 @@ function strictReply(raw) {
     if (value === "{" || value === "[") {
       if (stack.length >= 16) throw new Error("reply unavailable");
       stack.push(value === "{" ? { keys: new Set(), key: true } : {});
-    } else if (value === "}" || value === "]") {
-      stack.pop();
-    } else if (value === ",") {
-      if (stack.at(-1)?.keys) stack.at(-1).key = true;
-    } else if (value.startsWith('"') && stack.at(-1)?.key) {
+    } else if (value === "}" || value === "]") stack.pop();
+    else if (value === ",") { if (stack.at(-1)?.keys) stack.at(-1).key = true; }
+    else if (value.startsWith('"') && stack.at(-1)?.key) {
       const object = stack.at(-1);
       const key = JSON.parse(value);
       if (object.keys.has(key)) throw new Error("reply unavailable");
@@ -69,7 +62,7 @@ function strictReply(raw) {
   return JSON.parse(raw);
 }
 
-/** Nonsecret MEZ routing selects an endpoint/pane, never supplies authority. */
+/** Nonsecret MEZ routing selects endpoint/pane, never supplies authority. */
 export function discoverPersistentRoute(env = process.env) {
   if (typeof env.MEZ !== "string" || env.MEZ.length > 4096) return;
   const fields = env.MEZ.split("\x1f");
@@ -79,9 +72,7 @@ export function discoverPersistentRoute(env = process.env) {
   return Object.freeze({ socket: fields[0], pane: env.MEZ_PANE, encoded: fields.join("\x1f") });
 }
 
-/** Validate socket-directory ownership plus fixed-helper metadata before spawn.
- * Native helper verification remains necessary: path metadata alone cannot
- * attest the actual peer on a connected socket or repair a replaced endpoint. */
+/** Path metadata precedes native peer validation; it is not peer authority. */
 function trustedPaths(route, helper) {
   const uid = process.geteuid?.();
   if (!Number.isInteger(uid) || !isAbsolute(helper ?? "")) return false;
@@ -96,9 +87,7 @@ function trustedPaths(route, helper) {
   } catch { return false; }
 }
 
-/** Fixed argv and inherited private FD are internal peer inspection only, not
- * an enrollment channel or normal vendor-launch prerequisite. Output is captured
- * and bounded; errors never escape into the vendor's stdout/stderr. */
+/** Fixed read-only helper argv; no vendor executable or enrollment fd is used. */
 function verifyPeer(socket, helper, signal) {
   return new Promise(resolve => {
     if (signal.aborted || peerChecks.size >= 16) { resolve(false); return; }
@@ -113,8 +102,6 @@ function verifyPeer(socket, helper, signal) {
       peerChecks.delete(cancel);
       if (peerChecks.size === 0) process.off("exit", cancelPeerChecks);
       if (!accepted && child?.exitCode === null && child?.signalCode === null) {
-        // SIGTERM cannot reclaim a stopped verifier. This is only the exact
-        // ChildProcess we spawned for read-only peer inspection, never a vendor.
         try { child.kill("SIGKILL"); } catch {}
       }
       child?.stdout?.destroy();
@@ -128,9 +115,6 @@ function verifyPeer(socket, helper, signal) {
     peerChecks.add(cancel);
     signal.addEventListener("abort", cancel, { once: true });
     try {
-      // Passing the active Socket wrapper to child stdio can interfere with its
-      // libuv read ownership. Borrow only its native descriptor; unsupported
-      // Node/platform handle shapes fail closed without a transport fallback.
       const fd = socket._handle?.fd;
       if (!Number.isSafeInteger(fd) || fd < 0) { finish(false); return; }
       child = childProcess.spawn(helper, ["harness-peer"], { shell: false,
@@ -150,10 +134,7 @@ function verifyPeer(socket, helper, signal) {
   });
 }
 
-/** Creates one immutable observer-instance client. Caller metadata is projected
- * now, never retained as an arbitrary object. start() alone opens resources.
- * A successor is a fresh client against the returned predecessor generation,
- * so old callback closures cannot acquire its credentials or sequence owner. */
+/** Immutable observer client; successors never transfer lifecycle credentials. */
 export function createPersistentTelemetryClient(options) {
   const route = discoverPersistentRoute(options?.env);
   const metadata = {
@@ -181,14 +162,10 @@ export function createPersistentTelemetryClient(options) {
   let disposed = false;
   let verifier;
   let projectionMode;
-
   const lose = current => {
     if (current !== attempt) return;
     phase = "connection-lost";
-    if (verifier?.attempt === current) {
-      verifier.controller.abort();
-      verifier = undefined;
-    }
+    if (verifier?.attempt === current) { verifier.controller.abort(); verifier = undefined; }
     starting = undefined;
     buffer = Buffer.alloc(0);
     if (inflight) { clearTimeout(inflight.timer); inflight.resolve(undefined); inflight = undefined; }
@@ -284,11 +261,14 @@ export function createPersistentTelemetryClient(options) {
   };
   const params = () => ({ launch_token: handle.token, generation: handle.generation,
     external_session_id: metadata.external_session_id });
-  return Object.freeze({ start,
-    status() { return Object.freeze({ phase, usage: "unavailable-source-continuity",
+  const accounting = createRequestAccountingClient({ enqueue,
+    async exchange(method, payload) {
+      if (!await start()) return;
+      return exchange(method, { ...params(), ...payload }, attempt);
+    } });
+  return Object.freeze({ start, ...accounting,
+    status() { return Object.freeze({ phase, usage: accounting.accountingStatus(),
       run: handle?.run, epoch: handle?.epoch }); },
-    // Reserves a generic sequence without I/O or implicit enrollment. This is
-    // metadata capture, not delivery: the adapter owns serialized child dispatch.
     captureHelperObservation(state) {
       if (phase !== "enrolled" || !states.has(state) || projectionMode === "pi") return Promise.resolve(undefined);
       const capturedHandle = handle;
@@ -344,8 +324,6 @@ export function createPersistentTelemetryClient(options) {
         return result?.retired === true ? { delivered: true } : unavailable();
       });
     },
-    // Resource cancellation retains exact immutable attempt identity for later
-    // caller-owned recovery. It never retries work or transfers a successor.
     disconnect() { lose(attempt); },
     detach() { disposed = true; lose(attempt); },
   });

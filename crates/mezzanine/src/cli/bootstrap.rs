@@ -431,7 +431,7 @@ mod tests {
         assert_eq!(tree_snapshot(&home.0), before);
         let installed = invoke(&[]);
         assert_eq!(installed["result"], "installed");
-        assert_eq!(installed["manifest_revision"], 7);
+        assert_eq!(installed["manifest_revision"], 8);
         assert!(
             installed["changed_paths"]
                 .as_array()

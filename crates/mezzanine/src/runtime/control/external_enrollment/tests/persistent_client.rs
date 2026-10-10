@@ -2,6 +2,23 @@
 
 use super::*;
 
+/// Installed revision-8 client and accounting sibling run as an ordinary Node
+/// descendant, obtain genuine native request readiness, publish normalized
+/// expense with typed durable ACK and retire without primary/observer rights.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit installed Node path and built mez helper required; offline only"]
+async fn external_enrollment_installed_request_accounting_has_durable_native_ack() {
+    qualify_installed_node_entry(
+        "request-accounting-ordinary-fixture.mjs",
+        "persistent_client.mjs",
+        1,
+        1,
+        false,
+        None,
+    )
+    .await;
+}
+
 /// Explicit offline qualification requires an already-installed Node and built
 /// mez helper. The ordinary producer loads installed compiled siblings, validates
 /// daemon peer UID through the read-only helper, and itself sends enrollment,
@@ -179,6 +196,12 @@ async fn qualify_installed_node_entry(
             .is_empty()
     );
     let mut service = RuntimeServiceFixture::new().control_socket(&path).build();
+    let request_accounting = script_name == "request-accounting-ordinary-fixture.mjs";
+    if request_accounting {
+        service.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
+            directory.join("usage.sqlite"),
+        ));
+    }
     service.start_initial_pane_process(None).unwrap();
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../scripts")
@@ -316,12 +339,56 @@ async fn qualify_installed_node_entry(
     }
     assert_eq!(
         binding.enrollment.as_ref().unwrap().epoch,
-        if typed_pi || opencode || helper_callback {
+        if typed_pi || opencode || helper_callback || request_accounting {
             1
         } else {
             2
         }
     );
+    if request_accounting {
+        assert!(binding.enrollment.as_ref().unwrap().request_reports_seen);
+        assert_eq!(
+            exit.service
+                .external_token_usage(None)
+                .values()
+                .map(|usage| usage.input_tokens)
+                .sum::<u64>(),
+            10
+        );
+        assert_eq!(
+            exit.service.external_usage_reservation_counts_for_tests(),
+            (0, 0)
+        );
+        let database = rusqlite::Connection::open(directory.join("usage.sqlite")).unwrap();
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT sum(input_tokens) FROM token_usage_events",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            10
+        );
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM external_usage_requests", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT count(*) FROM external_usage_observations",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+    }
     if typed_pi {
         assert!(
             exit.service

@@ -10,7 +10,7 @@ pub(crate) fn manifest() -> Manifest {
     let mut manifest = Manifest {
         harness: "opencode".into(),
         vendor_version: "best-effort".into(),
-        revision: 7,
+        revision: 8,
         entries: vec![
             Entry {
                 path: "plugins/mezzanine.js".into(),
@@ -81,6 +81,7 @@ pub(super) fn nested_manifest(jsonc: bool) -> Manifest {
 pub(super) fn historical_manifest() -> Manifest {
     let mut previous = manifest();
     previous.revision = 6;
+    super::history::freeze_pre_request_client(&mut previous);
     for entry in &mut previous.entries {
         if let Artifact::JsoncArrayEntry { pointer, value } = &entry.artifact {
             entry.artifact = Artifact::JsonArrayEntry {

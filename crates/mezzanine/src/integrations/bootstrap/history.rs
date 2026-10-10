@@ -381,6 +381,36 @@ export function createPersistentTelemetryClient(options) {
 }
 "#;
 
+/// Exact client shipped in Pi/OpenCode revision 7 and strict OpenCode revision 6.
+/// This independent snapshot cannot be redefined by editing the active client.
+pub(super) fn persistent_client_v5() -> Vec<u8> {
+    include_bytes!("history/persistent_client_v5.mjs").to_vec()
+}
+
+/// Restores only the two known adapter client slots and removes the new sibling
+/// from pre-request manifests. No receipt/journal path supplies new authority.
+pub(super) fn freeze_pre_request_client(manifest: &mut super::installer::Manifest) {
+    manifest.entries.retain(|entry| {
+        ![
+            "extensions/mezzanine/request_accounting.mjs",
+            "plugins/mezzanine/request_accounting.mjs",
+        ]
+        .contains(&entry.path.as_str())
+    });
+    for entry in &mut manifest.entries {
+        if [
+            "extensions/mezzanine/persistent_client.mjs",
+            "plugins/mezzanine/persistent_client.mjs",
+        ]
+        .contains(&entry.path.as_str())
+        {
+            entry.artifact = super::reconciliation::Artifact::File {
+                bytes: persistent_client_v5(),
+            };
+        }
+    }
+}
+
 /// Reconstructs exact shipped v2 from fixed v1 data and fixed inspected deltas.
 /// It never consults current source, receipts, paths or runtime user input.
 pub(super) fn persistent_client_v2() -> Vec<u8> {

@@ -13,7 +13,7 @@ fn bootstrap_jsonc_review_transitions_recover_and_reject_ambiguous_ownership() {
     let current = crate::integrations::bootstrap::compiled_manifest("opencode", None).unwrap();
     let old = crate::integrations::bootstrap::opencode_artifact::historical_manifest();
     for nested in [false, true] {
-        for boundary in 1..=if nested { 2 } else { 3 } {
+        for boundary in 1..=if nested { 2 } else { 5 } {
             let fixture = Fixture::new();
             if nested {
                 fs::write(
@@ -45,7 +45,7 @@ fn bootstrap_jsonc_review_transitions_recover_and_reject_ambiguous_ownership() {
                 .unwrap();
             }
             let accepted = fixture.plan(&current, Operation::Install).unwrap();
-            assert_eq!(accepted.changes.len(), if nested { 2 } else { 3 });
+            assert_eq!(accepted.changes.len(), if nested { 2 } else { 5 });
             accepted.fixture_interrupt_after(boundary);
             assert!(accepted.apply().is_err());
             assert!(recover_private(&fixture.root, &fixture.home, &current).unwrap());
@@ -232,16 +232,16 @@ fn bootstrap_jsonc_history_keeps_strict_predecessors_and_rejects_payload_drift()
     use crate::integrations::bootstrap::{opencode_artifact, reconciliation::Artifact};
     let current = opencode_artifact::manifest();
     let history = crate::integrations::bootstrap::compiled_history(&current);
-    assert_eq!(history.len(), 6);
-    assert_eq!(history[0], opencode_artifact::historical_manifest());
-    assert!(history.iter().all(|manifest| {
+    assert_eq!(history.len(), 7);
+    assert_eq!(history[1], opencode_artifact::historical_manifest());
+    assert!(history.iter().skip(1).all(|manifest| {
         manifest
             .entries
             .iter()
             .all(|entry| !matches!(entry.artifact, Artifact::JsoncArrayEntry { .. }))
     }));
     let tui = include_bytes!("../../../opencode_tui.mjs");
-    let client = include_bytes!("../../../persistent_client.mjs");
+    let client = include_bytes!("../../../history/persistent_client_v5.mjs");
     assert!(opencode_artifact::historical_payloads_match(tui, client));
     let mut edited = tui.to_vec();
     edited.push(0);

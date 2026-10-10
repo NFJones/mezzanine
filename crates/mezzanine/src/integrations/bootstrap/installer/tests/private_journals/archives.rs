@@ -206,7 +206,8 @@ fn bootstrap_private_archive_covers_historical_upgrades_and_nested_helpers() {
         let current = crate::integrations::bootstrap::compiled_manifest(harness, None).unwrap();
         for old in crate::integrations::bootstrap::compiled_history(&current) {
             let fixture = Fixture::new();
-            plan(&fixture.root, &old, Operation::Install)
+            fixture
+                .plan(&old, Operation::Install)
                 .unwrap()
                 .apply()
                 .unwrap();

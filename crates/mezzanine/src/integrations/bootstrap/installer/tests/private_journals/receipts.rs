@@ -127,7 +127,11 @@ fn bootstrap_private_receipt_v2_source_field_forgery_is_rejected() {
 #[test]
 fn bootstrap_private_receipt_migration_edges_are_recoverable_and_private() {
     for harness in ["pi", "opencode"] {
-        let current = crate::integrations::bootstrap::compiled_manifest(harness, None).unwrap();
+        let current = if harness == "opencode" {
+            crate::integrations::bootstrap::opencode_artifact::historical_manifest()
+        } else {
+            crate::integrations::bootstrap::compiled_manifest(harness, None).unwrap()
+        };
         for boundary in [1, 2] {
             let fixture = Fixture::new();
             let legacy_current = if harness == "opencode" {
@@ -218,19 +222,36 @@ fn bootstrap_private_receipts_upgrade_all_history_after_original_v2_recovery() {
     for harness in ["pi", "opencode"] {
         let current = crate::integrations::bootstrap::compiled_manifest(harness, None).unwrap();
         let history = crate::integrations::bootstrap::compiled_history(&current);
-        assert_eq!(history.len(), if harness == "pi" { 5 } else { 6 });
+        assert_eq!(history.len(), if harness == "pi" { 6 } else { 7 });
         for old in history {
             let fixture = Fixture::new();
-            let pending = plan(&fixture.root, &old, Operation::Install).unwrap();
+            let private = old.entries.iter().any(|entry| {
+                matches!(
+                    entry.artifact,
+                    crate::integrations::bootstrap::reconciliation::Artifact::JsoncArrayEntry { .. }
+                )
+            });
+            let pending = if private {
+                fixture.plan(&old, Operation::Install)
+            } else {
+                plan(&fixture.root, &old, Operation::Install)
+            }
+            .unwrap();
             pending.fixture_interrupt_after(1);
             assert!(pending.apply().is_err());
             assert!(recover_private(&fixture.root, &fixture.home, &current).unwrap());
             let legacy = fixture
                 .root
                 .join(format!("mez-bootstrap-ownership-{harness}.json"));
-            let receipt: Receipt = serde_json::from_slice(&fs::read(&legacy).unwrap()).unwrap();
+            let receipt_path = if private {
+                fixture.receipt(harness)
+            } else {
+                legacy.clone()
+            };
+            let receipt: Receipt =
+                serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
             assert_eq!(receipt.manifest, old);
-            assert!(!fixture.receipt(harness).exists());
+            assert_eq!(fixture.receipt(harness).exists(), private);
             fixture
                 .plan(&current, Operation::Install)
                 .unwrap()
