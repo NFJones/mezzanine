@@ -14,7 +14,9 @@ register((name, handler) => hooks.set(name, handler));
 let helpers = 0, cancelled = false;
 const sdk = { process: { run: async (argv, options) => {
   helpers++;
-  const result = await exec(argv[0], argv.slice(1), { timeout: options.timeoutMs, maxBuffer: 8192 });
+  const execution = exec(argv[0], argv.slice(1), { timeout: options.timeoutMs, maxBuffer: 8192 });
+  execution.child.stdin.end(options.stdin ?? '');
+  const result = await execution;
   assert.equal(result.stderr, '');
   return { exitCode: 0, stdout: result.stdout };
 } }, clock: { every: () => ({ cancel() { cancelled = true; } }) } };
@@ -22,7 +24,7 @@ const unchanged = Object.freeze({ unchanged: true });
 assert.equal(await hooks.get('classic.SessionStart')(sdk, {
   session_id: 'session-a', hook_event_name: 'SessionStart', source: 'startup',
 }, async () => unchanged), unchanged);
-assert.equal(helpers, 1);
+assert.equal(helpers, 2);
 const chunk = Object.freeze({ kind: 'text', text: 'PRIVATE' });
 const final = Object.freeze({ turnId: 'turn-a', index: 0, answer: 'PRIVATE', toolUses: [], stopReason: 'end_turn',
   usage: { model: 'response-model', input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 4 } });
@@ -35,11 +37,21 @@ for (let iteration = 0; iteration < 2; iteration++) {
   const completed = await stream.next();
   assert.equal(completed.done, true); assert.equal(completed.value, final);
 }
-assert.equal(helpers, 7);
+assert.equal(helpers, 8);
 const missing = Object.freeze({ ...final, index: 1, usage: null });
 const stream = hooks.get('turn.step')(sdk, { turnId: 'turn-a', index: 1 }, async function* () { return missing; });
 assert.equal((await stream.next()).value, missing);
-assert.equal(helpers, 8);
+assert.equal(helpers, 9);
+for (const [name, extra] of [
+  ['UserPromptSubmit', { prompt: 'PRIVATE' }],
+  ['Notification', { notification_type: 'permission_prompt', message: 'PRIVATE' }],
+  ['Stop', { stop_hook_active: true }],
+  ['StopFailure', { error: 'PRIVATE' }],
+]) {
+  assert.equal(await hooks.get(`classic.${name}`)(sdk,
+    { session_id: 'session-a', hook_event_name: name, ...extra }, async () => unchanged), unchanged);
+}
 await hooks.get('classic.SessionEnd')(sdk, { session_id: 'session-a', hook_event_name: 'SessionEnd', reason: 'clear' }, async () => unchanged);
+assert.equal(helpers, 14);
 assert.equal(cancelled, true);
 process.stdout.write('{"qualified":true}\n');

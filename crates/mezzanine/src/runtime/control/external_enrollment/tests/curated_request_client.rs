@@ -25,7 +25,7 @@ async fn external_curated_request_sdk_client_has_native_durable_ack() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
 async fn external_claude_request_generator_has_native_durable_ack() {
-    qualify_request_client("claude-request-ordinary-fixture.mjs", true, 8).await;
+    qualify_request_client("claude-request-ordinary-fixture.mjs", true, 14).await;
 }
 
 /// Shared owned fixture for the pure runner and full literal generator; only
@@ -88,6 +88,13 @@ async fn qualify_request_client(script_name: &str, claude: bool, requests: usize
     fixture
         .service
         .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&path));
+    if claude {
+        fixture
+            .service
+            .session
+            .set_pane_title_explicit("%1", "Pinned")
+            .unwrap();
+    }
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../scripts")
         .join(script_name)
@@ -152,6 +159,28 @@ async fn qualify_request_client(script_name: &str, claude: bool, requests: usize
             .pending
             .is_empty()
     );
+    if claude {
+        let bindings = fixture.service.control.external_agents();
+        let presentation = bindings
+            .bindings
+            .values()
+            .next()
+            .unwrap()
+            .registration
+            .as_ref()
+            .unwrap()
+            .presentation
+            .as_ref()
+            .unwrap();
+        assert_eq!(presentation.sequence, 6);
+        assert_eq!(presentation.state, "complete");
+        assert_eq!(presentation.title.as_deref(), Some("Claude"));
+        assert!(
+            fixture.service.terminal_frame_context().panes["%1"]
+                .pane_title_override
+                .is_none()
+        );
+    }
     let database = rusqlite::Connection::open(path).unwrap();
     assert_eq!(
         database

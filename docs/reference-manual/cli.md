@@ -460,7 +460,13 @@ existing historical targets retain their original semantics. Receipt schema stay
 ordinary skills-directory loader discovers it without `--plugin-dir`, a Mez
 wrapper, fd3 or launcher helper environment. The literal SDK source pins the
 installing Mezzanine executable for native helper observations and available
-main-request counters. Installation does not override `disableAllHooks`, explicit
+main-request counters. Revision2 adds bounded main-session classic lifecycle
+observations and a static automatic title, without forwarding prompts, messages,
+tool/error text or transcript paths. Presentation order is captured before
+downstream completion; heartbeat and expense ownership remain separate. Exact
+same-helper revision1 bundles upgrade through guarded historical source inputs.
+Executable relocation remains fail-closed rather than guessed migration.
+Installation does not override `disableAllHooks`, explicit
 plugin disabling, managed policy, vendor trust review or authored statuslines and
 settings. Support is best-effort; installed files are not proof of loaded runtime
 telemetry, auxiliary/resume/fork coverage or exhaustive billing. Actual provider

@@ -601,8 +601,9 @@ async fn qualify_curated_probe_with_autoload(
         let caller = handle.clone();
         let callback_report = directory.join("callback-returned");
         let observed_proofs = if autoload { 1 } else { proofs };
+        let lifecycle_calls = u64::from(owned && proofs == 5);
         let server = tokio::spawn(async move {
-            for ordinal in 0..1 + observed_proofs + if handoff { 2 } else { 0 } {
+            for ordinal in 0..1 + observed_proofs + lifecycle_calls + if handoff { 2 } else { 0 } {
                 let (mut stream, _) =
                     tokio::time::timeout(Duration::from_secs(15), control_listener.accept())
                         .await
@@ -726,7 +727,20 @@ async fn qualify_curated_probe_with_autoload(
                 if autoload { 1 } else { proofs }
             );
             let original_expiry = binding.expires;
-            assert_eq!(binding.registration.as_ref().unwrap().presentation, None);
+            if owned && proofs == 5 {
+                let presentation = binding
+                    .registration
+                    .as_ref()
+                    .unwrap()
+                    .presentation
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(presentation.sequence, 1);
+                assert_eq!(presentation.state, "ready");
+                assert_eq!(presentation.title.as_deref(), Some("Claude"));
+            } else {
+                assert_eq!(binding.registration.as_ref().unwrap().presentation, None);
+            }
             probe
                 .service
                 .control

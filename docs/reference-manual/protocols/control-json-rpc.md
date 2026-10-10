@@ -757,6 +757,16 @@ ACKs. Known committed ACK replay is local after stop, while an unacknowledged se
 report retains unknown-delivery semantics. Strict bounded JSON rejects duplicate,
 unknown/private fields and unsafe integers. The literal runner launches no vendor,
 selects no arbitrary RPC and installs no vendor request/counter producer.
+Claude revision2 also sends normalized classic lifecycle states through the
+existing fixed `harness-event` stdin helper. Six original public selectors are
+captured once; up to16 pending exact-object capture tickets allocate presentation
+order before downstream waits. Old completion cannot overwrite a newer state,
+and stopped/replaced observers cannot borrow a newest binding. The static
+automatic title is `Claude`, subordinate to user pins. Stop suggests readiness,
+not retirement or a promise against continuation. Generic presentation does not
+renew heartbeat freshness. Neutral helper `{}` remains unverified submission,
+not delivery/lease/expense ACK. Changed revision1 source inputs remain frozen;
+the rest are hash-guarded for exact same-helper upgrade authority.
 The compiled Claude module now includes a documented main `turn.step` producer:
 it reserves at most16 active observations, hashes pinned session/turnId/index,
 obtains native readiness and delegates the original generator once unchanged.

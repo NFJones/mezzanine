@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { createCuratedLifetime } from "../crates/mezzanine/src/integrations/bootstrap/curated_lifetime.mjs";
-import { projectClaudeEvent } from "../crates/mezzanine/src/integrations/bootstrap/claude_observer.mjs";
+import { projectClaudeEvent, createClaudeLifecycleSender } from "../crates/mezzanine/src/integrations/bootstrap/claude_observer.mjs";
 import { createCuratedRequestAccountingClient } from "../crates/mezzanine/src/integrations/bootstrap/curated_request_accounting.mjs";
 import { captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome } from "../crates/mezzanine/src/integrations/bootstrap/claude_request.mjs";
 
@@ -16,10 +16,11 @@ const body = source.replace(/__MEZ_[A-Z]+__/g, marker => ({ __MEZ_OWNED__: "true
   __MEZ_REPLACING__: "false", __MEZ_PREDECESSOR__: "undefined" })[marker]);
 const code = template.replace(/^import .*;\n/gm, "").replace("export function register", "function register")
   .replace("__MEZ_SOURCE_BODY__", body)
+  .replace("__MEZ_LIFECYCLE_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/claude_lifecycle_runner.mjs", import.meta.url), "utf8").replace("__MEZ_HELPER__", JSON.stringify("/owned/mez")))
   .replace("__MEZ_STEP_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/claude_request_step.mjs", import.meta.url), "utf8")
     .replace("__MEZ_REQUEST_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_request_runner.mjs", import.meta.url), "utf8")
       .replace("__MEZ_HELPER__", JSON.stringify("/owned/mez"))));
-const register = new Function("createCuratedLifetime", "projectClaudeEvent", "createCuratedRequestAccountingClient", "captureClaudeStep", "identifyClaudeStep", "projectClaudeStepOutcome", `${code}\nreturn register;`)(createCuratedLifetime, projectClaudeEvent, createCuratedRequestAccountingClient, captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome);
+const register = new Function("createCuratedLifetime", "projectClaudeEvent", "createCuratedRequestAccountingClient", "captureClaudeStep", "identifyClaudeStep", "projectClaudeStepOutcome", "createClaudeLifecycleSender", `${code}\nreturn register;`)(createCuratedLifetime, projectClaudeEvent, createCuratedRequestAccountingClient, captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome, createClaudeLifecycleSender);
 
 const start = (session = "session-a", extra = {}) => ({ hook_event_name: "SessionStart", session_id: session, source: "startup", ...extra });
 const end = (session = "session-a", extra = {}) => ({ hook_event_name: "SessionEnd", session_id: session, reason: "clear", ...extra });
@@ -30,8 +31,10 @@ function fixture() {
   const hooks = new Map();
   register((name, callback) => { assert(!hooks.has(name)); hooks.set(name, callback); });
   const calls = [];
+  const lifecycle = [];
   const timers = [];
-  const sdk = { process: { run: async argv => {
+  const sdk = { process: { run: async (argv, options) => {
+    if (argv[1] === "harness-event") { lifecycle.push(JSON.parse(options.stdin)); return { exitCode: 0, stdout: "{}\n" }; }
     const capsule = JSON.parse(argv[2]); calls.push(capsule);
     const receipt = capsule.operation === "curated-usage-begin"
       ? { protocol: "external-request/1", accepted: true, request_id: capsule.request_id,
@@ -48,14 +51,14 @@ function fixture() {
   } }, clock: { every: (_delay, callback) => { const timer = { callback, cancelled: false, cancel() { this.cancelled = true; } }; timers.push(timer); return timer; } } };
   const invoke = (event, next = async () => result) => hooks.get(`classic.${event.hook_event_name}`)(sdk, event, next);
   const result = Object.freeze({ unchanged: true });
-  return { hooks, calls, timers, sdk, invoke, result };
+  return { hooks, calls, lifecycle, timers, sdk, invoke, result };
 }
 
 /** One retained owner coalesces duplicate main starts, and exact matching end
  * stops its timer without treating Stop/tool/child observations as retirement. */
 test("curated module owns one main session and filters child or foreign end", async () => {
   const f = fixture();
-  assert.deepEqual([...f.hooks.keys()], ["classic.SessionStart", "classic.SessionEnd", "turn.step"]);
+  assert.deepEqual([...f.hooks.keys()], ["classic.SessionStart", "classic.SessionEnd", "classic.UserPromptSubmit", "classic.Notification", "classic.Stop", "classic.StopFailure", "turn.step"]);
   assert.equal(await f.invoke(start()), f.result);
   assert.equal(await f.invoke(start()), f.result);
   assert.equal(f.calls.length, 1);
@@ -304,4 +307,31 @@ test("Claude request generator fences owner replacement and active pressure", as
   await current.next();
   assert.equal(f.calls.at(-1).operation, "curated-usage-end");
   assert.equal(f.calls.at(-1).external_session_id, "session-b");
+});
+
+/** Literal wrappers preserve next(original), results/errors and capture order.
+ * Unknown/child/foreign payloads cannot publish, and old completion cannot undo
+ * a newer prompt or borrow the replacement session's captured public witness. */
+test("Claude literal lifecycle captures before next and fences stale status", async () => {
+  const f = fixture(); await f.invoke(start());
+  const event = (name, extra = {}) => ({ session_id: "session-a", hook_event_name: name, ...extra });
+  let finish;
+  const slow = f.invoke(event("Stop", { stop_hook_active: true }), () => new Promise(resolve => { finish = resolve; }));
+  const prompt = event("UserPromptSubmit", { prompt: "PRIVATE" });
+  assert.equal(await f.invoke(prompt, async original => { assert.equal(original, prompt); return f.result; }), f.result);
+  finish(f.result); await slow;
+  assert.deepEqual(f.lifecycle.map(value => value.data.state), ["ready", "running"]);
+  await f.invoke(event("Notification", { notification_type: "permission_prompt", message: "PRIVATE" }));
+  await f.invoke(event("Notification", { notification_type: "unknown" }));
+  await f.invoke(event("Stop", { stop_hook_active: true, agent_id: "child" }));
+  const error = new Error("vendor");
+  await assert.rejects(f.invoke(event("StopFailure"), async () => { throw error; }), caught => caught === error);
+  assert.equal(f.lifecycle.at(-1).data.state, "approval-wait");
+  assert(!JSON.stringify(f.lifecycle).includes("PRIVATE"));
+  let lateFinish;
+  const late = f.invoke(event("StopFailure"), () => new Promise(resolve => { lateFinish = resolve; }));
+  await f.invoke(start("session-b"));
+  lateFinish(f.result); await late;
+  assert.equal(f.lifecycle.at(-1).external_session_id, "session-b");
+  assert.equal(f.lifecycle.at(-1).data.state, "ready");
 });

@@ -1179,6 +1179,19 @@ duplicate/unknown/private fields and unsafe numeric evidence remain unavailable.
 Known durable ACK replay MAY remain local after stop; withheld late ACK does not
 undo expense or prove non-delivery. Its literal SDK runner uses only the trusted
 fixed helper. This primitive supplies no vendor request/counter callback schema.
+Claude revision2 MAY additionally submit normalized classic lifecycle facts
+through fixed `harness-event` argv with token-free bounded stdin. One original
+observer sender MUST reserve at most16 capture tickets and assign presentation
+sequence before downstream waits; a delayed earlier callback MUST NOT replace
+a later accepted state. Stop or exact owner loss MUST permanently fence queued
+work, without borrowing a newest observer. Facts MUST be captured before exactly
+one unchanged `next(original)` and published only after success. Stop is ready,
+not process retirement or proof no continuation follows; heartbeat freshness and
+presentation sequence MUST remain separate. Static automatic title `Claude`
+MUST NOT override user-pinned titles. Neutral `{}` helper success is only an
+unverified submission, never delivery, lease or accounting acknowledgment.
+Revision1 changed module/observer inputs MUST remain independently frozen and
+all other historical inputs hash-guarded, never redefined from active source.
 The compiled Claude module MAY observe the documented main `turn.step` generator
 using pinned session/turnId/index identity and separate opaque SHA256 request and
 outcome domains. It MUST reserve at most16 active producers before asynchronous

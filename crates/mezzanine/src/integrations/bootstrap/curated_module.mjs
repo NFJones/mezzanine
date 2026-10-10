@@ -6,7 +6,7 @@
  * End captures its exact owner before downstream work, so delayed old events
  * cannot stop a newer binding. Native daemon provenance/retirement stays separate. */
 import { createCuratedLifetime } from './curated_lifetime.mjs';
-import { projectClaudeEvent } from './claude_observer.mjs';
+import { projectClaudeEvent, createClaudeLifecycleSender } from './claude_observer.mjs';
 import { createCuratedRequestAccountingClient } from './curated_request_accounting.mjs';
 import { captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome } from './claude_request.mjs';
 
@@ -19,6 +19,7 @@ export function register(on) {
   const endedSessions = new Set();
   let identitiesExhausted = false;
   let activeRequestProducers = 0;
+  let lifecycleSender;
 
   on('classic.SessionStart', async ($, e, next) => {
     let fact;
@@ -42,6 +43,8 @@ export function register(on) {
       if (accepted === undefined || accepted !== startGeneration
           || identitiesExhausted || endedSessions.has(fact.session)) return result;
       if (boundSession !== fact.session) {
+        lifecycleSender?.sender.stop();
+        lifecycleSender = undefined;
         observerLifetime.stop();
         observerLifetime = startOwner;
         boundSession = fact.session;
@@ -52,6 +55,7 @@ export function register(on) {
         const e = Object.freeze({ session_id: fact.session, source: fact.event.reason });
         __MEZ_SOURCE_BODY__
       }
+      __MEZ_LIFECYCLE_BODY__
     } catch { /* telemetry cannot change middleware results */ }
     finally {
       if (pendingStart === pending) pendingStart = undefined;
@@ -65,12 +69,52 @@ export function register(on) {
     try { fact = projectClaudeEvent(e?.session_id, 'SessionEnd', e); } catch { /* unavailable metadata */ }
     const endingOwner = fact && (fact.session === boundSession ? observerLifetime
       : fact.session === pendingStart?.session ? pendingStart.owner : undefined);
-    const result = await next(e);
+    const endingSender = endingOwner && lifecycleSender?.owner === endingOwner ? lifecycleSender.sender : undefined;
+    const endingTicket = endingSender?.capture(fact);
+    let result;
+    try { result = await next(e); } catch (error) { endingSender?.abandon(endingTicket); throw error; }
     if (endingOwner) {
       if (endedSessions.has(fact.session) || endedSessions.size < 128) endedSessions.add(fact.session);
       else identitiesExhausted = true;
+      try { await endingSender?.publish(endingTicket); endingSender?.stop(); } catch { /* telemetry loss */ }
       try { endingOwner.stop(); } catch { /* local cancellation is neutral */ }
     }
+    return result;
+  });
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    const sender = lifecycleSender?.sender;
+    const fact = projectClaudeEvent(boundSession, 'UserPromptSubmit', e);
+    const ticket = sender?.capture(fact);
+    let result;
+    try { result = await next(e); } catch (error) { sender?.abandon(ticket); throw error; }
+    try { await sender?.publish(ticket); } catch { /* neutral telemetry */ }
+    return result;
+  });
+  on('classic.Notification', async ($, e, next) => {
+    const sender = lifecycleSender?.sender;
+    const fact = projectClaudeEvent(boundSession, 'Notification', e);
+    const ticket = sender?.capture(fact);
+    let result;
+    try { result = await next(e); } catch (error) { sender?.abandon(ticket); throw error; }
+    try { await sender?.publish(ticket); } catch { /* neutral telemetry */ }
+    return result;
+  });
+  on('classic.Stop', async ($, e, next) => {
+    const sender = lifecycleSender?.sender;
+    const fact = projectClaudeEvent(boundSession, 'Stop', e);
+    const ticket = sender?.capture(fact);
+    let result;
+    try { result = await next(e); } catch (error) { sender?.abandon(ticket); throw error; }
+    try { await sender?.publish(ticket); } catch { /* neutral telemetry */ }
+    return result;
+  });
+  on('classic.StopFailure', async ($, e, next) => {
+    const sender = lifecycleSender?.sender;
+    const fact = projectClaudeEvent(boundSession, 'StopFailure', e);
+    const ticket = sender?.capture(fact);
+    let result;
+    try { result = await next(e); } catch (error) { sender?.abandon(ticket); throw error; }
+    try { await sender?.publish(ticket); } catch { /* neutral telemetry */ }
     return result;
   });
   __MEZ_STEP_BODY__

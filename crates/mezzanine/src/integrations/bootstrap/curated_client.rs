@@ -63,20 +63,117 @@ pub(crate) fn session_start_successor_body(
 /// It installs/enables nothing, retains no credentials, and neither persists nor
 /// fabricates a predecessor across module reload or same-ID session restart.
 pub(crate) fn module_source(helper: &std::path::Path, interval_ms: u64) -> Result<String> {
+    compose_module(
+        helper,
+        interval_ms,
+        include_str!("curated_module.mjs"),
+        true,
+    )
+}
+
+/// Reconstructs the shipped revision-1 module only while every unchanged source
+/// input remains byte-identical. Future edits fail closed until their owner adds
+/// an independent snapshot; active code never silently redefines old authority.
+pub(super) fn historical_claude_module_v1(helper: &std::path::Path) -> Result<String> {
+    use sha2::Digest;
+    for (bytes, expected) in [
+        (
+            include_bytes!("curated_client.mjs").as_slice(),
+            "1a395b002716be900ace04094ed4d1d64e64d81d598ce72a2b93d862dfa8c0bb",
+        ),
+        (
+            include_bytes!("claude_request_step.mjs").as_slice(),
+            "f438a048fa4fb1de35812a8a04ba138bd0de3629eb44949f77e15df28c35ce92",
+        ),
+        (
+            include_bytes!("curated_request_runner.mjs").as_slice(),
+            "4ea8ec867b94fe53578e78774f02e8b8a12069abbaef5f5754b6bba7950eb0b1",
+        ),
+        (
+            include_bytes!("curated_lifetime.mjs").as_slice(),
+            "6e0fa6c94d99a7b84663d9fe19f72e499464eb95d35ad69d85417c2286ad17b2",
+        ),
+        (
+            include_bytes!("claude_request.mjs").as_slice(),
+            "32b4b295e16a9d07afffd604aa4ec7500fa417f6945a4f3f6e2e5f0051ebecf4",
+        ),
+        (
+            include_bytes!("curated_request_accounting.mjs").as_slice(),
+            "20cbc1c0ce6f66836a4fa0200bc98418d7b78941138e575fd4d5c6bae9101a2e",
+        ),
+        (
+            include_bytes!("request_accounting.mjs").as_slice(),
+            "43788869b5404f5a098513da7bba66463fd084731b7bd6f76bd9809eff134053",
+        ),
+        (
+            include_bytes!("history/curated_module_claude_v1.mjs").as_slice(),
+            "d4392ec13b02a4bfea8ce6b6d3aa1983f0ad6b327e7df82ebd5c1ddb0517d65e",
+        ),
+        (
+            include_bytes!("history/claude_observer_v1.mjs").as_slice(),
+            "cd84275d11543d8b566b425ffdbfb2e3787e83c04deee37ab6271bcf3003e47b",
+        ),
+    ] {
+        let actual = sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if actual != expected {
+            return Err(MezError::invalid_state(
+                "Claude historical source snapshot changed",
+            ));
+        }
+    }
+    compose_module(
+        helper,
+        10_000,
+        include_str!("history/curated_module_claude_v1.mjs"),
+        false,
+    )
+}
+
+/// One-pass insertion preserves literal helper filenames even when they contain
+/// template markers. Both source graphs are code-owned, never caller input.
+fn compose_module(
+    helper: &std::path::Path,
+    interval_ms: u64,
+    template: &str,
+    lifecycle: bool,
+) -> Result<String> {
     let body = session_start_owned_body(helper, interval_ms)?;
     let request = request_accounting_body(helper)?;
     let (step_before, step_after) = include_str!("claude_request_step.mjs")
         .split_once("__MEZ_REQUEST_BODY__")
         .ok_or_else(|| MezError::invalid_state("Claude request runner marker unavailable"))?;
     let step = format!("{step_before}{request}{step_after}");
-    let (before, tail) = include_str!("curated_module.mjs")
+    let (before, tail) = template
         .split_once("__MEZ_SOURCE_BODY__")
         .ok_or_else(|| MezError::invalid_state("curated source marker unavailable"))?;
-    let (middle, after) = tail
+    let (middle, lifecycle_body, tail) = if lifecycle {
+        let (middle, tail) = tail
+            .split_once("__MEZ_LIFECYCLE_BODY__")
+            .ok_or_else(|| MezError::invalid_state("Claude lifecycle marker unavailable"))?;
+        let quoted = serde_json::to_string(
+            helper
+                .to_str()
+                .ok_or_else(|| MezError::invalid_args("Claude helper unavailable"))?,
+        )
+        .map_err(|_| MezError::invalid_args("Claude helper unavailable"))?;
+        (
+            middle,
+            include_str!("claude_lifecycle_runner.mjs").replace("__MEZ_HELPER__", &quoted),
+            tail,
+        )
+    } else {
+        ("", String::new(), tail)
+    };
+    let (step_middle, after) = tail
         .split_once("__MEZ_STEP_BODY__")
         .ok_or_else(|| MezError::invalid_state("curated step marker unavailable"))?;
     // Insert each literal once; marker-like helper filenames remain inert data.
-    Ok(format!("{before}{body}{middle}{step}{after}"))
+    Ok(format!(
+        "{before}{body}{middle}{lifecycle_body}{step_middle}{step}{after}"
+    ))
 }
 
 /// Renders initial source bound to the caller-retained `observerLifetime` pure
@@ -258,7 +355,7 @@ mod tests {
         assert!(source.contains("yield* next(e)"));
         assert!(!source.contains("on('session.start'"));
         assert!(source.contains("lifetime = observerLifetime;"));
-        assert_eq!(source.matches("\"/owned/__MEZ_SOURCE_BODY__\"").count(), 3);
+        assert_eq!(source.matches("\"/owned/__MEZ_SOURCE_BODY__\"").count(), 4);
         assert!(!source.contains("store.get"));
     }
 }

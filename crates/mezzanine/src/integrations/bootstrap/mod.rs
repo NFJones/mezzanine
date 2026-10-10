@@ -144,6 +144,13 @@ pub(crate) fn compiled_manifest(
 /// closed. The installer owns read-only overlays and locked reconciliation;
 /// this directory supplies immutable artifact authority only.
 pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer::Manifest> {
+    if manifest.harness == "claude" {
+        return if Some(manifest) == claude_artifact::manifest().as_ref() {
+            claude_artifact::historical_manifest().into_iter().collect()
+        } else {
+            Vec::new()
+        };
+    }
     if manifest == &codex_artifact::manifest() {
         return vec![codex_artifact::historical_manifest()];
     }
