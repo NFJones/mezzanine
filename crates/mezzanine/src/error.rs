@@ -549,8 +549,8 @@ pub struct MezError {
     /// This state is distinct from diagnostic raw text and contains no
     /// executable incomplete native-call arguments.
     provider_output_limit_state: Option<Box<mez_agent::ProviderOutputLimitState>>,
-    /// Incurred counters retained independently of final recovery classification.
-    provider_incurred_usage: Option<Box<mez_agent::ModelTokenUsage>>,
+    /// Boxed provider observations keep the shared error/result layout compact.
+    provider_evidence: Option<Box<ProviderErrorEvidence>>,
     /// This local transcript failure happened before any append, so only the
     /// persistence operation may be retried without ambiguous partial writes.
     local_transcript_precommit_retryable: bool,
@@ -560,6 +560,15 @@ pub struct MezError {
     sandbox_lifecycle_failure: Option<Box<crate::security::sandbox::SandboxLifecycleFailure>>,
     /// Typed partial config effects; diagnostics alone never determine settlement.
     config_mutation_failure: Option<Box<ConfigMutationFailureEvidence>>,
+}
+
+/// Non-authorizing provider observations retained independently of error kind.
+#[derive(Debug, Clone, Default)]
+struct ProviderErrorEvidence {
+    /// Known incurred expense, otherwise the existing cutoff fallback applies.
+    incurred_usage: Option<mez_agent::ModelTokenUsage>,
+    /// Canonical request/budget observations, never inferred from provider text.
+    recovery_facts: Option<mez_agent::recovery_attribution::RecoveryFacts>,
 }
 
 impl MezError {
@@ -577,7 +586,7 @@ impl MezError {
             provider_raw_text: None,
             provider_failure_json: None,
             provider_output_limit_state: None,
-            provider_incurred_usage: None,
+            provider_evidence: None,
             local_transcript_precommit_retryable: false,
             pane_backend_failure: false,
             sandbox_lifecycle_failure: None,
@@ -765,20 +774,40 @@ impl MezError {
         self.provider_output_limit_state.as_deref()
     }
 
+    /// Retains canonical request-bound facts without changing failure semantics.
+    pub(crate) fn with_recovery_facts(
+        mut self,
+        facts: mez_agent::recovery_attribution::RecoveryFacts,
+    ) -> Self {
+        self.provider_evidence
+            .get_or_insert_with(Default::default)
+            .recovery_facts = Some(facts);
+        self
+    }
+
+    /// Returns authoritative canonical facts; missing metadata stays unknown.
+    pub fn recovery_facts(&self) -> Option<&mez_agent::recovery_attribution::RecoveryFacts> {
+        self.provider_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.recovery_facts.as_ref())
+    }
+
     /// Retains total observed expense without changing failure recovery semantics.
     pub(crate) fn with_provider_incurred_usage(
         mut self,
         usage: mez_agent::ModelTokenUsage,
     ) -> Self {
-        self.provider_incurred_usage = Some(Box::new(usage));
+        self.provider_evidence
+            .get_or_insert_with(Default::default)
+            .incurred_usage = Some(usage);
         self
     }
 
     /// Returns explicit incurred expense, otherwise reported cutoff counters.
     pub(crate) fn provider_incurred_usage(&self) -> mez_agent::ModelTokenUsage {
-        self.provider_incurred_usage
-            .as_deref()
-            .copied()
+        self.provider_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.incurred_usage)
             .unwrap_or_else(|| {
                 self.provider_output_limit_state()
                     .map(|state| state.usage)
@@ -802,7 +831,7 @@ impl From<io::Error> for MezError {
             provider_raw_text: None,
             provider_failure_json: None,
             provider_output_limit_state: None,
-            provider_incurred_usage: None,
+            provider_evidence: None,
             local_transcript_precommit_retryable: false,
             pane_backend_failure: false,
             sandbox_lifecycle_failure: None,

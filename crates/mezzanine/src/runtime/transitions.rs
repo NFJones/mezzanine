@@ -357,6 +357,14 @@ pub enum ProcessEvent {
 /// Event emitted by an async agent provider worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentProviderEvent {
+    /// Worker-owned canonical recovery facts around one ordinary failure event.
+    /// A wrapper never changes failure classification or claim ownership.
+    CanonicalFailure {
+        /// Exactly one legacy-shaped failure event, never another wrapper.
+        failure: Box<AgentProviderEvent>,
+        /// Immutable canonical snapshot; provider payload text cannot create it.
+        recovery: Box<mez_agent::recovery_attribution::RecoveryFacts>,
+    },
     /// One concrete provider request completed and published content-free diagnostics.
     WireRequestObserved {
         /// Request shape and exact response usage observed by the worker.

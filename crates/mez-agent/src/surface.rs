@@ -132,7 +132,7 @@ impl ModelInteractionKind {
         match self {
             ModelInteractionKind::CapabilityContinuation => None,
             ModelInteractionKind::MaapRepair => Some(
-                "The previous provider response failed MAAP validation before any action executed. Return exactly one corrected MAAP action batch on the currently allowed surface. Do not mention the repair process to the user.",
+                "The rejected batch failed MAAP validation and did not execute. Earlier completed batches remain completed: do not replay their effects. Return exactly one complete corrected replacement MAAP action batch on the currently allowed surface, never a suffix or appended fragment. For apply_patch, decoded directive and hunk lines must have physical newlines, and the complete *** End Patch terminator must occupy its own line. JSON newline escapes must decode into physical newlines, not literal backslash-n text. Do not mechanically insert terminators, rewrite newline bytes, or normalize a partial patch. Do not mention the repair process to the user.",
             ),
             ModelInteractionKind::OutputLimitRetry => Some(
                 "The previous response hit the provider output limit. If safe partial assistant text is appended, treat it as already emitted and continue from it without repetition. Return one minimal complete MAAP batch when work remains or one short final answer when it does not. Omit progress prose, plans, evidence recaps, command logs, and explanations from this retry.",

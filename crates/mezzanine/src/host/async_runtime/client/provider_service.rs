@@ -1441,8 +1441,8 @@ fn provider_worker_event(
             }),
             false,
         ),
-        Ok(Err(error)) => (
-            RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+        Ok(Err(error)) => {
+            let failure = AgentProviderEvent::Failed {
                 agent_id,
                 turn_id,
                 claim_generation,
@@ -1454,9 +1454,16 @@ fn provider_worker_event(
                     .provider_output_limit_state()
                     .cloned()
                     .map(Box::new),
-            }),
-            false,
-        ),
+            };
+            let event = match error.recovery_facts() {
+                Some(facts) => AgentProviderEvent::CanonicalFailure {
+                    failure: Box::new(failure),
+                    recovery: Box::new(facts.clone()),
+                },
+                None => failure,
+            };
+            (RuntimeEvent::AgentProvider(event), false)
+        }
         Err(error) => (
             RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
                 agent_id,

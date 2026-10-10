@@ -174,6 +174,19 @@ directory and cannot traverse with `..`. Patch failures are recoverable
 evidence: inspect fresh owner context and submit a smaller anchored patch;
 do not claim a mutation succeeded until its result confirms it.
 
+Syntax errors identify the batch position and field, such as `actions[1].patch`.
+Correction requests require one complete replacement batch: decoded directives
+and hunks have physical newlines, with `*** End Patch` on its own line. Literal
+backslash-n text, concatenated directives and appended suffixes are not repairs.
+Rejected-batch siblings never execute; earlier completed work is not rolled back
+or replayed. Existing bounded correction differs from failed-action hunk feedback.
+
+Failure diagnostics use canonical request/budget facts when available, separating
+reserved attempts from calls started, phase exhaustion from interaction limits,
+and response-only summary work from action correction. Legacy provenance remains
+unknown. A qualified response excerpt may be display-truncated; clipping does
+not establish provider cutoff or prove that correction was skipped.
+
 The file directives are `*** Add File: PATH`, `*** Update File: PATH`, and
 `*** Delete File: PATH`. A move uses `*** Move to: PATH` immediately after an
 update directive and still requires an update hunk. There is no

@@ -44,6 +44,7 @@ pub struct ModelMessage {
 pub struct ModelMessages {
     items: std::sync::Arc<Vec<std::sync::Arc<ModelMessage>>>,
     provider_request_epoch: Option<ProviderRequestEpoch>,
+    recovery_facts: Option<crate::recovery_attribution::RecoveryFacts>,
 }
 
 /// One typed cache-affecting component that begins a new model-context epoch.
@@ -197,19 +198,32 @@ impl ModelMessages {
     /// Appends one request-local message using copy-on-write pointer storage.
     pub fn push(&mut self, message: ModelMessage) {
         self.provider_request_epoch = None;
+        self.recovery_facts = None;
         std::sync::Arc::make_mut(&mut self.items).push(std::sync::Arc::new(message));
     }
 
     /// Inserts one request-local message at the requested chronological index.
     pub fn insert(&mut self, index: usize, message: ModelMessage) {
         self.provider_request_epoch = None;
+        self.recovery_facts = None;
         std::sync::Arc::make_mut(&mut self.items).insert(index, std::sync::Arc::new(message));
     }
 
     /// Retains only messages accepted by `predicate`.
     pub fn retain(&mut self, mut predicate: impl FnMut(&ModelMessage) -> bool) {
         self.provider_request_epoch = None;
+        self.recovery_facts = None;
         std::sync::Arc::make_mut(&mut self.items).retain(|message| predicate(message.as_ref()));
+    }
+
+    /// Returns sealed canonical recovery observations for this result request.
+    pub(crate) fn recovery_facts(&self) -> Option<&crate::recovery_attribution::RecoveryFacts> {
+        self.recovery_facts.as_ref()
+    }
+
+    /// Attaches an immutable canonical result without model-visible text.
+    pub(crate) fn set_recovery_facts(&mut self, facts: crate::recovery_attribution::RecoveryFacts) {
+        self.recovery_facts = Some(facts);
     }
 
     /// Returns the typed provider epoch selected for this prepared request.
@@ -242,6 +256,7 @@ impl From<Vec<ModelMessage>> for ModelMessages {
         Self {
             items: std::sync::Arc::new(messages.into_iter().map(std::sync::Arc::new).collect()),
             provider_request_epoch: None,
+            recovery_facts: None,
         }
     }
 }

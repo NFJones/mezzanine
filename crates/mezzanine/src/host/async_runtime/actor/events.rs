@@ -1529,7 +1529,21 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         provider_event: AgentProviderEvent,
     ) -> Result<RuntimeTransition> {
+        let (provider_event, recovery) = match provider_event {
+            AgentProviderEvent::CanonicalFailure { failure, recovery } => {
+                if !matches!(*failure, AgentProviderEvent::Failed { .. }) {
+                    return Err(crate::MezError::invalid_args(
+                        "canonical recovery wrapper requires one failure event",
+                    ));
+                }
+                (*failure, Some(recovery))
+            }
+            event => (event, None),
+        };
         match provider_event {
+            AgentProviderEvent::CanonicalFailure { .. } => {
+                unreachable!("the validated wrapper is unwrapped once above")
+            }
             AgentProviderEvent::WireRequestObserved { observation } => self
                 .service
                 .apply_provider_wire_request_observation(*observation),
@@ -1616,6 +1630,18 @@ impl AsyncRuntimeSessionActor {
                 );
                 if let Some(state) = provider_output_limit_state {
                     error = error.with_provider_output_limit_state(*state);
+                }
+                if let Some(facts) = recovery
+                    .filter(|facts| facts.turn_id == turn_id && facts.agent_id == agent_id.as_str())
+                {
+                    if let Some(turn) = self.service.agent_turn_ledger().turn(&turn_id).cloned() {
+                        self.service.append_agent_trace_turn_event(
+                            &turn.pane_id,
+                            &turn_id,
+                            &facts.diagnostic_line(),
+                        )?;
+                    }
+                    error = error.with_recovery_facts(*facts);
                 }
                 if !accounted
                     && let Some(turn) = self.service.agent_turn_ledger().turn(&turn_id).cloned()

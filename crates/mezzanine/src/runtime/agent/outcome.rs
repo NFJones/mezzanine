@@ -93,9 +93,10 @@ impl RuntimeSessionService {
     /// failures.
     ///
     /// Most model-correctable failures consume a bounded recovery budget keyed
-    /// by stable failed-action signatures. `apply_patch` failures remain
-    /// model-correctable but intentionally bypass that budget so the model can
-    /// iterate on patch context as needed.
+    /// by stable failed-action signatures. Only eligible `apply_patch` hunk
+    /// mismatches bypass that budget so the model can refresh exact context.
+    /// Pre-execution malformed batch syntax uses the separate bounded canonical
+    /// MAAP repair owner, not an unbounded failed-action retry loop.
     ///
     /// Real execution failures are useful model context: a bad shell command,
     /// timeout, or failed tool call often gives the model enough information to

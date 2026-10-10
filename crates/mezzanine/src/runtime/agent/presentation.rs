@@ -992,19 +992,106 @@ fn runtime_agent_failed_execution_prompt_display_lines(
     execution: &AgentTurnExecution,
 ) -> Vec<String> {
     let failure = runtime_agent_execution_failure_error(execution);
-    let mut lines = vec![format!("agent: failure: {}", failure.message())];
-    lines.extend(
-        execution
-            .response
-            .raw_text
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .filter(|line| !runtime_agent_failed_execution_raw_text_is_placeholder(execution, line))
-            .take(200)
-            .map(ToOwned::to_owned),
-    );
+    format_failure_diagnostic_lines(
+        failure.message(),
+        &execution.response.raw_text,
+        execution.recovery_facts(),
+        |line| runtime_agent_failed_execution_raw_text_is_placeholder(execution, line),
+    )
+}
+
+/// Formats the cause once, typed provenance, and a bounded display-only excerpt.
+/// No marker text can manufacture canonical recovery counts or provider cutoff.
+fn format_failure_diagnostic_lines(
+    cause: &str,
+    raw_text: &str,
+    facts: Option<&mez_agent::recovery_attribution::RecoveryFacts>,
+    is_placeholder: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let mut lines = vec![format!("agent: failure: {cause}")];
+    lines.push(facts.map_or_else(
+        || {
+            "MAAP recovery: provenance unavailable; correction count/disposition unknown"
+                .to_string()
+        },
+        mez_agent::recovery_attribution::RecoveryFacts::diagnostic_line,
+    ));
+    let mut excerpt = raw_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !is_placeholder(line))
+        .filter(|line| *line != cause && !line.starts_with("maap_validation_error: "));
+    let displayed = excerpt
+        .by_ref()
+        .take(200)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if !displayed.is_empty() {
+        lines.push(
+            "Diagnostic response excerpt (not authoritative provider stop/cutoff evidence):"
+                .to_string(),
+        );
+        lines.extend(displayed);
+        if excerpt.next().is_some() {
+            lines.push("[diagnostic excerpt truncated after 200 non-empty lines]".to_string());
+        }
+    }
     lines
+}
+
+#[cfg(test)]
+mod recovery_display_tests {
+    use super::format_failure_diagnostic_lines;
+
+    /// Legacy marker text cannot prove an actual correction count or exhaustion.
+    /// The classified cause is emitted once even when raw diagnostics repeat it.
+    #[test]
+    fn failure_diagnostic_deduplicates_cause_without_inventing_recovery() {
+        let cause = "MAAP validation failed: missing terminator";
+        let raw = format!(
+            "{cause}\nmaap_validation_error: missing terminator\n[MAAP repair evidence]\nattempt=99"
+        );
+        let lines = format_failure_diagnostic_lines(cause, &raw, None, |_| false);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("missing terminator"))
+                .count(),
+            1
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("provenance unavailable"))
+        );
+        assert!(!lines.iter().any(|line| line.contains("BudgetExhausted")));
+    }
+
+    /// UTF-8 response excerpts are limited by complete physical lines, labelled
+    /// as display truncation, and never described as authoritative provider EOF.
+    #[test]
+    fn failure_diagnostic_labels_unicode_excerpt_truncation() {
+        let raw = (0..201)
+            .map(|index| format!("境界-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lines = format_failure_diagnostic_lines("failed", &raw, None, |_| false);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("境界-"))
+                .count(),
+            200
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("not authoritative provider stop/cutoff"))
+        );
+        assert!(lines.last().unwrap().contains("truncated after 200"));
+        assert!(!lines.iter().any(|line| line == "境界-200"));
+    }
 }
 
 /// Returns true when provider raw text is only an internal execution marker.

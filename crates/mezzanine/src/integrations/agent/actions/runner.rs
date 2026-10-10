@@ -106,6 +106,14 @@ impl<P: ModelProvider> AgentTurnEnvironment for SyncProductAgentTurnEnvironment<
         self.runner.provider.send_request(request)
     }
 
+    fn with_recovery_facts(
+        &self,
+        error: MezError,
+        facts: mez_agent::recovery_attribution::RecoveryFacts,
+    ) -> MezError {
+        error.with_recovery_facts(facts)
+    }
+
     fn failed_response_usage(&self, error: &MezError) -> mez_agent::ModelTokenUsage {
         error.provider_incurred_usage()
     }
@@ -463,6 +471,14 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
             .provider
             .send_request_async_with_progress(request, self.progress.clone())
             .await
+    }
+
+    fn with_recovery_facts(
+        &self,
+        error: MezError,
+        facts: mez_agent::recovery_attribution::RecoveryFacts,
+    ) -> MezError {
+        error.with_recovery_facts(facts)
     }
 
     fn failed_response_usage(&self, error: &MezError) -> mez_agent::ModelTokenUsage {

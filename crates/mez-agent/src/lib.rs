@@ -134,6 +134,8 @@ pub mod provider_transcript;
 pub mod quota;
 /// Provider-independent pane readiness state and override policy.
 pub mod readiness;
+/// Canonical request-bound recovery observations, separate from retry policy.
+pub mod recovery_attribution;
 /// Provider-independent complete request-input estimation.
 pub mod request_accounting;
 /// Provider-response accounting across one agent turn.

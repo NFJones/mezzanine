@@ -103,6 +103,15 @@ pub trait AgentTurnEnvironment {
     /// Classifies one provider failure for canonical recovery progression.
     fn provider_failure(&self, error: &Self::Error) -> AgentTurnProviderFailure;
 
+    /// Retains canonical diagnostic facts on an error without changing its kind.
+    fn with_recovery_facts(
+        &self,
+        error: Self::Error,
+        _facts: crate::recovery_attribution::RecoveryFacts,
+    ) -> Self::Error {
+        error
+    }
+
     /// Returns counters already observed before a provider/output failure.
     /// Defaults to no observation; never invents a successful model response.
     fn failed_response_usage(&self, _error: &Self::Error) -> crate::ModelTokenUsage {
@@ -214,6 +223,45 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
     interaction_kind: Option<ModelInteractionKind>,
     limits: AgentTurnLimits,
 ) -> Result<AgentTurnExecution, E::Error> {
+    let mut trace = crate::recovery_attribution::RecoveryTrace::default();
+    let result = run_agent_turn_inner(
+        environment,
+        ledger,
+        turn,
+        context,
+        allowed_actions,
+        interaction_kind,
+        limits,
+        &mut trace,
+    )
+    .await;
+    match result {
+        Ok(mut execution) => {
+            if let Some(facts) = trace.facts {
+                execution.request.messages.set_recovery_facts(facts);
+            }
+            Ok(execution)
+        }
+        Err(error) => match trace.facts {
+            Some(facts) => Err(environment.with_recovery_facts(error, facts)),
+            None => Err(error),
+        },
+    }
+}
+
+/// Owns the unchanged negotiation policy while publishing request-local facts.
+#[allow(clippy::too_many_arguments)]
+async fn run_agent_turn_inner<E: AgentTurnEnvironment>(
+    environment: &E,
+    ledger: &mut AgentTurnLedger,
+    turn: AgentTurnRecord,
+    context: &AgentContext,
+    allowed_actions: Option<AllowedActionSet>,
+    interaction_kind: Option<ModelInteractionKind>,
+    limits: AgentTurnLimits,
+    trace: &mut crate::recovery_attribution::RecoveryTrace,
+) -> Result<AgentTurnExecution, E::Error> {
+    use crate::recovery_attribution::{RecoveryDisposition as Disposition, RecoveryStage as Stage};
     if limits.max_provider_interactions == 0 {
         return Err(environment.invalid_args(
             "agent turn provider interaction limit must be greater than zero".to_string(),
@@ -241,6 +289,7 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
 
     let execution = loop {
         if provider_interactions >= limits.max_provider_interactions {
+            trace.finish(None, Disposition::InteractionLimit, false);
             project_ledger_result(ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed))?;
             return Err(environment.invalid_state(format!(
                 "agent turn exceeded provider interaction limit of {}",
@@ -249,9 +298,28 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
         }
         provider_interactions = provider_interactions.saturating_add(1);
         append_request_state_transition(&mut request);
-        environment.prepare_request(&mut request, previous_request.as_ref())?;
+        if let Err(error) = environment.prepare_request(&mut request, previous_request.as_ref()) {
+            trace.finish(
+                Some(Stage::ControllerInvariant),
+                if request.interaction_kind == ModelInteractionKind::MaapRepair {
+                    Disposition::RepairUnavailable
+                } else {
+                    Disposition::Rejected
+                },
+                false,
+            );
+            return Err(error);
+        }
         let response_request = request.clone();
         previous_request = Some(response_request.clone());
+        trace.start_request(
+            &response_request,
+            provider_interactions,
+            limits.max_provider_interactions,
+            negotiation.recovery_phase(),
+            negotiation.recovery_attempts(),
+            negotiation.recovery_limit(),
+        );
         let mut response = match environment.send_request(&request).await {
             Ok(response) => response,
             Err(error) => {
@@ -266,6 +334,12 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                     failure.retry_class,
                 ) {
                     AgentTurnProviderFailureDecision::RecoverMalformedOutput { attempt } => {
+                        trace.observe_budget(
+                            negotiation.recovery_phase(),
+                            attempt,
+                            negotiation.recovery_limit(),
+                        );
+                        trace.finish(Some(Stage::ProviderOutput), Disposition::Unknown, false);
                         negotiation.update_durable_request(|durable_request| {
                             append_maap_repair_evidence(durable_request, &failure.message, attempt);
                         });
@@ -277,8 +351,34 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                         );
                         continue;
                     }
-                    AgentTurnProviderFailureDecision::ReturnToRuntime => return Err(error),
-                    AgentTurnProviderFailureDecision::Summarize => {}
+                    AgentTurnProviderFailureDecision::ReturnToRuntime => {
+                        trace.finish(
+                            Some(Stage::ProviderOutput),
+                            Disposition::ReturnedToRuntime,
+                            false,
+                        );
+                        return Err(error);
+                    }
+                    AgentTurnProviderFailureDecision::Summarize => {
+                        trace.observe_budget(
+                            negotiation.recovery_phase(),
+                            negotiation.recovery_attempts(),
+                            negotiation.recovery_limit(),
+                        );
+                        trace.finish(
+                            Some(Stage::ProviderOutput),
+                            if failure.repairable_malformed_output {
+                                Disposition::BudgetExhausted
+                            } else if response_request.interaction_kind
+                                == ModelInteractionKind::MaapRepair
+                            {
+                                Disposition::RepairRequestFailed
+                            } else {
+                                Disposition::Rejected
+                            },
+                            false,
+                        );
+                    }
                 }
                 if let Some(execution) = environment
                     .summarize_provider_failure(
@@ -314,6 +414,11 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
             response_acceptance @ ProviderResponseAcceptance::ProviderIdentityMismatch,
         ) = response_decision
         {
+            trace.finish(
+                Some(Stage::ControllerInvariant),
+                Disposition::Rejected,
+                false,
+            );
             let error = environment.invalid_state(
                 response_acceptance
                     .rejection_message()
@@ -341,6 +446,7 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
         }
 
         if response_request.interaction_kind.expects_structured_json() {
+            trace.finish(None, Disposition::NotRequired, false);
             response.usage = negotiation.cumulative_response_usage();
             response.quota_usage = negotiation.latest_quota_usage().to_vec();
             project_ledger_result(ledger.finish_turn(&turn.turn_id, AgentTurnState::Completed))?;
@@ -362,6 +468,12 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
             if let AgentTurnResponseDecision::RecoverMissingActionBatch { attempt } =
                 response_decision
             {
+                trace.observe_budget(
+                    negotiation.recovery_phase(),
+                    attempt,
+                    negotiation.recovery_limit(),
+                );
+                trace.finish(Some(Stage::MissingBatch), Disposition::Unknown, false);
                 negotiation.update_durable_request(|durable_request| {
                     append_maap_repair_evidence(
                         durable_request,
@@ -377,6 +489,11 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                 );
                 continue;
             }
+            trace.finish(
+                Some(Stage::MissingBatch),
+                Disposition::BudgetExhausted,
+                false,
+            );
             project_ledger_result(ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed))?;
             response.usage = negotiation.cumulative_response_usage();
             response.quota_usage = negotiation.latest_quota_usage().to_vec();
@@ -409,6 +526,14 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
         );
         match continuation {
             Ok(BatchContinuationPlan::Continue(next_request)) => {
+                trace.observe_budget(
+                    negotiation.recovery_phase(),
+                    negotiation.recovery_attempts(),
+                    negotiation.recovery_limit(),
+                );
+                if next_request.interaction_kind == ModelInteractionKind::MaapRepair {
+                    trace.finish(negotiation.recovery_stage(), Disposition::Unknown, false);
+                }
                 if let Some(signature) = capability_continuation_signature(batch, &next_request)
                     && !continuation_signatures.insert(signature.clone())
                 {
@@ -416,6 +541,11 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                         "capability continuation made no progress: {}",
                         signature.diagnostic()
                     ));
+                    trace.finish(
+                        Some(Stage::ControllerInvariant),
+                        Disposition::Rejected,
+                        false,
+                    );
                     project_ledger_result(
                         ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed),
                     )?;
@@ -433,6 +563,7 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                     .await);
                 }
                 if provider_interactions >= limits.max_provider_interactions {
+                    trace.finish(None, Disposition::InteractionLimit, false);
                     let error = environment.invalid_state(format!(
                         "agent turn exceeded provider interaction limit of {}",
                         limits.max_provider_interactions
@@ -472,12 +603,32 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                     batch,
                     |action| environment.plan_action_result(&turn, action),
                 ) {
-                    Ok(execution) => break execution,
+                    Ok(execution) => {
+                        trace.finish(
+                            None,
+                            if trace
+                                .facts
+                                .as_ref()
+                                .is_some_and(|facts| facts.attempts_reserved > 0)
+                            {
+                                Disposition::CorrectedBatchAccepted
+                            } else {
+                                Disposition::NotRequired
+                            },
+                            true,
+                        );
+                        break execution;
+                    }
                     Err(error) => {
-                        if environment.planning_error_is_repairable(&error)
-                            && negotiation.record_recovery_attempt()
-                        {
+                        let repairable = environment.planning_error_is_repairable(&error);
+                        if repairable && negotiation.record_recovery_attempt() {
                             let attempt = negotiation.recovery_attempts();
+                            trace.observe_budget(
+                                negotiation.recovery_phase(),
+                                attempt,
+                                negotiation.recovery_limit(),
+                            );
+                            trace.finish(Some(Stage::ActionPlanning), Disposition::Unknown, false);
                             negotiation.update_durable_request(|durable_request| {
                                 append_maap_repair_evidence(
                                     durable_request,
@@ -493,6 +644,15 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                             );
                             continue;
                         }
+                        trace.finish(
+                            Some(Stage::ActionPlanning),
+                            if repairable {
+                                Disposition::BudgetExhausted
+                            } else {
+                                Disposition::Rejected
+                            },
+                            false,
+                        );
                         project_ledger_result(
                             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed),
                         )?;
@@ -501,6 +661,25 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                 }
             }
             Err(rejection) => {
+                trace.observe_budget(
+                    negotiation.recovery_phase(),
+                    negotiation.recovery_attempts(),
+                    negotiation.recovery_limit(),
+                );
+                let stage = match rejection.stage {
+                    "allowed_actions" => Stage::AllowedActions,
+                    "maap_validation" => Stage::BatchValidation,
+                    _ => Stage::ControllerInvariant,
+                };
+                trace.finish(
+                    Some(stage),
+                    if matches!(stage, Stage::AllowedActions | Stage::BatchValidation) {
+                        Disposition::BudgetExhausted
+                    } else {
+                        Disposition::Rejected
+                    },
+                    false,
+                );
                 let error = match rejection.error {
                     BatchContinuationError::Recovery(error) => {
                         environment.invalid_args(error.message().to_string())
@@ -1018,6 +1197,48 @@ mod tests {
         }
     }
 
+    /// A repair followed by a valid capability continuation starts a clean
+    /// phase. Earlier rejection stages cannot be relabelled as current-phase
+    /// canonical evidence, even though the invocation's repair-call count stays.
+    #[test]
+    fn repaired_capability_continuation_clears_previous_phase_stage() {
+        let turn = test_turn();
+        let mut missing = final_response(&turn);
+        missing.action_batch = None;
+        let environment = FakeEnvironment {
+            responses: RefCell::new(VecDeque::from([
+                missing,
+                capability_response(
+                    &turn,
+                    "shell-after-repair",
+                    AgentCapability::Shell,
+                    "inspect once",
+                ),
+                final_response(&turn),
+            ])),
+            requests: RefCell::new(Vec::new()),
+        };
+        let mut ledger = AgentTurnLedger::new(false);
+        let execution = run_ready(run_agent_turn_async(
+            &environment,
+            &mut ledger,
+            turn,
+            &test_context(),
+            Some(AllowedActionSet::capability_decision()),
+            Some(ModelInteractionKind::CapabilityDecision),
+        ))
+        .unwrap();
+        let facts = execution.recovery_facts().unwrap();
+        assert_eq!(facts.phase, 1);
+        assert_eq!(facts.attempts_reserved, 0);
+        assert_eq!(facts.repair_calls_started, 1);
+        assert_eq!(
+            facts.disposition,
+            crate::recovery_attribution::RecoveryDisposition::NotRequired
+        );
+        assert_eq!(facts.stage, None);
+    }
+
     /// Verifies repeated capability requests terminate once their normalized
     /// request and resulting controller surface repeat without progress.
     #[test]
@@ -1118,6 +1339,58 @@ mod tests {
         assert_eq!(environment.requests.borrow().len(), 3);
     }
 
+    /// A missing batch reserves one correction but the global bound prevents
+    /// sending it. Counts must distinguish a reservation from an actual repair
+    /// call and must not report phase-budget exhaustion or executed actions.
+    #[test]
+    fn interaction_limit_reports_reserved_but_unsent_correction() {
+        let environment = FakeEnvironment {
+            responses: RefCell::new(VecDeque::from([ModelResponse {
+                provider: "test".into(),
+                model: "test-model".into(),
+                raw_text: "missing batch".into(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: None,
+                provider_transcript_events: Vec::new(),
+            }])),
+            requests: RefCell::new(Vec::new()),
+        };
+        let mut ledger = AgentTurnLedger::new(false);
+        let mut trace = crate::recovery_attribution::RecoveryTrace::default();
+        let error = run_ready(run_agent_turn_inner(
+            &environment,
+            &mut ledger,
+            test_turn(),
+            &test_context(),
+            None,
+            Some(ModelInteractionKind::ActionExecution),
+            AgentTurnLimits {
+                max_provider_interactions: 1,
+                timeout_ms: 1000,
+            },
+            &mut trace,
+        ))
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("provider interaction limit of 1")
+        );
+        assert_eq!(environment.requests.borrow().len(), 1);
+        assert_eq!(ledger.turns()[0].state, AgentTurnState::Failed);
+        let facts = trace.facts.unwrap();
+        assert_eq!(
+            facts.disposition,
+            crate::recovery_attribution::RecoveryDisposition::InteractionLimit
+        );
+        assert_eq!(facts.attempts_reserved, 1);
+        assert_eq!(facts.repair_calls_started, 0);
+        assert_eq!(facts.provider_calls_started, 1);
+        assert!(!facts.batch_planned);
+    }
+
     /// Verifies the turn-wide interaction budget terminates alternating valid
     /// continuations independently of phase-local MAAP repair resets.
     #[test]
@@ -1157,6 +1430,15 @@ mod tests {
         .expect("interaction exhaustion should return a failed execution");
 
         assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+        let facts = execution.recovery_facts().unwrap();
+        assert_eq!(
+            facts.disposition,
+            crate::recovery_attribution::RecoveryDisposition::InteractionLimit
+        );
+        assert_eq!(facts.provider_calls_started, 2);
+        assert_eq!(facts.repair_calls_started, 0);
+        assert_eq!(facts.attempts_reserved, 0);
+        assert!(!facts.batch_planned);
         assert!(
             execution
                 .response

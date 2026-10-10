@@ -880,7 +880,9 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(pane_text.contains("maap_validation_error"), "{pane_text}");
+    assert!(pane_text.contains("MAAP validation failed"), "{pane_text}");
+    assert!(pane_text.contains("call_skill is not"), "{pane_text}");
+    assert!(pane_text.contains("BudgetExhausted"), "{pane_text}");
     service.terminate_all_pane_processes().unwrap();
 }
 

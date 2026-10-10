@@ -24,6 +24,11 @@ impl AgentTurnRecoveryBudget {
         self.attempts
     }
 
+    /// Returns the existing maximum reservations, without changing the budget.
+    pub const fn limit(self) -> usize {
+        self.limit
+    }
+
     /// Records one recovery attempt when capacity remains.
     pub const fn record_attempt(&mut self) -> bool {
         if self.attempts >= self.limit {
@@ -80,6 +85,8 @@ pub enum AgentTurnProviderFailureDecision {
 pub struct AgentTurnNegotiation<Request> {
     durable_request: Request,
     recovery_budget: AgentTurnRecoveryBudget,
+    recovery_phase: usize,
+    recovery_stage: Option<crate::recovery_attribution::RecoveryStage>,
     response_progress: crate::ProviderResponseProgress,
 }
 
@@ -89,6 +96,8 @@ impl<Request> AgentTurnNegotiation<Request> {
         Self {
             durable_request,
             recovery_budget: AgentTurnRecoveryBudget::new(recovery_limit),
+            recovery_phase: 0,
+            recovery_stage: None,
             response_progress: crate::ProviderResponseProgress::default(),
         }
     }
@@ -122,6 +131,29 @@ impl<Request> AgentTurnNegotiation<Request> {
         self.recovery_budget.attempts()
     }
 
+    /// Returns the current canonical phase index for diagnostic attribution.
+    pub const fn recovery_phase(&self) -> usize {
+        self.recovery_phase
+    }
+
+    /// Returns the existing phase-local correction bound.
+    pub const fn recovery_limit(&self) -> usize {
+        self.recovery_budget.limit()
+    }
+
+    /// Returns the actual continuation owner for the current repair phase.
+    pub(crate) fn recovery_stage(&self) -> Option<crate::recovery_attribution::RecoveryStage> {
+        self.recovery_stage
+    }
+
+    /// Records only the branch that actually reserved a continuation repair.
+    pub(crate) fn mark_recovery_stage(
+        &mut self,
+        stage: crate::recovery_attribution::RecoveryStage,
+    ) {
+        self.recovery_stage = Some(stage);
+    }
+
     /// Classifies one provider failure and advances bounded repair state.
     ///
     /// Malformed output may consume the shared repair budget. Context,
@@ -152,6 +184,8 @@ impl<Request> AgentTurnNegotiation<Request> {
     /// Starts a fresh recovery phase after a valid continuation decision.
     pub const fn reset_recovery(&mut self) {
         self.recovery_budget.reset();
+        self.recovery_phase = self.recovery_phase.saturating_add(1);
+        self.recovery_stage = None;
     }
 
     /// Borrows the recovery budget for canonical MAAP continuation planning.

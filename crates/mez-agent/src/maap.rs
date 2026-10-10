@@ -660,8 +660,17 @@ impl MaapBatch {
                 ));
             }
         }
-        for action in &self.actions {
-            action.validate(context)?;
+        for (index, action) in self.actions.iter().enumerate() {
+            action.validate(context).map_err(|error| {
+                if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+                    MaapContractError::invalid_args(format!(
+                        "actions[{index}].patch: {}",
+                        error.message()
+                    ))
+                } else {
+                    error
+                }
+            })?;
         }
         let wait_count = self
             .actions

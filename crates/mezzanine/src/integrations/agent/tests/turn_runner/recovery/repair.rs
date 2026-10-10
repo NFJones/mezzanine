@@ -761,7 +761,7 @@ fn turn_runner_repairs_malformed_apply_patch_hunk_before_planning_replacement() 
         .unwrap();
     assert!(
         repair_message.content.lines().any(|line| {
-            line == "validation_error=apply_patch: patch hunk lines must start with space, +, or -"
+            line == "validation_error=actions[0].patch: apply_patch: patch hunk lines must start with space, +, or -"
         }),
         "{}",
         repair_message.content

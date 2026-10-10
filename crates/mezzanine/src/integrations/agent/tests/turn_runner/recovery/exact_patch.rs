@@ -122,6 +122,41 @@ fn turn_runner_repairs_exact_patch_terminator_and_newline_shapes_atomically() {
             )
             .unwrap();
         assert_eq!(execution.terminal_state, AgentTurnState::Running);
+        let facts = execution.recovery_facts().unwrap();
+        assert_eq!(facts.attempts_reserved, 1);
+        assert_eq!(facts.repair_calls_started, 1);
+        assert_eq!(facts.provider_calls_started, 2);
+        assert_eq!(
+            facts.disposition,
+            mez_agent::recovery_attribution::RecoveryDisposition::CorrectedBatchAccepted
+        );
+        assert!(facts.batch_planned);
+        let mut copied = execution.clone();
+        copied.request.turn_id = "another-turn".into();
+        assert!(copied.recovery_facts().is_none());
+        let records = mez_agent::transcript_entries_for_execution(
+            "conversation-1",
+            1,
+            1,
+            &turn(),
+            &execution,
+        )
+        .unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .filter(|entry| entry.content.contains("canonical recovery facts"))
+                .count(),
+            1
+        );
+        copied = execution.clone();
+        copied.request.messages.push(mez_agent::ModelMessage {
+            role: mez_agent::ModelMessageRole::Context,
+            source: ContextSourceKind::RuntimeHint,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            content: "new request state".into(),
+        });
+        assert!(copied.recovery_facts().is_none());
         assert_eq!(execution.action_results.len(), 1);
         assert_eq!(execution.action_results[0].action_id, "corrected");
         assert_eq!(executor.requests.len(), 1);
@@ -252,6 +287,16 @@ async fn qualify_exhaustion(hostile_summary: bool) {
         .await
         .unwrap();
     assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+    let facts = execution.recovery_facts().unwrap();
+    assert_eq!(facts.attempts_reserved, 2);
+    assert_eq!(facts.repair_calls_started, 2);
+    assert_eq!(facts.provider_calls_started, 3);
+    assert_eq!(facts.attempt_limit, 2);
+    assert_eq!(
+        facts.disposition,
+        mez_agent::recovery_attribution::RecoveryDisposition::BudgetExhausted
+    );
+    assert!(!facts.batch_planned);
     assert!(
         execution
             .action_results

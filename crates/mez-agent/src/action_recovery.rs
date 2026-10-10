@@ -491,6 +491,8 @@ pub fn plan_batch_continuation<ProductError>(
             negotiation.update_durable_request(|durable_request| {
                 append_maap_repair_evidence(durable_request, error.message(), attempt);
             });
+            negotiation
+                .mark_recovery_stage(crate::recovery_attribution::RecoveryStage::AllowedActions);
             return Ok(BatchContinuationPlan::Continue(Box::new(
                 maap_repair_request(
                     input.response_request,
@@ -509,6 +511,8 @@ pub fn plan_batch_continuation<ProductError>(
     if let Err(failure) = validate_product_batch() {
         if negotiation.record_recovery_attempt() {
             let attempt = negotiation.recovery_attempts();
+            negotiation
+                .mark_recovery_stage(crate::recovery_attribution::RecoveryStage::BatchValidation);
             negotiation.update_durable_request(|durable_request| {
                 append_maap_repair_evidence(durable_request, &failure.message, attempt);
             });
@@ -537,6 +541,9 @@ pub fn plan_batch_continuation<ProductError>(
         Ok(None) => Ok(BatchContinuationPlan::Execute),
         Err(error) if negotiation.record_recovery_attempt() => {
             let attempt = negotiation.recovery_attempts();
+            negotiation.mark_recovery_stage(
+                crate::recovery_attribution::RecoveryStage::ControllerInvariant,
+            );
             negotiation.update_durable_request(|durable_request| {
                 append_maap_repair_evidence(durable_request, error.message(), attempt);
             });

@@ -45,6 +45,18 @@ pub struct AgentTurnExecution {
     pub terminal_state: AgentTurnState,
 }
 
+/// Read-only recovery attribution bound to one execution projection.
+impl AgentTurnExecution {
+    /// Returns only canonical recovery facts bound to this execution's request.
+    /// Legacy/synthetic executions remain unknown rather than implying zero repairs.
+    pub fn recovery_facts(&self) -> Option<&crate::recovery_attribution::RecoveryFacts> {
+        self.request
+            .messages
+            .recovery_facts()
+            .filter(|facts| facts.matches_request(&self.request))
+    }
+}
+
 /// Executes the `transcript_entries_for_execution` operation for the owning subsystem.
 ///
 /// Callers receive a typed result or error with context from the underlying
@@ -76,6 +88,25 @@ pub fn transcript_entries_for_execution(
             agent_id: turn.agent_id.clone(),
             pane_id: turn.pane_id.clone(),
             content,
+        });
+        sequence = sequence.saturating_add(1);
+    }
+    if let Some(facts) = execution.recovery_facts()
+        && let Some(event) = crate::TranscriptContextEvent::execution_block(
+            ContextSourceKind::CommittedEvidence,
+            "canonical recovery facts",
+            facts.diagnostic_line(),
+        )
+    {
+        entries.push(TranscriptEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence,
+            created_at_unix_seconds,
+            role: TranscriptRole::System,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            pane_id: turn.pane_id.clone(),
+            content: event.to_transcript_content(),
         });
         sequence = sequence.saturating_add(1);
     }

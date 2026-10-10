@@ -7313,6 +7313,17 @@ diagnostic MUST locate the offending batch position and field, for example
 that budget is exhausted, the terminal failure MUST report the recorded provider
 diagnostic, including the malformed-output cause and location, and MUST NOT
 replace it with a generic controller failure message.
+Recovery disposition and counts MUST come from canonical request/budget owners,
+not diagnostic marker text. Snapshots MUST bind the issued turn, agent,
+provider and requested model, distinguish reserved attempts from corrective
+provider calls actually started, and separate phase budget exhaustion from
+turn-wide interaction limits and repair preparation/provider failures. A final
+batch accepted for planning MUST NOT be described as approved or executed.
+Response-only failure-summary calls are a separate phase and MUST NOT be
+silently counted as additional action-batch repair calls. Missing or legacy
+provenance MUST remain explicitly unknown. Display excerpts MUST be bounded,
+UTF-8 safe, qualified as diagnostic text and labelled when truncated; display
+clipping MUST NOT be presented as evidence of provider cutoff or skipped repair.
 Settled action evidence MUST use one bounded canonical model-visible projection
 before it first enters cache-eligible chronology. That exact projection,
 including captured shell, patch, MCP, web, fetch, skill, and other action output,
@@ -9717,14 +9728,17 @@ local action IDs after synthesis, or references to unavailable capabilities
 MUST be rejected before execution.
 
 Before recording a terminal turn failure for malformed or schema-invalid MAAP,
-the harness MAY issue a bounded ephemeral repair request to the same provider.
-The repair request MUST include the validation diagnostic and a bounded excerpt
-of the invalid provider output, MUST require the same turn and agent identity,
+the harness MUST offer correction while its existing recovery bounds permit it.
+The repair request MUST include the validation diagnostic and MAY include a
+bounded excerpt when safely available; missing excerpt MUST NOT suppress repair.
+It MUST require the same turn and agent identity,
 and MUST NOT execute any action from the invalid response. If the provider
 returns a valid corrected batch, Mezzanine MUST execute and transcript only the
 corrected response against the original durable model context; the repair
 instruction and invalid response MUST NOT become transcript entries or
-future-turn context. If repair attempts are exhausted or the provider repair
+future-turn context. Bounded controller-authored enum/counter facts MAY be
+retained under the original execution envelope without rehydrating them as
+current authoritative recovery state. If repair attempts are exhausted or the provider repair
 request fails, the final malformed response MUST be surfaced and recorded as a
 failed turn diagnostic.
 

@@ -54,6 +54,57 @@ fn shell_action(id: &str) -> AgentAction {
     }
 }
 
+/// Invalid patch bytes at a nonzero batch index must retain the exact parser
+/// cause while locating the responsible field. Valid siblings do not become
+/// executable merely because the diagnostic is qualified by its batch owner.
+#[test]
+fn malformed_middle_patch_diagnostic_names_exact_batch_field() {
+    let patch = "*** Begin Patch\n*** Add File: note.txt\n+content\n";
+    let batch = MaapBatch {
+        rationale: "validate the entire batch".into(),
+        actions: vec![
+            shell_action("first"),
+            AgentAction {
+                id: "invalid-patch".into(),
+                payload: AgentActionPayload::ApplyPatch {
+                    patch: patch.into(),
+                    strip: None,
+                },
+            },
+            shell_action("last"),
+        ],
+    };
+    let error = batch.validate(&turn(), &[], &[]).unwrap_err();
+    assert_eq!(
+        error.message(),
+        "actions[1].patch: apply_patch Mezzanine patch blocks must end with *** End Patch"
+    );
+    assert!(!error.message().contains("note.txt"));
+}
+
+/// Stable correction rules must require a complete replacement and decoded
+/// physical lines without promising that earlier completed work was undone or
+/// teaching automatic normalization of malformed or truncated provider bytes.
+#[test]
+fn patch_repair_mode_requires_complete_decoded_lines_without_replay() {
+    let instruction = ModelInteractionKind::MaapRepair
+        .system_instruction()
+        .unwrap();
+    for rule in [
+        "complete corrected replacement",
+        "physical newlines",
+        "*** End Patch",
+        "literal backslash-n",
+        "do not replay",
+        "Do not mechanically",
+    ] {
+        assert!(
+            instruction.contains(rule),
+            "missing stable correction rule: {rule}"
+        );
+    }
+}
+
 #[test]
 /// Verifies that the fallback parser extracts the one required fenced
 /// `mezzanine-action-json` block and maps its JSON schema into MAAP structs.
