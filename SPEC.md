@@ -1147,9 +1147,22 @@ for historical/resumed/fork-inherited completed events or infer a newest marker.
 These observational facts do not attest vendor invoice amounts. Generic legacy
 `agent/external/usage` remains unchanged and rejects internal observation mode.
 Unreported sources remain unavailable; actually committed request reports expose
-`request-bound-external-reported` coverage, not exhaustive accounting. Curated
-helper reporting, vendor producers, legacy OpenCode layout handoff and broader
+`request-bound-external-reported` coverage, not exhaustive accounting. Vendor
+producers, legacy OpenCode layout handoff and broader
 cross-process resume/fork attachment qualification remain separate work.
+Declared curated Claude creators MAY use fixed `curated-usage-begin/end`
+helpers with public original generation/witness/session/request selectors only.
+They MUST reuse the existing bounded native helper observation pipeline and
+durably mapped verified-parent creator, never assign billing to a helper PID,
+allocate a replacement namespace, grant socket roles or consume a freshness
+sequence. Begin qualifies actual creator cwd and first origin off actor; end
+MUST use the shared sealed ledger/reservation owner only after original native
+parent/root proof. Native rejection releases both budgets without expense or
+discarding legitimate readiness; an actual already-committed expense still
+settles after authority changes, but a stale helper receives no durable ACK.
+The fixed argv capsule MUST reject raw content/private handles/PID/project/epoch
+claims and rebuild only typed ready/durable receipts. Neutral exit is not a
+commit. These common helpers do not attest or install a vendor usage producer.
 The installed shared request client MUST retain only validated content-free
 reports and client-local tickets captured before genuine new requests. It MUST
 refuse beyond128 active tickets without silently evicting unacknowledged expense,

@@ -106,6 +106,15 @@ impl ExternalUsageWork {
             self.store.ingest_external(&self.report, self.now)
         }
     }
+
+    /// Only the actual native ledger worker publishes durable completion;
+    /// absence is an error, not a helper-supplied successful return value.
+    pub(super) fn published_result(&self) -> Result<ExternalUsageCommit> {
+        self.published
+            .get()
+            .cloned()
+            .ok_or_else(|| MezError::conflict("external request durable result unavailable"))
+    }
 }
 
 impl RuntimeSessionService {
@@ -316,7 +325,20 @@ impl RuntimeSessionService {
                 )
             })?;
         enrollment.authorize(connection)?;
-        let marker = super::external_agents::text(&params, "request_id", 64)?;
+        let work = self.external_request_work_for_binding(request.id.clone(), binding, &params)?;
+        self.reserve_external_usage_work(work)
+    }
+
+    /// Builds only original ready-marker provenance for an already authorized
+    /// binding. Caller owns native admission; this helper grants no authority
+    /// and performs no storage I/O or reservation itself.
+    pub(super) fn external_request_work_for_binding(
+        &self,
+        request_id: String,
+        binding: &super::external_agents::LaunchBinding,
+        params: &serde_json::Value,
+    ) -> Result<ExternalUsageWork> {
+        let marker = super::external_agents::text(params, "request_id", 64)?;
         let origin = self
             .control
             .external_agents()
@@ -344,14 +366,14 @@ impl RuntimeSessionService {
             project: origin.project.clone(),
             harness: binding.harness.clone(),
             epoch: "request-observation".into(),
-            event_id: super::external_agents::text(&params, "event_id", 64)?,
+            event_id: super::external_agents::text(params, "event_id", 64)?,
             sequence: 1,
             mode: "observation".into(),
             baseline: false,
             observed_at,
             model: ModelTokenUsageKey::new(
-                super::external_agents::text(&params, "provider", 128)?,
-                super::external_agents::text(&params, "model", 128)?,
+                super::external_agents::text(params, "provider", 128)?,
+                super::external_agents::text(params, "model", 128)?,
             ),
             counters,
         };
@@ -368,7 +390,7 @@ impl RuntimeSessionService {
         report.epoch = crate::storage::token_usage::external_observation_epoch(&report)?;
         let work = ExternalUsageWork {
             admission: 0,
-            request_id: request.id.clone(),
+            request_id,
             store: self.persistence.cloned_token_usage_store().ok_or_else(|| {
                 MezError::invalid_state("durable external accounting unavailable")
             })?,
@@ -381,12 +403,12 @@ impl RuntimeSessionService {
             #[cfg(test)]
             worker_gate: self.control.external_agents().usage.worker_gate.clone(),
         };
-        self.reserve_external_usage_work(work)
+        Ok(work)
     }
 
     /// Shares exact stream reservations between legacy and native request work.
     /// New groups fail explicitly at capacity; no paid observation is evicted.
-    fn reserve_external_usage_work(
+    pub(super) fn reserve_external_usage_work(
         &mut self,
         mut work: ExternalUsageWork,
     ) -> Result<ExternalUsageWork> {
@@ -422,6 +444,25 @@ impl RuntimeSessionService {
         projection.pending.insert(work.admission);
         *projection.reservations.entry(stream_id).or_default() += 1;
         Ok(work)
+    }
+
+    /// Releases an admitted work that failed helper proof before a ledger
+    /// publication. Preserves original readiness for the legitimate producer.
+    pub(super) fn release_unexecuted_external_usage(&mut self, work: &ExternalUsageWork) {
+        let projection = &mut self.control.external_agents_mut().usage;
+        if !projection.pending.remove(&work.admission) {
+            return;
+        }
+        if let Ok(id) = crate::storage::token_usage::external_usage_stream_id(
+            &work.report.owner,
+            &work.report.epoch,
+        ) && let Some(count) = projection.reservations.get_mut(&id)
+        {
+            *count -= 1;
+            if *count == 0 {
+                projection.reservations.remove(&id);
+            }
+        }
     }
 
     /// Projects one committed absolute checkpoint even after registration expiry.

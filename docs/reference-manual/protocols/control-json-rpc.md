@@ -732,7 +732,23 @@ zero usage. Historical/resumed/fork-inherited completed events must not get new
 markers. This contract is external-reported observation, not vendor billing
 attestation. Discovery reports `request-bound-external-reported` only after an
 actual durable request report. Existing enrollment/client support may still lack
-usage producers; curated helper reporting and legacy layout handoff are unfinished.
+usage producers; legacy layout handoff remains unfinished.
+Declared curated Claude sources can use `agent/external/curated-usage-begin`
+and `agent/external/curated-usage-end` through the fixed `harness-source` argv
+capsule operations of those names. Public fields are original generation,
+observer witness, session and opaque request marker; end adds normalized outcome
+ID/time/provider/model/counters. No private capability, PID/project/epoch/endpoint
+or general-method selector is accepted. Exact sender-confirmed native helper,
+direct-parent creator, pane-root incarnation, mapped namespace and deadline
+remain required. No new producer/freshness/presentation/lease is allocated.
+Begin captures actual creator cwd and original origin on the existing worker;
+end shares atomic ledger and accounting reservations, with worker-published
+durability. Wrong-parent/fake result/capacity rejection releases budgets without
+expense or lost original readiness. Actual committed expense can settle after
+native authority changes, without giving the stale helper a durable receipt.
+CLI failures return fixed accepted:false/durable:false; success rebuilds only
+typed public receipts. This is a common reporting primitive, not vendor callback
+association or exhaustive spend certification.
 The installed revision-8 shared client exposes `beginRequest(id)`,
 `endRequest(ticket, normalizedObservation)` and `abandonRequest(ticket)`. Tickets
 are immutable client-instance-local objects; copied or successor tickets cannot

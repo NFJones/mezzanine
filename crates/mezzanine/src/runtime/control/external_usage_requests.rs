@@ -36,7 +36,12 @@ impl ExternalUsageBegins {
     /// Keeps metadata memory bounded without refusing unrelated new requests.
     /// Evicted entries are restored only by their same source-scoped begin;
     /// durable request/observation/expense tables are never changed here.
-    fn cache_origin(&mut self, owner: String, marker: String, origin: ExternalRequestOrigin) {
+    pub(super) fn cache_origin(
+        &mut self,
+        owner: String,
+        marker: String,
+        origin: ExternalRequestOrigin,
+    ) {
         let key = (owner, marker);
         if !self.origins.contains_key(&key) && self.origins.len() >= MAX_READY_ORIGINS {
             self.origins.pop_first();
@@ -330,7 +335,7 @@ impl RuntimeSessionService {
 /// Public non-authoritative continuity selector; only the qualified source may
 /// use markers. A fresh server-owned namespace changes this witness even if
 /// coarse request timestamps coincide after storage loss or source replacement.
-fn request_source_witness(owner: &str) -> String {
+pub(super) fn request_source_witness(owner: &str) -> String {
     use sha2::Digest;
     sha2::Sha256::digest(format!("external-request-source/1\0{owner}").as_bytes())
         .iter()

@@ -38,6 +38,7 @@ const MAX_OBSERVER_INSTANCES: usize = 128;
 
 mod curated;
 mod helper;
+mod helper_usage;
 mod producer;
 mod rotation;
 mod source;
@@ -209,6 +210,9 @@ impl ExternalEnrollmentWork {
         self.ancestry
             .set(Arc::new(ancestry))
             .map_err(|_| MezError::conflict("external ancestry already observed"))?;
+        if let Some(helper) = &self.helper {
+            helper.observe_usage(self)?;
+        }
         if self.helper.is_none() {
             self.observe_source_owner(&ProducerEvidence::Socket(self.origin.clone()));
         }
@@ -472,6 +476,24 @@ impl RuntimeSessionService {
         connection: &ControlConnectionState,
     ) -> String {
         let result = self.commit_external_enrollment(&work, observed, connection);
+        if let Some(end) = work
+            .helper
+            .as_ref()
+            .and_then(|helper| helper.usage_end.as_ref())
+        {
+            match end.published_result() {
+                Ok(commit) => {
+                    let accounting_reply =
+                        self.complete_external_usage((**end).clone(), Ok(commit));
+                    // Already-admitted actual expense settles even if native
+                    // presentation authority changed; stale helpers get no ACK.
+                    if result.is_ok() {
+                        return accounting_reply;
+                    }
+                }
+                Err(_) => self.release_unexecuted_external_usage(end),
+            }
+        }
         #[cfg(test)]
         if let Some(settled) = &work.settled {
             settled.notify_one();

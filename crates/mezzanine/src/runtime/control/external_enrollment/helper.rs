@@ -19,6 +19,23 @@ pub(super) struct HelperPresentation {
     params: SecretString,
     /// Explicit freshness proof is separate from generic presentation mutation.
     heartbeat: bool,
+    /// Request origin is distinct from presentation/freshness and never expense.
+    usage_begin: Option<super::helper_usage::HelperUsageBegin>,
+    /// Shared ledger reservation; native observation must precede execution.
+    pub(super) usage_end: Option<Box<super::super::external_usage::ExternalUsageWork>>,
+}
+
+impl HelperPresentation {
+    /// Runs only after the original native direct-parent ancestry publication.
+    pub(super) fn observe_usage(&self, work: &ExternalEnrollmentWork) -> Result<()> {
+        if let Some(begin) = &self.usage_begin {
+            begin.observe(work)?;
+        }
+        if let Some(end) = &self.usage_end {
+            end.execute()?;
+        }
+        Ok(())
+    }
 }
 
 impl RuntimeSessionService {
@@ -36,6 +53,8 @@ impl RuntimeSessionService {
             "agent/external/helper-presentation"
                 | "agent/external/helper-observe"
                 | "agent/external/curated-heartbeat"
+                | "agent/external/curated-usage-begin"
+                | "agent/external/curated-usage-end"
         ) || connection.initialized()
         {
             return Err(MezError::forbidden(
@@ -63,6 +82,8 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::forbidden("external helper sender unavailable"))?
             .clone();
         let heartbeat = request.method == "agent/external/curated-heartbeat";
+        let usage_begin = request.method == "agent/external/curated-usage-begin";
+        let usage_end = request.method == "agent/external/curated-usage-end";
         if heartbeat
             && !params
                 .get("sequence")
@@ -73,7 +94,11 @@ impl RuntimeSessionService {
                 "curated observer sequence unavailable",
             ));
         }
-        let digest = if request.method == "agent/external/helper-observe" || heartbeat {
+        let digest = if request.method == "agent/external/helper-observe"
+            || heartbeat
+            || usage_begin
+            || usage_end
+        {
             let harness = text(&params, "harness", 64)?;
             crate::integrations::harness_policy::require_active_external_harness(&harness)?;
             let candidates = self
@@ -94,7 +119,10 @@ impl RuntimeSessionService {
             super::super::external_agents::credential(&params)?
         };
         self.reconcile_external_agent_registration(digest);
-        if (request.method == "agent/external/helper-observe" || heartbeat)
+        if (request.method == "agent/external/helper-observe"
+            || heartbeat
+            || usage_begin
+            || usage_end)
             && text(&params, "observer_witness", 64)? != observer_witness(digest)
         {
             return Err(MezError::forbidden(
@@ -123,7 +151,7 @@ impl RuntimeSessionService {
             .as_ref()
             .filter(|registration| registration.external_session_id == session_id)
             .ok_or_else(|| MezError::forbidden("external helper session unavailable"))?;
-        if heartbeat
+        if (heartbeat || usage_end)
             && (binding.harness != "claude"
                 || enrollment.curated_observer.is_none()
                 || !matches!(enrollment.producer, ProducerEvidence::VerifiedParent(_)))
@@ -137,11 +165,28 @@ impl RuntimeSessionService {
                 "external Pi lifecycle owns presentation sequence",
             ));
         }
+        let usage_begin = if usage_begin {
+            Some(super::helper_usage::HelperUsageBegin::capture(
+                self,
+                binding,
+                text(&params, "request_id", 64)?,
+            )?)
+        } else {
+            None
+        };
         let payload = params
             .as_object_mut()
             .ok_or_else(|| MezError::invalid_args("external helper requires an object"))?;
         payload.remove("launch_token");
         payload.remove("harness");
+        let usage_end = if usage_end {
+            if !enrollment.usage_owner_is_durable {
+                return Err(MezError::forbidden("curated request namespace unavailable"));
+            }
+            Some(self.external_request_work_for_binding(request.id.clone(), binding, &params)?)
+        } else {
+            None
+        };
         let mut work = ExternalEnrollmentWork {
             admission: 0,
             request_id: request.id.clone(),
@@ -162,6 +207,8 @@ impl RuntimeSessionService {
                 producer: enrollment.producer.clone(),
                 params: SecretString::from(params.to_string()),
                 heartbeat,
+                usage_begin,
+                usage_end: None,
             }),
             ancestry: Arc::new(OnceLock::new()),
             source_store: None,
@@ -194,6 +241,23 @@ impl RuntimeSessionService {
         {
             work.worker_gate = admissions.worker_gate.clone();
             work.settled = admissions.settled.clone();
+        }
+        if let Some(end) = usage_end {
+            match self.reserve_external_usage_work(end) {
+                Ok(end) => {
+                    if let Some(helper) = &mut work.helper {
+                        helper.usage_end = Some(Box::new(end));
+                    }
+                }
+                Err(error) => {
+                    self.control
+                        .external_agents_mut()
+                        .enrollments
+                        .pending
+                        .remove(&work.admission);
+                    return Err(error);
+                }
+            }
         }
         Ok(work)
     }
@@ -268,6 +332,23 @@ impl RuntimeSessionService {
                 .and_then(|source| source.curated_observer.as_mut())
                 .ok_or_else(|| MezError::forbidden("curated observer owner unavailable"))?;
             return observer.observe(sequence);
+        }
+        if let Some(begin) = &helper.usage_begin {
+            let origin = begin.origin(binding)?;
+            let witness =
+                super::super::external_usage_requests::request_source_witness(&begin.owner);
+            self.control
+                .external_agents_mut()
+                .usage_begins
+                .cache_origin(
+                    begin.owner.clone(),
+                    origin.request_id.clone(),
+                    origin.clone(),
+                );
+            return Ok(serde_json::json!({"protocol":"external-request/1","accepted":true,"request_id":origin.request_id,"admitted_at":origin.admitted_at,"source_witness":witness,"origin":if origin.project.is_some(){"project"}else{"unattributed"},"controls":[]}).to_string());
+        }
+        if helper.usage_end.is_some() {
+            return Ok("{}".into());
         }
         self.update_external_presentation(helper.digest, &params)
     }

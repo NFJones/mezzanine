@@ -10,6 +10,7 @@
 
 use super::{MezError, Result, Write};
 mod heartbeat;
+mod usage;
 
 /// Minimal public session declaration; everything identifying the transport and
 /// source profile is fixed code, not a user-provided RPC or daemon capability.
@@ -163,9 +164,24 @@ pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u
         .filter(|text| text.len() <= 4096)
         .and_then(|text| crate::protocol::strict_json::decode(text.as_bytes()).ok())
         .is_some_and(|value| value["operation"] == "curated-heartbeat");
+    let usage_mode = arguments[2]
+        .to_str()
+        .filter(|text| text.len() <= 4096)
+        .and_then(|text| crate::protocol::strict_json::decode(text.as_bytes()).ok())
+        .is_some_and(|value| {
+            matches!(
+                value["operation"].as_str(),
+                Some("curated-usage-begin" | "curated-usage-end")
+            )
+        });
     let result = (|| -> Option<serde_json::Value> {
         let bytes = arguments[2].to_str()?.as_bytes();
-        let capsule = if heartbeat_mode {
+        let usage = if usage_mode {
+            Some(usage::Usage::parse(bytes).ok()?)
+        } else {
+            None
+        };
+        let capsule = if heartbeat_mode || usage_mode {
             None
         } else {
             Some(Capsule::parse(bytes).ok()?)
@@ -178,7 +194,9 @@ pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u
         let discovery = std::env::var_os("MEZ");
         let socket = super::env::socket_selection_from_mez(discovery.as_ref()).ok()??;
         let pane = std::env::var("MEZ_PANE").ok()?;
-        let body = if let Some(heartbeat) = &heartbeat {
+        let body = if let Some(usage) = &usage {
+            usage.request()
+        } else if let Some(heartbeat) = &heartbeat {
             heartbeat.request()
         } else {
             capsule.as_ref()?.request(&pane).ok()?
@@ -194,7 +212,9 @@ pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u
                 "harness-source",
             ))
             .ok()?;
-        if let Some(heartbeat) = &heartbeat {
+        if let Some(usage) = &usage {
+            usage.receipt(&response)
+        } else if let Some(heartbeat) = &heartbeat {
             heartbeat.receipt(&response)
         } else {
             capsule.as_ref()?.receipt(&response)
@@ -203,6 +223,8 @@ pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u
     .unwrap_or_else(|| {
         if heartbeat_mode {
             serde_json::json!({"observed":false})
+        } else if usage_mode {
+            serde_json::json!({"accepted":false,"durable":false,"reason":"telemetry-unavailable"})
         } else {
             serde_json::json!({"registered":false})
         }

@@ -147,7 +147,9 @@ impl AsyncRuntimeSessionActor {
             "agent/external/enroll"
                 | "agent/external/curated-enroll"
                 | "agent/external/curated-heartbeat"
+                | "agent/external/curated-usage-begin"
                 | "agent/external/helper-presentation"
+                | "agent/external/curated-usage-end"
                 | "agent/external/helper-observe"
         ) {
             return None;
@@ -161,6 +163,8 @@ impl AsyncRuntimeSessionActor {
             "agent/external/helper-presentation"
                 | "agent/external/helper-observe"
                 | "agent/external/curated-heartbeat"
+                | "agent/external/curated-usage-begin"
+                | "agent/external/curated-usage-end"
         ) {
             self.service
                 .prepare_external_helper_presentation(&request, connection)

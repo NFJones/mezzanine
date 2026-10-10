@@ -1,6 +1,7 @@
 //! Ordinary pane-process admission tests, with no supplied PID/token/fd3 proof.
 
 use super::*;
+mod curated_usage;
 use crate::test_support::runtime::RuntimeServiceFixture;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -182,6 +183,34 @@ fn external_enrollment_ordinary_child_fixture() {
                 child.stdin.take().unwrap().write_all(&event).unwrap();
                 let success = child.wait().unwrap().success();
                 socket.write_all(&[u8::from(success)]).unwrap();
+                continue;
+            }
+            if release == [6] {
+                let mut length = [0; 4];
+                socket.read_exact(&mut length).unwrap();
+                let length = u32::from_be_bytes(length) as usize;
+                assert!(length <= 4096);
+                let mut capsule = vec![0; length];
+                socket.read_exact(&mut capsule).unwrap();
+                let helper = std::env::current_exe()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("mez");
+                let output = std::process::Command::new(helper)
+                    .args(["harness-source", std::str::from_utf8(&capsule).unwrap()])
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                    .unwrap();
+                assert!(output.status.success());
+                assert!(output.stderr.is_empty());
+                assert!(output.stdout.len() <= 4096);
+                socket
+                    .write_all(&u32::try_from(output.stdout.len()).unwrap().to_be_bytes())
+                    .unwrap();
+                socket.write_all(&output.stdout).unwrap();
                 continue;
             }
             assert_eq!(release, [3]);
