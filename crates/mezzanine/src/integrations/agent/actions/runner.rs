@@ -106,6 +106,18 @@ impl<P: ModelProvider> AgentTurnEnvironment for SyncProductAgentTurnEnvironment<
         self.runner.provider.send_request(request)
     }
 
+    fn failed_response_usage(&self, error: &MezError) -> mez_agent::ModelTokenUsage {
+        error.provider_incurred_usage()
+    }
+
+    fn with_accumulated_response_usage(
+        &self,
+        error: MezError,
+        usage: mez_agent::ModelTokenUsage,
+    ) -> MezError {
+        error.with_provider_incurred_usage(usage)
+    }
+
     fn provider_failure(&self, error: &MezError) -> AgentTurnProviderFailure {
         AgentTurnProviderFailure {
             repairable_malformed_output: maap_provider_error_is_repairable(error),
@@ -162,8 +174,15 @@ impl<P: ModelProvider> AgentTurnEnvironment for SyncProductAgentTurnEnvironment<
         turn: &AgentTurnRecord,
         previous_request: &ModelRequest,
         error: &MezError,
+        latest_response_usage: mez_agent::ModelTokenUsage,
     ) -> Option<AgentTurnExecution> {
-        summarize_provider_failure_execution(self.runner.provider, turn, previous_request, error)
+        summarize_provider_failure_execution(
+            self.runner.provider,
+            turn,
+            previous_request,
+            error,
+            latest_response_usage,
+        )
     }
 
     async fn summarize_controller_failure(
@@ -446,6 +465,18 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
             .await
     }
 
+    fn failed_response_usage(&self, error: &MezError) -> mez_agent::ModelTokenUsage {
+        error.provider_incurred_usage()
+    }
+
+    fn with_accumulated_response_usage(
+        &self,
+        error: MezError,
+        usage: mez_agent::ModelTokenUsage,
+    ) -> MezError {
+        error.with_provider_incurred_usage(usage)
+    }
+
     fn provider_failure(&self, error: &MezError) -> AgentTurnProviderFailure {
         AgentTurnProviderFailure {
             repairable_malformed_output: maap_provider_error_is_repairable(error),
@@ -502,12 +533,14 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
         turn: &AgentTurnRecord,
         previous_request: &ModelRequest,
         error: &MezError,
+        latest_response_usage: mez_agent::ModelTokenUsage,
     ) -> Option<AgentTurnExecution> {
         summarize_provider_failure_execution_async(
             self.runner.provider,
             turn,
             previous_request,
             error,
+            latest_response_usage,
         )
         .await
     }

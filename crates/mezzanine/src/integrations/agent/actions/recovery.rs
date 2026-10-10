@@ -40,6 +40,7 @@ fn failed_provider_error_execution(
     provider_id: &str,
     model: &str,
     error: &MezError,
+    latest_response_usage: mez_agent::ModelTokenUsage,
 ) -> AgentTurnExecution {
     AgentTurnExecution {
         request,
@@ -47,13 +48,14 @@ fn failed_provider_error_execution(
             provider: provider_id.to_string(),
             model: model.to_string(),
             raw_text: provider_error_raw_text(error),
-            usage: Default::default(),
-            latest_request_usage: None,
+            usage: error.provider_incurred_usage(),
+            latest_request_usage: (latest_response_usage.input_tokens > 0)
+                .then_some(latest_response_usage),
             quota_usage: Default::default(),
             action_batch: None,
             provider_transcript_events: Vec::new(),
         },
-        latest_response_usage: Default::default(),
+        latest_response_usage,
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: Vec::new(),
         final_turn: true,
@@ -187,6 +189,30 @@ fn advance_failure_summary_provider_failure(
     }
 }
 
+/// Retains the original failure when a best-effort summary spent observed usage
+/// but could not be adopted. No summary success or action effects are invented;
+/// absent new observations preserve the caller's existing fallback behavior.
+fn failed_summary_with_observed_usage(
+    request: &ModelRequest,
+    response: &ModelResponse,
+    progress: &mez_agent::ProviderResponseProgress,
+) -> Option<AgentTurnExecution> {
+    if progress.cumulative_usage() == response.usage {
+        return None;
+    }
+    let mut response = response.clone();
+    response.usage = progress.cumulative_usage();
+    Some(AgentTurnExecution {
+        request: request.clone(),
+        latest_response_usage: progress.latest_response_usage(),
+        response,
+        routing_token_usage_by_model: Default::default(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Failed,
+    })
+}
+
 /// Product-side outcome after lower-crate summary response progression.
 enum FailureSummaryResponsePlan {
     /// Return a valid terminal summary execution.
@@ -198,6 +224,10 @@ enum FailureSummaryResponsePlan {
 }
 
 /// Validates one summary response and advances canonical response progression.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "summary negotiation, source ownership and accumulated expense are independent inputs"
+)]
 fn advance_failure_summary_response(
     negotiation: &mut AgentFailureSummaryNegotiation<ModelRequest>,
     expected_provider: &str,
@@ -205,7 +235,13 @@ fn advance_failure_summary_response(
     failed_response_raw_text: &str,
     response: ModelResponse,
     scope: FailureSummaryScope<'_>,
+    progress: &mut mez_agent::ProviderResponseProgress,
 ) -> FailureSummaryResponsePlan {
+    progress.observe(
+        response.usage,
+        response.latest_request_usage,
+        &response.quota_usage,
+    );
     let actual_provider = response.provider.clone();
     let response_raw_text = response.raw_text.clone();
     let execution = mez_agent::failure_summary_execution_from_response(
@@ -222,7 +258,9 @@ fn advance_failure_summary_response(
         execution.is_ok(),
     );
     match (decision, execution) {
-        (AgentFailureSummaryResponseDecision::Accept, Ok(execution)) => {
+        (AgentFailureSummaryResponseDecision::Accept, Ok(mut execution)) => {
+            execution.response.usage = progress.cumulative_usage();
+            execution.latest_response_usage = progress.latest_response_usage();
             FailureSummaryResponsePlan::Finish(Box::new(execution))
         }
         (AgentFailureSummaryResponseDecision::RecoverMalformedResponse { attempt }, Err(error)) => {
@@ -251,12 +289,14 @@ pub(super) fn summarize_provider_failure_execution<P: ModelProvider>(
     turn: &AgentTurnRecord,
     previous_request: &ModelRequest,
     error: &MezError,
+    latest_response_usage: mez_agent::ModelTokenUsage,
 ) -> Option<AgentTurnExecution> {
     let failed = failed_provider_error_execution(
         previous_request.clone(),
         provider.provider_id(),
         &previous_request.model,
         error,
+        latest_response_usage,
     );
     summarize_controller_failure_execution(
         provider,
@@ -292,13 +332,26 @@ pub(super) fn summarize_controller_failure_execution<P: ModelProvider>(
         FAILURE_SUMMARY_PROVIDER_RETRY_LIMIT,
         FAILURE_SUMMARY_MAAP_REPAIR_LIMIT,
     );
+    let mut progress = mez_agent::ProviderResponseProgress::default();
+    progress.observe(
+        input.failed_response.usage,
+        input.failed_response.latest_request_usage,
+        &[],
+    );
     loop {
         let response = match provider.send_request(negotiation.request()) {
             Ok(response) => response,
-            Err(error) if advance_failure_summary_provider_failure(&mut negotiation, &error) => {
-                continue;
+            Err(error) => {
+                progress.observe(error.provider_incurred_usage(), None, &[]);
+                if advance_failure_summary_provider_failure(&mut negotiation, &error) {
+                    continue;
+                }
+                return failed_summary_with_observed_usage(
+                    previous_request,
+                    &input.failed_response,
+                    &progress,
+                );
             }
-            Err(_) => return None,
         };
         match advance_failure_summary_response(
             &mut negotiation,
@@ -307,10 +360,17 @@ pub(super) fn summarize_controller_failure_execution<P: ModelProvider>(
             &input.failed_response.raw_text,
             response,
             input.scope,
+            &mut progress,
         ) {
             FailureSummaryResponsePlan::Finish(execution) => return Some(*execution),
             FailureSummaryResponsePlan::Continue => {}
-            FailureSummaryResponsePlan::Reject => return None,
+            FailureSummaryResponsePlan::Reject => {
+                return failed_summary_with_observed_usage(
+                    previous_request,
+                    &input.failed_response,
+                    &progress,
+                );
+            }
         }
     }
 }
@@ -321,12 +381,14 @@ pub(super) async fn summarize_provider_failure_execution_async<P: AsyncModelProv
     turn: &AgentTurnRecord,
     previous_request: &ModelRequest,
     error: &MezError,
+    latest_response_usage: mez_agent::ModelTokenUsage,
 ) -> Option<AgentTurnExecution> {
     let failed = failed_provider_error_execution(
         previous_request.clone(),
         provider.provider_id(),
         &previous_request.model,
         error,
+        latest_response_usage,
     );
     summarize_controller_failure_execution_async(
         provider,
@@ -362,13 +424,26 @@ pub(super) async fn summarize_controller_failure_execution_async<P: AsyncModelPr
         FAILURE_SUMMARY_PROVIDER_RETRY_LIMIT,
         FAILURE_SUMMARY_MAAP_REPAIR_LIMIT,
     );
+    let mut progress = mez_agent::ProviderResponseProgress::default();
+    progress.observe(
+        input.failed_response.usage,
+        input.failed_response.latest_request_usage,
+        &[],
+    );
     loop {
         let response = match provider.send_request_async(negotiation.request()).await {
             Ok(response) => response,
-            Err(error) if advance_failure_summary_provider_failure(&mut negotiation, &error) => {
-                continue;
+            Err(error) => {
+                progress.observe(error.provider_incurred_usage(), None, &[]);
+                if advance_failure_summary_provider_failure(&mut negotiation, &error) {
+                    continue;
+                }
+                return failed_summary_with_observed_usage(
+                    previous_request,
+                    &input.failed_response,
+                    &progress,
+                );
             }
-            Err(_) => return None,
         };
         match advance_failure_summary_response(
             &mut negotiation,
@@ -377,10 +452,17 @@ pub(super) async fn summarize_controller_failure_execution_async<P: AsyncModelPr
             &input.failed_response.raw_text,
             response,
             input.scope,
+            &mut progress,
         ) {
             FailureSummaryResponsePlan::Finish(execution) => return Some(*execution),
             FailureSummaryResponsePlan::Continue => {}
-            FailureSummaryResponsePlan::Reject => return None,
+            FailureSummaryResponsePlan::Reject => {
+                return failed_summary_with_observed_usage(
+                    previous_request,
+                    &input.failed_response,
+                    &progress,
+                );
+            }
         }
     }
 }

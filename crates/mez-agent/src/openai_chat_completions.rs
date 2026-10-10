@@ -926,7 +926,10 @@ fn openai_chat_malformed_output(
     provider_malformed_output_error(ProviderErrorKind::InvalidArgs, error_message, raw_text)
 }
 
-fn openai_chat_completions_usage(root: &serde_json::Value) -> ModelTokenUsage {
+/// Normalizes reported Chat Completions counters independently of MAAP output.
+/// Missing or invalid counters retain the existing absent/zero semantics; this
+/// reports provider observations, not successful output or verified billing.
+pub fn openai_chat_completions_usage(root: &serde_json::Value) -> ModelTokenUsage {
     let usage = root.get("usage").unwrap_or(&serde_json::Value::Null);
     ModelTokenUsage {
         input_tokens: usage
@@ -976,6 +979,15 @@ pub struct OpenAiChatCompletionsStreamDecoder {
 }
 
 impl OpenAiChatCompletionsStreamDecoder {
+    /// Returns the latest cumulative usage observation without accepting output.
+    /// Failed stream/MAAP parsing must not discard counters already received.
+    pub fn reported_usage(&self) -> ModelTokenUsage {
+        self.usage
+            .as_ref()
+            .map(|usage| openai_chat_completions_usage(&serde_json::json!({"usage": usage})))
+            .unwrap_or_default()
+    }
+
     /// Applies one complete SSE event and returns newly visible content.
     ///
     /// Empty data events are ignored. Every non-terminal data event must be a

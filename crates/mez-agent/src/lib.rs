@@ -420,7 +420,8 @@ pub use openai_chat_completions::{
     ChatCompletionsResponseEnvelope, OpenAiChatCompletionsOptions, OpenAiChatCompletionsResponse,
     OpenAiChatCompletionsResponseError, OpenAiChatCompletionsStreamDecoder,
     openai_chat_completions_request_body, openai_chat_completions_request_body_with_stream,
-    parse_chat_completions_response_envelope, parse_openai_chat_completions_response_body,
+    openai_chat_completions_usage, parse_chat_completions_response_envelope,
+    parse_openai_chat_completions_response_body,
     prepare_openai_chat_completions_request_prefix_extension,
 };
 pub use openai_continuity::{

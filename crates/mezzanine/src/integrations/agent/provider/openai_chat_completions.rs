@@ -214,27 +214,39 @@ fn parse_openai_chat_completions_http_response(
     let ProviderHttpResponse { headers, body, .. } = response;
     let parsed = if stream {
         let mut decoder = OpenAiChatCompletionsStreamDecoder::default();
-        parse_sse_events_with(
+        let events = parse_sse_events_with(
             &body,
             "OpenAI-compatible Chat Completions stream contained no SSE events",
             |name, data| {
-                decoder.push_event(&SseEvent {
-                    name: name.map(str::to_string),
-                    data: data.to_string(),
-                })?;
-                Ok::<(), mez_agent::OpenAiChatCompletionsResponseError>(())
+                decoder
+                    .push_event(&SseEvent {
+                        name: name.map(str::to_string),
+                        data: data.to_string(),
+                    })
+                    .map_err(MezError::from)?;
+                Ok::<(), MezError>(())
             },
-        )?;
-        decoder.finish(request)?
+        );
+        events.map_err(|error| error.with_provider_incurred_usage(decoder.reported_usage()))?;
+        let usage = decoder.reported_usage();
+        decoder
+            .finish(request)
+            .map_err(|error| MezError::from(error).with_provider_incurred_usage(usage))?
     } else {
-        parse_openai_chat_completions_response_body(&body, request)?
+        let usage = serde_json::from_str::<serde_json::Value>(&body)
+            .map(|root| mez_agent::openai_chat_completions_usage(&root))
+            .unwrap_or_default();
+        parse_openai_chat_completions_response_body(&body, request)
+            .map_err(|error| MezError::from(error).with_provider_incurred_usage(usage))?
     };
     openai_chat_completions_model_response(parsed, headers, provider_id)
 }
 
 impl ChatCompletionsStreamDecoder for OpenAiChatCompletionsStreamDecoder {
     fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>> {
-        Ok(OpenAiChatCompletionsStreamDecoder::push_event(self, event)?)
+        OpenAiChatCompletionsStreamDecoder::push_event(self, event).map_err(|error| {
+            MezError::from(error).with_provider_incurred_usage(self.reported_usage())
+        })
     }
 
     fn finish(
@@ -243,7 +255,9 @@ impl ChatCompletionsStreamDecoder for OpenAiChatCompletionsStreamDecoder {
         request: &ModelRequest,
         provider_id: &str,
     ) -> Result<ModelResponse> {
-        let parsed = OpenAiChatCompletionsStreamDecoder::finish(*self, request)?;
+        let usage = self.reported_usage();
+        let parsed = OpenAiChatCompletionsStreamDecoder::finish(*self, request)
+            .map_err(|error| MezError::from(error).with_provider_incurred_usage(usage))?;
         openai_chat_completions_model_response(parsed, headers, provider_id)
     }
 }
@@ -285,7 +299,92 @@ fn openai_chat_completions_model_response(
 
 #[cfg(test)]
 mod tests {
-    use super::build_openai_chat_completions_models_http_request;
+    use super::*;
+
+    /// Minimal request for pure response parsing; no provider or action executes.
+    fn parsing_request() -> ModelRequest {
+        ModelRequest {
+            provider: "compatible".into(),
+            model: "test".into(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            temperature: None,
+            stop: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-parser".into(),
+            agent_id: "agent-%1".into(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::Shell,
+            ),
+            messages: Vec::new().into(),
+        }
+    }
+
+    /// Parsed provider counters survive malformed MAAP content in both buffered
+    /// JSON and SSE adapters. Repeated stream observations are cumulative, so
+    /// only the latest snapshot is retained; no successful output is invented.
+    /// Cache-write absence and reported cache/reasoning subsets remain distinct.
+    #[test]
+    fn openai_chat_parse_errors_retain_reported_expense_without_accepting_output() {
+        let usage = serde_json::json!({"prompt_tokens":7,"completion_tokens":5,
+            "prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":2}});
+        let body = serde_json::json!({"model":"test", "choices":[{"message":{"role":"assistant","content":"{"}}],"usage":usage}).to_string();
+        let stream = format!(
+            "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            serde_json::json!({"model":"test","choices":[{"delta":{"content":"{"}}],"usage":{"prompt_tokens":4,"completion_tokens":3}}),
+            serde_json::json!({"model":"test","choices":[{"delta":{},"finish_reason":"stop"}],"usage":usage})
+        );
+        for (body, streaming) in [(body, false), (stream, true)] {
+            let error = parse_openai_chat_completions_http_response(
+                ProviderHttpResponse {
+                    status_code: 200,
+                    headers: Default::default(),
+                    body,
+                },
+                &parsing_request(),
+                "compatible",
+                streaming,
+            )
+            .unwrap_err();
+            let observed = error.provider_incurred_usage();
+            assert_eq!(observed.input_tokens, 7);
+            assert_eq!(observed.output_tokens, 5);
+            assert_eq!(observed.reasoning_tokens, 2);
+            assert_eq!(observed.cached_input_tokens, Some(3));
+            assert_eq!(observed.cache_write_input_tokens, None);
+        }
+    }
+
+    /// The incremental trait adapter retains an earlier usage observation when
+    /// a later SSE event is malformed. Error feedback stays an error and is not
+    /// normalized into a fake accepted batch or a zero-expense success.
+    #[test]
+    fn openai_chat_incremental_error_keeps_prior_counter_observation() {
+        let mut decoder = OpenAiChatCompletionsStreamDecoder::default();
+        ChatCompletionsStreamDecoder::push_event(&mut decoder, &SseEvent {
+            name:None, data:serde_json::json!({"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":5}}).to_string(),
+        }).unwrap();
+        let error = ChatCompletionsStreamDecoder::push_event(
+            &mut decoder,
+            &SseEvent {
+                name: None,
+                data: "invalid-json".into(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.provider_incurred_usage().input_tokens, 7);
+        assert_eq!(error.provider_incurred_usage().output_tokens, 5);
+    }
 
     /// Verifies model listing derives the sibling `/models` endpoint only from
     /// the normalized trailing Chat Completions suffix, so compatible proxy

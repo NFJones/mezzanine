@@ -300,3 +300,79 @@ async fn qualify_exhaustion(hostile_summary: bool) {
             .contains("controller_failure_summary:")
     );
 }
+
+/// A final summary that omits usage must retain the canonical last concrete
+/// request sample (7 input tokens), never the cumulative three-request total
+/// (21). This covers both decoded-batch rejection and malformed provider output
+/// errors, which hand accounting through different summary adapter entry points.
+#[tokio::test]
+async fn async_turn_runner_omitted_summary_usage_retains_concrete_request_sample() {
+    let single = mez_agent::ModelTokenUsage {
+        input_tokens: 7,
+        output_tokens: 4,
+        reasoning_tokens: 1,
+        cached_input_tokens: Some(2),
+        cache_write_input_tokens: Some(1),
+    };
+    for provider_error in [false, true] {
+        let mut responses = Vec::new();
+        for _ in 0..3 {
+            if provider_error {
+                responses.push(Err(crate::MezError::invalid_args(
+                    "provider MAAP output is malformed: synthetic parse failure",
+                )
+                .with_provider_incurred_usage(single)));
+            } else {
+                let mut response =
+                    malformed_response("*** Begin Patch\n*** Add File: note.txt\n+content\n");
+                response.usage = single;
+                responses.push(Ok(response));
+            }
+        }
+        let mut summary = corrected_response();
+        summary.action_batch.as_mut().unwrap().actions =
+            vec![say_action("summary", "No invalid action executed.")];
+        responses.push(Ok(summary));
+        let provider = SequencedProvider::new(responses);
+        let policy = PermissionPolicy::default();
+        let approvals = SessionApprovalStore::default();
+        let permissions =
+            crate::security::permissions::ProductPermissionPlanning::new(&policy, &approvals, None);
+        let runner = AgentTurnRunner {
+            provider: &provider,
+            model_profile: ModelProfile {
+                provider: "batch".into(),
+                model: "test".into(),
+                model_capabilities: Default::default(),
+                reasoning_profile: None,
+                latency_preference: None,
+                multimodal_required: false,
+                provider_options: Default::default(),
+                safety_tier: None,
+            },
+            permissions: &permissions,
+            subagent_scope: None,
+            subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+            available_mcp_servers: vec![],
+            available_mcp_tools: &[],
+            memory_actions_enabled: false,
+            issue_actions_enabled: true,
+        };
+        let mut ledger = AgentTurnLedger::new(false);
+        let execution = runner
+            .run_turn_async(&mut ledger, turn(), context())
+            .await
+            .unwrap();
+        assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+        assert_eq!(execution.response.usage.input_tokens, 21);
+        assert_eq!(execution.response.usage.output_tokens, 12);
+        assert_eq!(execution.latest_response_usage, single);
+        assert_eq!(provider.requests().len(), 4);
+        assert!(
+            execution
+                .action_results
+                .iter()
+                .all(|result| result.action_type == "say")
+        );
+    }
+}
