@@ -339,7 +339,14 @@ async fn async_actor_applies_agent_provider_failure_events() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(pane_text.contains("provider_error"), "{pane_text}");
+    assert!(pane_text.contains("agent: failure:"), "{pane_text}");
+    assert_eq!(
+        pane_text
+            .matches("provider worker failed before response")
+            .count(),
+        1,
+        "{pane_text}"
+    );
     assert!(
         pane_text.contains("provider worker failed before response"),
         "{pane_text}"

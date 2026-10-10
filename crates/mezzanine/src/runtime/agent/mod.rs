@@ -218,7 +218,6 @@ mod presentation;
 pub(crate) use presentation::RuntimeProviderLogInput;
 mod project_accounting;
 mod provider_context;
-mod provider_events;
 mod provider_execution;
 pub(crate) use provider_execution::execute_agent_provider_persistence_work;
 pub(crate) use provider_execution::{
@@ -4978,7 +4977,6 @@ use outcome::{
     runtime_agent_execution_failure_error, runtime_agent_finished_footer_line,
     runtime_agent_pending_approval_log_line, runtime_agent_shell_status,
 };
-use provider_events::runtime_provider_event_error;
 use subagents::runtime_agent_pane_id;
 use trace::{
     runtime_maap_message_content_type, runtime_spawn_json_agent_and_turn,

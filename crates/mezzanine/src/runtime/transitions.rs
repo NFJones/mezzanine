@@ -364,6 +364,9 @@ pub enum AgentProviderEvent {
         failure: Box<AgentProviderEvent>,
         /// Immutable canonical snapshot; provider payload text cannot create it.
         recovery: Box<mez_agent::recovery_attribution::RecoveryFacts>,
+        /// Cumulative observed error expense, charged only by the issued owner.
+        /// It is not an adopted latest/context execution sample.
+        usage: mez_agent::ModelTokenUsage,
     },
     /// One concrete provider request completed and published content-free diagnostics.
     WireRequestObserved {

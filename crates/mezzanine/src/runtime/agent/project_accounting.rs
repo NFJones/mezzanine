@@ -224,6 +224,24 @@ impl RuntimeSessionService {
         generation: u64,
         state: Option<&mez_agent::ProviderOutputLimitState>,
     ) -> bool {
+        self.settle_provider_failure_usage(
+            agent,
+            turn_id,
+            generation,
+            state.map(|state| state.usage).unwrap_or_default(),
+        )
+    }
+
+    /// Charges cumulative canonical error expense using the immutable issued
+    /// profile and exactly-once owner, independent of content freshness. Error
+    /// usage never becomes a latest/context execution sample or retry authority.
+    pub(crate) fn settle_provider_failure_usage(
+        &mut self,
+        agent: &mez_core::ids::AgentId,
+        turn_id: &str,
+        generation: u64,
+        counters: mez_agent::ModelTokenUsage,
+    ) -> bool {
         let Some(owner) = self
             .agent
             .provider_accounting_owners
@@ -231,14 +249,10 @@ impl RuntimeSessionService {
         else {
             return false;
         };
-        let usage = state
-            .map(|state| {
-                std::collections::BTreeMap::from([(
-                    ModelTokenUsageKey::new(&owner.profile.provider, &owner.profile.model),
-                    state.usage,
-                )])
-            })
-            .unwrap_or_default();
+        let usage = std::collections::BTreeMap::from([(
+            ModelTokenUsageKey::new(&owner.profile.provider, &owner.profile.model),
+            counters,
+        )]);
         self.settle_provider_request_usage(agent, turn_id, generation, &usage)
     }
 

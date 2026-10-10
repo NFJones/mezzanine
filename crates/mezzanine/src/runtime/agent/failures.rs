@@ -191,7 +191,7 @@ impl RuntimeSessionService {
             raw_text.push_str("\nsafe_fallback_profiles: ");
             raw_text.push_str(&safe_fallbacks.join(","));
         }
-        let execution = AgentTurnExecution {
+        let mut execution = AgentTurnExecution {
             request,
             response: ModelResponse {
                 provider: provider_id.to_string(),
@@ -209,6 +209,9 @@ impl RuntimeSessionService {
             final_turn: true,
             terminal_state: AgentTurnState::Failed,
         };
+        if let Some(facts) = error.recovery_facts() {
+            execution.attach_recovery_facts(facts.clone());
+        }
         self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution.clone());
         let transcript_entries =

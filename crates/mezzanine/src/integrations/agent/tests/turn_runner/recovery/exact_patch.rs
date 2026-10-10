@@ -421,3 +421,76 @@ async fn async_turn_runner_omitted_summary_usage_retains_concrete_request_sample
         );
     }
 }
+
+/// A nonretryable corrective provider failure followed by an unbilled failed
+/// summary retains the actual request failure disposition, not exhaustion or
+/// inferred zero corrections. Neither failed response can plan an invalid
+/// patch/sibling, and summary failure cannot replace the original provider cause.
+#[tokio::test]
+async fn async_turn_runner_exact_patch_repair_provider_failure_retains_facts() {
+    let provider = SequencedProvider::new(vec![
+        Ok(malformed_response(
+            "*** Begin Patch\n*** Add File: note.txt\n+content\n",
+        )),
+        Err(crate::MezError::invalid_state(
+            "mock corrective authentication failure",
+        )),
+        Err(crate::MezError::invalid_state(
+            "mock summary authentication failure",
+        )),
+    ]);
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let permissions =
+        crate::security::permissions::ProductPermissionPlanning::new(&policy, &approvals, None);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".into(),
+            model: "test".into(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: Default::default(),
+            safety_tier: None,
+        },
+        permissions: &permissions,
+        subagent_scope: None,
+        subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+        available_mcp_servers: vec![],
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+    let mut ledger = AgentTurnLedger::new(false);
+    let error = runner
+        .run_turn_async(&mut ledger, turn(), context())
+        .await
+        .unwrap_err();
+    assert_eq!(error.message(), "mock corrective authentication failure");
+    let facts = error.recovery_facts().unwrap();
+    assert_eq!(
+        facts.disposition,
+        mez_agent::recovery_attribution::RecoveryDisposition::RepairRequestFailed
+    );
+    assert_eq!(
+        facts.stage,
+        Some(mez_agent::recovery_attribution::RecoveryStage::ProviderOutput)
+    );
+    assert_eq!(facts.attempts_reserved, 1);
+    assert_eq!(facts.repair_calls_started, 1);
+    assert_eq!(facts.provider_calls_started, 2);
+    assert!(!facts.batch_planned);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[1].interaction_kind,
+        mez_agent::ModelInteractionKind::MaapRepair
+    );
+    assert_eq!(
+        requests[2].interaction_kind,
+        mez_agent::ModelInteractionKind::FailureSummary
+    );
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Failed);
+}

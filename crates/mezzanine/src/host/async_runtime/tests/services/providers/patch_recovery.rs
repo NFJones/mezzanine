@@ -14,7 +14,7 @@ use super::*;
 /// execution or duplicate successful file mutation.
 #[tokio::test(flavor = "current_thread")]
 async fn async_provider_exact_patch_repair_rejects_siblings_and_applies_once() {
-    Box::pin(qualify(false, false, SummaryReply::Valid)).await;
+    Box::pin(qualify(false, false, SummaryReply::Valid, false)).await;
 }
 
 /// Repeated invalid decoded patches, or a malformed outer response followed by
@@ -24,7 +24,7 @@ async fn async_provider_exact_patch_repair_rejects_siblings_and_applies_once() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_provider_exact_patch_exhaustion_leaves_all_effects_absent() {
     for malformed_outer in [false, true] {
-        Box::pin(qualify(true, malformed_outer, SummaryReply::Valid)).await;
+        Box::pin(qualify(true, malformed_outer, SummaryReply::Valid, false)).await;
     }
 }
 
@@ -38,7 +38,18 @@ async fn async_provider_exact_patch_summary_repair_conserves_all_observed_expens
         SummaryReply::HostileBatch,
         SummaryReply::ExhaustedBatch,
     ] {
-        Box::pin(qualify(true, false, reply)).await;
+        Box::pin(qualify(true, false, reply, false)).await;
+    }
+}
+
+/// A prior accepted batch may already have committed an effect before a later
+/// malformed batch reaches correction. Both correction and exhaustion must
+/// preserve that append exactly once: no rollback, sibling dispatch or replay
+/// is permitted when the canonical worker settles the later rejected batch.
+#[tokio::test(flavor = "current_thread")]
+async fn async_provider_exact_patch_recovery_preserves_prior_effect_without_replay() {
+    for exhausted in [false, true] {
+        Box::pin(qualify(exhausted, false, SummaryReply::Valid, true)).await;
     }
 }
 
@@ -47,6 +58,8 @@ async fn async_provider_exact_patch_summary_repair_conserves_all_observed_expens
 enum SummaryReply {
     /// An ordinary valid response-only summary.
     Valid,
+    /// A nonretryable HTTP error with no observed summary usage.
+    FailedRequest,
     /// Invalid JSON followed by one valid summary correction.
     MalformedJson,
     /// A forbidden action batch followed by one valid summary correction.
@@ -55,10 +68,23 @@ enum SummaryReply {
     ExhaustedBatch,
 }
 
+/// Three real malformed provider responses exhaust canonical correction. An
+/// unbilled authentication failure in best-effort summary must settle that
+/// original failure once, not restart the runtime's independent MAAP budget.
+#[tokio::test(flavor = "current_thread")]
+async fn async_provider_exact_patch_failed_summary_does_not_restart_correction() {
+    Box::pin(qualify(true, true, SummaryReply::FailedRequest, false)).await;
+}
+
 /// Owns one isolated actor/provider/persistence pipeline under a finite deadline.
 /// Auxiliary title generation is disabled so every observed HTTP exchange has
 /// the admitted action or correction purpose, not a coincidental title request.
-async fn qualify(exhausted: bool, malformed_outer: bool, summary_reply: SummaryReply) {
+async fn qualify(
+    exhausted: bool,
+    malformed_outer: bool,
+    summary_reply: SummaryReply,
+    prior_effect: bool,
+) {
     let root = std::env::temp_dir().join(format!(
         "mez-real-patch-repair-{:032x}",
         rand::random::<u128>()
@@ -76,6 +102,26 @@ async fn qualify(exhausted: bool, malformed_outer: bool, summary_reply: SummaryR
         assert!(first.contains("repair the complete patch batch"));
         let first_body: serde_json::Value =
             serde_json::from_str(first.split_once("\r\n\r\n").unwrap().1).unwrap();
+        if prior_effect {
+            let earlier = serde_json::json!({
+                "rationale":"commit an earlier independent effect",
+                "actions":[{"type":"shell_command","summary":"append earlier effect once","command":"printf earlier >> earlier-effect"}]
+            }).to_string();
+            async_provider_concurrency_write_chat_content_response(
+                &mut stream,
+                "local-chat-model",
+                &earlier,
+            )
+            .await;
+            drop(stream);
+            (stream, _) = listener.accept().await.unwrap();
+            let continuation = async_provider_concurrency_read_http_request(&mut stream).await;
+            assert!(continuation.contains("shell_command"));
+            assert_eq!(
+                std::fs::read(root.join("earlier-effect")).unwrap(),
+                b"earlier"
+            );
+        }
         let invalid = serde_json::json!({
             "rationale":"invalid middle patch must reject all actions",
             "actions":[
@@ -110,20 +156,31 @@ async fn qualify(exhausted: bool, malformed_outer: bool, summary_reply: SummaryR
             async_provider_concurrency_write_chat_content_response(
                 &mut stream,
                 "local-chat-model",
-                &invalid,
+                if summary_reply == SummaryReply::FailedRequest {
+                    "{"
+                } else {
+                    &invalid
+                },
             )
             .await;
             drop(stream);
             let (mut stream, _) = listener.accept().await.unwrap();
             let second_repair = async_provider_concurrency_read_http_request(&mut stream).await;
             assert!(
-                second_repair
-                    .contains("apply_patch Mezzanine patch blocks must end with *** End Patch")
+                second_repair.contains(if summary_reply == SummaryReply::FailedRequest {
+                    "provider MAAP output is malformed"
+                } else {
+                    "apply_patch Mezzanine patch blocks must end with *** End Patch"
+                })
             );
             async_provider_concurrency_write_chat_content_response(
                 &mut stream,
                 "local-chat-model",
-                &invalid,
+                if summary_reply == SummaryReply::FailedRequest {
+                    "{"
+                } else {
+                    &invalid
+                },
             )
             .await;
             drop(stream);
@@ -133,6 +190,16 @@ async fn qualify(exhausted: bool, malformed_outer: bool, summary_reply: SummaryR
             assert!(!root.join("corrected.txt").exists());
             assert!(!root.join("forbidden-first").exists());
             assert!(!root.join("forbidden-last").exists());
+            if summary_reply == SummaryReply::FailedRequest {
+                final_seen.notify_one();
+                async_provider_concurrency_write_chat_error_response(
+                    &mut stream,
+                    401,
+                    r#"{"error":{"message":"mock unauthorized"}}"#,
+                )
+                .await;
+                return;
+            }
             if summary_reply != SummaryReply::Valid {
                 let hostile = serde_json::json!({"rationale":"must remain response-only", "actions":[{"type":"shell_command","summary":"must not execute summary","command":"printf forbidden > forbidden-summary"}]}).to_string();
                 async_provider_concurrency_write_chat_content_response(
@@ -255,6 +322,12 @@ async fn qualify(exhausted: bool, malformed_outer: bool, summary_reply: SummaryR
         assert!(!root.join("corrected.txt").exists());
         assert!(!root.join("forbidden-first").exists());
         assert!(!root.join("forbidden-last").exists());
+        if prior_effect {
+            assert_eq!(
+                std::fs::read(root.join("earlier-effect")).unwrap(),
+                b"earlier"
+            );
+        }
         let config = handle
             .terminal_client_loop_config(TerminalClientLoopConfig::default())
             .await
@@ -272,15 +345,16 @@ async fn qualify(exhausted: bool, malformed_outer: bool, summary_reply: SummaryR
                 .await
                 .unwrap()
                 .unwrap();
-            if summary_reply == SummaryReply::ExhaustedBatch
-                || view.lines.iter().any(|line| {
-                    line.contains(if exhausted {
-                        "failed bounded patch"
-                    } else {
-                        "completed corrected patch"
-                    })
+            if matches!(
+                summary_reply,
+                SummaryReply::ExhaustedBatch | SummaryReply::FailedRequest
+            ) || view.lines.iter().any(|line| {
+                line.contains(if exhausted {
+                    "failed bounded patch"
+                } else {
+                    "completed corrected patch"
                 })
-            {
+            }) {
                 run_async_persistence_side_effect_service(
                     &handle,
                     AsyncRuntimeSideEffectServiceConfig {
@@ -307,7 +381,16 @@ async fn qualify(exhausted: bool, malformed_outer: bool, summary_reply: SummaryR
     })
     .await
     .unwrap();
-    assert_eq!(report.executions, if exhausted { 1 } else { 2 });
+    assert_eq!(
+        report.executions,
+        (if summary_reply == SummaryReply::FailedRequest {
+            0
+        } else if exhausted {
+            1
+        } else {
+            2
+        }) + u64::from(prior_effect)
+    );
     assert_eq!(exit.service.agent_turn_ledger().turns().len(), 1);
     assert_eq!(
         exit.service.agent_turn_ledger().turns()[0].state,
@@ -318,6 +401,25 @@ async fn qualify(exhausted: bool, malformed_outer: bool, summary_reply: SummaryR
         }
     );
     let entries = store.inspect(&conversation).unwrap();
+    if summary_reply == SummaryReply::FailedRequest {
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.content.contains("canonical recovery facts"))
+                .count(),
+            1
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.content.contains("BudgetExhausted"))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.content.contains("provider MAAP output is malformed"))
+        );
+    }
     let results = entries
         .iter()
         .filter_map(|entry| {
@@ -352,34 +454,46 @@ async fn qualify(exhausted: bool, malformed_outer: bool, summary_reply: SummaryR
         exit.service
             .agent_latest_request_usage(&conversation)
             .map(|sample| sample.usage.input_tokens),
-        Some(3)
+        if summary_reply == SummaryReply::FailedRequest {
+            None
+        } else {
+            Some(3)
+        }
     );
     assert_eq!(
         exit.service
             .agent_context_usage_snapshot(&conversation)
             .map(|sample| sample.input_tokens),
-        Some(3)
+        if summary_reply == SummaryReply::FailedRequest {
+            None
+        } else {
+            Some(3)
+        }
     );
     assert_eq!(
         usage.values().map(|usage| usage.input_tokens).sum::<u64>(),
-        if summary_reply != SummaryReply::Valid {
+        if summary_reply == SummaryReply::FailedRequest {
+            9
+        } else if summary_reply != SummaryReply::Valid {
             15
         } else if exhausted {
             12
         } else {
             9
-        },
+        } + u64::from(prior_effect) * 3,
         "exhausted={exhausted} malformed_outer={malformed_outer}"
     );
     assert_eq!(
         usage.values().map(|usage| usage.output_tokens).sum::<u64>(),
-        if summary_reply != SummaryReply::Valid {
+        if summary_reply == SummaryReply::FailedRequest {
+            6
+        } else if summary_reply != SummaryReply::Valid {
             10
         } else if exhausted {
             8
         } else {
             6
-        }
+        } + u64::from(prior_effect) * 2
     );
     if exhausted {
         assert!(!root.join("corrected.txt").exists());
@@ -392,6 +506,19 @@ async fn qualify(exhausted: bool, malformed_outer: bool, summary_reply: SummaryR
     assert!(!root.join("forbidden-first").exists());
     assert!(!root.join("forbidden-last").exists());
     assert!(!root.join("forbidden-summary").exists());
+    if prior_effect {
+        assert_eq!(
+            std::fs::read(root.join("earlier-effect")).unwrap(),
+            b"earlier"
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|content| content.contains("shell_command") && content.contains("succeeded"))
+                .count(),
+            1
+        );
+    }
     exit.service.terminate_all_pane_processes().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }

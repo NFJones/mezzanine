@@ -1459,6 +1459,7 @@ fn provider_worker_event(
                 Some(facts) => AgentProviderEvent::CanonicalFailure {
                     failure: Box::new(failure),
                     recovery: Box::new(facts.clone()),
+                    usage: error.provider_incurred_usage(),
                 },
                 None => failure,
             };

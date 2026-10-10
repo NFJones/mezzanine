@@ -887,6 +887,18 @@ mod tests {
         /// turn can then complete.
         static INJECTED_PLANNING_FAILURE: RefCell<Option<(String, bool)>> =
             const { RefCell::new(None) };
+        /// One synchronous fixture rejects only corrective preparation; guarded
+        /// cleanup prevents leakage to another test on the same worker thread.
+        static INJECTED_REPAIR_PREPARATION_FAILURE: RefCell<bool> = const { RefCell::new(false) };
+    }
+
+    /// Clears corrective-preparation injection even if its regression panics.
+    struct InjectedRepairPreparationFailure;
+
+    impl Drop for InjectedRepairPreparationFailure {
+        fn drop(&mut self) {
+            INJECTED_REPAIR_PREPARATION_FAILURE.with(|slot| *slot.borrow_mut() = false);
+        }
     }
 
     /// Clears the injected planning failure when one regression ends.
@@ -959,6 +971,19 @@ mod tests {
 
         fn available_mcp_tools(&self) -> &[McpPromptTool] {
             &[]
+        }
+
+        fn prepare_request(
+            &self,
+            request: &mut ModelRequest,
+            _previous: Option<&ModelRequest>,
+        ) -> Result<(), Self::Error> {
+            if request.interaction_kind == ModelInteractionKind::MaapRepair
+                && INJECTED_REPAIR_PREPARATION_FAILURE.with(|slot| *slot.borrow())
+            {
+                return Err(TestError("corrective request preparation failed".into()));
+            }
+            Ok(())
         }
 
         fn memory_actions_enabled(&self) -> bool {
@@ -1337,6 +1362,50 @@ mod tests {
                 .contains("capability continuation made no progress")
         );
         assert_eq!(environment.requests.borrow().len(), 3);
+    }
+
+    /// Corrective preparation rejects before the provider-send boundary. The
+    /// canonical trace retains the original issued identity, one reservation,
+    /// zero corrective calls and RepairUnavailable, never budget exhaustion or
+    /// claimed execution. No best-effort summary or second scheduler is entered.
+    #[test]
+    fn corrective_preparation_failure_reports_unsent_reserved_repair() {
+        INJECTED_REPAIR_PREPARATION_FAILURE.with(|slot| *slot.borrow_mut() = true);
+        let _guard = InjectedRepairPreparationFailure;
+        let mut missing = final_response(&test_turn());
+        missing.action_batch = None;
+        let environment = FakeEnvironment {
+            responses: RefCell::new(VecDeque::from([missing])),
+            requests: RefCell::new(Vec::new()),
+        };
+        let mut ledger = AgentTurnLedger::new(false);
+        let mut trace = crate::recovery_attribution::RecoveryTrace::default();
+        let error = run_ready(run_agent_turn_inner(
+            &environment,
+            &mut ledger,
+            test_turn(),
+            &test_context(),
+            None,
+            Some(ModelInteractionKind::ActionExecution),
+            AgentTurnLimits::default(),
+            &mut trace,
+        ))
+        .unwrap_err();
+        assert_eq!(error.to_string(), "corrective request preparation failed");
+        assert_eq!(environment.requests.borrow().len(), 1);
+        let facts = trace.facts.unwrap();
+        assert_eq!(facts.attempts_reserved, 1);
+        assert_eq!(facts.provider_calls_started, 1);
+        assert_eq!(facts.repair_calls_started, 0);
+        assert_eq!(
+            facts.disposition,
+            crate::recovery_attribution::RecoveryDisposition::RepairUnavailable
+        );
+        assert_eq!(
+            facts.stage,
+            Some(crate::recovery_attribution::RecoveryStage::ControllerInvariant)
+        );
+        assert!(!facts.batch_planned);
     }
 
     /// A missing batch reserves one correction but the global bound prevents

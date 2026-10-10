@@ -98,7 +98,6 @@ use super::{
     openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
     openai_responses_provider_from_auth_store_with_provider_options, resolve_provider_api,
     runtime_agent_turn_start_hook_payload, runtime_mezzanine_error_code,
-    runtime_provider_event_error,
 };
 #[cfg(test)]
 use crate::integrations::agent::provider::ModelProvider;
@@ -1713,21 +1712,14 @@ impl RuntimeSessionService {
         Ok(queued)
     }
 
-    /// Applies an async provider-worker failure event through actor-owned
-    /// runtime ingress.
-    ///
-    /// Provider workers can fail before producing a model response. The event
-    /// carries enough identity and error information to fail the active turn
-    /// using the same audit, transcript, prompt-display, scheduler, and
-    /// lifecycle paths as the configured compatibility poller.
-    pub fn apply_agent_provider_failed_event(
+    /// Settles an already classified worker error without losing typed evidence.
+    /// Ingress owns claim fencing; this owner rechecks turn/agent identity and
+    /// retains the existing audit, persistence and terminal lifecycle behavior.
+    fn apply_agent_provider_error_event(
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
-        kind: &str,
-        message: &str,
-        provider_failure_json: Option<&str>,
-        provider_raw_text: Option<&str>,
+        error: &MezError,
     ) -> Result<bool> {
         let Some(turn) = self
             .agent_turn_ledger()
@@ -1744,9 +1736,7 @@ impl RuntimeSessionService {
                 "agent provider event agent id does not match turn",
             ));
         }
-        let error =
-            runtime_provider_event_error(kind, message, provider_failure_json, provider_raw_text);
-        self.fail_configured_agent_provider_task(turn_id, &error)?;
+        self.fail_configured_agent_provider_task(turn_id, error)?;
         Ok(true)
     }
 
@@ -1755,10 +1745,7 @@ impl RuntimeSessionService {
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
-        kind: &str,
-        message: &str,
-        provider_failure_json: Option<&str>,
-        provider_raw_text: Option<&str>,
+        error: &MezError,
     ) -> Result<crate::runtime::RuntimeTransition> {
         let pane_id = self
             .agent_turn_ledger()
@@ -1766,14 +1753,7 @@ impl RuntimeSessionService {
             .iter()
             .find(|turn| turn.turn_id == turn_id)
             .map(|turn| turn.pane_id.clone());
-        let applied = self.apply_agent_provider_failed_event(
-            agent_id,
-            turn_id,
-            kind,
-            message,
-            provider_failure_json,
-            provider_raw_text,
-        )?;
+        let applied = self.apply_agent_provider_error_event(agent_id, turn_id, error)?;
         if let Some(ref pane_id) = pane_id {
             self.ingest_provider_log(
                 pane_id,

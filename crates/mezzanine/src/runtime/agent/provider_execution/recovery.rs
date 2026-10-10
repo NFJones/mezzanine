@@ -56,6 +56,21 @@ pub(crate) fn decide_provider_failure_recovery(
     if !eligibility.current_owner {
         return Decision::Ignore;
     }
+    if error.recovery_facts().is_some_and(|facts| {
+        use mez_agent::recovery_attribution::RecoveryDisposition;
+        matches!(
+            facts.disposition,
+            RecoveryDisposition::BudgetExhausted
+                | RecoveryDisposition::InteractionLimit
+                | RecoveryDisposition::RepairUnavailable
+                | RecoveryDisposition::RepairRequestFailed
+                | RecoveryDisposition::Rejected
+        )
+    }) {
+        // Canonical negotiation already made the terminal decision. Failed
+        // best-effort summaries cannot reopen another runtime recovery budget.
+        return Decision::Terminal;
+    }
     if eligibility.repair_available && maap_provider_error_is_repairable(error) {
         return Decision::RepairMaap;
     }
@@ -247,6 +262,76 @@ mod tests {
                 } else {
                     ProviderFailureRecoveryDecision::Terminal
                 }
+            );
+        }
+    }
+
+    /// A canonical invocation that already stopped correction cannot enter the
+    /// compatibility runtime's separate repair budget after a failed summary.
+    /// Legacy errors retain ordinary repair, and stale claims remain inert;
+    /// neither raw malformed text nor fresh runtime capacity resets provenance.
+    #[test]
+    fn provider_failure_recovery_canonical_terminal_facts_fence_second_budget() {
+        use mez_agent::recovery_attribution::{RecoveryDisposition, RecoveryFacts, RecoveryStage};
+        let available = ProviderFailureRecoveryEligibility {
+            current_owner: true,
+            repair_available: true,
+            context_available: true,
+            output_attempt: 1,
+            transport_available: true,
+        };
+        let legacy = MezError::invalid_state("provider MAAP output is malformed: invalid JSON");
+        assert_eq!(
+            decide_provider_failure_recovery(
+                &legacy,
+                ProviderErrorRetryClass::NonRetryable,
+                available
+            ),
+            ProviderFailureRecoveryDecision::RepairMaap
+        );
+        for disposition in [
+            RecoveryDisposition::BudgetExhausted,
+            RecoveryDisposition::InteractionLimit,
+            RecoveryDisposition::RepairUnavailable,
+            RecoveryDisposition::RepairRequestFailed,
+            RecoveryDisposition::Rejected,
+        ] {
+            let error =
+                MezError::invalid_state(legacy.message()).with_recovery_facts(RecoveryFacts {
+                    turn_id: "turn-1".into(),
+                    agent_id: "agent-%1".into(),
+                    provider: "openai".into(),
+                    model: "test".into(),
+                    phase: 0,
+                    attempts_reserved: 2,
+                    attempt_limit: 2,
+                    provider_calls_started: 3,
+                    provider_call_limit: 16,
+                    repair_calls_started: 2,
+                    last_request_kind: mez_agent::ModelInteractionKind::MaapRepair,
+                    stage: Some(RecoveryStage::ProviderOutput),
+                    disposition,
+                    batch_planned: false,
+                });
+            assert_eq!(
+                decide_provider_failure_recovery(
+                    &error,
+                    ProviderErrorRetryClass::NonRetryable,
+                    available
+                ),
+                ProviderFailureRecoveryDecision::Terminal,
+                "{disposition:?}"
+            );
+            assert_eq!(
+                decide_provider_failure_recovery(
+                    &error,
+                    ProviderErrorRetryClass::NonRetryable,
+                    ProviderFailureRecoveryEligibility {
+                        current_owner: false,
+                        ..available
+                    }
+                ),
+                ProviderFailureRecoveryDecision::Ignore
             );
         }
     }

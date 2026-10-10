@@ -55,6 +55,21 @@ impl AgentTurnExecution {
             .recovery_facts()
             .filter(|facts| facts.matches_request(&self.request))
     }
+
+    /// Attaches worker-owned canonical facts to a terminal error projection only
+    /// when its request identity matches. Adapters must first validate the live
+    /// claim; this diagnostic handoff cannot authorize actions or new recovery.
+    /// Returns false without mutation for a different request identity.
+    pub fn attach_recovery_facts(
+        &mut self,
+        facts: crate::recovery_attribution::RecoveryFacts,
+    ) -> bool {
+        if !facts.matches_request(&self.request) {
+            return false;
+        }
+        self.request.messages.set_recovery_facts(facts);
+        true
+    }
 }
 
 /// Executes the `transcript_entries_for_execution` operation for the owning subsystem.

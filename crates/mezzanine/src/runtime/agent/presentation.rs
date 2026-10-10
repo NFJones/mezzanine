@@ -1021,7 +1021,11 @@ fn format_failure_diagnostic_lines(
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .filter(|line| !is_placeholder(line))
-        .filter(|line| *line != cause && !line.starts_with("maap_validation_error: "));
+        .filter(|line| {
+            *line != cause
+                && !line.starts_with("maap_validation_error: ")
+                && line.strip_prefix("provider_error: ") != Some(cause)
+        });
     let displayed = excerpt
         .by_ref()
         .take(200)
@@ -1091,6 +1095,24 @@ mod recovery_display_tests {
         );
         assert!(lines.last().unwrap().contains("truncated after 200"));
         assert!(!lines.iter().any(|line| line == "境界-200"));
+    }
+
+    /// Provider terminal fallback appends a prefixed classified cause to raw
+    /// response text. It is the same cause, not another response excerpt; an
+    /// unrelated prefixed message must remain visible rather than being hidden.
+    #[test]
+    fn failure_diagnostic_deduplicates_matching_provider_error_cause() {
+        let cause = "InvalidState: upstream failure";
+        let raw =
+            format!("safe excerpt\nprovider_error: {cause}\nprovider_error: different detail");
+        let lines = format_failure_diagnostic_lines(cause, &raw, None, |_| false);
+        assert_eq!(lines.iter().filter(|line| line.contains(cause)).count(), 1);
+        assert!(lines.iter().any(|line| line == "safe excerpt"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "provider_error: different detail")
+        );
     }
 }
 

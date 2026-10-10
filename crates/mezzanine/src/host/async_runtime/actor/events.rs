@@ -1529,16 +1529,20 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         provider_event: AgentProviderEvent,
     ) -> Result<RuntimeTransition> {
-        let (provider_event, recovery) = match provider_event {
-            AgentProviderEvent::CanonicalFailure { failure, recovery } => {
+        let (provider_event, recovery, incurred_usage) = match provider_event {
+            AgentProviderEvent::CanonicalFailure {
+                failure,
+                recovery,
+                usage,
+            } => {
                 if !matches!(*failure, AgentProviderEvent::Failed { .. }) {
                     return Err(crate::MezError::invalid_args(
                         "canonical recovery wrapper requires one failure event",
                     ));
                 }
-                (*failure, Some(recovery))
+                (*failure, Some(recovery), Some(usage))
             }
-            event => (event, None),
+            event => (event, None, None),
         };
         match provider_event {
             AgentProviderEvent::CanonicalFailure { .. } => {
@@ -1595,12 +1599,21 @@ impl AsyncRuntimeSessionActor {
                 provider_raw_text,
                 provider_output_limit_state,
             } => {
-                let accounted = self.service.settle_provider_cutoff_usage(
-                    &agent_id,
-                    &turn_id,
-                    claim_generation,
-                    provider_output_limit_state.as_deref(),
-                );
+                let accounted = if let Some(usage) = incurred_usage {
+                    self.service.settle_provider_failure_usage(
+                        &agent_id,
+                        &turn_id,
+                        claim_generation,
+                        usage,
+                    )
+                } else {
+                    self.service.settle_provider_cutoff_usage(
+                        &agent_id,
+                        &turn_id,
+                        claim_generation,
+                        provider_output_limit_state.as_deref(),
+                    )
+                };
                 if !self
                     .service
                     .agent_provider_claim_matches(&agent_id, &turn_id, claim_generation)
@@ -1631,9 +1644,16 @@ impl AsyncRuntimeSessionActor {
                 if let Some(state) = provider_output_limit_state {
                     error = error.with_provider_output_limit_state(*state);
                 }
-                if let Some(facts) = recovery
-                    .filter(|facts| facts.turn_id == turn_id && facts.agent_id == agent_id.as_str())
-                {
+                if let Some(facts) = recovery.filter(|facts| {
+                    facts.turn_id == turn_id
+                        && facts.agent_id == agent_id.as_str()
+                        && self
+                            .service
+                            .agent_turn_model_profile(&turn_id)
+                            .is_some_and(|profile| {
+                                facts.provider == profile.provider && facts.model == profile.model
+                            })
+                }) {
                     if let Some(turn) = self.service.agent_turn_ledger().turn(&turn_id).cloned() {
                         self.service.append_agent_trace_turn_event(
                             &turn.pane_id,
@@ -1696,14 +1716,9 @@ impl AsyncRuntimeSessionActor {
                     self.service
                         .clear_agent_provider_retry_attempt(turn_id.as_str());
                     self.timers.provider_retry.remove(turn_id.as_str());
-                    let mut transition = self.service.apply_agent_provider_failed_transition(
-                        &agent_id,
-                        &turn_id,
-                        &kind,
-                        &message,
-                        provider_failure_json.as_deref(),
-                        provider_raw_text.as_deref(),
-                    )?;
+                    let mut transition = self
+                        .service
+                        .apply_agent_provider_failed_transition(&agent_id, &turn_id, &error)?;
                     transition.side_effects.extend(claim_cancellations);
                     return Ok(transition);
                 }
@@ -1732,14 +1747,9 @@ impl AsyncRuntimeSessionActor {
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
                 self.timers.provider_retry.remove(turn_id.as_str());
-                let mut transition = self.service.apply_agent_provider_failed_transition(
-                    &agent_id,
-                    &turn_id,
-                    &kind,
-                    &message,
-                    provider_failure_json.as_deref(),
-                    provider_raw_text.as_deref(),
-                )?;
+                let mut transition = self
+                    .service
+                    .apply_agent_provider_failed_transition(&agent_id, &turn_id, &error)?;
                 transition.side_effects.extend(claim_cancellations);
                 Ok(transition)
             }

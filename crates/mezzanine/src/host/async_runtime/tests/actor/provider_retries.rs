@@ -3,6 +3,7 @@
 use super::super::*;
 
 mod close;
+mod recovery_attribution;
 mod terminal_compaction;
 
 /// Verifies that provider-poll timer events convert pending provider work into

@@ -9741,6 +9741,11 @@ retained under the original execution envelope without rehydrating them as
 current authoritative recovery state. If repair attempts are exhausted or the provider repair
 request fails, the final malformed response MUST be surfaced and recorded as a
 failed turn diagnostic.
+An accepted canonical terminal correction disposition MUST NOT reopen a separate
+runtime repair budget when a best-effort failure summary fails, including when
+that summary reports no usage. Known request-bound facts MUST survive terminal
+error conversion into display and append-only execution evidence. Stale claims
+and mismatched request identities MUST NOT attach those facts to another owner.
 
 Local action IDs MUST be treated as idempotency keys within a turn. Retrying
 provider requests MUST NOT execute the same accepted local action ID twice

@@ -186,6 +186,10 @@ reserved attempts from calls started, phase exhaustion from interaction limits,
 and response-only summary work from action correction. Legacy provenance remains
 unknown. A qualified response excerpt may be display-truncated; clipping does
 not establish provider cutoff or prove that correction was skipped.
+Failure-summary failure cannot reopen exhausted canonical correction through a
+second runtime budget. Accepted terminal errors retain their request-bound
+recovery facts in diagnostics and the transcript; stale or mismatched owners do
+not inherit them. Matching `provider_error` cause copies are displayed once.
 
 The file directives are `*** Add File: PATH`, `*** Update File: PATH`, and
 `*** Delete File: PATH`. A move uses `*** Move to: PATH` immediately after an
