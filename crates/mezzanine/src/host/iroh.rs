@@ -436,6 +436,38 @@ impl HostIrohRuntime {
         }
     }
 
+    /// Test-only TTL fixture issuer using an already bound ephemeral socket.
+    /// Qualifies an actual non-loopback advertised port against retained sockets
+    /// instead of probing/releasing a port. Only the fixture issuer's policy is
+    /// changed; production endpoint configuration and route guards stay intact.
+    #[cfg(test)]
+    pub(crate) fn ephemeral_invitation_fixture_issuer(&self) -> Result<HostIrohInvitationIssuer> {
+        let mut issuer = self.invitation_issuer();
+        if issuer.policy.bind_port != 0 {
+            return Err(MezError::invalid_args(
+                "invitation fixture requires an ephemeral endpoint",
+            ));
+        }
+        let sockets = self.endpoint.endpoint().bound_sockets();
+        let addr = self.endpoint.endpoint().addr();
+        let port = addr
+            .ip_addrs()
+            .find(|addr| {
+                addr.port() != 0
+                    && !addr.ip().is_loopback()
+                    && !addr.ip().is_unspecified()
+                    && sockets.iter().any(|socket| socket.port() == addr.port())
+            })
+            .map(|addr| addr.port())
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "invitation fixture has no retained non-loopback socket route",
+                )
+            })?;
+        issuer.policy.bind_port = port;
+        Ok(issuer)
+    }
+
     /// Creates a host-scoped pairing invitation without provisioning a session.
     pub(crate) fn create_invitation(
         &self,

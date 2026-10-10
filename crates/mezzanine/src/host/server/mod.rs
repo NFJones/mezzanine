@@ -2453,17 +2453,17 @@ mod tests {
 
     /// Verifies persistent-host invitations use the configured Iroh lifetime
     /// when the request omits an override, while an explicit expiry retains
-    /// precedence over that configured default.
+    /// precedence over that configured default. The fixture retains a kernel-
+    /// assigned endpoint rather than releasing a probe port before binding;
+    /// production ephemeral routing remains refused by its unchanged guard.
     #[tokio::test(flavor = "current_thread")]
     async fn remote_invite_uses_configured_ttl_unless_explicitly_overridden() {
         let root = test_root("remote-invite-configured-ttl");
-        let reservation = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let bind_port = reservation.local_addr().unwrap().port();
-        drop(reservation);
         let policy = crate::runtime::RuntimeIrohTransportPolicy {
             enabled: true,
             identity: crate::runtime::RuntimeIrohIdentityPolicy::Host,
-            bind_port,
+            bind_port: 0,
+            port_mapping: false,
             invitation_ttl: Duration::from_secs(120),
             compression_codecs: vec![crate::runtime::RuntimeIrohCompressionCodec::None],
             setup_timeout: Duration::from_secs(10),
@@ -2473,8 +2473,18 @@ mod tests {
             .await
             .unwrap()
             .expect("enabled host Iroh policy binds an invitation issuer");
+        assert!(
+            iroh.create_invitation(
+                "ephemeral-production",
+                RemoteRoleCeiling::Observer,
+                120,
+                current_unix_seconds().unwrap()
+            )
+            .is_err()
+        );
         let mut host_config = config(root.clone());
-        host_config.iroh_invitation_issuer = Some(iroh.invitation_issuer());
+        host_config.iroh_invitation_issuer =
+            Some(iroh.ephemeral_invitation_fixture_issuer().unwrap());
         let host = HostServer::bind(host_config).unwrap();
 
         let now = current_unix_seconds().unwrap();
