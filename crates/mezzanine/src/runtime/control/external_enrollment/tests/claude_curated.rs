@@ -1,10 +1,13 @@
 //! Opt-in real curated-command creator evidence without a provider conversation.
 //!
 //! An owned temporary mod uses literal classic.SessionStart/next/process.run
-//! calls. --init-only runs Setup/SessionStart then exits. HOME/config/cwd/env are
-//! isolated and no credentials/prompt, installation, policy bypass, supplied PID
-//! or enrollment capability exists. This qualifies only a source relationship,
-//! not a deployed idle producer, enabled integration or authorization contract.
+//! calls. --init-only runs Setup/SessionStart then exits; an owned offline plugin
+//! command separately proves retained timer delivery after SessionStart returns
+//! without delegating to a model. HOME/config/cwd/env are isolated; compiled
+//! artifacts may be installed only in fixture roots, never user configuration.
+//! No credentials, provider request, policy bypass, supplied PID or enrollment
+//! capability is used. This is not quiescent idle, live billing, user enablement
+//! or complete integration qualification.
 //! A separate ordinary Node SDK shim qualifies the shared source after callback
 //! return through real native ingress; it is not real vendor idle qualification.
 
@@ -263,7 +266,17 @@ async fn external_claude_curated_literal_module_owns_actual_main_session() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated ordinary autoload"]
 async fn external_claude_curated_skills_directory_autoloads_without_plugin_flag() {
-    qualify_curated_probe_with_autoload(true, 5, false, false, true, true).await;
+    qualify_curated_probe_with_autoload(true, 5, false, false, true, true, false).await;
+}
+
+/// The compiled autoloaded mod returns from classic.SessionStart before an
+/// owned offline command holds the producer alive. A heartbeat must arrive via
+/// the original callback's retained SDK closure outside that callback frame;
+/// the command answers itself and never delegates to a model/provider request.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; offline post-callback proof"]
+async fn external_claude_curated_heartbeat_survives_actual_callback_return() {
+    qualify_curated_probe_with_autoload(true, 5, false, false, true, true, true).await;
 }
 
 /// Shared owned temporary source fixture for provenance-only and real transport
@@ -276,7 +289,8 @@ async fn qualify_curated_probe(
     handoff: bool,
     owned: bool,
 ) {
-    qualify_curated_probe_with_autoload(admission, proofs, node_shim, handoff, owned, false).await;
+    qualify_curated_probe_with_autoload(admission, proofs, node_shim, handoff, owned, false, false)
+        .await;
 }
 
 /// Reuses native proof ownership while selecting an explicit probe directory or
@@ -288,9 +302,11 @@ async fn qualify_curated_probe_with_autoload(
     handoff: bool,
     owned: bool,
     autoload: bool,
+    post_callback: bool,
 ) {
     assert!(!owned || (admission && proofs > 1 && !node_shim));
     assert!(!autoload || (owned && proofs == 5 && !handoff));
+    assert!(!post_callback || autoload);
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
         serve_async_runtime_control_connection_loop,
@@ -517,14 +533,24 @@ async fn qualify_curated_probe_with_autoload(
         let module = std::fs::read_to_string(&installed).unwrap();
         let marker = "    return result;\n  });\n\n  on('classic.SessionEnd'";
         assert_eq!(module.matches(marker).count(), 1);
-        std::fs::write(
-            installed,
+        let module = if post_callback {
+            let marker_body = module.replace(marker,
+                "    sessionStartReturned = true;\n    return result;\n  });\n\n  on('classic.SessionEnd'");
+            let command = format!(
+                "let sessionStartReturned = false; on('session.start', async ($, e, next) => {{ await $.command.register({{name:'mez_idle_probe',description:'Owned offline heartbeat qualification'}}); return next(e); }}); on('command.run', {{command:'mez_idle_probe'}}, async ($, e) => {{ if (!sessionStartReturned) throw new Error('SessionStart has not returned'); {hold} return {{text:'offline probe finished'}}; }});"
+            );
+            marker_body.replacen(
+                "export function register(on) {",
+                &format!("export function register(on) {{ {command}"),
+                1,
+            )
+        } else {
             module.replace(
                 marker,
                 &format!("    {hold}\n    return result;\n  }});\n\n  on('classic.SessionEnd'"),
-            ),
-        )
-        .unwrap();
+            )
+        };
+        std::fs::write(installed, module).unwrap();
     }
     let quote = |path: &std::path::Path| {
         shlex::try_quote(path.to_str().unwrap())
@@ -545,6 +571,8 @@ async fn qualify_curated_probe_with_autoload(
             quote(&path),
             quote(&directory.join("callback-returned"))
         )
+    } else if post_callback {
+        format!("{} -p /mez_idle_probe", quote(&vendor))
     } else if autoload {
         format!("{} --init-only", quote(&vendor))
     } else {
