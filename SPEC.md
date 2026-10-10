@@ -746,7 +746,7 @@ effects, not silently discard a replaced journal. This is not whole-workflow CAS
 Explicit recovery MUST freeze pending bytes/location before writer acquisition and
 reauthorize the identical snapshot under retained ownership. No pending intent,
 including absent roots, MUST return a truthful no-op without root/state/lock writes.
-New private journal transactions MUST use version 7 and explicit Private receipt
+New private journal transactions MUST use version 8 and explicit Private receipt
 placement with separately qualified prior private/vendor receipt identities.
 Version-2 journals MUST retain original vendor receipt destinations and MUST NOT
 authorize private receipt targets or new receipt-source fields. Unknown versions,
@@ -810,9 +810,16 @@ Archive collision/failure/loss MUST prevent future file publication or retain pe
 intent after already confirmed effects. Versions 2/3 MUST NOT authorize archive effects
 or relaxed edited-file reconciliation; their original target semantics remain frozen.
 The v4 transaction is bounded to 32 effects with finite payload/journal limits.
-Current private publication MUST use journal version 7, retaining version-5 bounded multi-array
+Current private publication MUST use journal version 8, retaining version-5 bounded multi-array
 ownership and Codex receipt-qualified whole-file-to-shared migration. Version 5
-MUST retain v4 archive dependencies/bounds and exact compiled recovery authority.
+MUST retain v4 archive dependencies/bounds and exact compiled recovery authority
+for its historical targets. Version8 additionally MAY
+adopt exact complete compiled Claude all-file bundles under only
+`skills/mezzanine-telemetry/` and archive/repair receipt-owned private mod files.
+Versions2-7 MUST NOT authorize Claude mod ownership even when relabelled bytes
+otherwise match. Claude bootstrap MUST preserve authored settings/statuslines,
+siblings, explicit disabled policy and vendor trust review; installation is not
+runtime activation or exhaustive accounting proof.
 Genuine v2-v4 targets MUST retain original effects; new multi-array manifests or
 new migration payloads relabelled as older journals MUST reject without mutation.
 One shared artifact MAY own at most 16 distinct nonoverlapping object-only array

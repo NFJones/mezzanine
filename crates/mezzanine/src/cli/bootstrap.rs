@@ -763,12 +763,12 @@ mod tests {
             assert_eq!(tree_snapshot(&home.0), before);
         }
         let mut absent = args;
-        absent.harness = "claude".into();
+        absent.harness = "copilot".into();
         let mut output = Vec::new();
         run_at_home(absent, CliOutputFormat::Plain, &mut output, &home.0).unwrap();
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "bootstrap claude: unavailable\nNo compiled adapter; no files changed.\n"
+            "bootstrap copilot: unavailable\nNo compiled adapter; no files changed.\n"
         );
     }
 
@@ -1753,6 +1753,7 @@ mod tests {
 
     /// Candidates can be inspected without a daemon or filesystem mutation, but
     /// must not be installed by guessing released schemas or event field names.
+    /// The following test retains that refusal for still-unimplemented adapters.
     #[test]
     fn bootstrap_cli_refuses_uncertified_mutation_before_root_access() {
         #[derive(Parser)]
@@ -1762,7 +1763,7 @@ mod tests {
         }
         let parsed = Fixture::try_parse_from([
             "fixture",
-            "claude",
+            "copilot",
             "--root",
             "/missing/bootstrap/root",
             "--dry-run",
@@ -1773,9 +1774,92 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(value["supported"], false);
         let parsed =
-            Fixture::try_parse_from(["fixture", "claude", "--root", "/missing/bootstrap/root"])
+            Fixture::try_parse_from(["fixture", "copilot", "--root", "/missing/bootstrap/root"])
                 .unwrap();
         assert!(run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).is_err());
         assert!(Fixture::try_parse_from(["fixture", "codex", "--check", "--dry-run"]).is_err());
+    }
+
+    /// Bare Claude bootstrap must select the documented user root, install the
+    /// compiled autoload graph, remain idempotent and keep preview/check write-
+    /// free. Authored disabled policy and statusline settings are never changed.
+    #[test]
+    fn bootstrap_cli_claude_bare_install_preserves_policy_and_read_only_intents() {
+        #[derive(Parser)]
+        struct Fixture {
+            #[command(flatten)]
+            args: BootstrapCliArgs,
+        }
+        for overridden in [false, true] {
+            let home = PrivateHome::new();
+            let root = home.0.join(if overridden {
+                "claude-override"
+            } else {
+                ".claude"
+            });
+            let invoke = |flags: &[&str]| {
+                let args = Fixture::try_parse_from(
+                    std::iter::once("fixture")
+                        .chain(std::iter::once("claude"))
+                        .chain(flags.iter().copied()),
+                )
+                .unwrap()
+                .args;
+                let mut output = Vec::new();
+                run_with_root_selector(
+                    args,
+                    CliOutputFormat::Json,
+                    &mut output,
+                    crate::integrations::bootstrap::compiled_manifest("claude", None),
+                    |harness, explicit| {
+                        crate::integrations::bootstrap::roots::resolve_with_environment(
+                            harness,
+                            explicit,
+                            |key| match key {
+                                "HOME" => Some(home.0.clone().into_os_string()),
+                                "CLAUDE_CONFIG_DIR" if overridden => {
+                                    Some(root.clone().into_os_string())
+                                }
+                                _ => None,
+                            },
+                            false,
+                        )
+                    },
+                    || Ok(home.0.clone()),
+                )
+                .unwrap();
+                serde_json::from_slice::<serde_json::Value>(&output).unwrap()
+            };
+            let before = tree_snapshot(&home.0);
+            let preview = invoke(&["--dry-run"]);
+            assert_eq!(preview["result"], "preview");
+            assert_eq!(tree_snapshot(&home.0), before);
+            assert!(!root.exists());
+            let installed = invoke(&[]);
+            assert_eq!(installed["result"], "installed");
+            assert_eq!(
+                installed["root_source"],
+                if overridden {
+                    "CLAUDE_CONFIG_DIR"
+                } else {
+                    "vendor-default"
+                }
+            );
+            assert_eq!(installed["runtime_verification"], "not-performed");
+            assert!(
+                root.join("skills/mezzanine-telemetry/hooks/register.mjs")
+                    .is_file()
+            );
+            let settings = b"{\"disableAllHooks\":true,\"enabledPlugins\":{\"mezzanine-telemetry@skills-dir\":false},\"statusLine\":{\"command\":\"authored\"}}\n";
+            std::fs::write(root.join("settings.json"), settings).unwrap();
+            assert_eq!(invoke(&[])["result"], "unchanged");
+            let before = tree_snapshot(&home.0);
+            assert_eq!(invoke(&["--check"])["result"], "checked");
+            assert_eq!(tree_snapshot(&home.0), before);
+            assert_eq!(invoke(&["--dry-run", "--uninstall"])["result"], "preview");
+            assert_eq!(tree_snapshot(&home.0), before);
+            assert_eq!(invoke(&["--uninstall"])["result"], "uninstalled");
+            assert_eq!(std::fs::read(root.join("settings.json")).unwrap(), settings);
+        }
     }
 }

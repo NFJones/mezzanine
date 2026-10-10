@@ -354,7 +354,7 @@ fn bootstrap_jsonc_private_all_operations_and_publication_edges_recover() {
                     let original_bytes = fs::read(fixture.journal()).unwrap();
                     let mut journal: serde_json::Value =
                         serde_json::from_slice(&original_bytes).unwrap();
-                    assert_eq!(journal["version"], 7);
+                    assert_eq!(journal["version"], 8);
                     journal["version"] = 6.into();
                     fs::write(fixture.journal(), serde_json::to_vec(&journal).unwrap()).unwrap();
                     let before = tree_snapshot(&fixture.workspace);

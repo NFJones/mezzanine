@@ -1,6 +1,6 @@
 //! Narrow generated-file preservation, independent of vendor shared documents.
 //!
-//! Only compiled receipt-owned Pi/OpenCode helper destinations and the private Pi
+//! Only compiled receipt-owned Claude/Pi/OpenCode destinations and the private Pi
 //! loader package may preserve edited whole-file preimages. Current private
 //! transactions also deduplicate exact receipt-owned shared array registrations.
 //! Shared package metadata, hooks/config and unowned slots otherwise retain strict
@@ -14,7 +14,8 @@ use sha2::{Digest, Sha256};
 /// Recomputes current private repairs and required archives for edited artifacts.
 /// Caller qualifies compiled receipts and checks vendor/archive observations.
 /// Journal versions admit only their frozen private semantics; new Codex shared
-/// migration requires v5. No version grants authority outside compiled receipts.
+/// migration requires v5 and Claude private mods require v8. No version grants
+/// authority outside compiled receipts.
 pub(super) fn reconcile_preserving(
     harness: &str,
     path: &str,
@@ -73,6 +74,13 @@ pub(super) fn reconcile_preserving(
         ));
     }
     let generated = match harness {
+        "claude" => {
+            journal_version.is_some_and(|version| version >= 8)
+                && (path == "skills/mezzanine-telemetry/.claude-plugin/plugin.json"
+                    || path == "skills/mezzanine-telemetry/hooks/hooks.json"
+                    || (path.starts_with("skills/mezzanine-telemetry/hooks/")
+                        && path.ends_with(".mjs")))
+        }
         "pi" => {
             path == "extensions/mezzanine/package.json"
                 || (path.starts_with("extensions/mezzanine/") && path.ends_with(".mjs"))

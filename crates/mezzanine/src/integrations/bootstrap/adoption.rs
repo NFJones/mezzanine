@@ -1,6 +1,6 @@
 //! Compiled exact private-bundle recognition without synthesizing receipts.
 //!
-//! Only complete Pi/OpenCode all-file bundles at enumerated private destinations
+//! Only complete Claude/Pi/OpenCode all-file bundles at enumerated private destinations
 //! qualify. Candidate manifests are supplied by the compiled owner, not observed
 //! version text, journals or client JSON. No directory enumeration or substring
 //! recognition occurs. Recovery re-proves every original compiled byte preimage;
@@ -18,6 +18,7 @@ pub(super) fn private_bundle(manifest: &Manifest) -> bool {
         && manifest.entries.len() <= 15
         && manifest.entries.iter().all(|entry| {
             let private = match manifest.harness.as_str() {
+                "claude" => entry.path.starts_with("skills/mezzanine-telemetry/"),
                 "pi" => entry.path.starts_with("extensions/mezzanine/"),
                 "opencode" => {
                     entry.path == "plugins/mezzanine.js"

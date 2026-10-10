@@ -440,7 +440,7 @@ fn plan_with_publisher(
             before.as_deref(),
             old.get(&path).copied(),
             desired.get(&path).copied(),
-            (receipt_location == ReceiptLocation::Private).then_some(7),
+            (receipt_location == ReceiptLocation::Private).then_some(8),
         )?;
         if let Some(archive) = archive {
             archive_requirements.insert(path.clone(), archive.clone());
@@ -842,6 +842,17 @@ fn authorize_recovery(
     }
     // Compiled membership above is authority; the journal only identifies
     // which original immutable target must finish before current refresh.
+    if version < 8
+        && std::iter::once(&intent.manifest)
+            .chain(intent.previous.iter())
+            .chain(intent.previous_private.iter())
+            .chain(intent.previous_vendor.iter())
+            .any(|source| source.harness == "claude")
+    {
+        return Err(MezError::forbidden(
+            "bootstrap historical journal cannot authorize Claude mod ownership",
+        ));
+    }
     if version < 5
         && std::iter::once(&intent.manifest)
             .chain(intent.previous.iter())

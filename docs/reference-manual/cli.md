@@ -61,7 +61,7 @@ daemon; add
 
 `mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
 accepts `claude`, `codex`, `copilot`, `opencode`, `cursor`, and `pi` as adapter
-candidates. Pi, OpenCode and the Codex hook candidate have compiled artifacts; other candidates currently
+candidates. Claude, Pi, OpenCode and the Codex hook candidate have compiled artifacts; other candidates currently
 report unavailable installation. Bare bootstrap installs/reconciles; `--dry-run`
 previews without writes, and `--check` observes owned state. `--uninstall` and
 `--recover` are separate maintenance intents, both supporting `--dry-run`.
@@ -410,7 +410,7 @@ new transactions journal privately, and compiled-authorized legacy recovery copi
 exact original bytes durably before removing the old journal. Identical dual copies
 after a copy-boundary interruption can resume; conflicting copies and changed
 inspected source locations reject without choosing a winner. Final journal removal
-checks exact accepted bytes/location. New private transactions use journal version 7,
+checks exact accepted bytes/location. New private transactions use journal version 8,
 with explicit Private receipt placement and qualified prior receipt sources.
 Recognized version-2 intent still finishes its original vendor destinations; it cannot
 authorize private receipt targets. Unknown or altered version/placement/root/effects
@@ -449,6 +449,23 @@ future versions reject. The legacy vendor-root publisher cannot emit new multi-a
 intent: public bootstrap uses the private owner. Receipt payload schema remains 1;
 there is no Mezzanine configuration schema change.
 
+Version-8 private journals add exact compiled Claude mod ownership under only
+`skills/mezzanine-telemetry/`, including receipt-owned generated-file archives and
+repair. Versions 2–7 cannot acquire this ownership by relabelling a journal;
+existing historical targets retain their original semantics. Receipt schema stays
+1 and the Mezzanine configuration schema is unchanged.
+
+`mez bootstrap claude` installs an eight-file observational mod at the selected
+`CLAUDE_CONFIG_DIR` or `~/.claude` root's `skills/mezzanine-telemetry/`. The vendor's
+ordinary skills-directory loader discovers it without `--plugin-dir`, a Mez
+wrapper, fd3 or launcher helper environment. The literal SDK source pins the
+installing Mezzanine executable for native helper observations and available
+main-request counters. Installation does not override `disableAllHooks`, explicit
+plugin disabling, managed policy, vendor trust review or authored statuslines and
+settings. Support is best-effort; installed files are not proof of loaded runtime
+telemetry, auxiliary/resume/fork coverage or exhaustive billing. Actual provider
+and reasoning coverage remain unavailable when the documented SDK omits them.
+
 Version-6 private journals added exact unreceipted private-bundle
 adoption. Install can recognize a complete compiled Pi/OpenCode all-file bundle
 at its enumerated private paths only when every file matches exact generated
@@ -466,7 +483,7 @@ refresh reports `upgraded`. No adoption report implies vendor loading, enrollmen
 or accounting support. Failed publication may create coordination lock/private
 directories, but cannot overwrite changed artifact preimages or publish success.
 
-Current version-7 private journals additionally qualify OpenCode revision-7 JSONC
+Version-7 private journals introduced OpenCode revision-7 JSONC
 registration. The selected root uses existing `tui.jsonc` before `tui.json`; both
 file preimages/absence are captured and revalidated. Ownership is one exact
 `/plugin` member, or `/tui/plugin` when loader normalization makes an existing

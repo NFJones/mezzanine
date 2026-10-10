@@ -9,6 +9,8 @@
 
 /// Exact private-bundle recognition, never user-document or filename ownership.
 mod adoption;
+/// Owns the documented ordinary Claude user-root mod bundle, not vendor settings.
+pub(crate) mod claude_artifact;
 #[allow(
     dead_code,
     reason = "pinned projection awaits launch-bound vendor qualification"
@@ -128,6 +130,7 @@ pub(crate) fn compiled_manifest(
     _version: Option<&str>,
 ) -> Option<installer::Manifest> {
     match harness {
+        "claude" => claude_artifact::manifest(),
         "pi" => Some(pi_artifact::candidate_manifest()),
         "opencode" => Some(opencode_artifact::manifest()),
         "codex" => Some(codex_artifact::manifest()),

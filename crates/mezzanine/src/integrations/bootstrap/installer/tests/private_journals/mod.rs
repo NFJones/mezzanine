@@ -7,6 +7,7 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 
 mod adoption;
 mod archives;
+mod claude;
 mod codex_hooks;
 mod jsonc;
 mod permissions;

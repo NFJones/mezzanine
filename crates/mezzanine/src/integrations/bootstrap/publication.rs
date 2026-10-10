@@ -687,7 +687,7 @@ impl Publisher {
         })?;
         let root = self.directory.file()?.metadata()?;
         self.validate_root()?;
-        if !matches!(journal.version, 2..=7)
+        if !matches!(journal.version, 2..=8)
             || journal.root_device != root.dev()
             || journal.root_inode != root.ino()
         {
@@ -785,7 +785,7 @@ impl Publisher {
         self.validate_changes(&changes, false)?;
         let root = self.directory.file()?.metadata()?;
         let bytes = serde_json::to_vec(&Journal {
-            version: if self.uses_private_state() { 7 } else { 2 },
+            version: if self.uses_private_state() { 8 } else { 2 },
             root_device: root.dev(),
             root_inode: root.ino(),
             intent,

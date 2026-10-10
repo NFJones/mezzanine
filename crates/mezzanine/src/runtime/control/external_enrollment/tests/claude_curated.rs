@@ -150,7 +150,7 @@ fn external_claude_curated_command_helper_fixture() {
     };
     let mut socket = std::os::unix::net::UnixStream::connect(path).unwrap();
     socket
-        .set_read_timeout(Some(Duration::from_secs(10)))
+        .set_read_timeout(Some(Duration::from_secs(20)))
         .unwrap();
     socket
         .set_write_timeout(Some(Duration::from_secs(10)))
@@ -256,6 +256,16 @@ async fn external_claude_curated_literal_module_owns_actual_main_session() {
     qualify_curated_probe(true, 5, false, false, true).await;
 }
 
+/// An owned user-root skills-directory plugin must load from an ordinary
+/// init-only invocation without --plugin-dir, injected settings, fd3 or launch
+/// credentials. Actual native admission and recurring helpers qualify the
+/// documented autoload placement; no provider request or user install occurs.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; isolated ordinary autoload"]
+async fn external_claude_curated_skills_directory_autoloads_without_plugin_flag() {
+    qualify_curated_probe_with_autoload(true, 5, false, false, true, true).await;
+}
+
 /// Shared owned temporary source fixture for provenance-only and real transport
 /// qualification. Actor shutdown returns the owned runtime before source exit
 /// assertions, preserving pane cleanup and exact native creator inspection.
@@ -266,7 +276,21 @@ async fn qualify_curated_probe(
     handoff: bool,
     owned: bool,
 ) {
+    qualify_curated_probe_with_autoload(admission, proofs, node_shim, handoff, owned, false).await;
+}
+
+/// Reuses native proof ownership while selecting an explicit probe directory or
+/// documented user autoload placement. Neither selection grants daemon authority.
+async fn qualify_curated_probe_with_autoload(
+    admission: bool,
+    proofs: u64,
+    node_shim: bool,
+    handoff: bool,
+    owned: bool,
+    autoload: bool,
+) {
     assert!(!owned || (admission && proofs > 1 && !node_shim));
+    assert!(!autoload || (owned && proofs == 5 && !handoff));
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
         serve_async_runtime_control_connection_loop,
@@ -401,8 +425,9 @@ async fn qualify_curated_probe(
         String::new()
     } else {
         format!(
-            "await $.process.run({argv}, {{ env: {{ MEZ_TEST_CURATED_SOCKET: {} }}, timeoutMs: 10000 }});",
-            serde_json::to_string(path.to_str().unwrap()).unwrap()
+            "await $.process.run({argv}, {{ env: {{ MEZ_TEST_CURATED_SOCKET: {} }}, timeoutMs: {} }});",
+            serde_json::to_string(path.to_str().unwrap()).unwrap(),
+            if autoload { 20_000 } else { 10_000 }
         )
     };
     let (import, create, duplicate, stop) = if owned {
@@ -474,6 +499,33 @@ async fn qualify_curated_probe(
         )
     };
     std::fs::write(directory.join("plugin/hooks/register.mjs"), source).unwrap();
+    if autoload {
+        let manifest =
+            crate::integrations::bootstrap::claude_artifact::manifest_for_helper(&helper).unwrap();
+        crate::integrations::bootstrap::installer::plan_private(
+            &directory.join("config"),
+            &directory.join("home"),
+            &manifest,
+            crate::integrations::bootstrap::installer::Operation::Install,
+        )
+        .unwrap()
+        .apply()
+        .unwrap();
+        // Only this fixture adds its exit gate to the freshly installed source;
+        // the manifest's real registration/helper/heartbeat code stays intact.
+        let installed = directory.join("config/skills/mezzanine-telemetry/hooks/register.mjs");
+        let module = std::fs::read_to_string(&installed).unwrap();
+        let marker = "    return result;\n  });\n\n  on('classic.SessionEnd'";
+        assert_eq!(module.matches(marker).count(), 1);
+        std::fs::write(
+            installed,
+            module.replace(
+                marker,
+                &format!("    {hold}\n    return result;\n  }});\n\n  on('classic.SessionEnd'"),
+            ),
+        )
+        .unwrap();
+    }
     let quote = |path: &std::path::Path| {
         shlex::try_quote(path.to_str().unwrap())
             .unwrap()
@@ -493,6 +545,8 @@ async fn qualify_curated_probe(
             quote(&path),
             quote(&directory.join("callback-returned"))
         )
+    } else if autoload {
+        format!("{} --init-only", quote(&vendor))
     } else {
         format!(
             "{} --init-only --setting-sources '' --plugin-dir {}",
@@ -518,8 +572,9 @@ async fn qualify_curated_probe(
         let task = tokio::spawn(actor.run());
         let caller = handle.clone();
         let callback_report = directory.join("callback-returned");
+        let observed_proofs = if autoload { 1 } else { proofs };
         let server = tokio::spawn(async move {
-            for ordinal in 0..1 + proofs + if handoff { 2 } else { 0 } {
+            for ordinal in 0..1 + observed_proofs + if handoff { 2 } else { 0 } {
                 let (mut stream, _) =
                     tokio::time::timeout(Duration::from_secs(15), control_listener.accept())
                         .await
@@ -638,7 +693,10 @@ async fn qualify_curated_probe(
             assert_ne!(binding.generation, owner.run_generation);
         }
         if proofs > 0 {
-            assert_eq!(owner.curated_observer.as_ref().unwrap().sequence, proofs);
+            assert_eq!(
+                owner.curated_observer.as_ref().unwrap().sequence,
+                if autoload { 1 } else { proofs }
+            );
             let original_expiry = binding.expires;
             assert_eq!(binding.registration.as_ref().unwrap().presentation, None);
             probe
