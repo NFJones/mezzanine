@@ -148,6 +148,10 @@ async fn external_curated_heartbeat_native_proof_is_separate_from_lease() {
     let (_socket, connection) = child(&mut fixture).await;
     let first = enroll(&mut fixture, &connection).await;
     assert!(first.get("error").is_none());
+    assert_eq!(
+        fixture.service.external_agent_rows()[0]["telemetry_health"],
+        "awaiting-first-proof"
+    );
     let expiry = fixture
         .service
         .control
@@ -185,6 +189,10 @@ async fn external_curated_heartbeat_native_proof_is_separate_from_lease() {
     assert!(binding.enrollment.as_ref().unwrap().has_live_observer());
     assert!(binding.enrollment.as_ref().unwrap().observers.is_empty());
     assert!(!connection.initialized());
+    assert_eq!(
+        fixture.service.external_agent_rows()[0]["telemetry_health"],
+        "enrolled"
+    );
     let observed_at = binding
         .enrollment
         .as_ref()
@@ -278,6 +286,10 @@ async fn external_curated_heartbeat_native_proof_is_separate_from_lease() {
         .unwrap()
         .observed_at;
     assert!(!binding.enrollment.as_ref().unwrap().has_live_observer());
+    assert_eq!(
+        fixture.service.external_agent_rows()[0]["telemetry_health"],
+        "connection-lost"
+    );
     assert_eq!(
         prove(&mut fixture, &connection, &first, 3).await["result"]["changed"],
         false

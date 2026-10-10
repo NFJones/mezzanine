@@ -83,6 +83,7 @@ impl LaunchBinding {
     fn telemetry_health(&self) -> &'static str {
         match &self.enrollment {
             Some(enrollment) if enrollment.has_live_observer() => "enrolled",
+            Some(enrollment) if enrollment.awaiting_first_curated_proof() => "awaiting-first-proof",
             Some(_) => "connection-lost",
             None => "lease-active",
         }

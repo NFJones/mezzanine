@@ -167,9 +167,11 @@ space when room remains, without changing draft text or the allocated row width.
 Without scope flags it retains overall totals.
 The live status view also includes a pane-scoped **External Telemetry** section:
 harness, last externally reported state, server-observed telemetry health, and
-usage coverage. `enrolled`, `connection-lost`, and legacy `lease-active` describe
+usage coverage. `enrolled`, `awaiting-first-proof`, `connection-lost`, and legacy `lease-active` describe
 different evidence, not vendor completion or process death. Unavailable usage
-is not zero or invoice proof. With no current telemetry, the view says so without
+is not zero or invoice proof. A curated source awaiting its first native proof
+has not yet demonstrated freshness, rather than having lost a proven observer.
+With no current telemetry, the view says so without
 inferring installation or vendor activation. This read-only section works with
 or without a native conversation, does not renew leases or query durable history,
 and excludes other panes' telemetry; accounting tables keep their existing scope.

@@ -975,7 +975,10 @@ up, while a dead ordinary producer disappears even before identity retirement.
 Browser refresh may reconcile lifecycle before projecting its snapshot.
 External rows expose server-derived `telemetry_health`: `enrolled` for a live
 qualified observer, `connection-lost` for a missing observer within its remaining
-lease, and `lease-active` for a legacy caller-renewed launch. This is separate
+lease, `awaiting-first-proof` for an admitted curated source that has never
+supplied native freshness proof, and `lease-active` for a legacy caller-renewed
+launch. Pending proof is neither live observer attestation nor renewal authority;
+observed proof expiry still reports loss. This is separate
 from the last vendor-reported `status`; connection loss does not mean completion
 or producer death. Browser details and agent discovery include the same health
 and `usage_coverage`, which is `unavailable-source-continuity` for ordinary runs

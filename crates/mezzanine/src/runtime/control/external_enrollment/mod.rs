@@ -285,6 +285,14 @@ impl EnrollmentBinding {
             })
     }
 
+    /// Labels only never-observed curated activation, without supplying observer
+    /// freshness, lease renewal or native authority to the caller.
+    pub(super) fn awaiting_first_curated_proof(&self) -> bool {
+        self.curated_observer
+            .as_ref()
+            .is_some_and(|observer| observer.observed_at.is_none())
+    }
+
     /// Requires the same live kernel-qualified producer on every credential use;
     /// a same-user token holder on another origin cannot report on this run.
     pub(super) fn authorize(&self, connection: &ControlConnectionState) -> Result<()> {

@@ -483,8 +483,11 @@ reconcile lifecycle before capturing its snapshot. An overdue qualified connecte
 observer MUST remain visible before delayed maintenance; a dead ordinary
 producer MUST not remain visible under a surviving pane shell's lease.
 External discovery rows and browser details MUST distinguish server-derived
-`telemetry_health` (`enrolled`, `connection-lost`, or legacy `lease-active`) from
+`telemetry_health` (`enrolled`, `awaiting-first-proof`, `connection-lost`, or legacy `lease-active`) from
 the vendor-reported status. Connection loss is not completion or process death.
+Never-observed curated freshness MUST be `awaiting-first-proof`, not a claim
+that a previously observed connection was lost. First proof changes only this
+evidence label; authority/renewal rules and proof-expiry loss remain unchanged.
 The shared live status display MUST expose a current-pane External Telemetry
 section for both native/external coexistence and external-only panes, projecting
 only these server-observed health/coverage fields alongside last reported state.

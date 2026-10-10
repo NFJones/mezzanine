@@ -77,6 +77,8 @@ async fn external_curated_admission_native_creator_public_reply_and_retry() {
     ));
     assert!(source.observers.is_empty());
     assert!(!source.has_live_observer());
+    let rows = fixture.service.external_agent_rows();
+    assert_eq!(rows[0]["telemetry_health"], "awaiting-first-proof");
     assert!(source.authorize_connection(&fixture.connection).is_err());
     let owner = binding.accounting_owner.clone();
     let expires = binding.expires;
