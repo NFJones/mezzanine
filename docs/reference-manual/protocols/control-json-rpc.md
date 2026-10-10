@@ -749,9 +749,13 @@ native authority changes, without giving the stale helper a durable receipt.
 CLI failures return fixed accepted:false/durable:false; success rebuilds only
 typed public receipts. This is a common reporting primitive, not vendor callback
 association or exhaustive spend certification.
-The installed revision-8 shared client exposes `beginRequest(id)`,
-`endRequest(ticket, normalizedObservation)` and `abandonRequest(ticket)`. Tickets
-are immutable client-instance-local objects; copied or successor tickets cannot
+The installed revision-9 shared client exposes `beginRequest(id)`,
+`endRequest(ticket, normalizedObservation)` and `abandonRequest(ticket)`.
+The injected request core requires neither Node Buffer nor DOM TextEncoder and
+retains the 128-byte UTF-8 identifier boundary. Transport adapters still own
+their platform dependencies; this is not installation of a curated usage hook.
+Exact revision-8 request and transport snapshots remain upgradeable.
+Tickets are immutable client-instance-local objects; copied or successor tickets cannot
 select credentials. Up to128 active tickets and16 serialized transport operations
 are retained. Unknown fields, unsafe/negative/overflowing counters and invalid
 subsets reject before transport; callback selectors are captured once. At most

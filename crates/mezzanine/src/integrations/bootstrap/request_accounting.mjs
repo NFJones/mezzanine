@@ -9,8 +9,20 @@
 const hex = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const natural = value => Number.isSafeInteger(value) && value >= 0;
 const positive = value => natural(value) && value > 0;
+/** Bounded UTF-8 length without Node/DOM globals. Lone surrogates count as
+ * three replacement bytes, matching the previous Buffer encoding convention. */
+function boundedUtf8(value) {
+  if (value.length > 128) return false;
+  let bytes = 0;
+  for (const character of value) {
+    const point = character.codePointAt(0);
+    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+    if (bytes > 128) return false;
+  }
+  return true;
+}
 const inert = value => typeof value === "string" && value.trim().length > 0
-  && Buffer.byteLength(value) <= 128 && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value);
+  && boundedUtf8(value) && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value);
 const unavailable = reason => Object.freeze({ delivered: false, durable: false, reason });
 
 /** Normalize only explicit known fields before retaining any caller object. */

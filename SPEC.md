@@ -1171,8 +1171,11 @@ same-marker/same-report deliveries per call. Only typed durable acknowledgment
 may establish delivery; neutral/accepted callback success is insufficient.
 Missing ticket/counters, changed source/payload and bounded-queue pressure MUST
 remain explicit unavailable/loss outcomes, never zero or provider replay.
-Revision8 Pi/OpenCode manifests include the request-accounting sibling and retain
-independent exact revision7 client snapshots and every older compiled authority.
+Revision9 Pi/OpenCode manifests include a pure ECMAScript request-accounting
+core with bounded UTF-8 identifier byte limits, requiring neither Node Buffer
+nor DOM TextEncoder. Transport-specific adapters retain their own dependencies.
+Independent exact revision8 request/client snapshots, revision7 client snapshots
+and every older compiled authority MUST remain safely upgradeable.
 This common client capability does not prove each vendor's outcome producer.
 Pane creation commands MAY specify an explicit command to run in the new pane.
 When a pane creation command specifies an explicit command, Mezzanine MUST start

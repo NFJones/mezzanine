@@ -387,6 +387,30 @@ pub(super) fn persistent_client_v5() -> Vec<u8> {
     include_bytes!("history/persistent_client_v5.mjs").to_vec()
 }
 
+/// Exact shared transport shipped alongside request accounting in revision 8.
+pub(super) fn persistent_client_v6() -> Vec<u8> {
+    include_bytes!("history/persistent_client_v6.mjs").to_vec()
+}
+
+/// Restores only the two compiled revision-8 request/transport slots. Frozen
+/// byte authority is independent of active source and receipt-supplied paths.
+pub(super) fn freeze_revision8_request_client(manifest: &mut super::installer::Manifest) {
+    for entry in &mut manifest.entries {
+        let bytes = match entry.path.as_str() {
+            "extensions/mezzanine/request_accounting.mjs"
+            | "plugins/mezzanine/request_accounting.mjs" => {
+                Some(include_bytes!("history/request_accounting_v8.mjs").to_vec())
+            }
+            "extensions/mezzanine/persistent_client.mjs"
+            | "plugins/mezzanine/persistent_client.mjs" => Some(persistent_client_v6()),
+            _ => None,
+        };
+        if let Some(bytes) = bytes {
+            entry.artifact = super::reconciliation::Artifact::File { bytes };
+        }
+    }
+}
+
 /// Restores only the two known adapter client slots and removes the new sibling
 /// from pre-request manifests. No receipt/journal path supplies new authority.
 pub(super) fn freeze_pre_request_client(manifest: &mut super::installer::Manifest) {
@@ -527,6 +551,14 @@ mod tests {
             "b01a4baee8c198b0edea9bf4adf03ae2c217a74c597d48502694cee69c7267d9"
         );
         for (bytes, expected) in [
+            (
+                include_bytes!("history/request_accounting_v8.mjs").as_slice(),
+                "9e467c36fb253c2d9ab5a234c7260dcc91d68a92b5d4d50aa357ea5836c1ed7b",
+            ),
+            (
+                include_bytes!("history/persistent_client_v6.mjs").as_slice(),
+                "68db5b7859b9a98607abdf2410bec1e56324e158cf45746898ef30a8cd3c2d4c",
+            ),
             (
                 PI_ENTRY_V3,
                 "d8ac6138a1f2500609cb093ca27022f922a40e7f46dcc6f7a7a7a008c7f02257",

@@ -232,9 +232,9 @@ fn bootstrap_jsonc_history_keeps_strict_predecessors_and_rejects_payload_drift()
     use crate::integrations::bootstrap::{opencode_artifact, reconciliation::Artifact};
     let current = opencode_artifact::manifest();
     let history = crate::integrations::bootstrap::compiled_history(&current);
-    assert_eq!(history.len(), 7);
-    assert_eq!(history[1], opencode_artifact::historical_manifest());
-    assert!(history.iter().skip(1).all(|manifest| {
+    assert_eq!(history.len(), 8);
+    assert_eq!(history[2], opencode_artifact::historical_manifest());
+    assert!(history.iter().skip(2).all(|manifest| {
         manifest
             .entries
             .iter()

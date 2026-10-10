@@ -175,6 +175,14 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     if *manifest != current && !current_opencode {
         return Vec::new();
     }
+    let revision8_client = if manifest.harness == "pi" || current_opencode {
+        let mut snapshot = manifest.clone();
+        snapshot.revision = 8;
+        history::freeze_revision8_request_client(&mut snapshot);
+        Some(snapshot)
+    } else {
+        None
+    };
     let last_current = if manifest.harness == "pi" || current_opencode {
         let mut snapshot = manifest.clone();
         snapshot.revision = 7;
@@ -256,6 +264,9 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         }
         if current_opencode {
             history.insert(1, opencode_artifact::historical_manifest());
+        }
+        if let Some(revision8_client) = revision8_client {
+            history.insert(0, revision8_client);
         }
         history
     } else {

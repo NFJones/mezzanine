@@ -3,6 +3,8 @@
  * Real native admission remains covered by the installed-client Rust fixture. */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { createRequestAccountingClient } from "../crates/mezzanine/src/integrations/bootstrap/request_accounting.mjs";
 
 const marker = "a".repeat(64);
@@ -12,6 +14,29 @@ const ready = id => ({ protocol: "external-request/1", accepted: true, request_i
   admitted_at: 100, source_witness: "c".repeat(64), origin: "unattributed", controls: [] });
 const committed = applied => ({ accepted: true, durable: true, applied, revision: 1,
   coverage: { source: "external-reported", reasoning_known: false } });
+
+/** The injected transport core must run in a restricted SDK realm with neither
+ * Node Buffer nor DOM TextEncoder. Exact UTF-8 limits remain byte limits, not
+ * code-unit/grapheme limits; oversized identifiers never reach transport. */
+test("request accounting needs no Node or DOM globals and preserves UTF-8 bounds", async () => {
+  const source = readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/request_accounting.mjs", import.meta.url), "utf8");
+  const create = runInNewContext(source.replace("export function createRequestAccountingClient", "function createRequestAccountingClient")
+    + "\nif (typeof Buffer !== 'undefined' || typeof TextEncoder !== 'undefined') throw new Error('fixture globals'); createRequestAccountingClient;", {});
+  for (const [model, allowed] of [["m".repeat(128), true], ["m".repeat(129), false],
+    ["é".repeat(64), true], ["é".repeat(65), false], ["界".repeat(42) + "ab", true],
+    ["界".repeat(43), false], ["😀".repeat(32), true], ["😀".repeat(33), false]]) {
+    const requests = [];
+    const client = create({ enqueue: operation => Promise.resolve().then(operation),
+      exchange: async (method, params) => {
+        requests.push({ method, params });
+        return method.endsWith("begin") ? ready(params.request_id) : committed(true);
+      } });
+    const ticket = await client.beginRequest(marker);
+    const result = await client.endRequest(ticket, { ...report(), model });
+    assert.equal(result.durable, allowed, `UTF-8 bound for ${model.length} code units`);
+    assert.equal(requests.filter(request => request.method.endsWith("end")).length, allowed ? 1 : 0);
+  }
+});
 
 /** Retains the real serialized ordering boundary without performing I/O. */
 function fixture(respond) {

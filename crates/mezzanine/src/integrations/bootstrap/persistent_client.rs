@@ -155,16 +155,16 @@ mod tests {
     /// A shared-client byte revision must preserve every compiled historical
     /// upgrade, not just the oldest or immediate predecessor. Historical client
     /// data stays independent of active source and upgrade touches no authored
-    /// sibling configuration. Both immediate revision-7 clients use exact v5
-    /// data; older strict-format/client predecessors retain independent bytes.
+    /// sibling configuration. Immediate revision-8 clients retain independent
+    /// request and transport bytes, as do all older compiled predecessors.
     #[test]
     fn persistent_client_artifact_upgrade_retains_all_frozen_predecessors() {
         use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, 8);
+            assert_eq!(current.revision, 9);
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), if harness == "pi" { 6 } else { 7 });
+            assert_eq!(history.len(), if harness == "pi" { 7 } else { 8 });
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
             let frozen = immediate
@@ -175,7 +175,18 @@ mod tests {
             assert_eq!(
                 frozen.artifact,
                 Artifact::File {
-                    bytes: super::super::history::persistent_client_v5()
+                    bytes: super::super::history::persistent_client_v6()
+                }
+            );
+            let request = immediate
+                .entries
+                .iter()
+                .find(|entry| entry.path.ends_with("/request_accounting.mjs"))
+                .unwrap();
+            assert_eq!(
+                request.artifact,
+                Artifact::File {
+                    bytes: include_bytes!("history/request_accounting_v8.mjs").to_vec()
                 }
             );
             for previous in history {
@@ -212,6 +223,15 @@ mod tests {
                     panic!("shared client must be a file");
                 };
                 assert_eq!(std::fs::read(root.join(&client.path)).unwrap(), *bytes);
+                let request = current
+                    .entries
+                    .iter()
+                    .find(|entry| entry.path.ends_with("/request_accounting.mjs"))
+                    .unwrap();
+                let Artifact::File { bytes } = &request.artifact else {
+                    panic!("request accounting must be a file");
+                };
+                assert_eq!(std::fs::read(root.join(&request.path)).unwrap(), *bytes);
                 std::fs::remove_dir_all(root).unwrap();
             }
         }

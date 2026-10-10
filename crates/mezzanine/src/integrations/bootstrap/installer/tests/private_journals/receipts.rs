@@ -222,7 +222,7 @@ fn bootstrap_private_receipts_upgrade_all_history_after_original_v2_recovery() {
     for harness in ["pi", "opencode"] {
         let current = crate::integrations::bootstrap::compiled_manifest(harness, None).unwrap();
         let history = crate::integrations::bootstrap::compiled_history(&current);
-        assert_eq!(history.len(), if harness == "pi" { 6 } else { 7 });
+        assert_eq!(history.len(), if harness == "pi" { 7 } else { 8 });
         for old in history {
             let fixture = Fixture::new();
             let private = old.entries.iter().any(|entry| {
