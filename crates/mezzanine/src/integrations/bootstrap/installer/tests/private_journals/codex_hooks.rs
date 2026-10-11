@@ -277,7 +277,7 @@ fn bootstrap_codex_shared_hooks_migrate_historical_receipt_across_every_edge() {
     let history = crate::integrations::bootstrap::compiled_history(&current);
     assert_eq!(
         history.iter().map(|old| old.revision).collect::<Vec<_>>(),
-        vec![2, 1]
+        vec![3, 2, 1]
     );
     for old in history {
         for operation in [Operation::Install, Operation::Uninstall] {

@@ -152,10 +152,14 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         };
     }
     if Some(manifest) == codex_artifact::manifest().as_ref() {
-        return vec![
+        let mut history = codex_artifact::historical_fixed_manifest()
+            .into_iter()
+            .collect::<Vec<_>>();
+        history.extend([
             codex_artifact::historical_shared_manifest(),
             codex_artifact::historical_manifest(),
-        ];
+        ]);
+        return history;
     }
     let (mut current, revision, paths) = match manifest.harness.as_str() {
         "pi" => (

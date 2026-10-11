@@ -49,7 +49,7 @@ fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks()
     .unwrap();
     std::fs::write(vendor.join("config.toml"), b"[features]\nhooks = false\n").unwrap();
     let installed = bootstrap(&[]);
-    assert_eq!(installed["manifest_revision"], 3);
+    assert_eq!(installed["manifest_revision"], 4);
     assert_eq!(installed["result"], "installed");
     assert_eq!(installed["runtime_verification"], "not-performed");
     assert_eq!(bootstrap(&[])["result"], "unchanged");
@@ -75,15 +75,29 @@ fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks()
         } else if state == "missing" {
             std::fs::remove_file(&helper).unwrap();
         }
-        let result = std::process::Command::new("/bin/sh")
-            .args(["-c", command])
-            .env_clear()
-            .stdin(std::process::Stdio::null())
-            .output()
-            .unwrap();
-        assert!(result.status.success(), "{result:?}");
-        assert_eq!(result.stdout, b"{}\n");
-        assert!(result.stderr.is_empty());
+        for (shell, flags) in [
+            ("/bin/sh", vec!["-c"]),
+            ("/usr/bin/bash", vec!["--noprofile", "--norc", "-c"]),
+            ("/bin/zsh", vec!["-f", "-c"]),
+            ("/usr/bin/zsh", vec!["-f", "-c"]),
+            ("/usr/bin/fish", vec!["--no-config", "-c"]),
+            ("/opt/homebrew/bin/fish", vec!["--no-config", "-c"]),
+            ("/usr/local/bin/fish", vec!["--no-config", "-c"]),
+        ] {
+            if !std::path::Path::new(shell).is_file() {
+                continue;
+            }
+            let result = std::process::Command::new(shell)
+                .args(flags)
+                .arg(command)
+                .env_clear()
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "{shell}/{state}: {result:?}");
+            assert_eq!(result.stdout, b"{}\n", "{shell}/{state}");
+            assert!(result.stderr.is_empty(), "{shell}/{state}: {result:?}");
+        }
     }
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -116,7 +116,7 @@ or certify a live Codex process. Its release reference is
 That reference is evidence, not a compatibility gate. The fixed internal helper
 normalizes at most 64 KiB/250 ms of stdin and remains neutral on unavailable
 telemetry; it never starts Codex, initializes a primary or bypasses vendor trust.
-The revision-3 hook candidate owns only exact compiled members of five lifecycle
+The revision-4 hook candidate owns only exact compiled members of five lifecycle
 event arrays in shared `hooks.json`. Authored callbacks/matchers/timeouts, unrelated
 events, metadata, disabled policy and `config.toml` survive install and uninstall.
 Exact receipt-owned duplicates collapse at the first position; unreceipted matches
@@ -124,10 +124,11 @@ or edited/missing owned members conflict. Recognized revision-1 whole-file recei
 migrate to shared ownership during current reconciliation without deleting authored
 additions; current uninstall retains the containing document. Strict-JSON changes
 may reformat whitespace, but noops are byte-exact and JSONC comments are not stripped.
-Revision-3 members pin the safely quoted absolute installing Mez executable,
+Revision-4 members pin the safely quoted absolute installing Mez executable,
 not `MEZ_CODEX_HELPER` or a PATH lookup. A missing/nonexecutable helper returns
 neutral JSON; restoring the executable at its pinned location restores delivery.
-Exact revision-2
+Builtin test/exec/printf with short-circuit operators supports Sh/Bash/Zsh/Fish
+without forcing Codex to another shell. Exact revision-3 and revision-2
 shared members are retained as immutable history and replaced without deleting
 authored callbacks. Rebootstrap at the original executable location is unchanged;
 relocation qualification remains unfinished. A receipt containing an unknown
