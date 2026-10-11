@@ -336,7 +336,7 @@ async fn external_curated_request_end_capacity_unpublished_and_late_commit_fence
 
 /// Normalized finalized counters remain tied to the existing original marker;
 /// no source owner, PID, project, epoch or private credential is supplied.
-fn end(first: &serde_json::Value, observed_at: u64) -> JsonRpcRequest {
+pub(super) fn end(first: &serde_json::Value, observed_at: u64) -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"curated-end","method":"agent/external/curated-usage-end","params":{
         "harness":"claude","generation":first["result"]["generation"],"observer_witness":first["result"]["observer_witness"],"external_session_id":"session-a","request_id":"a".repeat(64),
         "event_id":"b".repeat(64),"observed_at":observed_at,"provider":"fixture","model":"model","counters":{"input_tokens":10,"output_tokens":3}}}).to_string()).unwrap()
@@ -466,7 +466,7 @@ async fn external_curated_request_end_native_commit_replay_and_wrong_parent_cons
 }
 
 /// Builds only a public current observer selector plus one opaque request ID.
-fn begin(first: &serde_json::Value) -> JsonRpcRequest {
+pub(super) fn begin(first: &serde_json::Value) -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"curated-request","method":"agent/external/curated-usage-begin","params":{
         "harness":"claude","generation":first["result"]["generation"],"observer_witness":first["result"]["observer_witness"],"external_session_id":"session-a","request_id":"a".repeat(64)}}).to_string()).unwrap()
 }

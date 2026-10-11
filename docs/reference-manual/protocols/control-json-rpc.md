@@ -780,6 +780,13 @@ ID/time/provider/model/counters. No private capability, PID/project/epoch/endpoi
 or general-method selector is accepted. Exact sender-confirmed native helper,
 direct-parent creator, pane-root incarnation, mapped namespace and deadline
 remain required. No new producer/freshness/presentation/lease is allocated.
+Curated usage and heartbeat callbacks narrow only the indexed UID/harness/session
+candidates by their exact original observer witness. Two distinct creators with
+the same session label keep separate accounting and can use their own receipts;
+tuple-only generic helper discovery remains ambiguous. A foreign receipt still
+fails native parent/root checks, and a new creator cannot import completed history
+without genuine new request readiness. This is isolation, not cross-process
+resume/fork continuity or permission to mint markers for inherited events.
 Begin captures actual creator cwd and original origin on the existing worker;
 end shares atomic ledger and accounting reservations, with worker-published
 durability. Wrong-parent/fake result/capacity rejection releases budgets without

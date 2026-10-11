@@ -249,8 +249,18 @@ fn callback(response: &serde_json::Value, sequence: u64) -> JsonRpcRequest {
 pub(super) async fn child(
     fixture: &mut Fixture,
 ) -> (tokio::net::UnixStream, ControlConnectionState) {
-    fixture.socket.write_all(&[4]).await.unwrap();
-    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(10), fixture.listener.accept())
+    child_of(&mut fixture.socket, &fixture.listener).await
+}
+
+/// Spawns a real helper from the selected fixture creator's own command socket.
+/// Nested creators share a pane root but retain distinct native lifetimes; the
+/// driver socket is not supplied as authority to any enrollment request.
+pub(super) async fn child_of(
+    creator: &mut tokio::net::UnixStream,
+    listener: &tokio::net::UnixListener,
+) -> (tokio::net::UnixStream, ControlConnectionState) {
+    creator.write_all(&[4]).await.unwrap();
+    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
         .await
         .unwrap()
         .unwrap();

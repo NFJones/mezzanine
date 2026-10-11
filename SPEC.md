@@ -1220,6 +1220,12 @@ producers, legacy OpenCode layout handoff and broader
 cross-process resume/fork attachment qualification remain separate work.
 Declared curated Claude creators MAY use fixed `curated-usage-begin/end`
 helpers with public original generation/witness/session/request selectors only.
+Curated usage and heartbeat callbacks MUST narrow only the bounded indexed
+UID/harness/session candidates by their exact original observer witness before
+native observation. Distinct creators sharing a session label MUST NOT merge
+accounting owners or block those exact callbacks; tuple-only generic helper
+discovery MUST remain ambiguous. A witness is only a candidate selector, never
+parent/root/writer proof, request readiness or permission to import history.
 They MUST reuse the existing bounded native helper observation pipeline and
 durably mapped verified-parent creator, never assign billing to a helper PID,
 allocate a replacement namespace, grant socket roles or consume a freshness

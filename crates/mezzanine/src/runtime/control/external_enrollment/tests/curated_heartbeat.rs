@@ -5,7 +5,7 @@ use super::helper_presentation::release;
 use super::*;
 
 /// Strict public selectors must still pass native exact creator/writer/root proof.
-fn heartbeat(first: &serde_json::Value, sequence: u64) -> JsonRpcRequest {
+pub(super) fn heartbeat(first: &serde_json::Value, sequence: u64) -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"heartbeat","method":"agent/external/curated-heartbeat","params":{"harness":"claude","generation":first["result"]["generation"],"observer_witness":first["result"]["observer_witness"],"external_session_id":"session-a","sequence":sequence}}).to_string()).unwrap()
 }
 

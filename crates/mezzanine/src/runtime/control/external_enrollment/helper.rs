@@ -110,11 +110,17 @@ impl RuntimeSessionService {
             for candidate in candidates {
                 self.reconcile_external_agent_registration(candidate);
             }
-            self.control
-                .external_agents()
-                .enrollments
-                .helper_targets
-                .select(*uid, &harness, &session_id)?
+            let targets = &self.control.external_agents().enrollments.helper_targets;
+            if heartbeat || usage_begin || usage_end {
+                targets.select_witness(
+                    *uid,
+                    &harness,
+                    &session_id,
+                    &text(&params, "observer_witness", 64)?,
+                )?
+            } else {
+                targets.select(*uid, &harness, &session_id)?
+            }
         } else {
             super::super::external_agents::credential(&params)?
         };

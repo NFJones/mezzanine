@@ -5,7 +5,9 @@
 //! that pool, adds an owner, or receives a credential. A selector is a candidate,
 //! never authority: native parent/ancestry and actor-generation fences still run.
 //! Multiple live producers with the same UID/harness/session remain ambiguous
-//! rather than choosing by focus, pane environment, PID claims or first arrival.
+//! for tuple-only discovery. Curated callbacks may narrow those candidates by
+//! their exact original public witness, never by focus, pane environment, PID
+//! claims or first arrival; all native and generation checks still follow.
 
 use super::*;
 use std::collections::BTreeMap;
@@ -74,6 +76,28 @@ impl HelperTargets {
             .copied()
             .ok_or_else(|| MezError::forbidden("external helper target unavailable"))
     }
+
+    /// Narrows only this tuple's bounded candidates by an original public
+    /// observer witness. The canonical digest encoding is injective, so no
+    /// arrival order chooses between owners. Possessing this selector confers
+    /// no authority; native creator/root/writer and generation remain required.
+    pub(super) fn select_witness(
+        &self,
+        uid: u32,
+        harness: &str,
+        session: &str,
+        witness: &str,
+    ) -> Result<[u8; 32]> {
+        self.entries
+            .get(&(uid, harness.to_owned(), session.to_owned()))
+            .and_then(|targets| {
+                targets
+                    .iter()
+                    .find(|digest| observer_witness(**digest) == witness)
+            })
+            .copied()
+            .ok_or_else(|| MezError::forbidden("external helper target unavailable"))
+    }
 }
 
 #[cfg(test)]
@@ -99,5 +123,44 @@ mod tests {
         assert_eq!(index.entries.len(), 2);
         assert_eq!(index.select(2, "pi", "session").unwrap(), [3; 32]);
         assert_eq!(index.select(1, "pi", "other").unwrap(), [4; 32]);
+    }
+
+    /// Exact original curated witnesses disambiguate only their indexed tuple.
+    /// Wrong UID/session, unknown or noncanonical witnesses fail without
+    /// affecting tuple-only ambiguity; rotation/retirement removes old targets.
+    #[test]
+    fn helper_targets_original_witness_narrows_only_existing_candidate() {
+        let mut index = HelperTargets::default();
+        index.insert(1, "claude", "session", [1; 32]);
+        index.insert(1, "claude", "session", [2; 32]);
+        let first = observer_witness([1; 32]);
+        assert!(index.select(1, "claude", "session").is_err());
+        assert_eq!(
+            index
+                .select_witness(1, "claude", "session", &first)
+                .unwrap(),
+            [1; 32]
+        );
+        for (uid, harness, session, witness) in [
+            (2, "claude", "session", first.clone()),
+            (1, "pi", "session", first.clone()),
+            (1, "claude", "other", first.clone()),
+            (1, "claude", "session", observer_witness([3; 32])),
+            (1, "claude", "session", "1".repeat(64)),
+            (1, "claude", "session", "".into()),
+        ] {
+            assert!(
+                index
+                    .select_witness(uid, harness, session, &witness)
+                    .is_err()
+            );
+        }
+        index.remove(1, "claude", "session", [1; 32]);
+        assert!(
+            index
+                .select_witness(1, "claude", "session", &first)
+                .is_err()
+        );
+        assert_eq!(index.select(1, "claude", "session").unwrap(), [2; 32]);
     }
 }
