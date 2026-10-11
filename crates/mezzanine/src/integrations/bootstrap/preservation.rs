@@ -76,6 +76,25 @@ pub(super) fn reconcile_preserving(
         }
         if harness == "codex"
             && path == "hooks.json"
+            && current.is_none()
+            && matches!(desired, Some(Artifact::JsonArrayEntries { .. }) | None)
+            && let Some(previous) = previous
+            && (matches!(previous, Artifact::JsonArrayEntries { .. })
+                || super::codex_artifact::historical_shared_ownership(previous)?.is_some())
+        {
+            // Physical absence cannot contain an old or foreign callback. Only
+            // the compiled desired graph is recreated; uninstall stays absent.
+            return Ok((
+                if desired.is_none() {
+                    None
+                } else {
+                    super::shared_arrays::reconcile_arrays(None, None, desired, true)?
+                },
+                None,
+            ));
+        }
+        if harness == "codex"
+            && path == "hooks.json"
             && previous.is_none()
             && matches!(desired, Some(Artifact::JsonArrayEntries { .. }))
             && let Some(bytes) = current

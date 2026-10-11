@@ -732,6 +732,10 @@ exchange or claim SDK invocation session fields as classic CLI input. Bootstrap
 MUST report Copilot lifecycle/usage unavailable-source-association until actual
 qualified producer/association and metadata-only accounting contracts are wired.
 Other compiled adapters remain runtime-unverified by installation reports.
+Qualified current/frozen historical Codex ownership MAY repair genuine whole-file
+hooks.json absence using only current compiled array members. Missing-file
+uninstall MUST remain absent; this MUST NOT relax unreceipted, edited-member,
+existing missing-member, unknown-reference or forged-recovery rejection.
 Cursor revision1 MAY own only exact sessionStart/stop/sessionEnd array members
 in shared hooks.json under the selected CLI configuration root, using a bounded
 quoted installing helper reference and portable conditional-exec/neutral fallback.

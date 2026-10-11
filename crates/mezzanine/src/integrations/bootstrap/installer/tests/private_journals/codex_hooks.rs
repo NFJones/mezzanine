@@ -7,8 +7,9 @@ use super::*;
 use crate::integrations::bootstrap::reconciliation::Artifact;
 
 /// Malformed JSON, ambiguous keys/types and unreceipted exact registrations
-/// never become ownership. Under a valid receipt, missing or edited members
-/// still refuse publication and preserve every vendor/private byte.
+/// never become ownership. Under a valid receipt, missing or edited members in
+/// an existing shared document still refuse publication; genuine whole-file
+/// absence has separate qualified repair coverage.
 #[test]
 fn bootstrap_codex_shared_hooks_conflicts_remain_non_mutating() {
     let current = crate::integrations::bootstrap::compiled_manifest("codex", None).unwrap();
@@ -38,7 +39,7 @@ fn bootstrap_codex_shared_hooks_conflicts_remain_non_mutating() {
     assert!(fixture.plan(&current, Operation::Install).is_err());
     assert_eq!(tree_snapshot(&fixture.workspace), before);
     for old_receipt in [false, true] {
-        for fault in ["missing", "edited", "missing-file"] {
+        for fault in ["missing", "edited"] {
             let fixture = Fixture::new();
             fixture
                 .plan(
@@ -51,16 +52,12 @@ fn bootstrap_codex_shared_hooks_conflicts_remain_non_mutating() {
             let file = fixture.root.join("hooks.json");
             let mut document: serde_json::Value =
                 serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
-            if fault == "missing-file" {
-                fs::remove_file(&file).unwrap();
+            if fault == "missing" {
+                document["hooks"]["Stop"] = serde_json::json!([]);
             } else {
-                if fault == "missing" {
-                    document["hooks"]["Stop"] = serde_json::json!([]);
-                } else {
-                    document["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 42.into();
-                }
-                fs::write(&file, serde_json::to_vec(&document).unwrap()).unwrap();
+                document["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 42.into();
             }
+            fs::write(&file, serde_json::to_vec(&document).unwrap()).unwrap();
             let before = tree_snapshot(&fixture.workspace);
             for operation in [Operation::Install, Operation::Uninstall] {
                 assert!(
@@ -69,6 +66,52 @@ fn bootstrap_codex_shared_hooks_conflicts_remain_non_mutating() {
                 );
                 assert_eq!(tree_snapshot(&fixture.workspace), before);
             }
+        }
+    }
+}
+
+/// Current and frozen historical receipts may recreate only a genuinely absent
+/// shared hook file from compiled current members. Missing-file uninstall is a
+/// no-op; sibling data and preview trees remain untouched. No old byte/pointer
+/// is copied from a journal or receipt into new filesystem authority.
+#[test]
+fn bootstrap_codex_shared_missing_file_repairs_current_and_historical_receipts() {
+    let current = crate::integrations::bootstrap::compiled_manifest("codex", None).unwrap();
+    for source in std::iter::once(current.clone())
+        .chain(crate::integrations::bootstrap::compiled_history(&current))
+    {
+        for operation in [Operation::Install, Operation::Uninstall] {
+            let fixture = Fixture::new();
+            fixture
+                .plan(&source, Operation::Install)
+                .unwrap()
+                .apply()
+                .unwrap();
+            let file = fixture.root.join("hooks.json");
+            fs::remove_file(&file).unwrap();
+            fs::write(fixture.root.join("unrelated.json"), b"AUTHORED SIBLING").unwrap();
+            let before = tree_snapshot(&fixture.workspace);
+            let plan = fixture.plan(&current, operation).unwrap();
+            assert_eq!(tree_snapshot(&fixture.workspace), before);
+            plan.apply().unwrap();
+            if matches!(operation, Operation::Install) {
+                let document: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+                assert_eq!(document["hooks"]["Stop"].as_array().unwrap().len(), 1);
+                assert!(
+                    fixture
+                        .plan(&current, Operation::Install)
+                        .unwrap()
+                        .changed_paths()
+                        .is_empty()
+                );
+            } else {
+                assert!(!file.exists());
+            }
+            assert_eq!(
+                fs::read(fixture.root.join("unrelated.json")).unwrap(),
+                b"AUTHORED SIBLING"
+            );
         }
     }
 }

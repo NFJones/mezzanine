@@ -148,7 +148,10 @@ The revision-4 hook candidate owns only exact compiled members of five lifecycle
 event arrays in shared `hooks.json`. Authored callbacks/matchers/timeouts, unrelated
 events, metadata, disabled policy and `config.toml` survive install and uninstall.
 Exact receipt-owned duplicates collapse at the first position; unreceipted matches
-or edited/missing owned members conflict. Recognized revision-1 whole-file receipts
+or edited/missing owned members in an existing document conflict. A genuinely
+absent whole file can be recreated only from current compiled members under a
+qualified current or frozen historical receipt; missing-file uninstall leaves it
+absent. No stale receipt payload becomes new ownership. Recognized revision-1 whole-file receipts
 migrate to shared ownership during current reconciliation without deleting authored
 additions; current uninstall retains the containing document. Strict-JSON changes
 may reformat whitespace, but noops are byte-exact and JSONC comments are not stripped.
